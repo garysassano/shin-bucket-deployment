@@ -33,7 +33,7 @@
   "json": {
     "formatter": {
       "enabled": true,
-      "trailingCommas": "all"
+      "trailingCommas": "none"
     },
     "parser": {
       "allowTrailingCommas": true
