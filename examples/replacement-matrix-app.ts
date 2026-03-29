@@ -1,5 +1,13 @@
 import { join } from "node:path";
-import { App, Aws, CfnOutput, RemovalPolicy, Stack, type StackProps } from "aws-cdk-lib";
+import {
+  App,
+  Aws,
+  CfnOutput,
+  CfnParameter,
+  RemovalPolicy,
+  Stack,
+  type StackProps,
+} from "aws-cdk-lib";
 import { Bucket } from "aws-cdk-lib/aws-s3";
 import { CargoBucketDeployment, Source } from "../src";
 
@@ -10,6 +18,13 @@ class ReplacementMatrixCargoBucketDeploymentStack extends Stack {
     const websiteBucket = new Bucket(this, "WebsiteBucket", {
       autoDeleteObjects: true,
       removalPolicy: RemovalPolicy.DESTROY,
+    });
+
+    const specialJsonToken = new CfnParameter(this, "SpecialJsonToken", {
+      type: "String",
+      default: 'value with "quotes" and \\backslash',
+      description:
+        "Deploy-time string used to verify JSON escaping when token values contain quotes and backslashes.",
     });
 
     new CargoBucketDeployment(this, "DeployWebsite", {
@@ -32,6 +47,7 @@ class ReplacementMatrixCargoBucketDeploymentStack extends Stack {
             bucketName: websiteBucket.bucketName,
             message: "jsonData without escape",
             repeatedRegion: Aws.REGION,
+            specialValue: specialJsonToken.valueAsString,
           },
           { escape: false },
         ),
@@ -43,8 +59,18 @@ class ReplacementMatrixCargoBucketDeploymentStack extends Stack {
             bucketName: websiteBucket.bucketName,
             message: "jsonData with escape",
             repeatedRegion: Aws.REGION,
+            specialValue: specialJsonToken.valueAsString,
           },
           { escape: true },
+        ),
+        Source.data(
+          "runtime/from-data-raw.json",
+          `{"specialValue":"${specialJsonToken.valueAsString}"}`,
+        ),
+        Source.data(
+          "runtime/from-data-escaped.json",
+          `{"specialValue":"${specialJsonToken.valueAsString}"}`,
+          { jsonEscape: true },
         ),
         Source.yamlData("runtime/config.yaml", {
           stackName: Aws.STACK_NAME,
@@ -66,6 +92,10 @@ class ReplacementMatrixCargoBucketDeploymentStack extends Stack {
       value: `s3://${websiteBucket.bucketName}/site/runtime/`,
     });
 
+    new CfnOutput(this, "SpecialJsonTokenValue", {
+      value: specialJsonToken.valueAsString,
+    });
+
     new CfnOutput(this, "ListRuntimeFilesCommand", {
       value: `aws s3 ls s3://${websiteBucket.bucketName}/site/runtime/ --recursive`,
     });
@@ -80,6 +110,14 @@ class ReplacementMatrixCargoBucketDeploymentStack extends Stack {
 
     new CfnOutput(this, "VerifyEscapedJsonCommand", {
       value: `aws s3 cp s3://${websiteBucket.bucketName}/site/runtime/escaped.json -`,
+    });
+
+    new CfnOutput(this, "VerifyDataRawJsonCommand", {
+      value: `aws s3 cp s3://${websiteBucket.bucketName}/site/runtime/from-data-raw.json -`,
+    });
+
+    new CfnOutput(this, "VerifyDataEscapedJsonCommand", {
+      value: `aws s3 cp s3://${websiteBucket.bucketName}/site/runtime/from-data-escaped.json -`,
     });
 
     new CfnOutput(this, "VerifyYamlCommand", {

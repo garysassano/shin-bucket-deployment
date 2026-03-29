@@ -65,6 +65,24 @@ test("renders plain markers for Source.yamlData", () => {
   expect(properties.SourceMarkersConfig).toBeUndefined();
 });
 
+test("renders jsonEscape config for Source.data markers", () => {
+  const stack = new Stack();
+  const destinationBucket = new Bucket(stack, "Dest");
+
+  new CargoBucketDeployment(stack, "Deploy", {
+    sources: [
+      Source.data("runtime/from-data-escaped.json", `{"specialValue":"${Aws.STACK_NAME}"}`, {
+        jsonEscape: true,
+      }),
+    ],
+    destinationBucket,
+  });
+
+  const properties = customResourceProperties(stack);
+
+  expect(properties.SourceMarkersConfig).toEqual([{ jsonEscape: true }]);
+});
+
 test("renders source markers for jsonData sources with escape enabled", () => {
   const stack = new Stack();
   const destinationBucket = new Bucket(stack, "Dest");

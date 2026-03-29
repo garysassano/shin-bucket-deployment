@@ -54,11 +54,10 @@ Example apps:
 - [examples/simple-app.ts](./examples/simple-app.ts)
   - plain asset deployment under `site/`
 - [examples/replacement-matrix-app.ts](./examples/replacement-matrix-app.ts)
-  - end-to-end replacement matrix covering `Source.data(...)`, `Source.yamlData(...)`, `Source.jsonData(..., { escape: false })`, `Source.jsonData(..., { escape: true })`, and mixed sources in one deployment
+  - end-to-end replacement matrix covering `Source.data(...)`, `Source.data(..., { jsonEscape: true })`, `Source.yamlData(...)`, `Source.jsonData(..., { escape: false })`, `Source.jsonData(..., { escape: true })`, and mixed sources in one deployment
+  - includes a deploy-time CloudFormation parameter whose value contains quotes and backslashes, so `raw` outputs act as negative controls and `escaped` outputs should remain valid JSON
   - after deployment, use the emitted `Verify*Command` outputs to fetch each generated runtime file from S3
 
-If your default Rust toolchain is not the one you want `cargo lambda` to use,
-set `RUSTUP_TOOLCHAIN` before running the TypeScript tests or synthesis.
 
 The Rust provider lives under [rust](./rust), the construct code under [src](./src),
 and provenance notes under [.codex/reference](./.codex/reference).

@@ -133,21 +133,12 @@ export class CargoBucketDeployment extends Construct {
 
     const architecture = props.architecture ?? Architecture.X86_64;
     const rustProjectPath = props.rustProjectPath ?? resolveDefaultRustProjectPath(this);
-    const bundlingEnvironment = { ...props.bundling?.environment };
-
-    if (process.env.RUSTUP_TOOLCHAIN && bundlingEnvironment.RUSTUP_TOOLCHAIN === undefined) {
-      bundlingEnvironment.RUSTUP_TOOLCHAIN = process.env.RUSTUP_TOOLCHAIN;
-    }
-
     this.handlerFunction = new RustFunction(this, "CustomResourceHandler", {
       runtime: "provided.al2023",
       architecture,
       binaryName: HANDLER_BINARY_NAME,
       manifestPath: join(rustProjectPath, "Cargo.toml"),
-      bundling: {
-        ...props.bundling,
-        environment: bundlingEnvironment,
-      },
+      bundling: props.bundling,
       timeout: Duration.minutes(15),
       memorySize: props.memoryLimit,
       ephemeralStorageSize: props.ephemeralStorageSize,
