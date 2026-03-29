@@ -856,12 +856,10 @@ fn replacement_pairs(
 
     for (key, value) in markers {
         let replacement = if config.json_escape {
-            let serialized = serde_json::to_string(value)?;
-            if serialized.starts_with('"') && serialized.ends_with('"') {
-                serialized[1..serialized.len() - 1].to_string()
-            } else {
-                serialized
-            }
+            // `Source.jsonData(..., { escape: true })` already encodes marker values as
+            // JSON-safe fragments (for example, string tokens arrive wrapped in quotes).
+            // Re-serializing here double-escapes those values and produces invalid JSON.
+            value.clone()
         } else {
             value.clone()
         };
@@ -1167,4 +1165,30 @@ async fn send_response(
         .error_for_status()?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn json_escape_markers_are_not_double_escaped() {
+        let mut markers = HashMap::new();
+        markers.insert(
+            "<<marker:0xbaba:0>>".to_string(),
+            "\"CargoBucketDeploymentTokenDemo\"".to_string(),
+        );
+
+        let rendered = replace_markers(
+            br#"{"stackName":<<marker:0xbaba:0>>}"#.to_vec(),
+            &markers,
+            &MarkerConfig { json_escape: true },
+        )
+        .expect("json replacement should succeed");
+
+        assert_eq!(
+            String::from_utf8(rendered).expect("output should be valid utf-8"),
+            r#"{"stackName":"CargoBucketDeploymentTokenDemo"}"#,
+        );
+    }
 }
