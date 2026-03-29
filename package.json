@@ -14,7 +14,10 @@
 		"lint": "biome check .",
 		"rust:fmt": "RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN:-1.94.1-x86_64-unknown-linux-gnu} cargo fmt --manifest-path rust/Cargo.toml --all",
 		"rust:check": "RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN:-1.94.1-x86_64-unknown-linux-gnu} cargo check --manifest-path rust/Cargo.toml",
-		"test": "RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN:-1.94.1-x86_64-unknown-linux-gnu} vitest run"
+		"test": "RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN:-1.94.1-x86_64-unknown-linux-gnu} vitest run",
+		"example:synth": "pnpm build && RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN:-1.94.1-x86_64-unknown-linux-gnu} pnpm exec cdk synth --app \"node dist/examples/simple-app.js\"",
+		"example:deploy": "pnpm build && RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN:-1.94.1-x86_64-unknown-linux-gnu} pnpm exec cdk deploy --app \"node dist/examples/simple-app.js\" --require-approval never",
+		"example:destroy": "pnpm build && RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN:-1.94.1-x86_64-unknown-linux-gnu} pnpm exec cdk destroy --app \"node dist/examples/simple-app.js\" --force"
 	},
 	"dependencies": {
 		"aws-cdk-lib": "2.245.0",
@@ -24,6 +27,7 @@
 	"devDependencies": {
 		"@biomejs/biome": "2.4.9",
 		"@types/node": "24.10.1",
+		"aws-cdk": "2.1114.1",
 		"typescript": "5.9.3",
 		"vitest": "4.1.2"
 	}
