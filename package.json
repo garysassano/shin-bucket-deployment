@@ -1,0 +1,30 @@
+{
+	"name": "cargo-bucket-deployment-prototype",
+	"private": true,
+	"version": "0.0.0",
+	"description": "Local prototype of a Rust-backed CDK bucket deployment construct",
+	"license": "Apache-2.0",
+	"engines": {
+		"node": ">=20.0.0"
+	},
+	"scripts": {
+		"build": "tsc -p tsconfig.json",
+		"typecheck": "tsc --noEmit",
+		"format": "biome format --write .",
+		"lint": "biome check .",
+		"rust:fmt": "RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN:-1.94.1-x86_64-unknown-linux-gnu} cargo fmt --manifest-path rust/Cargo.toml --all",
+		"rust:check": "RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN:-1.94.1-x86_64-unknown-linux-gnu} cargo check --manifest-path rust/Cargo.toml",
+		"test": "RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN:-1.94.1-x86_64-unknown-linux-gnu} vitest run"
+	},
+	"dependencies": {
+		"aws-cdk-lib": "2.245.0",
+		"cargo-lambda-cdk": "0.0.36",
+		"constructs": "10.6.0"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.4.9",
+		"@types/node": "24.10.1",
+		"typescript": "5.9.3",
+		"vitest": "4.1.2"
+	}
+}
