@@ -1,22 +1,22 @@
-import * as path from "node:path";
-import * as cdk from "aws-cdk-lib";
+import { join } from "node:path";
+import { Aws, Stack } from "aws-cdk-lib";
 import { Match, Template } from "aws-cdk-lib/assertions";
-import * as s3 from "aws-cdk-lib/aws-s3";
+import { Bucket } from "aws-cdk-lib/aws-s3";
 import { test } from "vitest";
 import { CargoBucketDeployment, Source } from "../src";
 
 test("renders source markers for jsonData sources", () => {
-  const stack = new cdk.Stack();
-  const destinationBucket = new s3.Bucket(stack, "Dest");
+  const stack = new Stack();
+  const destinationBucket = new Bucket(stack, "Dest");
 
   new CargoBucketDeployment(stack, "Deploy", {
     sources: [
-      Source.asset(path.join(__dirname, "fixtures", "my-website")),
+      Source.asset(join(__dirname, "fixtures", "my-website")),
       Source.jsonData(
         "runtime/config.json",
         {
-          stackName: cdk.Aws.STACK_NAME,
-          region: cdk.Aws.REGION,
+          stackName: Aws.STACK_NAME,
+          region: Aws.REGION,
         },
         { escape: true },
       ),
