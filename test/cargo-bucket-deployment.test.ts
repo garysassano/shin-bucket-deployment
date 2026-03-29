@@ -1,19 +1,19 @@
-import * as path from "node:path";
-import * as cdk from "aws-cdk-lib";
+import { join } from "node:path";
+import { Stack } from "aws-cdk-lib";
 import { Match, Template } from "aws-cdk-lib/assertions";
-import * as lambda from "aws-cdk-lib/aws-lambda";
-import * as s3 from "aws-cdk-lib/aws-s3";
+import { Architecture } from "aws-cdk-lib/aws-lambda";
+import { Bucket } from "aws-cdk-lib/aws-s3";
 import { test } from "vitest";
 import { CargoBucketDeployment, Source } from "../src";
 
 test("renders a Rust-backed custom resource", () => {
-  const stack = new cdk.Stack();
-  const destinationBucket = new s3.Bucket(stack, "Dest");
+  const stack = new Stack();
+  const destinationBucket = new Bucket(stack, "Dest");
 
   new CargoBucketDeployment(stack, "Deploy", {
-    sources: [Source.asset(path.join(__dirname, "fixtures", "my-website"))],
+    sources: [Source.asset(join(__dirname, "fixtures", "my-website"))],
     destinationBucket,
-    architecture: lambda.Architecture.X86_64,
+    architecture: Architecture.X86_64,
   });
 
   const template = Template.fromStack(stack);

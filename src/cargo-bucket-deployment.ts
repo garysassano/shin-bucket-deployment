@@ -1,32 +1,32 @@
-import { existsSync } from "node:fs";
-import * as path from "node:path";
-import { CustomResource, Duration, Lazy, Stack, Tags, Token } from "aws-cdk-lib";
-import * as iam from "aws-cdk-lib/aws-iam";
-import * as lambda from "aws-cdk-lib/aws-lambda";
-import * as s3 from "aws-cdk-lib/aws-s3";
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { CustomResource, Duration, Lazy, Stack, Tags, Token } from 'aws-cdk-lib';
+import { Effect, type IRole, PolicyStatement } from 'aws-cdk-lib/aws-iam';
+import { Architecture, type Function as LambdaFunction } from 'aws-cdk-lib/aws-lambda';
+import { Bucket, type IBucket } from 'aws-cdk-lib/aws-s3';
 import type {
   BucketDeploymentProps,
   ISource,
   MarkersConfig,
   SourceConfig,
-} from "aws-cdk-lib/aws-s3-deployment";
-import { ValidationError } from "aws-cdk-lib/core/lib/errors";
-import { type BundlingOptions as CargoLambdaBundlingOptions, RustFunction } from "cargo-lambda-cdk";
-import { Construct } from "constructs";
+} from 'aws-cdk-lib/aws-s3-deployment';
+import { ValidationError } from 'aws-cdk-lib/core/lib/errors';
+import { type BundlingOptions as CargoLambdaBundlingOptions, RustFunction } from 'cargo-lambda-cdk';
+import { Construct } from 'constructs';
 
-const CUSTOM_RESOURCE_OWNER_TAG = "aws-cdk:cr-owned";
-const HANDLER_BINARY_NAME = "cargo-bucket-deployment-handler";
+const CUSTOM_RESOURCE_OWNER_TAG = 'aws-cdk:cr-owned';
+const HANDLER_BINARY_NAME = 'cargo-bucket-deployment-handler';
 
 export interface CargoBucketDeploymentProps
   extends Omit<
     BucketDeploymentProps,
-    "expires" | "signContent" | "serverSideEncryptionCustomerAlgorithm" | "useEfs"
+    'expires' | 'signContent' | 'serverSideEncryptionCustomerAlgorithm' | 'useEfs'
   > {
   /**
    * Lambda architecture for the Rust provider.
-   * @default lambda.Architecture.X86_64
+   * @default Architecture.X86_64
    */
-  readonly architecture?: lambda.Architecture;
+  readonly architecture?: Architecture;
 
   /**
    * Optional override for the Rust provider project directory.
@@ -49,20 +49,20 @@ export interface CargoBucketDeploymentProps
  */
 export class CargoBucketDeployment extends Construct {
   private readonly cr: CustomResource;
-  private readonly destinationBucket: s3.IBucket;
+  private readonly destinationBucket: IBucket;
   private readonly sources: SourceConfig[];
-  private _deployedBucket?: s3.IBucket;
+  private _deployedBucket?: IBucket;
   private requestDestinationArn = false;
 
   /**
    * Execution role of the custom resource Lambda function.
    */
-  public readonly handlerRole: iam.IRole;
+  public readonly handlerRole: IRole;
 
   /**
    * The backing Rust Lambda function.
    */
-  public readonly handlerFunction: lambda.Function;
+  public readonly handlerFunction: LambdaFunction;
 
   constructor(scope: Construct, id: string, props: CargoBucketDeploymentProps) {
     super(scope, id);
@@ -72,8 +72,8 @@ export class CargoBucketDeployment extends Construct {
     if (props.distributionPaths) {
       if (!props.distribution) {
         throw new ValidationError(
-          "DistributionSpecifiedDistributionPathsSpecified",
-          "Distribution must be specified if distribution paths are specified",
+          'DistributionSpecifiedDistributionPathsSpecified',
+          'Distribution must be specified if distribution paths are specified',
           this,
         );
       }
@@ -81,11 +81,11 @@ export class CargoBucketDeployment extends Construct {
         if (
           !props.distributionPaths.every(
             (distributionPath) =>
-              Token.isUnresolved(distributionPath) || distributionPath.startsWith("/"),
+              Token.isUnresolved(distributionPath) || distributionPath.startsWith('/'),
           )
         ) {
           throw new ValidationError(
-            "DistributionPathsStart",
+            'DistributionPathsStart',
             'Distribution paths must start with "/"',
             this,
           );
@@ -95,32 +95,32 @@ export class CargoBucketDeployment extends Construct {
 
     if (maybeUnsupported.useEfs) {
       throw new ValidationError(
-        "CargoBucketDeploymentUseEfsUnsupported",
-        "CargoBucketDeployment does not support useEfs in this prototype.",
+        'CargoBucketDeploymentUseEfsUnsupported',
+        'CargoBucketDeployment does not support useEfs in this prototype.',
         this,
       );
     }
 
     if (maybeUnsupported.signContent) {
       throw new ValidationError(
-        "CargoBucketDeploymentSignContentUnsupported",
-        "CargoBucketDeployment does not support signContent in this prototype.",
+        'CargoBucketDeploymentSignContentUnsupported',
+        'CargoBucketDeployment does not support signContent in this prototype.',
         this,
       );
     }
 
     if (maybeUnsupported.serverSideEncryptionCustomerAlgorithm) {
       throw new ValidationError(
-        "CargoBucketDeploymentSseCustomerAlgorithmUnsupported",
-        "CargoBucketDeployment does not support serverSideEncryptionCustomerAlgorithm in this prototype.",
+        'CargoBucketDeploymentSseCustomerAlgorithmUnsupported',
+        'CargoBucketDeployment does not support serverSideEncryptionCustomerAlgorithm in this prototype.',
         this,
       );
     }
 
     if (maybeUnsupported.expires) {
       throw new ValidationError(
-        "CargoBucketDeploymentExpiresUnsupported",
-        "CargoBucketDeployment does not support expires in this prototype.",
+        'CargoBucketDeploymentExpiresUnsupported',
+        'CargoBucketDeployment does not support expires in this prototype.',
         this,
       );
     }
@@ -131,7 +131,7 @@ export class CargoBucketDeployment extends Construct {
       this.node.addDependency(props.vpc);
     }
 
-    const architecture = props.architecture ?? lambda.Architecture.X86_64;
+    const architecture = props.architecture ?? Architecture.X86_64;
     const rustProjectPath = props.rustProjectPath ?? resolveDefaultRustProjectPath(this);
     const bundlingEnvironment = { ...props.bundling?.environment };
 
@@ -139,11 +139,11 @@ export class CargoBucketDeployment extends Construct {
       bundlingEnvironment.RUSTUP_TOOLCHAIN = process.env.RUSTUP_TOOLCHAIN;
     }
 
-    this.handlerFunction = new RustFunction(this, "CustomResourceHandler", {
-      runtime: "provided.al2023",
+    this.handlerFunction = new RustFunction(this, 'CustomResourceHandler', {
+      runtime: 'provided.al2023',
       architecture,
       binaryName: HANDLER_BINARY_NAME,
-      manifestPath: path.join(rustProjectPath, "Cargo.toml"),
+      manifestPath: join(rustProjectPath, 'Cargo.toml'),
       bundling: {
         ...props.bundling,
         environment: bundlingEnvironment,
@@ -157,7 +157,7 @@ export class CargoBucketDeployment extends Construct {
       securityGroups:
         props.securityGroups && props.securityGroups.length > 0 ? props.securityGroups : undefined,
       environment: {
-        RUST_BACKTRACE: "1",
+        RUST_BACKTRACE: '1',
       },
       ...(props.logRetention ? { logRetention: props.logRetention } : {}),
       logGroup: props.logGroup,
@@ -166,8 +166,8 @@ export class CargoBucketDeployment extends Construct {
     const handlerRole = this.handlerFunction.role;
     if (!handlerRole) {
       throw new ValidationError(
-        "CargoBucketDeploymentHandlerRole",
-        "lambda.Function should have created a Role",
+        'CargoBucketDeploymentHandlerRole',
+        'lambda.Function should have created a Role',
         this,
       );
     }
@@ -179,9 +179,9 @@ export class CargoBucketDeployment extends Construct {
 
     this.destinationBucket.grantReadWrite(this.handlerFunction);
     this.handlerFunction.addToRolePolicy(
-      new iam.PolicyStatement({
-        effect: iam.Effect.ALLOW,
-        actions: ["s3:GetBucketTagging"],
+      new PolicyStatement({
+        effect: Effect.ALLOW,
+        actions: ['s3:GetBucketTagging'],
         resources: [this.destinationBucket.bucketArn],
       }),
     );
@@ -192,10 +192,10 @@ export class CargoBucketDeployment extends Construct {
 
     if (props.distribution) {
       this.handlerFunction.addToRolePolicy(
-        new iam.PolicyStatement({
-          effect: iam.Effect.ALLOW,
-          actions: ["cloudfront:GetInvalidation", "cloudfront:CreateInvalidation"],
-          resources: ["*"],
+        new PolicyStatement({
+          effect: Effect.ALLOW,
+          actions: ['cloudfront:GetInvalidation', 'cloudfront:CreateInvalidation'],
+          resources: ['*'],
         }),
       );
     }
@@ -204,16 +204,16 @@ export class CargoBucketDeployment extends Construct {
       validate: () => {
         if (this.sources.some((source) => source.markers) && props.extract === false) {
           return [
-            "Some sources are incompatible with extract=false; sources with deploy-time values must be extracted.",
+            'Some sources are incompatible with extract=false; sources with deploy-time values must be extracted.',
           ];
         }
         return [];
       },
     });
 
-    this.cr = new CustomResource(this, "CustomResource", {
+    this.cr = new CustomResource(this, 'CustomResource', {
       serviceToken: this.handlerFunction.functionArn,
-      resourceType: "Custom::CargoBucketDeployment",
+      resourceType: 'Custom::CargoBucketDeployment',
       properties: {
         SourceBucketNames: Lazy.uncachedList({
           produce: () => this.sources.map((source) => source.bucket.bucketName),
@@ -277,27 +277,27 @@ export class CargoBucketDeployment extends Construct {
       },
     });
 
-    let prefix = props.destinationKeyPrefix ? `:${props.destinationKeyPrefix}` : "";
+    let prefix = props.destinationKeyPrefix ? `:${props.destinationKeyPrefix}` : '';
     prefix += `:${this.cr.node.addr.slice(-8)}`;
     const tagKey = CUSTOM_RESOURCE_OWNER_TAG + prefix;
 
     if (!Token.isUnresolved(tagKey) && tagKey.length > 128) {
       throw new ValidationError(
-        "CargoBucketDeploymentConstructRequiresDestination",
-        "The destinationKeyPrefix must be <=104 characters.",
+        'CargoBucketDeploymentConstructRequiresDestination',
+        'The destinationKeyPrefix must be <=104 characters.',
         this,
       );
     }
 
-    Tags.of(this.destinationBucket).add(tagKey, "true");
+    Tags.of(this.destinationBucket).add(tagKey, 'true');
   }
 
-  public get deployedBucket(): s3.IBucket {
+  public get deployedBucket(): IBucket {
     this.requestDestinationArn = true;
     this._deployedBucket =
       this._deployedBucket ??
-      s3.Bucket.fromBucketAttributes(this, "DestinationBucket", {
-        bucketArn: Token.asString(this.cr.getAtt("DestinationBucketArn")),
+      Bucket.fromBucketAttributes(this, 'DestinationBucket', {
+        bucketArn: Token.asString(this.cr.getAtt('DestinationBucketArn')),
         region: this.destinationBucket.env.region,
         account: this.destinationBucket.env.account,
         isWebsite: this.destinationBucket.isWebsite,
@@ -306,7 +306,7 @@ export class CargoBucketDeployment extends Construct {
   }
 
   public get objectKeys(): string[] {
-    return Token.asList(this.cr.getAtt("SourceObjectKeys"));
+    return Token.asList(this.cr.getAtt('SourceObjectKeys'));
   }
 
   public addSource(source: ISource): void {
@@ -318,17 +318,17 @@ export class CargoBucketDeployment extends Construct {
 }
 
 function resolveDefaultRustProjectPath(scope: Construct): string {
-  const candidates = [path.join(__dirname, "..", "rust"), path.join(__dirname, "..", "..", "rust")];
+  const candidates = [join(__dirname, '..', 'rust'), join(__dirname, '..', '..', 'rust')];
 
   for (const candidate of candidates) {
-    if (existsSync(path.join(candidate, "Cargo.toml"))) {
+    if (existsSync(join(candidate, 'Cargo.toml'))) {
       return candidate;
     }
   }
 
   throw new ValidationError(
-    "CargoBucketDeploymentRustProjectPath",
-    "Unable to locate rust/Cargo.toml. Pass rustProjectPath explicitly.",
+    'CargoBucketDeploymentRustProjectPath',
+    'Unable to locate rust/Cargo.toml. Pass rustProjectPath explicitly.',
     scope,
   );
 }
@@ -358,31 +358,31 @@ function mapSystemMetadata(metadata: CargoBucketDeploymentProps) {
   const res: { [key: string]: string } = {};
 
   if (metadata.cacheControl) {
-    res["cache-control"] = metadata.cacheControl.map((c) => c.value).join(", ");
+    res['cache-control'] = metadata.cacheControl.map((c) => c.value).join(', ');
   }
   if (metadata.contentDisposition) {
-    res["content-disposition"] = metadata.contentDisposition;
+    res['content-disposition'] = metadata.contentDisposition;
   }
   if (metadata.contentEncoding) {
-    res["content-encoding"] = metadata.contentEncoding;
+    res['content-encoding'] = metadata.contentEncoding;
   }
   if (metadata.contentLanguage) {
-    res["content-language"] = metadata.contentLanguage;
+    res['content-language'] = metadata.contentLanguage;
   }
   if (metadata.contentType) {
-    res["content-type"] = metadata.contentType;
+    res['content-type'] = metadata.contentType;
   }
   if (metadata.serverSideEncryption) {
     res.sse = metadata.serverSideEncryption;
   }
   if (metadata.storageClass) {
-    res["storage-class"] = metadata.storageClass;
+    res['storage-class'] = metadata.storageClass;
   }
   if (metadata.websiteRedirectLocation) {
-    res["website-redirect"] = metadata.websiteRedirectLocation;
+    res['website-redirect'] = metadata.websiteRedirectLocation;
   }
   if (metadata.serverSideEncryptionAwsKmsKeyId) {
-    res["sse-kms-key-id"] = metadata.serverSideEncryptionAwsKmsKeyId;
+    res['sse-kms-key-id'] = metadata.serverSideEncryptionAwsKmsKeyId;
   }
   if (metadata.accessControl) {
     res.acl = toKebabCase(metadata.accessControl.toString());
@@ -393,7 +393,7 @@ function mapSystemMetadata(metadata: CargoBucketDeploymentProps) {
 
 function toKebabCase(value: string): string {
   return value
-    .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
-    .replace(/_/g, "-")
+    .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
+    .replace(/_/g, '-')
     .toLowerCase();
 }
