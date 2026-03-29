@@ -24,6 +24,9 @@ importers:
       '@types/node':
         specifier: 24.10.1
         version: 24.10.1
+      aws-cdk:
+        specifier: 2.1114.1
+        version: 2.1114.1
       typescript:
         specifier: 5.9.3
         version: 5.9.3
@@ -291,6 +294,11 @@ packages:
       - table
       - yaml
       - mime-types
+
+  aws-cdk@2.1114.1:
+    resolution: {integrity: sha512-jMaKPWQQs1G6AbhfCQG2zGrgAhTxzP0jn4T2CuwONuvcV374dMPhfC/LBAv48ruSOgpCK9x6V1xeO/aH3EchAA==}
+    engines: {node: '>= 18.0.0'}
+    hasBin: true
 
   cargo-lambda-cdk@0.0.36:
     resolution: {integrity: sha512-H25m7WjzHeifdfEEpsSNkQS6WZETMT6agHaUIfA0rmYlQohOX3lC1qE0OXBEsk1bgCHEatfcsEBkyYgxnzZdLA==}
@@ -755,6 +763,8 @@ snapshots:
       '@aws-cdk/asset-node-proxy-agent-v6': 2.1.1
       '@aws-cdk/cloud-assembly-schema': 53.9.0
       constructs: 10.6.0
+
+  aws-cdk@2.1114.1: {}
 
   cargo-lambda-cdk@0.0.36(aws-cdk-lib@2.245.0(constructs@10.6.0))(constructs@10.6.0):
     dependencies:

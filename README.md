@@ -34,6 +34,7 @@ Tooling:
 - package manager: `pnpm`
 - TypeScript tests: `vitest`
 - formatter/lint runner: `biome`
+- local CDK CLI: `aws-cdk`
 
 Useful commands:
 
@@ -41,6 +42,13 @@ Useful commands:
 - `pnpm test`
 - `pnpm lint`
 - `pnpm rust:check`
+- `pnpm example:synth`
+- `pnpm example:deploy`
+- `pnpm example:destroy`
+
+The example app lives in [examples/simple-app.ts](./examples/simple-app.ts). It creates
+an S3 bucket, deploys the local fixture site under `site/`, and outputs the bucket name
+plus the returned object keys.
 
 If your default Rust toolchain is not the one you want `cargo lambda` to use,
 set `RUSTUP_TOOLCHAIN` before running the TypeScript tests or synthesis.
