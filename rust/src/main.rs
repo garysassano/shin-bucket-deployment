@@ -856,10 +856,7 @@ fn replacement_pairs(
 
     for (key, value) in markers {
         let replacement = if config.json_escape {
-            // `Source.jsonData(..., { escape: true })` already encodes marker values as
-            // JSON-safe fragments (for example, string tokens arrive wrapped in quotes).
-            // Re-serializing here double-escapes those values and produces invalid JSON.
-            value.clone()
+            json_escape_marker_value(value)?
         } else {
             value.clone()
         };
@@ -868,6 +865,24 @@ fn replacement_pairs(
     }
 
     Ok(pairs)
+}
+
+fn json_escape_marker_value(value: &str) -> Result<String> {
+    if let Some(inner) = value.strip_prefix('"').and_then(|v| v.strip_suffix('"')) {
+        // `Source.jsonData(..., { escape: true })` sends string tokens as quoted JSON fragments.
+        // Re-escape only the inner string contents, then restore the surrounding JSON quotes.
+        return serde_json::to_string(inner).map_err(Into::into);
+    }
+
+    if serde_json::from_str::<Value>(value).is_ok() {
+        // Non-string JSON fragments from `Source.jsonData(...)` should be preserved as-is.
+        return Ok(value.to_string());
+    }
+
+    // `Source.data(..., { jsonEscape: true })` expects the replacement bytes to be safe inside an
+    // already-quoted JSON string, so escape the contents without adding new surrounding quotes.
+    let escaped = serde_json::to_string(value)?;
+    Ok(escaped[1..escaped.len() - 1].to_string())
 }
 
 fn replace_all(input: Vec<u8>, needle: &[u8], replacement: &[u8]) -> Vec<u8> {
@@ -1212,6 +1227,48 @@ mod tests {
         assert_eq!(
             String::from_utf8(rendered).expect("output should be valid utf-8"),
             r#"{"stackName":"CargoBucketDeploymentTokenDemo"}"#,
+        );
+    }
+
+    #[test]
+    fn json_escape_quoted_fragments_escape_inner_special_characters() {
+        let mut markers = HashMap::new();
+        markers.insert(
+            "<<marker:0xbaba:0>>".to_string(),
+            r#""value with "quotes" and \backslash""#.to_string(),
+        );
+
+        let rendered = replace_markers(
+            br#"{"specialValue":<<marker:0xbaba:0>>}"#.to_vec(),
+            &markers,
+            &MarkerConfig { json_escape: true },
+        )
+        .expect("json replacement should succeed");
+
+        assert_eq!(
+            String::from_utf8(rendered).expect("output should be valid utf-8"),
+            r#"{"specialValue":"value with \"quotes\" and \\backslash"}"#,
+        );
+    }
+
+    #[test]
+    fn json_escape_raw_values_are_safe_inside_quoted_json_strings() {
+        let mut markers = HashMap::new();
+        markers.insert(
+            "<<marker:0xbaba:0>>".to_string(),
+            r#"value with "quotes" and \backslash"#.to_string(),
+        );
+
+        let rendered = replace_markers(
+            br#"{"specialValue":"<<marker:0xbaba:0>>"}"#.to_vec(),
+            &markers,
+            &MarkerConfig { json_escape: true },
+        )
+        .expect("json replacement should succeed");
+
+        assert_eq!(
+            String::from_utf8(rendered).expect("output should be valid utf-8"),
+            r#"{"specialValue":"value with \"quotes\" and \\backslash"}"#,
         );
     }
 
