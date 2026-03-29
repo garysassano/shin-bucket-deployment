@@ -18,9 +18,9 @@
     "example:synth": "pnpm build && RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN:-1.94.1-x86_64-unknown-linux-gnu} pnpm exec cdk synth --app \"node dist/examples/simple-app.js\"",
     "example:deploy": "pnpm build && RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN:-1.94.1-x86_64-unknown-linux-gnu} pnpm exec cdk deploy --app \"node dist/examples/simple-app.js\" --require-approval never",
     "example:destroy": "pnpm build && RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN:-1.94.1-x86_64-unknown-linux-gnu} pnpm exec cdk destroy --app \"node dist/examples/simple-app.js\" --force",
-    "example:tokens:synth": "pnpm build && RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN:-1.94.1-x86_64-unknown-linux-gnu} pnpm exec cdk synth --app \"node dist/examples/token-replacement-app.js\"",
-    "example:tokens:deploy": "pnpm build && RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN:-1.94.1-x86_64-unknown-linux-gnu} pnpm exec cdk deploy --app \"node dist/examples/token-replacement-app.js\" --require-approval never",
-    "example:tokens:destroy": "pnpm build && RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN:-1.94.1-x86_64-unknown-linux-gnu} pnpm exec cdk destroy --app \"node dist/examples/token-replacement-app.js\" --force"
+    "example:replacements:synth": "pnpm build && RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN:-1.94.1-x86_64-unknown-linux-gnu} pnpm exec cdk synth --app \"node dist/examples/replacement-matrix-app.js\"",
+    "example:replacements:deploy": "pnpm build && RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN:-1.94.1-x86_64-unknown-linux-gnu} pnpm exec cdk deploy --app \"node dist/examples/replacement-matrix-app.js\" --require-approval never",
+    "example:replacements:destroy": "pnpm build && RUSTUP_TOOLCHAIN=${RUSTUP_TOOLCHAIN:-1.94.1-x86_64-unknown-linux-gnu} pnpm exec cdk destroy --app \"node dist/examples/replacement-matrix-app.js\" --force"
   },
   "dependencies": {
     "aws-cdk-lib": "2.245.0",

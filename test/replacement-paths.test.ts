@@ -65,6 +65,31 @@ test("renders plain markers for Source.yamlData", () => {
   expect(properties.SourceMarkersConfig).toBeUndefined();
 });
 
+test("renders source markers for jsonData sources with escape enabled", () => {
+  const stack = new Stack();
+  const destinationBucket = new Bucket(stack, "Dest");
+
+  new CargoBucketDeployment(stack, "Deploy", {
+    sources: [
+      Source.asset(join(__dirname, "fixtures", "my-website")),
+      Source.jsonData(
+        "runtime/config.json",
+        {
+          stackName: Aws.STACK_NAME,
+          region: Aws.REGION,
+        },
+        { escape: true },
+      ),
+    ],
+    destinationBucket,
+  });
+
+  const properties = customResourceProperties(stack);
+  const sourceMarkersConfig = properties.SourceMarkersConfig as Array<Record<string, unknown>>;
+
+  expect(sourceMarkersConfig).toEqual([{}, { jsonEscape: true }]);
+});
+
 test("keeps jsonData without escape on the plain replacement path", () => {
   const stack = new Stack();
   const destinationBucket = new Bucket(stack, "Dest");
