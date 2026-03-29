@@ -45,10 +45,17 @@ Useful commands:
 - `pnpm example:synth`
 - `pnpm example:deploy`
 - `pnpm example:destroy`
+- `pnpm example:tokens:synth`
+- `pnpm example:tokens:deploy`
+- `pnpm example:tokens:destroy`
 
-The example app lives in [examples/simple-app.ts](./examples/simple-app.ts). It creates
-an S3 bucket, deploys the local fixture site under `site/`, and outputs the bucket name
-plus the returned object keys.
+Example apps:
+
+- [examples/simple-app.ts](./examples/simple-app.ts)
+  - plain asset deployment under `site/`
+- [examples/token-replacement-app.ts](./examples/token-replacement-app.ts)
+  - asset deployment plus `Source.jsonData(...)` to exercise deploy-time marker replacement
+  - after deployment, fetch the generated config with `aws s3 cp s3://.../site/runtime/config.json -`
 
 If your default Rust toolchain is not the one you want `cargo lambda` to use,
 set `RUSTUP_TOOLCHAIN` before running the TypeScript tests or synthesis.

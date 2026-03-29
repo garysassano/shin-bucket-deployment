@@ -377,3 +377,193 @@ The valuable redesign is:
 - no dependency on `aws s3 sync`.
 
 Without that redesign, a Rust rewrite would help somewhat, but it would not address the main inefficiencies that the issue is complaining about.
+
+
+## Custom resource update semantics
+
+One important behavior surfaced while testing the standalone Rust prototype: fixing the provider Lambda code does not necessarily cause already-deployed bucket contents to be refreshed on the next `cdk deploy`.
+
+That is not primarily a "Rust vs `aws s3 sync`" issue. It is a CloudFormation custom-resource update-trigger issue.
+
+### What "provider" means here
+
+In this context:
+
+- the construct is the TypeScript CDK implementation,
+- the provider is the Lambda behind the custom resource,
+- the custom resource is the CloudFormation resource that invokes that Lambda on `Create`, `Update`, and `Delete`.
+
+For the standalone prototype:
+
+- construct: `src/cargo-bucket-deployment.ts`
+- provider: `rust/src/main.rs`
+- custom resource type: `Custom::CargoBucketDeployment`
+
+For the original AWS CDK implementation:
+
+- construct: `packages/aws-cdk-lib/aws-s3-deployment/lib/bucket-deployment.ts`
+- provider: `packages/@aws-cdk/custom-resource-handlers/lib/aws-s3-deployment/bucket-deployment-handler/index.py`
+- custom resource type: `Custom::CDKBucketDeployment`
+
+### What actually causes a deployment rerun
+
+The provider Lambda only performs work when CloudFormation sends the custom resource a `Create` or `Update` event.
+
+In the original Python handler, that event eventually leads to `s3_deploy(...)`, which performs the actual deployment work. If there is no custom-resource event, there is no deploy step, no extraction, no marker replacement, and no `aws s3 sync`.
+
+The important detail is that both the original construct and the standalone Rust prototype use a stable Lambda ARN as `serviceToken` and rely on custom-resource property changes to trigger updates.
+
+Typical update-driving properties include:
+
+- `SourceObjectKeys`
+- `SourceMarkers`
+- `SourceMarkersConfig`
+- destination bucket and prefix
+- metadata
+- prune/include/exclude settings
+- CloudFront distribution settings
+
+This means:
+
+- if the source asset changes, the custom resource usually gets an update event,
+- if only the provider Lambda code changes, the custom resource may not get an update event,
+- therefore previously deployed objects may remain unchanged even though the handler code was fixed.
+
+### Why this showed up in the prototype
+
+During testing, a bug in JSON token replacement was fixed in the Rust provider implementation. A subsequent `cdk deploy` updated the Lambda bundle, but the custom resource inputs did not change.
+
+So CloudFormation updated the Lambda function resource, but did not necessarily send an `Update` event to `Custom::CargoBucketDeployment`. The already-written object in S3 therefore stayed as it was.
+
+This is an awkward behavior during provider development, but it is not fundamentally different from the original `BucketDeployment` update model.
+
+### Is this a regression from the original `BucketDeployment`?
+
+Not really, at least not in the narrow "when only provider code changes" scenario.
+
+The original construct has the same general shape:
+
+- stable `serviceToken`
+- input-driven custom-resource properties
+- actual deploy work only on custom-resource `Create` / `Update`
+
+So the behavior is:
+
+- source or property changes rerun the deployment,
+- provider-code-only changes do not necessarily rerun the deployment.
+
+This means the current prototype is aligned with the original design in that respect.
+
+### What happens on a library upgrade
+
+Upgrading the construct package from, say, `v1.0` to `v1.1` splits into two cases.
+
+#### Case 1: only provider implementation changes
+
+Example:
+
+- a bugfix in the Rust handler,
+- no change to synthesized custom-resource properties,
+- same source assets,
+- same destination settings.
+
+Likely outcome:
+
+- the Lambda function code is updated,
+- the custom resource itself may not receive an `Update`,
+- existing bucket contents may remain stale until some other input changes.
+
+#### Case 2: synthesized custom-resource properties change
+
+Example:
+
+- a new property is added,
+- a default changes,
+- a source asset key changes,
+- the generated template shape changes in a way CloudFormation sees on the custom resource.
+
+Likely outcome:
+
+- the custom resource receives an `Update`,
+- the deployment reruns,
+- bucket contents are refreshed accordingly.
+
+The awkward case is therefore "provider bugfix release with no property diff".
+
+## Possible solutions
+
+There are three main ways to handle this.
+
+### 1. Accept the current behavior
+
+Rationale:
+
+- it matches the original `BucketDeployment` model reasonably well,
+- normal user workflows are input-driven,
+- provider-code-only changes are relatively uncommon for end users.
+
+This is the most conservative option.
+
+### 2. Add an internal provider-version trigger
+
+This means the construct implementation itself adds something like:
+
+- `ProviderVersion`
+- `HandlerCodeHash`
+
+to the custom-resource properties automatically.
+
+Then any change to that value causes CloudFormation to send an `Update` event to the custom resource.
+
+Benefits:
+
+- upgrading from `v1.0` to `v1.1` can automatically rerun the deployment,
+- provider bugfixes are more likely to repair already-deployed content,
+- developers do not need to remember a manual "force update" knob.
+
+Costs:
+
+- package upgrades can trigger unexpected redeployments,
+- large assets may be recopied even though source inputs did not change,
+- `prune` can perform deletes as part of that redeploy,
+- CloudFront invalidation may run unexpectedly,
+- a raw handler-code hash may be too sensitive and cause more churn than desired.
+
+This is convenient, but it changes the operational behavior of the construct.
+
+### 3. Add an explicit user-controlled revision prop
+
+This means exposing a public property such as:
+
+- `deploymentRevision`
+- `forceUpdateToken`
+- `forceUpdateNonce`
+
+Then users change that value intentionally when they want to force a redeploy.
+
+Benefits:
+
+- no surprise redeployments,
+- clear and explicit control,
+- useful during provider development and bugfix rollout.
+
+Costs:
+
+- less convenient than an automatic trigger,
+- users must remember to change it when needed.
+
+This is the most predictable option.
+
+## Recommendation
+
+For the standalone experimental construct, an automatic version-based trigger is defensible because it improves iteration ergonomics and makes provider bugfix rollouts less surprising.
+
+For a polished general-purpose construct, an unconditional internal trigger is less obviously correct because library upgrades could suddenly redeploy large amounts of content with no source change.
+
+The best balanced long-term design is likely:
+
+- keep the default behavior input-driven,
+- add an explicit public prop such as `deploymentRevision`,
+- optionally add an opt-in mode such as `redeployOnProviderChange` if automatic reruns are desired.
+
+For now, do not implement automatic provider-version forcing by default. The behavior should be documented clearly, and any rerun trigger should be added deliberately once the desired operational semantics are settled.
