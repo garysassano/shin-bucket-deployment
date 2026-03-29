@@ -30,6 +30,15 @@
     "indentWidth": 2,
     "lineWidth": 100
   },
+  "json": {
+    "formatter": {
+      "enabled": true,
+      "trailingCommas": "all"
+    },
+    "parser": {
+      "allowTrailingCommas": true
+    }
+  },
   "linter": {
     "enabled": true,
     "rules": {
@@ -40,8 +49,8 @@
     }
   },
   "vcs": {
-    "clientKind": "git",
     "enabled": true,
+    "clientKind": "git",
     "useIgnoreFile": true
   },
   "$schema": "https://biomejs.dev/schemas/2.4.9/schema.json"
