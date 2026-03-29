@@ -45,17 +45,17 @@ Useful commands:
 - `pnpm example:synth`
 - `pnpm example:deploy`
 - `pnpm example:destroy`
-- `pnpm example:tokens:synth`
-- `pnpm example:tokens:deploy`
-- `pnpm example:tokens:destroy`
+- `pnpm example:replacements:synth`
+- `pnpm example:replacements:deploy`
+- `pnpm example:replacements:destroy`
 
 Example apps:
 
 - [examples/simple-app.ts](./examples/simple-app.ts)
   - plain asset deployment under `site/`
-- [examples/token-replacement-app.ts](./examples/token-replacement-app.ts)
-  - asset deployment plus `Source.jsonData(...)` to exercise deploy-time marker replacement
-  - after deployment, fetch the generated config with `aws s3 cp s3://.../site/runtime/config.json -`
+- [examples/replacement-matrix-app.ts](./examples/replacement-matrix-app.ts)
+  - end-to-end replacement matrix covering `Source.data(...)`, `Source.yamlData(...)`, `Source.jsonData(..., { escape: false })`, `Source.jsonData(..., { escape: true })`, and mixed sources in one deployment
+  - after deployment, use the emitted `Verify*Command` outputs to fetch each generated runtime file from S3
 
 If your default Rust toolchain is not the one you want `cargo lambda` to use,
 set `RUSTUP_TOOLCHAIN` before running the TypeScript tests or synthesis.
