@@ -14,3 +14,4 @@ Copied analysis:
 
 - [bucket-deployment-custom-construct-analysis.md](./bucket-deployment-custom-construct-analysis.md)
 - [bucket-deployment-rust-redesign-notes.md](./bucket-deployment-rust-redesign-notes.md)
+- [bucket-deployment-validation-status.md](./bucket-deployment-validation-status.md)
