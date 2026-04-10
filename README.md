@@ -62,6 +62,11 @@ Useful commands:
 - `pnpm example:prune:v2:synth`
 - `pnpm example:prune:v2:deploy`
 - `pnpm example:prune:destroy`
+- `pnpm example:retain:v1:synth`
+- `pnpm example:retain:v1:deploy`
+- `pnpm example:retain:v2:synth`
+- `pnpm example:retain:v2:deploy`
+- `pnpm example:retain:destroy`
 
 Example apps:
 
@@ -76,6 +81,8 @@ I kept the current filenames stable so the `pnpm` commands and any in-flight dep
 | Metadata and filters | [examples/controls-matrix-app.ts](./examples/controls-matrix-app.ts) | `pnpm example:controls:deploy` | Manual validation target for `include` / `exclude`, user metadata, cache-control, SSE, storage class, and `head-object` inspection. |
 | Prune cycle v1 | [examples/prune-cycle-v1-app.ts](./examples/prune-cycle-v1-app.ts) | `pnpm example:prune:v1:deploy` | Baseline deploy that creates both `runtime/current.txt` and `runtime/legacy.txt`. |
 | Prune cycle v2 | [examples/prune-cycle-v2-app.ts](./examples/prune-cycle-v2-app.ts) | `pnpm example:prune:v2:deploy` | Update over the same stack to confirm `prune=true` removes `runtime/legacy.txt`. |
+| Retain cycle v1 | [examples/retain-cycle-v1-app.ts](./examples/retain-cycle-v1-app.ts) | `pnpm example:retain:v1:deploy` | Baseline deploy using `retainOnDelete: true` and a retained bucket, writing under `retain-v1/`. |
+| Retain cycle v2 | [examples/retain-cycle-v2-app.ts](./examples/retain-cycle-v2-app.ts) | `pnpm example:retain:v2:deploy` | Update over the same stack using `retain-v2/` to verify the old prefix is not deleted when `retainOnDelete: true`. |
 
 Example validation targets:
 
@@ -87,6 +94,7 @@ Example validation targets:
 | CloudFront invalidation (async) | S3 content updates, invalidation creation, faster stack completion, and eventual CDN freshness after deploy completion. |
 | Metadata and filters | Included files only, excluded files absent, metadata normalized and applied to uploaded objects. |
 | Prune cycle | Old objects removed on update when no longer present in the source set. |
+| Retain cycle | Old prefixes preserved across updates and objects preserved after stack delete when `retainOnDelete: true`. |
 
 Validation status so far:
 
@@ -100,7 +108,7 @@ Validation status so far:
 | Include / exclude filters | Done | Manual deploy and S3 inspection on April 10, 2026 | `filtered-site/index.html` and `filtered-site/runtime/probe.txt` were present, while `filtered-site/app.js` returned `404 Not Found`. |
 | Metadata mapping | Done | Manual deploy and `head-object` inspection on April 10, 2026 | `metadata-site/runtime/headers.json` showed the expected cache-control, disposition, language, SSE, storage class, and lowercased user metadata keys. |
 | Prune on update | Done | Manual v1 deploy followed by v2 update on April 10, 2026 | `runtime/legacy.txt` existed after v1, then returned `404 Not Found` after the v2 deploy while `runtime/current.txt` updated to `version=v2`. |
-| `retainOnDelete` update/delete semantics | Pending | Not yet exercised in AWS | No dedicated manual stack yet. |
+| `retainOnDelete` update/delete semantics | Done | Manual v1 deploy, v2 update, and stack destroy on April 10-11, 2026 | `retain-v1/` remained after the v2 update, and both `retain-v1/` and `retain-v2/` objects were still present and readable after stack destroy because the bucket and deployment data were retained. |
 | Validation/error branches (`distributionPaths`, unsupported props, `extract=false` with markers) | Partial | Covered in code paths, not in an explicit manual stack | Better suited to targeted unit/synth tests than AWS deployment. |
 
 
