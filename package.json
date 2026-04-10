@@ -34,7 +34,12 @@
     "example:prune:v1:deploy": "pnpm build && pnpm exec cdk deploy --app \"node dist/examples/prune-cycle-v1-app.js\" --require-approval never",
     "example:prune:v2:synth": "pnpm build && pnpm exec cdk synth --app \"node dist/examples/prune-cycle-v2-app.js\"",
     "example:prune:v2:deploy": "pnpm build && pnpm exec cdk deploy --app \"node dist/examples/prune-cycle-v2-app.js\" --require-approval never",
-    "example:prune:destroy": "pnpm build && pnpm exec cdk destroy --app \"node dist/examples/prune-cycle-v2-app.js\" --force"
+    "example:prune:destroy": "pnpm build && pnpm exec cdk destroy --app \"node dist/examples/prune-cycle-v2-app.js\" --force",
+    "example:retain:v1:synth": "pnpm build && pnpm exec cdk synth --app \"node dist/examples/retain-cycle-v1-app.js\"",
+    "example:retain:v1:deploy": "pnpm build && pnpm exec cdk deploy --app \"node dist/examples/retain-cycle-v1-app.js\" --require-approval never",
+    "example:retain:v2:synth": "pnpm build && pnpm exec cdk synth --app \"node dist/examples/retain-cycle-v2-app.js\"",
+    "example:retain:v2:deploy": "pnpm build && pnpm exec cdk deploy --app \"node dist/examples/retain-cycle-v2-app.js\" --require-approval never",
+    "example:retain:destroy": "pnpm build && pnpm exec cdk destroy --app \"node dist/examples/retain-cycle-v2-app.js\" --force"
   },
   "dependencies": {
     "aws-cdk-lib": "2.245.0",
