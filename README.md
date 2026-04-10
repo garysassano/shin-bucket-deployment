@@ -97,9 +97,9 @@ Validation status so far:
 | Replacement matrix manual validation | Done | Manual S3 fetches on March 30, 2026 | `escaped` variants produced valid JSON, `raw` variants intentionally remained invalid JSON, `plain.txt` matched expectations. |
 | CloudFront invalidation with synchronous wait | Done | Manual deploy/update on April 10, 2026 | Redeploy from `CacheProbeToken=v1` to `v2` updated S3, produced a new CloudFront invalidation, and served `v2` immediately from CloudFront after the stack completed. |
 | CloudFront invalidation with asynchronous wait | Done | Manual deploy/update on April 10, 2026 | Redeploy from `CacheProbeToken=v1` to `v2` updated S3, created a new invalidation, and returned in about 23s without waiting for CloudFront completion. By the first post-deploy probe, CloudFront was already serving `v2`. |
-| Include / exclude filters | Pending | `controls-matrix-app.ts` added | Needs deploy-time inspection of resulting S3 keys. |
-| Metadata mapping | Pending | `controls-matrix-app.ts` added | Needs `aws s3api head-object` verification. |
-| Prune on update | Pending | `prune-cycle-v1-app.ts` and `prune-cycle-v2-app.ts` added | Needs v1 deploy followed by v2 update. |
+| Include / exclude filters | Done | Manual deploy and S3 inspection on April 10, 2026 | `filtered-site/index.html` and `filtered-site/runtime/probe.txt` were present, while `filtered-site/app.js` returned `404 Not Found`. |
+| Metadata mapping | Done | Manual deploy and `head-object` inspection on April 10, 2026 | `metadata-site/runtime/headers.json` showed the expected cache-control, disposition, language, SSE, storage class, and lowercased user metadata keys. |
+| Prune on update | Done | Manual v1 deploy followed by v2 update on April 10, 2026 | `runtime/legacy.txt` existed after v1, then returned `404 Not Found` after the v2 deploy while `runtime/current.txt` updated to `version=v2`. |
 | `retainOnDelete` update/delete semantics | Pending | Not yet exercised in AWS | No dedicated manual stack yet. |
 | Validation/error branches (`distributionPaths`, unsupported props, `extract=false` with markers) | Partial | Covered in code paths, not in an explicit manual stack | Better suited to targeted unit/synth tests than AWS deployment. |
 
