@@ -5,10 +5,11 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use aws_config::BehaviorVersion;
-use aws_sdk_cloudfront::types::{InvalidationBatch, Paths};
 use aws_sdk_cloudfront::Client as CloudFrontClient;
+use aws_sdk_cloudfront::types::{InvalidationBatch, Paths};
+use aws_sdk_s3::Client as S3Client;
 use aws_sdk_s3::operation::copy_object::builders::CopyObjectFluentBuilder;
 use aws_sdk_s3::operation::put_object::builders::PutObjectFluentBuilder;
 use aws_sdk_s3::primitives::ByteStream;
@@ -16,12 +17,11 @@ use aws_sdk_s3::types::{
     Delete, MetadataDirective, ObjectCannedAcl, ObjectIdentifier, ServerSideEncryption,
     StorageClass,
 };
-use aws_sdk_s3::Client as S3Client;
 use globset::{Glob, GlobMatcher};
-use lambda_runtime::{service_fn, Error, LambdaEvent};
+use lambda_runtime::{Error, LambdaEvent, service_fn};
 use reqwest::Client as HttpClient;
 use serde::Deserialize;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use tempfile::NamedTempFile;
 use tokio::io::AsyncWriteExt;
 use tokio::time::sleep;
@@ -1098,11 +1098,7 @@ fn compile_globs(patterns: &[String]) -> Result<Vec<GlobMatcher>> {
 }
 
 fn normalize_destination_prefix(prefix: String) -> String {
-    if prefix == "/" {
-        String::new()
-    } else {
-        prefix
-    }
+    if prefix == "/" { String::new() } else { prefix }
 }
 
 fn normalize_archive_key(raw: &str) -> Result<String> {
@@ -1189,7 +1185,10 @@ mod tests {
     #[test]
     fn plain_markers_replace_multiple_tokens_and_repeated_occurrences() {
         let mut markers = HashMap::new();
-        markers.insert("<<marker:0xbaba:0>>".to_string(), "eu-central-1".to_string());
+        markers.insert(
+            "<<marker:0xbaba:0>>".to_string(),
+            "eu-central-1".to_string(),
+        );
         markers.insert(
             "<<marker:0xbaba:1>>".to_string(),
             "CargoBucketDeploymentTokenDemo".to_string(),
