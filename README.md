@@ -27,7 +27,7 @@ Notable limitations in this prototype:
 - it rejects `expires`
 - it rejects `signContent`
 - it rejects `serverSideEncryptionCustomerAlgorithm`
-- it has only been validated with synth-level tests in this environment
+- AWS runtime validation is still partial and tracked in the validation table below
 
 Tooling:
 
@@ -48,15 +48,60 @@ Useful commands:
 - `pnpm example:replacements:synth`
 - `pnpm example:replacements:deploy`
 - `pnpm example:replacements:destroy`
+- `pnpm example:cloudfront:synth`
+- `pnpm example:cloudfront:deploy`
+- `pnpm example:cloudfront:destroy`
+- `pnpm example:cloudfront:async:synth`
+- `pnpm example:cloudfront:async:deploy`
+- `pnpm example:cloudfront:async:destroy`
+- `pnpm example:controls:synth`
+- `pnpm example:controls:deploy`
+- `pnpm example:controls:destroy`
+- `pnpm example:prune:v1:synth`
+- `pnpm example:prune:v1:deploy`
+- `pnpm example:prune:v2:synth`
+- `pnpm example:prune:v2:deploy`
+- `pnpm example:prune:destroy`
 
 Example apps:
 
-- [examples/simple-app.ts](./examples/simple-app.ts)
-  - plain asset deployment under `site/`
-- [examples/replacement-matrix-app.ts](./examples/replacement-matrix-app.ts)
-  - end-to-end replacement matrix covering `Source.data(...)`, `Source.data(..., { jsonEscape: true })`, `Source.yamlData(...)`, `Source.jsonData(..., { escape: false })`, `Source.jsonData(..., { escape: true })`, and mixed sources in one deployment
-  - includes a deploy-time CloudFormation parameter whose value contains quotes and backslashes, so `raw` outputs act as negative controls and `escaped` outputs should remain valid JSON
-  - after deployment, use the emitted `Verify*Command` outputs to fetch each generated runtime file from S3
+I kept the current filenames stable so the `pnpm` commands and any in-flight deployments do not change underneath us.
+
+| Stack | File | Deploy command | Purpose |
+| --- | --- | --- | --- |
+| Simple asset deploy | [examples/simple-app.ts](./examples/simple-app.ts) | `pnpm example:deploy` | Plain asset deployment under `site/` with object key outputs. |
+| Replacement matrix | [examples/replacement-matrix-app.ts](./examples/replacement-matrix-app.ts) | `pnpm example:replacements:deploy` | End-to-end marker replacement coverage for `Source.data(...)`, `Source.data(..., { jsonEscape: true })`, `Source.yamlData(...)`, `Source.jsonData(..., { escape: false })`, `Source.jsonData(..., { escape: true })`, and mixed-source deployments. |
+| CloudFront invalidation (sync) | [examples/cloudfront-invalidation-app.ts](./examples/cloudfront-invalidation-app.ts) | `pnpm example:cloudfront:deploy` | Cache-probe deployment with `waitForDistributionInvalidation: true` to prove the stack blocks until CloudFront invalidation completes. |
+| CloudFront invalidation (async) | [examples/cloudfront-invalidation-async-app.ts](./examples/cloudfront-invalidation-async-app.ts) | `pnpm example:cloudfront:async:deploy` | Same cache-probe deployment, but with `waitForDistributionInvalidation: false` so the stack returns before CloudFront finishes invalidating. |
+| Metadata and filters | [examples/controls-matrix-app.ts](./examples/controls-matrix-app.ts) | `pnpm example:controls:deploy` | Manual validation target for `include` / `exclude`, user metadata, cache-control, SSE, storage class, and `head-object` inspection. |
+| Prune cycle v1 | [examples/prune-cycle-v1-app.ts](./examples/prune-cycle-v1-app.ts) | `pnpm example:prune:v1:deploy` | Baseline deploy that creates both `runtime/current.txt` and `runtime/legacy.txt`. |
+| Prune cycle v2 | [examples/prune-cycle-v2-app.ts](./examples/prune-cycle-v2-app.ts) | `pnpm example:prune:v2:deploy` | Update over the same stack to confirm `prune=true` removes `runtime/legacy.txt`. |
+
+Example validation targets:
+
+| Stack | Main things to verify |
+| --- | --- |
+| Simple asset deploy | Bucket contents and returned object keys. |
+| Replacement matrix | Plain token replacement, JSON escaping, YAML replacement, and negative-control `raw` outputs. |
+| CloudFront invalidation (sync) | S3 content updates, CloudFront invalidation creation, CloudFormation waiting behavior, and fresh CDN content immediately after deploy completion. |
+| CloudFront invalidation (async) | S3 content updates, invalidation creation, faster stack completion, and eventual CDN freshness after deploy completion. |
+| Metadata and filters | Included files only, excluded files absent, metadata normalized and applied to uploaded objects. |
+| Prune cycle | Old objects removed on update when no longer present in the source set. |
+
+Validation status so far:
+
+| Capability | Status | Evidence | Notes |
+| --- | --- | --- | --- |
+| TypeScript synth/build path | Done | `pnpm typecheck`, `pnpm build` | Current examples and scripts compile. |
+| Biome formatting/lint | Done | `pnpm lint` | Clean after adding the manual-validation stacks. |
+| Replacement matrix manual validation | Done | Manual S3 fetches on March 30, 2026 | `escaped` variants produced valid JSON, `raw` variants intentionally remained invalid JSON, `plain.txt` matched expectations. |
+| CloudFront invalidation with synchronous wait | Done | Manual deploy/update on April 10, 2026 | Redeploy from `CacheProbeToken=v1` to `v2` updated S3, produced a new CloudFront invalidation, and served `v2` immediately from CloudFront after the stack completed. |
+| CloudFront invalidation with asynchronous wait | Done | Manual deploy/update on April 10, 2026 | Redeploy from `CacheProbeToken=v1` to `v2` updated S3, created a new invalidation, and returned in about 23s without waiting for CloudFront completion. By the first post-deploy probe, CloudFront was already serving `v2`. |
+| Include / exclude filters | Pending | `controls-matrix-app.ts` added | Needs deploy-time inspection of resulting S3 keys. |
+| Metadata mapping | Pending | `controls-matrix-app.ts` added | Needs `aws s3api head-object` verification. |
+| Prune on update | Pending | `prune-cycle-v1-app.ts` and `prune-cycle-v2-app.ts` added | Needs v1 deploy followed by v2 update. |
+| `retainOnDelete` update/delete semantics | Pending | Not yet exercised in AWS | No dedicated manual stack yet. |
+| Validation/error branches (`distributionPaths`, unsupported props, `extract=false` with markers) | Partial | Covered in code paths, not in an explicit manual stack | Better suited to targeted unit/synth tests than AWS deployment. |
 
 
 The Rust provider lives under [rust](./rust), the construct code under [src](./src),
