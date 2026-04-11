@@ -1,11 +1,9 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { CustomResource, Duration, Lazy, RemovalPolicy, Stack, Tags, Token } from "aws-cdk-lib";
-import type { IVpc } from "aws-cdk-lib/aws-ec2";
-import { AccessPoint, FileSystem as EfsFileSystem, type IAccessPoint } from "aws-cdk-lib/aws-efs";
+import { CustomResource, Duration, Lazy, Stack, Tags, Token } from "aws-cdk-lib";
 import { Effect, type IRole, PolicyStatement } from "aws-cdk-lib/aws-iam";
-import { Architecture, FileSystem, type Function as LambdaFunction } from "aws-cdk-lib/aws-lambda";
+import { Architecture, type Function as LambdaFunction } from "aws-cdk-lib/aws-lambda";
 import { Bucket, type IBucket } from "aws-cdk-lib/aws-s3";
 import type {
   BucketDeploymentProps,
@@ -20,17 +18,15 @@ import { Construct } from "constructs";
 const CUSTOM_RESOURCE_OWNER_TAG = "aws-cdk:cr-owned";
 const HANDLER_BINARY_NAME = "cargo-bucket-deployment-handler";
 const SHARED_HANDLER_ID_PREFIX = "CargoBucketDeploymentHandler";
-const EFS_ACCESS_POINT_PATH = "/lambda";
-const EFS_MOUNT_PATH = `/mnt${EFS_ACCESS_POINT_PATH}`;
 
 export interface CargoBucketDeploymentProps
   extends Omit<
     BucketDeploymentProps,
-    "expires" | "signContent" | "serverSideEncryptionCustomerAlgorithm"
+    "expires" | "signContent" | "serverSideEncryptionCustomerAlgorithm" | "useEfs"
   > {
   /**
    * Lambda architecture for the Rust provider.
-   * @default Architecture.X86_64
+   * @default Architecture.ARM_64
    */
   readonly architecture?: Architecture;
 
@@ -99,10 +95,10 @@ export class CargoBucketDeployment extends Construct {
       }
     }
 
-    if (props.useEfs && !props.vpc) {
+    if (maybeUnsupported.useEfs) {
       throw new ValidationError(
-        "VpcSpecifiedEfsSet",
-        "Vpc must be specified if useEfs is set",
+        "CargoBucketDeploymentUseEfsUnsupported",
+        "CargoBucketDeployment does not support useEfs. Increase ephemeralStorageSize instead.",
         this,
       );
     }
@@ -137,17 +133,9 @@ export class CargoBucketDeployment extends Construct {
       this.node.addDependency(props.vpc);
     }
 
-    const architecture = props.architecture ?? Architecture.X86_64;
+    const architecture = props.architecture ?? Architecture.ARM_64;
     const rustProjectPath = props.rustProjectPath ?? resolveDefaultRustProjectPath(this);
-    const efsAccessPoint =
-      props.useEfs && props.vpc ? getOrCreateEfsAccessPoint(this, props.vpc) : undefined;
-    this.handlerFunction = getOrCreateHandler(
-      this,
-      props,
-      architecture,
-      rustProjectPath,
-      efsAccessPoint,
-    );
+    this.handlerFunction = getOrCreateHandler(this, props, architecture, rustProjectPath);
 
     const handlerRole = this.handlerFunction.role;
     if (!handlerRole) {
@@ -324,7 +312,6 @@ function getOrCreateHandler(
   props: CargoBucketDeploymentProps,
   architecture: Architecture,
   rustProjectPath: string,
-  efsAccessPoint?: IAccessPoint,
 ): RustFunction {
   const stack = Stack.of(scope);
   const manifestPath = join(rustProjectPath, "Cargo.toml");
@@ -332,7 +319,6 @@ function getOrCreateHandler(
     stack,
     props,
     architecture,
-    efsAccessPoint,
     manifestPath,
   )}`;
 
@@ -363,12 +349,8 @@ function getOrCreateHandler(
     securityGroups:
       props.securityGroups && props.securityGroups.length > 0 ? props.securityGroups : undefined,
     environment: {
-      ...(props.useEfs ? { MOUNT_PATH: EFS_MOUNT_PATH } : undefined),
       RUST_BACKTRACE: "1",
     },
-    filesystem: efsAccessPoint
-      ? FileSystem.fromEfsAccessPoint(efsAccessPoint, EFS_MOUNT_PATH)
-      : undefined,
     ...(props.logRetention ? { logRetention: props.logRetention } : {}),
     logGroup: props.logGroup,
   });
@@ -378,13 +360,11 @@ function renderHandlerConfigHash(
   stack: Stack,
   props: CargoBucketDeploymentProps,
   architecture: Architecture,
-  efsAccessPoint: IAccessPoint | undefined,
   manifestPath: string,
 ): string {
   const config = {
     architecture: architecture.name,
     bundling: normalizeSingletonValue(props.bundling),
-    efsAccessPoint: normalizeSingletonValue(efsAccessPoint),
     ephemeralStorageSize: normalizeSingletonValue(props.ephemeralStorageSize),
     logGroup: normalizeSingletonValue(props.logGroup),
     logRetention: normalizeSingletonValue(props.logRetention),
@@ -398,7 +378,6 @@ function renderHandlerConfigHash(
             .sort()
         : undefined,
     stack: stack.node.addr,
-    useEfs: props.useEfs ?? false,
     vpc: normalizeSingletonValue(props.vpc),
     vpcSubnets: normalizeSingletonValue(props.vpcSubnets),
   };
@@ -445,50 +424,6 @@ function normalizeSingletonValue(value: unknown): unknown {
 
 function stableStringify(value: unknown): string {
   return JSON.stringify(normalizeSingletonValue(value));
-}
-
-function getOrCreateEfsAccessPoint(scope: Construct, vpc: IVpc): IAccessPoint {
-  const fileSystem = getOrCreateEfsFileSystem(scope, vpc);
-  const stack = Stack.of(scope);
-  const accessPointId = `CargoBucketDeploymentAccessPoint${vpc.node.addr}`;
-  return (
-    (stack.node.tryFindChild(accessPointId) as AccessPoint | undefined) ??
-    createEfsAccessPoint(stack, accessPointId, fileSystem)
-  );
-}
-
-function getOrCreateEfsFileSystem(scope: Construct, vpc: IVpc): EfsFileSystem {
-  const stack = Stack.of(scope);
-  const fileSystemId = `CargoBucketDeploymentEfs${vpc.node.addr}`;
-  return (
-    (stack.node.tryFindChild(fileSystemId) as EfsFileSystem | undefined) ??
-    new EfsFileSystem(stack, fileSystemId, {
-      vpc,
-      removalPolicy: RemovalPolicy.DESTROY,
-    })
-  );
-}
-
-function createEfsAccessPoint(
-  scope: Construct,
-  id: string,
-  fileSystem: EfsFileSystem,
-): AccessPoint {
-  const accessPoint = new AccessPoint(scope, id, {
-    fileSystem,
-    path: EFS_ACCESS_POINT_PATH,
-    createAcl: {
-      ownerUid: "1001",
-      ownerGid: "1001",
-      permissions: "0777",
-    },
-    posixUser: {
-      uid: "1001",
-      gid: "1001",
-    },
-  });
-  accessPoint.node.addDependency(fileSystem.mountTargetsAvailable);
-  return accessPoint;
 }
 
 function sourceConfigEqual(stack: Stack, a: SourceConfig, b: SourceConfig) {

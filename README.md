@@ -46,6 +46,7 @@ Current limitations:
 - not packaged as a publishable construct library yet
 - assumes `cargo lambda` is available locally at synth time
 - not integrated into `aws-cdk-lib`'s handler generation
+- does not support `useEfs`; increase `ephemeralStorageSize` first if you need more scratch space
 - rejects `expires`
 - rejects `signContent`
 - rejects `serverSideEncryptionCustomerAlgorithm`
@@ -71,21 +72,10 @@ This tracks parity against the upstream [`BucketDeployment`](https://docs.aws.am
 | `addSource()` | ✅ | Supported. |
 | Deploy-time replacement for `Source.data`, `Source.jsonData`, `Source.yamlData` | ✅ | Supported and validated. |
 | `vpc`, `vpcSubnets`, `securityGroups`, `role`, `memoryLimit`, `ephemeralStorageSize`, `logRetention`, `logGroup` | ✅ | Wired through to the Rust provider function. |
-| `useEfs` | ✅ | Supported with the same VPC requirement as upstream. |
+| `useEfs` | ❌ | Intentionally not supported. Prefer increasing `ephemeralStorageSize` first now that Lambda supports up to 10,240 MiB of ephemeral storage. Longer term, S3 Files is the more interesting direction once CloudFormation supports it. |
 | `expires` | ❌ | Not supported yet. |
 | `signContent` | ❌ | Not supported yet. |
 | `serverSideEncryptionCustomerAlgorithm` | ❌ | Not supported yet. |
-
-## Execution Model Comparison
-
-| Concern | `BucketDeployment` today | `CargoBucketDeployment` today | Next step |
-| --- | --- | --- | --- |
-| Provider runtime | Python singleton Lambda | Shared Rust Lambda per compatible configuration within a stack | Already implemented. |
-| S3 transfer engine | AWS CLI `s3 cp` / `s3 sync` from the handler | AWS SDK copy/upload/delete calls with bounded transfer concurrency | Tune concurrency and large-transfer behavior further if needed. |
-| Extracted deploy path | Download zip, extract full tree to a working directory, rewrite files in place, then sync the tree | Plan directly from the zip archive, open each archive once, and upload entries individually | Already in a good place. |
-| Working storage | `/tmp` by default, optional EFS support | `/tmp` by default, optional EFS-backed work directory via `MOUNT_PATH` | Already implemented. |
-| CloudFront invalidation | One batched invalidation request for all paths | One batched invalidation request for all paths | Already in a good place. |
-| Prune/delete path | AWS CLI sync/delete behavior | SDK list + batched delete with namespace-safe prefixes, page-by-page cleanup, and per-object delete error checks | Already in a good place. |
 
 ## Quick Start
 
@@ -170,20 +160,6 @@ export class DemoStack extends Stack {
 | Metadata and filters | [examples/metadata-filters-app.ts](./examples/metadata-filters-app.ts) | Include/exclude and metadata behavior. |
 | Prune update | [examples/prune-update-v1-app.ts](./examples/prune-update-v1-app.ts), [examples/prune-update-v2-app.ts](./examples/prune-update-v2-app.ts) | Update path that removes no-longer-deployed objects. |
 | Retain on delete | [examples/retain-on-delete-v1-app.ts](./examples/retain-on-delete-v1-app.ts), [examples/retain-on-delete-v2-app.ts](./examples/retain-on-delete-v2-app.ts) | Update/delete path when `retainOnDelete: true`. |
-
-Runner names:
-
-- `simple`
-- `replacement`
-- `cloudfront-sync`
-- `cloudfront-async`
-- `metadata-filters`
-- `prune-update-v1`
-- `prune-update-v2`
-- `prune-update`
-- `retain-on-delete-v1`
-- `retain-on-delete-v2`
-- `retain-on-delete`
 
 ## Implementation Notes
 
