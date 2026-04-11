@@ -6,8 +6,9 @@ use serde_json::{Map, Value, json};
 use tracing::error;
 use uuid::Uuid;
 
-use crate::deploy::{bucket_owned, cloudfront_invalidate, delete_prefix, deploy};
+use crate::cloudfront::invalidate as invalidate_cloudfront;
 use crate::request::{parse_old_destination, parse_request};
+use crate::s3::{bucket_owned, delete_prefix, deploy};
 use crate::types::{AppState, CloudFormationEvent, ResponsePayload};
 
 pub(crate) async fn handle_event(
@@ -83,7 +84,7 @@ async fn process_request(state: &AppState, event: &CloudFormationEvent) -> Resul
 
     if event.request_type == "Update" && !request.retain_on_delete {
         if let Some(old_props) = old_props {
-            let (old_bucket, old_prefix) = parse_old_destination(old_props);
+            let (old_bucket, old_prefix) = parse_old_destination(old_props)?;
 
             if old_bucket.as_deref() != Some(request.dest_bucket_name.as_str())
                 || old_prefix != request.dest_bucket_prefix
@@ -101,7 +102,7 @@ async fn process_request(state: &AppState, event: &CloudFormationEvent) -> Resul
 
     if let Some(distribution_id) = request.distribution_id.as_deref() {
         if !distribution_id.is_empty() {
-            cloudfront_invalidate(
+            invalidate_cloudfront(
                 state,
                 distribution_id,
                 &request.distribution_paths,

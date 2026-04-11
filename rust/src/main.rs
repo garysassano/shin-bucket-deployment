@@ -1,8 +1,9 @@
 mod cloudformation;
-mod deploy;
+mod cloudfront;
 mod metadata;
 mod replace;
 mod request;
+mod s3;
 mod types;
 
 use std::sync::Arc;
