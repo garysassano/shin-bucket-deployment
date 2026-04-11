@@ -1,6 +1,7 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Write};
+use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
 use aws_sdk_s3::error::ProvideErrorMetadata;
@@ -8,6 +9,8 @@ use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::{Delete, MetadataDirective, ObjectIdentifier};
 use tempfile::NamedTempFile;
 use tokio::io::AsyncWriteExt;
+use tokio::sync::Semaphore;
+use tokio::task::JoinSet;
 use tracing::{info, warn};
 use zip::ZipArchive;
 
@@ -24,6 +27,26 @@ mod metadata;
 
 use self::metadata::{apply_copy_metadata, apply_put_metadata};
 
+const MAX_PARALLEL_TRANSFERS: usize = 8;
+
+#[derive(Clone)]
+struct CopyPlan {
+    source_bucket: String,
+    source_key: String,
+    destination_key: String,
+}
+
+struct ZipEntryPlan {
+    entry_index: usize,
+    source_index: usize,
+    destination_key: String,
+}
+
+enum UploadPayload {
+    Bytes(Vec<u8>),
+    TempFile(NamedTempFile),
+}
+
 pub(crate) async fn deploy(state: &AppState, request: &DeploymentRequest) -> Result<()> {
     validate_request_lengths(request)?;
 
@@ -31,30 +54,12 @@ pub(crate) async fn deploy(state: &AppState, request: &DeploymentRequest) -> Res
     let metadata = ObjectMetadata::from_request(request);
     let (archives, manifest) = plan_deployment(state, request, &filters).await?;
 
-    for planned in manifest.values() {
-        let destination_key = join_s3_key(&request.dest_bucket_prefix, &planned.relative_key);
-        match &planned.action {
-            PlannedAction::CopyObject { source_index } => {
-                copy_source_object(state, request, *source_index, &destination_key, &metadata)
-                    .await?;
-            }
-            PlannedAction::ZipEntry {
-                archive_index,
-                entry_index,
-                source_index,
-            } => {
-                upload_zip_entry(
-                    state,
-                    &archives[*archive_index],
-                    request,
-                    *source_index,
-                    *entry_index,
-                    &destination_key,
-                    &metadata,
-                )
-                .await?;
-            }
-        }
+    if request.extract {
+        let zip_plans = collect_zip_entry_plans(&manifest, &request.dest_bucket_prefix);
+        upload_zip_entries(state, &archives, request, &metadata, zip_plans).await?;
+    } else {
+        let copy_plans = collect_copy_plans(&manifest, request);
+        execute_copy_plans(state, &request.dest_bucket_name, &metadata, copy_plans).await?;
     }
 
     if request.prune {
@@ -66,38 +71,42 @@ pub(crate) async fn deploy(state: &AppState, request: &DeploymentRequest) -> Res
 }
 
 pub(crate) async fn delete_prefix(state: &AppState, bucket: &str, prefix: &str) -> Result<()> {
-    let mut continuation_token = None;
-    let mut keys_to_delete = Vec::new();
+    let list_prefix = namespace_list_prefix(prefix);
+    let mut start_after = None;
 
     loop {
         let response = state
             .s3
             .list_objects_v2()
             .bucket(bucket)
-            .set_prefix(if prefix.is_empty() {
-                None
-            } else {
-                Some(prefix.to_string())
-            })
-            .set_continuation_token(continuation_token.clone())
+            .set_prefix(list_prefix.clone())
+            .set_start_after(start_after.clone())
             .send()
             .await?;
 
+        let mut keys_to_delete = Vec::new();
         for object in response.contents() {
             if let Some(key) = object.key() {
                 keys_to_delete.push(key.to_string());
             }
         }
 
-        if !response.is_truncated().unwrap_or(false) {
+        let last_key = response
+            .contents()
+            .iter()
+            .filter_map(|object| object.key())
+            .next_back()
+            .map(ToOwned::to_owned);
+
+        delete_keys(state, bucket, &keys_to_delete).await?;
+
+        if !response.is_truncated().unwrap_or(false) || last_key.is_none() {
             break;
         }
-        continuation_token = response
-            .next_continuation_token()
-            .map(|value| value.to_string());
+        start_after = last_key;
     }
 
-    delete_keys(state, bucket, &keys_to_delete).await
+    Ok(())
 }
 
 pub(crate) async fn bucket_owned(state: &AppState, bucket: &str, prefix: &str) -> Result<bool> {
@@ -239,13 +248,12 @@ async fn download_source_zip(state: &AppState, bucket: &str, key: &str) -> Resul
 
 async fn copy_source_object(
     state: &AppState,
-    request: &DeploymentRequest,
-    source_index: usize,
+    destination_bucket: &str,
+    source_bucket: &str,
+    source_key: &str,
     destination_key: &str,
     metadata: &ObjectMetadata,
 ) -> Result<()> {
-    let source_bucket = &request.source_bucket_names[source_index];
-    let source_key = &request.source_object_keys[source_index];
     let copy_source = format!(
         "{}/{}",
         source_bucket,
@@ -260,7 +268,7 @@ async fn copy_source_object(
     let builder = state
         .s3
         .copy_object()
-        .bucket(&request.dest_bucket_name)
+        .bucket(destination_bucket)
         .key(destination_key)
         .copy_source(copy_source)
         .metadata_directive(MetadataDirective::Replace);
@@ -275,53 +283,85 @@ async fn copy_source_object(
     Ok(())
 }
 
-async fn upload_zip_entry(
+async fn execute_copy_plans(
     state: &AppState,
-    archive: &SourceArchive,
-    request: &DeploymentRequest,
-    source_index: usize,
-    entry_index: usize,
-    destination_key: &str,
+    destination_bucket: &str,
     metadata: &ObjectMetadata,
+    copy_plans: Vec<CopyPlan>,
 ) -> Result<()> {
-    let file = File::open(archive.file.path()).context("failed to reopen source archive")?;
-    let mut zip = ZipArchive::new(file).context("failed to reopen zip archive")?;
-    let mut entry = zip.by_index(entry_index)?;
+    let semaphore = Arc::new(Semaphore::new(MAX_PARALLEL_TRANSFERS));
+    let mut tasks = JoinSet::new();
 
-    let builder = state
-        .s3
-        .put_object()
-        .bucket(&request.dest_bucket_name)
-        .key(destination_key);
-
-    if request.source_markers[source_index].is_empty() {
-        let mut temp = NamedTempFile::new().context("failed to create temp entry file")?;
-        std::io::copy(&mut entry, &mut temp)?;
-        temp.flush()?;
-
-        let body = ByteStream::from_path(temp.path().to_path_buf()).await?;
-        apply_put_metadata(builder, metadata, destination_key)
-            .body(body)
-            .send()
+    for plan in copy_plans {
+        let permit = semaphore
+            .clone()
+            .acquire_owned()
             .await
-            .with_context(|| format!("failed to upload {destination_key}"))?;
-    } else {
-        let mut bytes = Vec::new();
-        entry.read_to_end(&mut bytes)?;
-        let replaced = replace_markers(
-            bytes,
-            &request.source_markers[source_index],
-            &request.source_markers_config[source_index],
-        )?;
+            .context("failed to acquire copy semaphore")?;
+        let state = state.clone();
+        let metadata = metadata.clone();
+        let destination_bucket = destination_bucket.to_string();
 
-        apply_put_metadata(builder, metadata, destination_key)
-            .body(ByteStream::from(replaced))
-            .send()
+        tasks.spawn(async move {
+            let _permit = permit;
+            copy_source_object(
+                &state,
+                &destination_bucket,
+                &plan.source_bucket,
+                &plan.source_key,
+                &plan.destination_key,
+                &metadata,
+            )
             .await
-            .with_context(|| format!("failed to upload substituted {destination_key}"))?;
+        });
     }
 
-    Ok(())
+    join_transfer_tasks(tasks).await
+}
+
+async fn upload_zip_entries(
+    state: &AppState,
+    archives: &[SourceArchive],
+    request: &DeploymentRequest,
+    metadata: &ObjectMetadata,
+    zip_plans: BTreeMap<usize, Vec<ZipEntryPlan>>,
+) -> Result<()> {
+    let semaphore = Arc::new(Semaphore::new(MAX_PARALLEL_TRANSFERS));
+    let mut tasks = JoinSet::new();
+
+    for (archive_index, plans) in zip_plans {
+        let file = File::open(archives[archive_index].file.path())
+            .context("failed to reopen source archive")?;
+        let mut zip = ZipArchive::new(file).context("failed to reopen zip archive")?;
+
+        for plan in plans {
+            let permit = semaphore
+                .clone()
+                .acquire_owned()
+                .await
+                .context("failed to acquire upload semaphore")?;
+            let mut entry = zip.by_index(plan.entry_index)?;
+            let payload = prepare_zip_upload_payload(&mut entry, request, plan.source_index)?;
+            let state = state.clone();
+            let metadata = metadata.clone();
+            let destination_bucket = request.dest_bucket_name.clone();
+            let destination_key = plan.destination_key;
+
+            tasks.spawn(async move {
+                let _permit = permit;
+                upload_payload(
+                    &state,
+                    &destination_bucket,
+                    &destination_key,
+                    &metadata,
+                    payload,
+                )
+                .await
+            });
+        }
+    }
+
+    join_transfer_tasks(tasks).await
 }
 
 async fn prune_destination(
@@ -330,26 +370,24 @@ async fn prune_destination(
     filters: &Filters,
     expected_relative_keys: &HashSet<String>,
 ) -> Result<()> {
-    let mut continuation_token = None;
+    let list_prefix = namespace_list_prefix(&request.dest_bucket_prefix);
+    let strip_prefix = list_prefix.as_deref().unwrap_or("");
+    let mut start_after = None;
 
     loop {
         let response = state
             .s3
             .list_objects_v2()
             .bucket(&request.dest_bucket_name)
-            .set_prefix(if request.dest_bucket_prefix.is_empty() {
-                None
-            } else {
-                Some(request.dest_bucket_prefix.clone())
-            })
-            .set_continuation_token(continuation_token.clone())
+            .set_prefix(list_prefix.clone())
+            .set_start_after(start_after.clone())
             .send()
             .await?;
 
         let mut keys_to_delete = Vec::new();
         for object in response.contents() {
             let Some(key) = object.key() else { continue };
-            let relative_key = strip_destination_prefix(&request.dest_bucket_prefix, key);
+            let relative_key = strip_destination_prefix(strip_prefix, key);
             if relative_key.is_empty() {
                 continue;
             }
@@ -361,14 +399,19 @@ async fn prune_destination(
             }
         }
 
+        let last_key = response
+            .contents()
+            .iter()
+            .filter_map(|object| object.key())
+            .next_back()
+            .map(ToOwned::to_owned);
+
         delete_keys(state, &request.dest_bucket_name, &keys_to_delete).await?;
 
-        if !response.is_truncated().unwrap_or(false) {
+        if !response.is_truncated().unwrap_or(false) || last_key.is_none() {
             break;
         }
-        continuation_token = response
-            .next_continuation_token()
-            .map(|value| value.to_string());
+        start_after = last_key;
     }
 
     Ok(())
@@ -389,7 +432,7 @@ async fn delete_keys(state: &AppState, bucket: &str, keys: &[String]) -> Result<
             .quiet(true)
             .build()?;
 
-        state
+        let response = state
             .s3
             .delete_objects()
             .bucket(bucket)
@@ -397,7 +440,158 @@ async fn delete_keys(state: &AppState, bucket: &str, keys: &[String]) -> Result<
             .send()
             .await
             .with_context(|| format!("failed to delete objects from bucket {bucket}"))?;
+
+        if !response.errors().is_empty() {
+            let details = response
+                .errors()
+                .iter()
+                .map(|error| {
+                    let key = error.key().unwrap_or("<unknown-key>");
+                    let code = error.code().unwrap_or("<unknown-code>");
+                    let message = error.message().unwrap_or("<no-message>");
+                    format!("{key}: {code} ({message})")
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(anyhow!(
+                "failed to delete some objects from bucket {bucket}: {details}"
+            ));
+        }
     }
 
     Ok(())
+}
+
+fn collect_copy_plans(manifest: &DeploymentManifest, request: &DeploymentRequest) -> Vec<CopyPlan> {
+    manifest
+        .values()
+        .filter_map(|planned| match planned.action {
+            PlannedAction::CopyObject { source_index } => Some(CopyPlan {
+                source_bucket: request.source_bucket_names[source_index].clone(),
+                source_key: request.source_object_keys[source_index].clone(),
+                destination_key: join_s3_key(&request.dest_bucket_prefix, &planned.relative_key),
+            }),
+            PlannedAction::ZipEntry { .. } => None,
+        })
+        .collect()
+}
+
+fn collect_zip_entry_plans(
+    manifest: &DeploymentManifest,
+    destination_prefix: &str,
+) -> BTreeMap<usize, Vec<ZipEntryPlan>> {
+    let mut grouped = BTreeMap::<usize, Vec<ZipEntryPlan>>::new();
+
+    for planned in manifest.values() {
+        if let PlannedAction::ZipEntry {
+            archive_index,
+            entry_index,
+            source_index,
+        } = planned.action
+        {
+            grouped
+                .entry(archive_index)
+                .or_default()
+                .push(ZipEntryPlan {
+                    entry_index,
+                    source_index,
+                    destination_key: join_s3_key(destination_prefix, &planned.relative_key),
+                });
+        }
+    }
+
+    for plans in grouped.values_mut() {
+        plans.sort_by_key(|plan| plan.entry_index);
+    }
+
+    grouped
+}
+
+fn prepare_zip_upload_payload(
+    entry: &mut zip::read::ZipFile<'_, File>,
+    request: &DeploymentRequest,
+    source_index: usize,
+) -> Result<UploadPayload> {
+    if request.source_markers[source_index].is_empty() {
+        let mut temp = NamedTempFile::new().context("failed to create temp entry file")?;
+        std::io::copy(entry, &mut temp)?;
+        temp.flush()?;
+        Ok(UploadPayload::TempFile(temp))
+    } else {
+        let mut bytes = Vec::new();
+        entry.read_to_end(&mut bytes)?;
+        let replaced = replace_markers(
+            bytes,
+            &request.source_markers[source_index],
+            &request.source_markers_config[source_index],
+        )?;
+        Ok(UploadPayload::Bytes(replaced))
+    }
+}
+
+async fn upload_payload(
+    state: &AppState,
+    destination_bucket: &str,
+    destination_key: &str,
+    metadata: &ObjectMetadata,
+    payload: UploadPayload,
+) -> Result<()> {
+    let builder = state
+        .s3
+        .put_object()
+        .bucket(destination_bucket)
+        .key(destination_key);
+
+    let body = match payload {
+        UploadPayload::Bytes(bytes) => ByteStream::from(bytes),
+        UploadPayload::TempFile(temp) => ByteStream::from_path(temp.path().to_path_buf()).await?,
+    };
+
+    apply_put_metadata(builder, metadata, destination_key)
+        .body(body)
+        .send()
+        .await
+        .with_context(|| format!("failed to upload {destination_key}"))?;
+
+    Ok(())
+}
+
+async fn join_transfer_tasks(mut tasks: JoinSet<Result<()>>) -> Result<()> {
+    while let Some(result) = tasks.join_next().await {
+        result.context("transfer task panicked or was cancelled")??;
+    }
+
+    Ok(())
+}
+
+fn namespace_list_prefix(prefix: &str) -> Option<String> {
+    if prefix.is_empty() {
+        return None;
+    }
+
+    let mut normalized = prefix.to_string();
+    if !normalized.ends_with('/') {
+        normalized.push('/');
+    }
+    Some(normalized)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::namespace_list_prefix;
+
+    #[test]
+    fn namespace_list_prefix_adds_trailing_slash() {
+        assert_eq!(namespace_list_prefix("site"), Some("site/".to_string()));
+    }
+
+    #[test]
+    fn namespace_list_prefix_preserves_existing_trailing_slash() {
+        assert_eq!(namespace_list_prefix("site/"), Some("site/".to_string()));
+    }
+
+    #[test]
+    fn namespace_list_prefix_omits_empty_prefix() {
+        assert_eq!(namespace_list_prefix(""), None);
+    }
 }

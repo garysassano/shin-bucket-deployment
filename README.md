@@ -82,11 +82,11 @@ This tracks parity against the upstream [`BucketDeployment`](https://docs.aws.am
 | Concern | `BucketDeployment` today | `CargoBucketDeployment` today | Next step |
 | --- | --- | --- | --- |
 | Provider runtime | Python singleton Lambda | Rust Lambda per construct | Reuse a shared/singleton Rust provider across compatible deployments. |
-| S3 transfer engine | AWS CLI `s3 cp` / `s3 sync` from the handler | AWS SDK copy/upload/delete calls | Add bounded concurrency for copy/upload work. |
-| Extracted deploy path | Download zip, extract full tree to a working directory, rewrite files in place, then sync the tree | Plan directly from the zip archive and upload entries individually | Open each zip once per deployment phase instead of reopening per entry. |
+| S3 transfer engine | AWS CLI `s3 cp` / `s3 sync` from the handler | AWS SDK copy/upload/delete calls with bounded transfer concurrency | Tune concurrency and large-transfer behavior further if needed. |
+| Extracted deploy path | Download zip, extract full tree to a working directory, rewrite files in place, then sync the tree | Plan directly from the zip archive, open each archive once, and upload entries individually | Already in a good place. |
 | Working storage | `/tmp` by default, optional EFS support | `/tmp` only | Add EFS parity if large-workdir support becomes necessary. |
 | CloudFront invalidation | One batched invalidation request for all paths | One batched invalidation request for all paths | Already in a good place. |
-| Prune/delete path | AWS CLI sync/delete behavior | SDK list + batched delete | Stream delete candidates page by page instead of collecting all keys first. |
+| Prune/delete path | AWS CLI sync/delete behavior | SDK list + batched delete with namespace-safe prefixes, page-by-page cleanup, and per-object delete error checks | Already in a good place. |
 
 ## Quick Start
 
@@ -202,8 +202,6 @@ Runner names:
 ## Next Optimizations
 
 - Reuse a shared provider Lambda across compatible `CargoBucketDeployment` instances instead of creating a fresh `RustFunction` for every construct.
-- Add bounded-concurrency upload and copy execution in the Rust runtime instead of processing every planned object serially.
-- Refactor zip processing so each source archive is opened once per deployment phase instead of being reopened for every uploaded entry.
-- Stream prune/delete work in chunks as pages are listed instead of collecting all candidate keys in memory first.
+- Add EFS parity if `/tmp` becomes a practical limit for large deployments.
 
 The Rust provider lives under [rust](./rust), the construct code under [src](./src), and the AWS/manual validation examples under [examples](./examples).
