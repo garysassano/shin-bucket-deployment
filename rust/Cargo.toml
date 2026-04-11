@@ -10,6 +10,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1"
 aws-config = "1"
+aws_lambda_events = { version = "0.16.1", default-features = false, features = ["cloudformation"] }
 aws-sdk-cloudfront = "1"
 aws-sdk-s3 = "1"
 globset = "0.4"
