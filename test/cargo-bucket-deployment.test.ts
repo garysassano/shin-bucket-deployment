@@ -5,6 +5,7 @@ import { Architecture } from "aws-cdk-lib/aws-lambda";
 import { Bucket } from "aws-cdk-lib/aws-s3";
 import { test } from "vitest";
 import { CargoBucketDeployment, Source } from "../src";
+import { testBundling } from "./test-bundling";
 
 test("renders a Rust-backed custom resource", () => {
   const stack = new Stack();
@@ -14,6 +15,7 @@ test("renders a Rust-backed custom resource", () => {
     sources: [Source.asset(join(__dirname, "fixtures", "my-website"))],
     destinationBucket,
     architecture: Architecture.X86_64,
+    bundling: testBundling(),
   });
 
   const template = Template.fromStack(stack);
