@@ -3,7 +3,7 @@ import { Stack } from "aws-cdk-lib";
 import { Match, Template } from "aws-cdk-lib/assertions";
 import { Architecture } from "aws-cdk-lib/aws-lambda";
 import { Bucket } from "aws-cdk-lib/aws-s3";
-import { test } from "vitest";
+import { expect, test } from "vitest";
 import { CargoBucketDeployment, Source } from "../src";
 import { testBundling } from "./test-bundling";
 
@@ -33,3 +33,50 @@ test("renders a Rust-backed custom resource", () => {
     Prune: true,
   });
 }, 120_000);
+
+test("reuses a shared handler for compatible deployments in the same stack", () => {
+  const stack = new Stack();
+  const firstBucket = new Bucket(stack, "FirstDest");
+  const secondBucket = new Bucket(stack, "SecondDest");
+
+  const first = new CargoBucketDeployment(stack, "FirstDeploy", {
+    sources: [Source.asset(join(__dirname, "fixtures", "my-website"))],
+    destinationBucket: firstBucket,
+    bundling: testBundling(),
+  });
+
+  const second = new CargoBucketDeployment(stack, "SecondDeploy", {
+    sources: [Source.asset(join(__dirname, "fixtures", "my-website"))],
+    destinationBucket: secondBucket,
+    bundling: testBundling(),
+  });
+
+  expect(first.handlerFunction).toBe(second.handlerFunction);
+
+  const lambdaFunctions = Template.fromStack(stack).findResources("AWS::Lambda::Function");
+  expect(Object.keys(lambdaFunctions)).toHaveLength(1);
+});
+
+test("creates separate handlers when the provider configuration differs", () => {
+  const stack = new Stack();
+  const firstBucket = new Bucket(stack, "FirstDest");
+  const secondBucket = new Bucket(stack, "SecondDest");
+
+  const first = new CargoBucketDeployment(stack, "FirstDeploy", {
+    sources: [Source.asset(join(__dirname, "fixtures", "my-website"))],
+    destinationBucket: firstBucket,
+    bundling: testBundling(),
+  });
+
+  const second = new CargoBucketDeployment(stack, "SecondDeploy", {
+    sources: [Source.asset(join(__dirname, "fixtures", "my-website"))],
+    destinationBucket: secondBucket,
+    memoryLimit: 1024,
+    bundling: testBundling(),
+  });
+
+  expect(first.handlerFunction).not.toBe(second.handlerFunction);
+
+  const lambdaFunctions = Template.fromStack(stack).findResources("AWS::Lambda::Function");
+  expect(Object.keys(lambdaFunctions)).toHaveLength(2);
+});
