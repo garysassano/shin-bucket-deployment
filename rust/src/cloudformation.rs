@@ -12,17 +12,6 @@ use crate::request::{parse_old_destination, parse_request};
 use crate::s3::{bucket_owned, delete_prefix, deploy};
 use crate::types::{AppState, Properties, ResponsePayload};
 
-struct CloudFormationEventView<'a> {
-    request_type: &'static str,
-    response_url: &'a str,
-    stack_id: &'a str,
-    request_id: &'a str,
-    logical_resource_id: &'a str,
-    physical_resource_id: Option<&'a str>,
-    resource_properties: &'a Properties,
-    old_resource_properties: Option<&'a Properties>,
-}
-
 pub(crate) async fn handle_event(
     state: Arc<AppState>,
     event: lambda_runtime::LambdaEvent<Value>,
@@ -30,24 +19,58 @@ pub(crate) async fn handle_event(
     let request: CloudFormationCustomResourceRequest<Properties, Properties> =
         serde_json::from_value(event.payload)
             .context("failed to deserialize CloudFormation event")?;
-    let view = request_view(&request)?;
 
-    tracing::info!(
-        request_type = view.request_type,
-        logical_resource_id = view.logical_resource_id,
-        "processing request"
-    );
-
-    let response = process_request(&state, &view).await;
+    let response = match &request {
+        CloudFormationCustomResourceRequest::Create(request) => {
+            tracing::info!(
+                request_type = "Create",
+                logical_resource_id = request.logical_resource_id,
+                "processing request"
+            );
+            process_request(&state, "Create", None, &request.resource_properties, None).await
+        }
+        CloudFormationCustomResourceRequest::Update(request) => {
+            tracing::info!(
+                request_type = "Update",
+                logical_resource_id = request.logical_resource_id,
+                "processing request"
+            );
+            process_request(
+                &state,
+                "Update",
+                Some(&request.physical_resource_id),
+                &request.resource_properties,
+                Some(&request.old_resource_properties),
+            )
+            .await
+        }
+        CloudFormationCustomResourceRequest::Delete(request) => {
+            tracing::info!(
+                request_type = "Delete",
+                logical_resource_id = request.logical_resource_id,
+                "processing request"
+            );
+            process_request(
+                &state,
+                "Delete",
+                Some(&request.physical_resource_id),
+                &request.resource_properties,
+                None,
+            )
+            .await
+        }
+    };
 
     match response {
         Ok(success) => {
+            let (response_url, stack_id, request_id, logical_resource_id) =
+                response_target(&request);
             send_response(
                 &state.http,
-                view.response_url,
-                view.stack_id,
-                view.request_id,
-                view.logical_resource_id,
+                response_url,
+                stack_id,
+                request_id,
+                logical_resource_id,
                 "SUCCESS",
                 &success,
             )
@@ -56,21 +79,23 @@ pub(crate) async fn handle_event(
         }
         Err(err) => {
             error!(error = %err, "request failed");
+            let (_, _, request_id, _) = response_target(&request);
             let failure = ResponsePayload {
-                physical_resource_id: view
-                    .physical_resource_id
+                physical_resource_id: physical_resource_id(&request)
                     .map(ToOwned::to_owned)
-                    .unwrap_or_else(|| view.request_id.to_string()),
+                    .unwrap_or_else(|| request_id.to_string()),
                 reason: Some(err.to_string()),
                 data: Map::new(),
             };
 
+            let (response_url, stack_id, request_id, logical_resource_id) =
+                response_target(&request);
             if let Err(send_err) = send_response(
                 &state.http,
-                view.response_url,
-                view.stack_id,
-                view.request_id,
-                view.logical_resource_id,
+                response_url,
+                stack_id,
+                request_id,
+                logical_resource_id,
                 "FAILED",
                 &failure,
             )
@@ -86,21 +111,22 @@ pub(crate) async fn handle_event(
 
 async fn process_request(
     state: &AppState,
-    event: &CloudFormationEventView<'_>,
+    request_type: &str,
+    physical_resource_id: Option<&str>,
+    resource_properties: &Properties,
+    old_resource_properties: Option<&Properties>,
 ) -> Result<ResponsePayload> {
-    let request = parse_request(event.resource_properties)?;
-    let old_props = event.old_resource_properties;
+    let request = parse_request(resource_properties)?;
 
-    let physical_resource_id = match event.request_type {
+    let physical_resource_id = match request_type {
         "Create" => format!("aws.cdk.cargobucketdeployment.{}", Uuid::new_v4()),
-        "Update" | "Delete" => event
-            .physical_resource_id
+        "Update" | "Delete" => physical_resource_id
             .map(ToOwned::to_owned)
-            .ok_or_else(|| anyhow!("PhysicalResourceId is required for {}", event.request_type))?,
+            .ok_or_else(|| anyhow!("PhysicalResourceId is required for {request_type}"))?,
         other => return Err(anyhow!("Unsupported request type: {other}")),
     };
 
-    if event.request_type == "Delete" && !request.retain_on_delete {
+    if request_type == "Delete" && !request.retain_on_delete {
         if !bucket_owned(
             state,
             &request.dest_bucket_name,
@@ -117,8 +143,8 @@ async fn process_request(
         }
     }
 
-    if event.request_type == "Update" && !request.retain_on_delete {
-        if let Some(old_props) = old_props {
+    if request_type == "Update" && !request.retain_on_delete {
+        if let Some(old_props) = old_resource_properties {
             let (old_bucket, old_prefix) = parse_old_destination(old_props)?;
 
             if old_bucket.as_deref() != Some(request.dest_bucket_name.as_str())
@@ -131,7 +157,7 @@ async fn process_request(
         }
     }
 
-    if matches!(event.request_type, "Create" | "Update") {
+    if matches!(request_type, "Create" | "Update") {
         deploy(state, &request).await?;
     }
 
@@ -170,40 +196,38 @@ async fn process_request(
     })
 }
 
-fn request_view(
+fn response_target(
     request: &CloudFormationCustomResourceRequest<Properties, Properties>,
-) -> Result<CloudFormationEventView<'_>> {
+) -> (&str, &str, &str, &str) {
     match request {
-        CloudFormationCustomResourceRequest::Create(request) => Ok(CloudFormationEventView {
-            request_type: "Create",
-            response_url: &request.response_url,
-            stack_id: &request.stack_id,
-            request_id: &request.request_id,
-            logical_resource_id: &request.logical_resource_id,
-            physical_resource_id: None,
-            resource_properties: &request.resource_properties,
-            old_resource_properties: None,
-        }),
-        CloudFormationCustomResourceRequest::Update(request) => Ok(CloudFormationEventView {
-            request_type: "Update",
-            response_url: &request.response_url,
-            stack_id: &request.stack_id,
-            request_id: &request.request_id,
-            logical_resource_id: &request.logical_resource_id,
-            physical_resource_id: Some(&request.physical_resource_id),
-            resource_properties: &request.resource_properties,
-            old_resource_properties: Some(&request.old_resource_properties),
-        }),
-        CloudFormationCustomResourceRequest::Delete(request) => Ok(CloudFormationEventView {
-            request_type: "Delete",
-            response_url: &request.response_url,
-            stack_id: &request.stack_id,
-            request_id: &request.request_id,
-            logical_resource_id: &request.logical_resource_id,
-            physical_resource_id: Some(&request.physical_resource_id),
-            resource_properties: &request.resource_properties,
-            old_resource_properties: None,
-        }),
+        CloudFormationCustomResourceRequest::Create(request) => (
+            &request.response_url,
+            &request.stack_id,
+            &request.request_id,
+            &request.logical_resource_id,
+        ),
+        CloudFormationCustomResourceRequest::Update(request) => (
+            &request.response_url,
+            &request.stack_id,
+            &request.request_id,
+            &request.logical_resource_id,
+        ),
+        CloudFormationCustomResourceRequest::Delete(request) => (
+            &request.response_url,
+            &request.stack_id,
+            &request.request_id,
+            &request.logical_resource_id,
+        ),
+    }
+}
+
+fn physical_resource_id(
+    request: &CloudFormationCustomResourceRequest<Properties, Properties>,
+) -> Option<&str> {
+    match request {
+        CloudFormationCustomResourceRequest::Create(_) => None,
+        CloudFormationCustomResourceRequest::Update(request) => Some(&request.physical_resource_id),
+        CloudFormationCustomResourceRequest::Delete(request) => Some(&request.physical_resource_id),
     }
 }
 
