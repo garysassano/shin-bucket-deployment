@@ -27,7 +27,7 @@ Notable limitations in this prototype:
 - it rejects `expires`
 - it rejects `signContent`
 - it rejects `serverSideEncryptionCustomerAlgorithm`
-- AWS runtime validation is still partial and tracked in the validation table below
+- AWS validation coverage is tracked in the validation table below, with a mix of manual AWS deploys and targeted Vitest synth/unit tests
 
 Tooling:
 
@@ -109,7 +109,7 @@ Validation status so far:
 | Metadata mapping | Done | Manual deploy and `head-object` inspection on April 10, 2026 | `metadata-site/runtime/headers.json` showed the expected cache-control, disposition, language, SSE, storage class, and lowercased user metadata keys. |
 | Prune on update | Done | Manual v1 deploy followed by v2 update on April 10, 2026 | `runtime/legacy.txt` existed after v1, then returned `404 Not Found` after the v2 deploy while `runtime/current.txt` updated to `version=v2`. |
 | `retainOnDelete` update/delete semantics | Done | Manual v1 deploy, v2 update, and stack destroy on April 10-11, 2026 | `retain-v1/` remained after the v2 update, and both `retain-v1/` and `retain-v2/` objects were still present and readable after stack destroy because the bucket and deployment data were retained. |
-| Validation/error branches (`distributionPaths`, unsupported props, `extract=false` with markers) | Partial | Covered in code paths, not in an explicit manual stack | Better suited to targeted unit/synth tests than AWS deployment. |
+| Validation/error branches (`distributionPaths`, unsupported props, `extract=false` with markers, `outputObjectKeys=false`, `deployedBucket`) | Done | `pnpm test` on April 11, 2026 | Covered by targeted Vitest synth/unit tests in [test/construct-validation.test.ts](./test/construct-validation.test.ts), using stub local bundling so synth assertions run without Docker. |
 
 
 The Rust provider lives under [rust](./rust), the construct code under [src](./src),
