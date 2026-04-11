@@ -67,7 +67,7 @@ describe("CargoBucketDeployment validation and option coverage", () => {
       "AES256",
       /does not support serverSideEncryptionCustomerAlgorithm/,
     ],
-    ["expires", { toString: () => "tomorrow" }, /does not support expires/],
+    ["expires", { toString: (): string => "tomorrow" }, /does not support expires/],
   ] as const)("rejects unsupported prop %s", (propName, value, pattern) => {
     const stack = new Stack();
     const destinationBucket = new Bucket(stack, "Dest");

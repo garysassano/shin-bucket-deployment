@@ -37,4 +37,4 @@ const env =
       }
     : undefined;
 
-new SimpleCargoBucketDeploymentStack(app, "CargoBucketDeploymentDemo", { env });
+new SimpleCargoBucketDeploymentStack(app, "CargoBucketDeploymentSimpleDemo", { env });

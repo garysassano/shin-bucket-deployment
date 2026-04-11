@@ -3,7 +3,7 @@ import { App, Aws, CfnOutput, RemovalPolicy, Stack, type StackProps } from "aws-
 import { Bucket } from "aws-cdk-lib/aws-s3";
 import { CargoBucketDeployment, Source } from "../src";
 
-class PruneCycleCargoBucketDeploymentStack extends Stack {
+class PruneUpdateCargoBucketDeploymentStack extends Stack {
   constructor(scope: App, id: string, props?: StackProps) {
     super(scope, id, props);
 
@@ -51,4 +51,4 @@ const env =
       }
     : undefined;
 
-new PruneCycleCargoBucketDeploymentStack(app, "CargoBucketDeploymentPruneDemo", { env });
+new PruneUpdateCargoBucketDeploymentStack(app, "CargoBucketDeploymentPruneUpdateDemo", { env });

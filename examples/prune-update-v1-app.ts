@@ -3,7 +3,7 @@ import { App, Aws, CfnOutput, RemovalPolicy, Stack, type StackProps } from "aws-
 import { Bucket } from "aws-cdk-lib/aws-s3";
 import { CargoBucketDeployment, Source } from "../src";
 
-class PruneCycleCargoBucketDeploymentStack extends Stack {
+class PruneUpdateCargoBucketDeploymentStack extends Stack {
   constructor(scope: App, id: string, props?: StackProps) {
     super(scope, id, props);
 
@@ -19,7 +19,7 @@ class PruneCycleCargoBucketDeploymentStack extends Stack {
           "runtime/current.txt",
           [`stack=${Aws.STACK_NAME}`, "version=v1", "state=current-and-legacy-exist"].join("\n"),
         ),
-        Source.data("runtime/legacy.txt", "remove this by deploying prune-cycle-v2"),
+        Source.data("runtime/legacy.txt", "remove this by deploying prune-update-v2"),
       ],
       destinationBucket: websiteBucket,
       destinationKeyPrefix: "prune-site",
@@ -42,7 +42,7 @@ class PruneCycleCargoBucketDeploymentStack extends Stack {
     });
 
     new CfnOutput(this, "UpgradeToPruneV2Command", {
-      value: "pnpm example:prune:v2:deploy",
+      value: "pnpm example deploy prune-update-v2",
     });
   }
 }
@@ -56,4 +56,4 @@ const env =
       }
     : undefined;
 
-new PruneCycleCargoBucketDeploymentStack(app, "CargoBucketDeploymentPruneDemo", { env });
+new PruneUpdateCargoBucketDeploymentStack(app, "CargoBucketDeploymentPruneUpdateDemo", { env });

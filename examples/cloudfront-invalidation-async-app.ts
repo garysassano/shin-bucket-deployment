@@ -110,7 +110,7 @@ class CloudFrontInvalidationAsyncCargoBucketDeploymentStack extends Stack {
 
     new CfnOutput(this, "RedeployWithNewTokenCommand", {
       value:
-        "pnpm example:cloudfront:async:deploy -- --parameters CacheProbeToken=<new-token-value>",
+        "pnpm example deploy cloudfront-async -- --parameters CargoBucketDeploymentCloudFrontInvalidationAsyncDemo:CacheProbeToken=<new-token-value>",
     });
   }
 }
@@ -126,6 +126,6 @@ const env =
 
 new CloudFrontInvalidationAsyncCargoBucketDeploymentStack(
   app,
-  "CargoBucketDeploymentCloudFrontAsyncInvalidationDemo",
+  "CargoBucketDeploymentCloudFrontInvalidationAsyncDemo",
   { env },
 );

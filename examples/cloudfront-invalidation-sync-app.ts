@@ -19,7 +19,7 @@ import { S3BucketOrigin } from "aws-cdk-lib/aws-cloudfront-origins";
 import { Bucket } from "aws-cdk-lib/aws-s3";
 import { CacheControl, CargoBucketDeployment, Source } from "../src";
 
-class CloudFrontInvalidationCargoBucketDeploymentStack extends Stack {
+class CloudFrontInvalidationSyncCargoBucketDeploymentStack extends Stack {
   constructor(scope: App, id: string, props?: StackProps) {
     super(scope, id, props);
 
@@ -109,7 +109,8 @@ class CloudFrontInvalidationCargoBucketDeploymentStack extends Stack {
     });
 
     new CfnOutput(this, "RedeployWithNewTokenCommand", {
-      value: "pnpm example:cloudfront:deploy -- --parameters CacheProbeToken=<new-token-value>",
+      value:
+        "pnpm example deploy cloudfront-sync -- --parameters CargoBucketDeploymentCloudFrontInvalidationSyncDemo:CacheProbeToken=<new-token-value>",
     });
   }
 }
@@ -123,8 +124,8 @@ const env =
       }
     : undefined;
 
-new CloudFrontInvalidationCargoBucketDeploymentStack(
+new CloudFrontInvalidationSyncCargoBucketDeploymentStack(
   app,
-  "CargoBucketDeploymentCloudFrontInvalidationDemo",
+  "CargoBucketDeploymentCloudFrontInvalidationSyncDemo",
   { env },
 );

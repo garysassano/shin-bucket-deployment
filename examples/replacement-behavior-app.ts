@@ -11,7 +11,7 @@ import {
 import { Bucket } from "aws-cdk-lib/aws-s3";
 import { CargoBucketDeployment, Source } from "../src";
 
-class ReplacementMatrixCargoBucketDeploymentStack extends Stack {
+class ReplacementBehaviorCargoBucketDeploymentStack extends Stack {
   constructor(scope: App, id: string, props?: StackProps) {
     super(scope, id, props);
 
@@ -135,6 +135,8 @@ const env =
       }
     : undefined;
 
-new ReplacementMatrixCargoBucketDeploymentStack(app, "CargoBucketDeploymentReplacementDemo", {
-  env,
-});
+new ReplacementBehaviorCargoBucketDeploymentStack(
+  app,
+  "CargoBucketDeploymentReplacementBehaviorDemo",
+  { env },
+);
