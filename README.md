@@ -51,6 +51,43 @@ Current limitations:
 - rejects `signContent`
 - rejects `serverSideEncryptionCustomerAlgorithm`
 
+## `BucketDeployment` Parity
+
+This tracks parity against the upstream [`BucketDeployment`](https://docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.aws_s3_deployment.BucketDeployment.html) surface.
+
+| Capability or prop from `BucketDeployment` | CargoBucketDeployment | Notes |
+| --- | --- | --- |
+| Basic asset deployment | ✅ | Supported. |
+| `destinationKeyPrefix` | ✅ | Supported. |
+| `prune` | ✅ | Supported and manually validated. |
+| `retainOnDelete` | ✅ | Supported and manually validated. |
+| `distribution` | ✅ | Supported. |
+| `distributionPaths` | ✅ | Supported and validated. |
+| `waitForDistributionInvalidation` | ✅ | Supported in both sync and async modes. |
+| `exclude` / `include` | ✅ | Supported and manually validated. |
+| User metadata (`metadata`) | ✅ | Supported and manually validated. |
+| Common system metadata (`cacheControl`, `contentType`, `contentDisposition`, `contentLanguage`, `contentEncoding`, SSE, storage class, redirect, ACL) | ✅ | Supported. |
+| `outputObjectKeys` | ✅ | Supported and covered by tests. |
+| `deployedBucket` | ✅ | Supported and covered by tests. |
+| `addSource()` | ✅ | Supported. |
+| Deploy-time replacement for `Source.data`, `Source.jsonData`, `Source.yamlData` | ✅ | Supported and validated. |
+| `vpc`, `vpcSubnets`, `securityGroups`, `role`, `memoryLimit`, `ephemeralStorageSize`, `logRetention`, `logGroup` | ✅ | Wired through to the Rust provider function. |
+| `useEfs` | ❌ | Not supported yet. |
+| `expires` | ❌ | Not supported yet. |
+| `signContent` | ❌ | Not supported yet. |
+| `serverSideEncryptionCustomerAlgorithm` | ❌ | Not supported yet. |
+
+## Execution Model Comparison
+
+| Concern | `BucketDeployment` today | `CargoBucketDeployment` today | Next step |
+| --- | --- | --- | --- |
+| Provider runtime | Python singleton Lambda | Rust Lambda per construct | Reuse a shared/singleton Rust provider across compatible deployments. |
+| S3 transfer engine | AWS CLI `s3 cp` / `s3 sync` from the handler | AWS SDK copy/upload/delete calls | Add bounded concurrency for copy/upload work. |
+| Extracted deploy path | Download zip, extract full tree to a working directory, rewrite files in place, then sync the tree | Plan directly from the zip archive and upload entries individually | Open each zip once per deployment phase instead of reopening per entry. |
+| Working storage | `/tmp` by default, optional EFS support | `/tmp` only | Add EFS parity if large-workdir support becomes necessary. |
+| CloudFront invalidation | One batched invalidation request for all paths | One batched invalidation request for all paths | Already in a good place. |
+| Prune/delete path | AWS CLI sync/delete behavior | SDK list + batched delete | Stream delete candidates page by page instead of collecting all keys first. |
+
 ## Quick Start
 
 ```ts
@@ -161,5 +198,12 @@ Runner names:
   - marker replacement in `replace.rs`
 - S3 metadata handling lives under `s3/metadata.rs` because it is tightly coupled to S3 upload/copy behavior.
 - The TypeScript test suite uses [test/test-bundling.ts](./test/test-bundling.ts) to stub local bundling during synth/unit tests without Docker.
+
+## Next Optimizations
+
+- Reuse a shared provider Lambda across compatible `CargoBucketDeployment` instances instead of creating a fresh `RustFunction` for every construct.
+- Add bounded-concurrency upload and copy execution in the Rust runtime instead of processing every planned object serially.
+- Refactor zip processing so each source archive is opened once per deployment phase instead of being reopened for every uploaded entry.
+- Stream prune/delete work in chunks as pages are listed instead of collecting all candidate keys in memory first.
 
 The Rust provider lives under [rust](./rust), the construct code under [src](./src), and the AWS/manual validation examples under [examples](./examples).
