@@ -61,10 +61,10 @@ pub(crate) async fn handle_event(
         }
     };
 
+    let (response_url, stack_id, request_id, logical_resource_id) = response_target(&request);
+
     match response {
         Ok(success) => {
-            let (response_url, stack_id, request_id, logical_resource_id) =
-                response_target(&request);
             send_response(
                 &state.http,
                 response_url,
@@ -79,7 +79,6 @@ pub(crate) async fn handle_event(
         }
         Err(err) => {
             error!(error = %err, "request failed");
-            let (_, _, request_id, _) = response_target(&request);
             let failure = ResponsePayload {
                 physical_resource_id: physical_resource_id(&request)
                     .map(ToOwned::to_owned)
@@ -88,9 +87,7 @@ pub(crate) async fn handle_event(
                 data: Map::new(),
             };
 
-            let (response_url, stack_id, request_id, logical_resource_id) =
-                response_target(&request);
-            if let Err(send_err) = send_response(
+            send_response(
                 &state.http,
                 response_url,
                 stack_id,
@@ -100,9 +97,7 @@ pub(crate) async fn handle_event(
                 &failure,
             )
             .await
-            {
-                error!(error = %send_err, "failed to send failure response");
-            }
+            .context("failed to send failure response")?;
         }
     }
 

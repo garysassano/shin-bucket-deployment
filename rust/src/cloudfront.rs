@@ -7,6 +7,10 @@ use uuid::Uuid;
 
 use crate::types::AppState;
 
+const INVALIDATION_POLL_INTERVAL: Duration = Duration::from_secs(20);
+const INVALIDATION_MAX_POLLS: usize = 39;
+const INVALIDATION_TIMEOUT_MINUTES: usize = 13;
+
 pub(crate) async fn invalidate(
     state: &AppState,
     distribution_id: &str,
@@ -40,7 +44,7 @@ pub(crate) async fn invalidate(
         .map(|invalidation| invalidation.id().to_string())
         .ok_or_else(|| anyhow!("CreateInvalidation response did not include an invalidation id"))?;
 
-    for _ in 0..39 {
+    for _ in 0..INVALIDATION_MAX_POLLS {
         let status = state
             .cloudfront
             .get_invalidation()
@@ -58,10 +62,10 @@ pub(crate) async fn invalidate(
             return Ok(());
         }
 
-        sleep(Duration::from_secs(20)).await;
+        sleep(INVALIDATION_POLL_INTERVAL).await;
     }
 
     Err(anyhow!(
-        "Unable to confirm that cache invalidation was successful after 13 minutes"
+        "Unable to confirm that cache invalidation was successful after {INVALIDATION_TIMEOUT_MINUTES} minutes"
     ))
 }
