@@ -3,6 +3,7 @@ use std::fs::File;
 use std::io::{Read, Write};
 
 use anyhow::{Context, Result, anyhow};
+use aws_sdk_s3::error::ProvideErrorMetadata;
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::{Delete, MetadataDirective, ObjectIdentifier};
 use tempfile::NamedTempFile;
@@ -111,9 +112,21 @@ pub(crate) async fn bucket_owned(state: &AppState, bucket: &str, prefix: &str) -
             .tag_set()
             .iter()
             .any(|tag| tag.key().starts_with(&tag_prefix))),
-        Err(err) => {
-            warn!(error = %err, bucket, "failed to read bucket tags, assuming bucket is not owned");
+        Err(err)
+            if err
+                .as_service_error()
+                .and_then(|service_err| service_err.code())
+                == Some("NoSuchTagSet") =>
+        {
             Ok(false)
+        }
+        Err(err) => {
+            warn!(error = %err, bucket, "failed to read bucket tags");
+            Err(err).with_context(|| {
+                format!(
+                    "unable to determine whether bucket {bucket} is owned by this custom resource"
+                )
+            })
         }
     }
 }
