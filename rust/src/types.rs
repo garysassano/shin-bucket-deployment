@@ -49,6 +49,7 @@ pub(crate) struct Filters {
     pub(crate) include: Vec<globset::GlobMatcher>,
 }
 
+#[derive(Clone)]
 pub(crate) struct ObjectMetadata {
     pub(crate) user_metadata: HashMap<String, String>,
     pub(crate) cache_control: Option<String>,

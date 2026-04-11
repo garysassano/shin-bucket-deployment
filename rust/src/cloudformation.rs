@@ -138,16 +138,6 @@ async fn process_request(
         }
     }
 
-    if request_type == "Update" && !request.retain_on_delete {
-        if let Some(old_props) = old_resource_properties {
-            let (old_bucket, old_prefix) = parse_old_destination(old_props);
-
-            if old_bucket != request.dest_bucket_name || old_prefix != request.dest_bucket_prefix {
-                delete_prefix(state, &old_bucket, &old_prefix).await?;
-            }
-        }
-    }
-
     if matches!(request_type, "Create" | "Update") {
         deploy(state, &request).await?;
     }
@@ -161,6 +151,16 @@ async fn process_request(
                 request.wait_for_distribution_invalidation,
             )
             .await?;
+        }
+    }
+
+    if request_type == "Update" && !request.retain_on_delete {
+        if let Some(old_props) = old_resource_properties {
+            let (old_bucket, old_prefix) = parse_old_destination(old_props);
+
+            if old_bucket != request.dest_bucket_name || old_prefix != request.dest_bucket_prefix {
+                delete_prefix(state, &old_bucket, &old_prefix).await?;
+            }
         }
     }
 
