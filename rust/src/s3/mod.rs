@@ -10,7 +10,6 @@ use tokio::io::AsyncWriteExt;
 use tracing::{info, warn};
 use zip::ZipArchive;
 
-use crate::metadata::{apply_copy_metadata, apply_put_metadata};
 use crate::replace::replace_markers;
 use crate::request::{
     compile_filters, join_s3_key, normalize_archive_key, source_basename, strip_destination_prefix,
@@ -19,6 +18,10 @@ use crate::types::{
     AppState, DeploymentManifest, DeploymentRequest, Filters, ObjectMetadata, PlannedAction,
     PlannedObject, SourceArchive,
 };
+
+mod metadata;
+
+use self::metadata::{apply_copy_metadata, apply_put_metadata};
 
 pub(crate) async fn deploy(state: &AppState, request: &DeploymentRequest) -> Result<()> {
     validate_request_lengths(request)?;
