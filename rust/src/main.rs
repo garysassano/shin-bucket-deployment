@@ -1,6 +1,5 @@
 mod cloudformation;
 mod cloudfront;
-mod metadata;
 mod replace;
 mod request;
 mod s3;
