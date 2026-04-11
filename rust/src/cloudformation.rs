@@ -27,8 +27,9 @@ pub(crate) async fn handle_event(
     state: Arc<AppState>,
     event: lambda_runtime::LambdaEvent<Value>,
 ) -> Result<Value, Error> {
-    let request: CloudFormationCustomResourceRequest = serde_json::from_value(event.payload)
-        .context("failed to deserialize CloudFormation event")?;
+    let request: CloudFormationCustomResourceRequest<Properties, Properties> =
+        serde_json::from_value(event.payload)
+            .context("failed to deserialize CloudFormation event")?;
     let view = request_view(&request)?;
 
     tracing::info!(
@@ -170,7 +171,7 @@ async fn process_request(
 }
 
 fn request_view(
-    request: &CloudFormationCustomResourceRequest,
+    request: &CloudFormationCustomResourceRequest<Properties, Properties>,
 ) -> Result<CloudFormationEventView<'_>> {
     match request {
         CloudFormationCustomResourceRequest::Create(request) => Ok(CloudFormationEventView {
@@ -180,7 +181,7 @@ fn request_view(
             request_id: &request.request_id,
             logical_resource_id: &request.logical_resource_id,
             physical_resource_id: None,
-            resource_properties: as_properties(&request.resource_properties, "ResourceProperties")?,
+            resource_properties: &request.resource_properties,
             old_resource_properties: None,
         }),
         CloudFormationCustomResourceRequest::Update(request) => Ok(CloudFormationEventView {
@@ -190,11 +191,8 @@ fn request_view(
             request_id: &request.request_id,
             logical_resource_id: &request.logical_resource_id,
             physical_resource_id: Some(&request.physical_resource_id),
-            resource_properties: as_properties(&request.resource_properties, "ResourceProperties")?,
-            old_resource_properties: Some(as_properties(
-                &request.old_resource_properties,
-                "OldResourceProperties",
-            )?),
+            resource_properties: &request.resource_properties,
+            old_resource_properties: Some(&request.old_resource_properties),
         }),
         CloudFormationCustomResourceRequest::Delete(request) => Ok(CloudFormationEventView {
             request_type: "Delete",
@@ -203,16 +201,10 @@ fn request_view(
             request_id: &request.request_id,
             logical_resource_id: &request.logical_resource_id,
             physical_resource_id: Some(&request.physical_resource_id),
-            resource_properties: as_properties(&request.resource_properties, "ResourceProperties")?,
+            resource_properties: &request.resource_properties,
             old_resource_properties: None,
         }),
     }
-}
-
-fn as_properties<'a>(value: &'a Value, field_name: &str) -> Result<&'a Properties> {
-    value
-        .as_object()
-        .ok_or_else(|| anyhow!("CloudFormation {field_name} must be a JSON object"))
 }
 
 async fn send_response(
