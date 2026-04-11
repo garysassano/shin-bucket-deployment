@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { CustomResource, Duration, Lazy, Stack, Tags, Token } from "aws-cdk-lib";
@@ -16,6 +17,7 @@ import { Construct } from "constructs";
 
 const CUSTOM_RESOURCE_OWNER_TAG = "aws-cdk:cr-owned";
 const HANDLER_BINARY_NAME = "cargo-bucket-deployment-handler";
+const SHARED_HANDLER_ID_PREFIX = "CargoBucketDeploymentHandler";
 
 export interface CargoBucketDeploymentProps
   extends Omit<
@@ -133,26 +135,7 @@ export class CargoBucketDeployment extends Construct {
 
     const architecture = props.architecture ?? Architecture.X86_64;
     const rustProjectPath = props.rustProjectPath ?? resolveDefaultRustProjectPath(this);
-    this.handlerFunction = new RustFunction(this, "CustomResourceHandler", {
-      runtime: "provided.al2023",
-      architecture,
-      binaryName: HANDLER_BINARY_NAME,
-      manifestPath: join(rustProjectPath, "Cargo.toml"),
-      bundling: props.bundling,
-      timeout: Duration.minutes(15),
-      memorySize: props.memoryLimit,
-      ephemeralStorageSize: props.ephemeralStorageSize,
-      role: props.role,
-      vpc: props.vpc,
-      vpcSubnets: props.vpcSubnets,
-      securityGroups:
-        props.securityGroups && props.securityGroups.length > 0 ? props.securityGroups : undefined,
-      environment: {
-        RUST_BACKTRACE: "1",
-      },
-      ...(props.logRetention ? { logRetention: props.logRetention } : {}),
-      logGroup: props.logGroup,
-    });
+    this.handlerFunction = getOrCreateHandler(this, props, architecture, rustProjectPath);
 
     const handlerRole = this.handlerFunction.role;
     if (!handlerRole) {
@@ -322,6 +305,125 @@ function resolveDefaultRustProjectPath(scope: Construct): string {
     "Unable to locate rust/Cargo.toml. Pass rustProjectPath explicitly.",
     scope,
   );
+}
+
+function getOrCreateHandler(
+  scope: Construct,
+  props: CargoBucketDeploymentProps,
+  architecture: Architecture,
+  rustProjectPath: string,
+): RustFunction {
+  const stack = Stack.of(scope);
+  const manifestPath = join(rustProjectPath, "Cargo.toml");
+  const handlerId = `${SHARED_HANDLER_ID_PREFIX}${renderHandlerConfigHash(
+    stack,
+    props,
+    architecture,
+    manifestPath,
+  )}`;
+
+  const existing = stack.node.tryFindChild(handlerId);
+  if (existing) {
+    if (!(existing instanceof RustFunction)) {
+      throw new ValidationError(
+        "CargoBucketDeploymentHandlerCollision",
+        `Found non-RustFunction child for shared handler id ${handlerId}.`,
+        scope,
+      );
+    }
+    return existing;
+  }
+
+  return new RustFunction(stack, handlerId, {
+    runtime: "provided.al2023",
+    architecture,
+    binaryName: HANDLER_BINARY_NAME,
+    manifestPath,
+    bundling: props.bundling,
+    timeout: Duration.minutes(15),
+    memorySize: props.memoryLimit,
+    ephemeralStorageSize: props.ephemeralStorageSize,
+    role: props.role,
+    vpc: props.vpc,
+    vpcSubnets: props.vpcSubnets,
+    securityGroups:
+      props.securityGroups && props.securityGroups.length > 0 ? props.securityGroups : undefined,
+    environment: {
+      RUST_BACKTRACE: "1",
+    },
+    ...(props.logRetention ? { logRetention: props.logRetention } : {}),
+    logGroup: props.logGroup,
+  });
+}
+
+function renderHandlerConfigHash(
+  stack: Stack,
+  props: CargoBucketDeploymentProps,
+  architecture: Architecture,
+  manifestPath: string,
+): string {
+  const config = {
+    architecture: architecture.name,
+    bundling: normalizeSingletonValue(props.bundling),
+    ephemeralStorageSize: normalizeSingletonValue(props.ephemeralStorageSize),
+    logGroup: normalizeSingletonValue(props.logGroup),
+    logRetention: normalizeSingletonValue(props.logRetention),
+    manifestPath,
+    memoryLimit: normalizeSingletonValue(props.memoryLimit),
+    role: normalizeSingletonValue(props.role),
+    securityGroups:
+      props.securityGroups && props.securityGroups.length > 0
+        ? [...props.securityGroups]
+            .map((securityGroup) => normalizeSingletonValue(securityGroup))
+            .sort()
+        : undefined,
+    stack: stack.node.addr,
+    vpc: normalizeSingletonValue(props.vpc),
+    vpcSubnets: normalizeSingletonValue(props.vpcSubnets),
+  };
+
+  return createHash("sha256").update(stableStringify(config)).digest("hex").slice(0, 16);
+}
+
+function normalizeSingletonValue(value: unknown): unknown {
+  if (value === undefined || value === null) {
+    return value;
+  }
+
+  if (typeof value === "function") {
+    return {
+      __function__: value.toString(),
+    };
+  }
+
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((entry) => normalizeSingletonValue(entry));
+  }
+
+  if (typeof value === "object") {
+    if (Construct.isConstruct(value as Construct)) {
+      return {
+        __construct__: (value as Construct).node.addr,
+      };
+    }
+
+    const normalizedEntries = Object.entries(value as Record<string, unknown>)
+      .filter(([, entry]) => entry !== undefined)
+      .map(([key, entry]) => [key, normalizeSingletonValue(entry)] as const)
+      .sort(([left], [right]) => left.localeCompare(right));
+
+    return Object.fromEntries(normalizedEntries);
+  }
+
+  return String(value);
+}
+
+function stableStringify(value: unknown): string {
+  return JSON.stringify(normalizeSingletonValue(value));
 }
 
 function sourceConfigEqual(stack: Stack, a: SourceConfig, b: SourceConfig) {
