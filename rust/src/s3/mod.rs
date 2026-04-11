@@ -331,7 +331,6 @@ async fn prune_destination(
     expected_relative_keys: &HashSet<String>,
 ) -> Result<()> {
     let mut continuation_token = None;
-    let mut keys_to_delete = Vec::new();
 
     loop {
         let response = state
@@ -347,6 +346,7 @@ async fn prune_destination(
             .send()
             .await?;
 
+        let mut keys_to_delete = Vec::new();
         for object in response.contents() {
             let Some(key) = object.key() else { continue };
             let relative_key = strip_destination_prefix(&request.dest_bucket_prefix, key);
@@ -361,6 +361,8 @@ async fn prune_destination(
             }
         }
 
+        delete_keys(state, &request.dest_bucket_name, &keys_to_delete).await?;
+
         if !response.is_truncated().unwrap_or(false) {
             break;
         }
@@ -369,7 +371,7 @@ async fn prune_destination(
             .map(|value| value.to_string());
     }
 
-    delete_keys(state, &request.dest_bucket_name, &keys_to_delete).await
+    Ok(())
 }
 
 async fn delete_keys(state: &AppState, bucket: &str, keys: &[String]) -> Result<()> {
