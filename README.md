@@ -36,6 +36,20 @@ Tooling:
 - formatter/lint runner: `biome`
 - local CDK CLI: `aws-cdk`
 
+Implementation notes:
+
+- The Lambda custom-resource envelope now uses the official [`aws_lambda_events`](https://docs.rs/aws_lambda_events/latest/aws_lambda_events/event/cloudformation/index.html) CloudFormation request type instead of a hand-rolled event struct.
+- `ResourceProperties` and `OldResourceProperties` are deserialized directly into a typed Rust struct (`RawDeploymentRequest`) rather than parsed from `serde_json::Value` field-by-field. The only remaining normalization step is from the raw request shape into the internal `DeploymentRequest`.
+- The Rust runtime is organized by responsibility:
+  - top-level orchestration in `cloudformation.rs`
+  - CloudFront-specific logic in `cloudfront.rs`
+  - S3-specific logic under `s3/`
+  - request parsing and normalization in `request.rs`
+  - marker replacement in `replace.rs`
+- S3 metadata handling lives under `s3/metadata.rs` because it is tightly coupled to S3 upload/copy behavior and not a generic cross-runtime concern.
+- For synth/unit tests, the TypeScript suite uses a stub local bundling helper in [test/test-bundling.ts](./test/test-bundling.ts). This avoids Docker during test-time asset staging while still exercising the construct output. The real examples and deploy flows still use the actual Rust handler build path.
+- The project favors direct deserialization and official AWS/helper crates where practical, and avoids extra intermediate adapter layers unless they materially simplify variant handling or shared control flow.
+
 Useful commands:
 
 - `pnpm typecheck`

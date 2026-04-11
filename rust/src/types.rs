@@ -3,10 +3,9 @@ use std::collections::{BTreeMap, HashMap};
 use aws_sdk_cloudfront::Client as CloudFrontClient;
 use aws_sdk_s3::Client as S3Client;
 use reqwest::Client as HttpClient;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use tempfile::NamedTempFile;
-
-pub(crate) type Properties = Map<String, Value>;
 
 #[derive(Clone)]
 pub(crate) struct AppState {
@@ -15,8 +14,10 @@ pub(crate) struct AppState {
     pub(crate) http: HttpClient,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct MarkerConfig {
+    #[serde(default)]
     pub(crate) json_escape: bool,
 }
 
