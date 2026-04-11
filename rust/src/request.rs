@@ -41,7 +41,7 @@ pub(crate) fn parse_request(props: &Properties) -> Result<DeploymentRequest> {
     }
 
     let dest_bucket_prefix = normalize_destination_prefix(
-        get_optional_string(props, "DestinationBucketKeyPrefix").unwrap_or_default(),
+        get_optional_string(props, "DestinationBucketKeyPrefix")?.unwrap_or_default(),
     );
 
     let default_distribution_path = default_distribution_path(&dest_bucket_prefix);
@@ -53,32 +53,32 @@ pub(crate) fn parse_request(props: &Properties) -> Result<DeploymentRequest> {
         source_markers_config,
         dest_bucket_name: get_required_string(props, "DestinationBucketName")?,
         dest_bucket_prefix,
-        extract: get_bool(props, "Extract", true),
-        retain_on_delete: get_bool(props, "RetainOnDelete", true),
-        distribution_id: get_optional_string(props, "DistributionId"),
-        distribution_paths: get_string_vec(props, "DistributionPaths")
+        extract: get_bool(props, "Extract", true)?,
+        retain_on_delete: get_bool(props, "RetainOnDelete", true)?,
+        distribution_id: get_optional_string(props, "DistributionId")?,
+        distribution_paths: get_string_vec(props, "DistributionPaths")?
             .unwrap_or_else(|| vec![default_distribution_path]),
         wait_for_distribution_invalidation: get_bool(
             props,
             "WaitForDistributionInvalidation",
             true,
-        ),
+        )?,
         user_metadata: get_string_map(props, "UserMetadata")?,
         system_metadata: get_string_map(props, "SystemMetadata")?,
-        prune: get_bool(props, "Prune", true),
-        exclude: get_string_vec(props, "Exclude").unwrap_or_default(),
-        include: get_string_vec(props, "Include").unwrap_or_default(),
-        output_object_keys: get_bool(props, "OutputObjectKeys", true),
-        destination_bucket_arn: get_optional_string(props, "DestinationBucketArn"),
+        prune: get_bool(props, "Prune", true)?,
+        exclude: get_string_vec(props, "Exclude")?.unwrap_or_default(),
+        include: get_string_vec(props, "Include")?.unwrap_or_default(),
+        output_object_keys: get_bool(props, "OutputObjectKeys", true)?,
+        destination_bucket_arn: get_optional_string(props, "DestinationBucketArn")?,
     })
 }
 
-pub(crate) fn parse_old_destination(props: &Properties) -> (Option<String>, String) {
-    let old_bucket = get_optional_string(props, "DestinationBucketName");
+pub(crate) fn parse_old_destination(props: &Properties) -> Result<(Option<String>, String)> {
+    let old_bucket = get_optional_string(props, "DestinationBucketName")?;
     let old_prefix = normalize_destination_prefix(
-        get_optional_string(props, "DestinationBucketKeyPrefix").unwrap_or_default(),
+        get_optional_string(props, "DestinationBucketKeyPrefix")?.unwrap_or_default(),
     );
-    (old_bucket, old_prefix)
+    Ok((old_bucket, old_prefix))
 }
 
 pub(crate) fn compile_filters(exclude: &[String], include: &[String]) -> Result<Filters> {
@@ -155,46 +155,47 @@ fn default_distribution_path(dest_bucket_prefix: &str) -> String {
 
 fn get_required_string(props: &Properties, key: &str) -> Result<String> {
     get_optional_string(props, key)
-        .ok_or_else(|| anyhow!("missing request resource property {key}"))
+        .and_then(|value| value.ok_or_else(|| anyhow!("missing request resource property {key}")))
 }
 
-fn get_optional_string(props: &Properties, key: &str) -> Option<String> {
+fn get_optional_string(props: &Properties, key: &str) -> Result<Option<String>> {
     match props.get(key) {
-        Some(Value::String(value)) => Some(value.clone()),
-        Some(Value::Number(value)) => Some(value.to_string()),
-        Some(Value::Bool(value)) => Some(value.to_string()),
-        _ => None,
+        Some(value) => render_scalar_string(value, key).map(Some),
+        None => Ok(None),
     }
 }
 
 fn get_required_string_vec(props: &Properties, key: &str) -> Result<Vec<String>> {
-    get_string_vec(props, key).ok_or_else(|| anyhow!("missing request resource property {key}"))
+    get_string_vec(props, key)
+        .and_then(|value| value.ok_or_else(|| anyhow!("missing request resource property {key}")))
 }
 
-fn get_string_vec(props: &Properties, key: &str) -> Option<Vec<String>> {
-    let Value::Array(items) = props.get(key)? else {
-        return None;
+fn get_string_vec(props: &Properties, key: &str) -> Result<Option<Vec<String>>> {
+    let Some(value) = props.get(key) else {
+        return Ok(None);
     };
 
-    Some(
-        items
-            .iter()
-            .filter_map(|value| match value {
-                Value::String(value) => Some(value.clone()),
-                Value::Number(value) => Some(value.to_string()),
-                Value::Bool(value) => Some(value.to_string()),
-                _ => None,
-            })
-            .collect(),
-    )
+    let Value::Array(items) = value else {
+        return Err(anyhow!("request resource property {key} must be an array"));
+    };
+
+    items
+        .iter()
+        .enumerate()
+        .map(|(index, value)| render_scalar_string(value, &format!("{key}[{index}]")))
+        .collect::<Result<Vec<_>>>()
+        .map(Some)
 }
 
-fn get_bool(props: &Properties, key: &str, default: bool) -> bool {
+fn get_bool(props: &Properties, key: &str, default: bool) -> Result<bool> {
     match props.get(key) {
-        Some(Value::Bool(value)) => *value,
-        Some(Value::String(value)) => value.eq_ignore_ascii_case("true"),
-        Some(Value::Number(value)) => value.as_i64().unwrap_or_default() != 0,
-        _ => default,
+        Some(Value::Bool(value)) => Ok(*value),
+        Some(Value::String(value)) => Ok(value.eq_ignore_ascii_case("true")),
+        Some(Value::Number(value)) => Ok(value.as_i64().unwrap_or_default() != 0),
+        Some(_) => Err(anyhow!(
+            "request resource property {key} must be a scalar boolean"
+        )),
+        None => Ok(default),
     }
 }
 
@@ -224,10 +225,11 @@ fn get_markers_list(props: &Properties, key: &str) -> Result<Vec<HashMap<String,
     };
 
     let mut result = Vec::new();
-    for item in items {
+    for (index, item) in items.iter().enumerate() {
         let Value::Object(object) = item else {
-            result.push(HashMap::new());
-            continue;
+            return Err(anyhow!(
+                "request resource property {key}[{index}] must be an object"
+            ));
         };
 
         let mut markers = HashMap::new();
@@ -253,17 +255,103 @@ fn get_marker_config_list(props: &Properties, key: &str) -> Result<Vec<MarkerCon
     };
 
     let mut result = Vec::new();
-    for item in items {
+    for (index, item) in items.iter().enumerate() {
         let Value::Object(object) = item else {
-            result.push(MarkerConfig::default());
-            continue;
+            return Err(anyhow!(
+                "request resource property {key}[{index}] must be an object"
+            ));
         };
         result.push(MarkerConfig {
-            json_escape: get_bool(object, "jsonEscape", false),
+            json_escape: get_bool(object, "jsonEscape", false)?,
         });
     }
 
     Ok(result)
+}
+
+fn render_scalar_string(value: &Value, key: &str) -> Result<String> {
+    match value {
+        Value::String(value) => Ok(value.clone()),
+        Value::Number(value) => Ok(value.to_string()),
+        Value::Bool(value) => Ok(value.to_string()),
+        other => Err(anyhow!(
+            "request resource property {key} must be a scalar string-compatible value, got {other}"
+        )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::{Map, json};
+
+    use super::*;
+
+    fn minimal_request() -> Properties {
+        let mut props = Map::new();
+        props.insert("SourceBucketNames".into(), json!(["source-bucket"]));
+        props.insert("SourceObjectKeys".into(), json!(["source.zip"]));
+        props.insert("DestinationBucketName".into(), json!("dest-bucket"));
+        props
+    }
+
+    #[test]
+    fn parse_request_rejects_non_scalar_distribution_paths() {
+        let mut props = minimal_request();
+        props.insert(
+            "DistributionPaths".into(),
+            json!(["/index.html", {"bad": true}]),
+        );
+
+        let error = parse_request(&props).expect_err("invalid distribution paths should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("request resource property DistributionPaths[1]"),
+        );
+    }
+
+    #[test]
+    fn parse_request_rejects_non_object_marker_entries() {
+        let mut props = minimal_request();
+        props.insert("SourceMarkers".into(), json!([true]));
+
+        let error = parse_request(&props).expect_err("invalid marker entries should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("request resource property SourceMarkers[0] must be an object"),
+        );
+    }
+
+    #[test]
+    fn parse_request_rejects_non_object_marker_config_entries() {
+        let mut props = minimal_request();
+        props.insert("SourceMarkersConfig".into(), json!(["bad"]));
+
+        let error = parse_request(&props).expect_err("invalid marker config entries should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("request resource property SourceMarkersConfig[0] must be an object"),
+        );
+    }
+
+    #[test]
+    fn parse_request_rejects_non_scalar_boolean_properties() {
+        let mut props = minimal_request();
+        props.insert("Prune".into(), json!({"bad": true}));
+
+        let error = parse_request(&props).expect_err("invalid boolean property should fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("request resource property Prune must be a scalar boolean"),
+        );
+    }
 }
 
 fn compile_globs(patterns: &[String]) -> Result<Vec<GlobMatcher>> {
