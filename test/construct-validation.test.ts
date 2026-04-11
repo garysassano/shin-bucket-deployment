@@ -3,6 +3,7 @@ import { App, Aws, Stack } from "aws-cdk-lib";
 import { Match, Template } from "aws-cdk-lib/assertions";
 import { AllowedMethods, Distribution, ViewerProtocolPolicy } from "aws-cdk-lib/aws-cloudfront";
 import { S3BucketOrigin } from "aws-cdk-lib/aws-cloudfront-origins";
+import { Vpc } from "aws-cdk-lib/aws-ec2";
 import { Bucket } from "aws-cdk-lib/aws-s3";
 import { describe, expect, test } from "vitest";
 import { CargoBucketDeployment, Source } from "../src";
@@ -60,7 +61,6 @@ describe("CargoBucketDeployment validation and option coverage", () => {
   });
 
   test.each([
-    ["useEfs", true, /does not support useEfs/],
     ["signContent", true, /does not support signContent/],
     [
       "serverSideEncryptionCustomerAlgorithm",
@@ -79,6 +79,19 @@ describe("CargoBucketDeployment validation and option coverage", () => {
         [propName]: value,
       } as never);
     }).toThrow(pattern);
+  });
+
+  test("throws when useEfs is enabled without a vpc", () => {
+    const stack = new Stack();
+    const destinationBucket = new Bucket(stack, "Dest");
+
+    expect(() => {
+      new CargoBucketDeployment(stack, "Deploy", {
+        sources: [Source.asset(join(__dirname, "fixtures", "my-website"))],
+        destinationBucket,
+        useEfs: true,
+      });
+    }).toThrow(/Vpc must be specified if useEfs is set/);
   });
 
   test("fails synthesis when extract=false is combined with deploy-time markers", () => {
@@ -134,6 +147,38 @@ describe("CargoBucketDeployment validation and option coverage", () => {
           }),
         ]),
       },
+    });
+  });
+
+  test("renders EFS-backed handler wiring when useEfs is enabled", () => {
+    const stack = new Stack();
+    const destinationBucket = new Bucket(stack, "Dest");
+    const vpc = new Vpc(stack, "Vpc", { maxAzs: 2 });
+
+    new CargoBucketDeployment(stack, "Deploy", {
+      sources: [Source.asset(join(__dirname, "fixtures", "my-website"))],
+      destinationBucket,
+      useEfs: true,
+      vpc,
+      bundling: testBundling(),
+    });
+
+    const template = Template.fromStack(stack);
+
+    template.resourceCountIs("AWS::EFS::FileSystem", 1);
+    template.resourceCountIs("AWS::EFS::AccessPoint", 1);
+    template.hasResourceProperties("AWS::Lambda::Function", {
+      Environment: {
+        Variables: Match.objectLike({
+          MOUNT_PATH: "/mnt/lambda",
+          RUST_BACKTRACE: "1",
+        }),
+      },
+      FileSystemConfigs: Match.arrayWith([
+        Match.objectLike({
+          LocalMountPath: "/mnt/lambda",
+        }),
+      ]),
     });
   });
 
