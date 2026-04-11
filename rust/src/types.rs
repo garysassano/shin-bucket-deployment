@@ -3,7 +3,6 @@ use std::collections::{BTreeMap, HashMap};
 use aws_sdk_cloudfront::Client as CloudFrontClient;
 use aws_sdk_s3::Client as S3Client;
 use reqwest::Client as HttpClient;
-use serde::Deserialize;
 use serde_json::{Map, Value};
 use tempfile::NamedTempFile;
 
@@ -14,26 +13,6 @@ pub(crate) struct AppState {
     pub(crate) s3: S3Client,
     pub(crate) cloudfront: CloudFrontClient,
     pub(crate) http: HttpClient,
-}
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct CloudFormationEvent {
-    #[serde(rename = "RequestType")]
-    pub(crate) request_type: String,
-    #[serde(rename = "ResponseURL")]
-    pub(crate) response_url: String,
-    #[serde(rename = "StackId")]
-    pub(crate) stack_id: String,
-    #[serde(rename = "RequestId")]
-    pub(crate) request_id: String,
-    #[serde(rename = "LogicalResourceId")]
-    pub(crate) logical_resource_id: String,
-    #[serde(rename = "PhysicalResourceId", default)]
-    pub(crate) physical_resource_id: Option<String>,
-    #[serde(rename = "ResourceProperties")]
-    pub(crate) resource_properties: Properties,
-    #[serde(rename = "OldResourceProperties", default)]
-    pub(crate) old_resource_properties: Option<Properties>,
 }
 
 #[derive(Clone, Debug, Default)]
