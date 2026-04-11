@@ -9,7 +9,7 @@ import {
   StorageClass,
 } from "../src";
 
-class ControlsMatrixCargoBucketDeploymentStack extends Stack {
+class MetadataFiltersCargoBucketDeploymentStack extends Stack {
   constructor(scope: App, id: string, props?: StackProps) {
     super(scope, id, props);
 
@@ -104,4 +104,6 @@ const env =
       }
     : undefined;
 
-new ControlsMatrixCargoBucketDeploymentStack(app, "CargoBucketDeploymentControlsDemo", { env });
+new MetadataFiltersCargoBucketDeploymentStack(app, "CargoBucketDeploymentMetadataFiltersDemo", {
+  env,
+});

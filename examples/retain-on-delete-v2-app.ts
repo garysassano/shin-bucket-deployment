@@ -3,7 +3,7 @@ import { App, CfnOutput, RemovalPolicy, Stack, type StackProps } from "aws-cdk-l
 import { Bucket } from "aws-cdk-lib/aws-s3";
 import { CargoBucketDeployment, Source } from "../src";
 
-class RetainCycleCargoBucketDeploymentStack extends Stack {
+class RetainOnDeleteCargoBucketDeploymentStack extends Stack {
   constructor(scope: App, id: string, props?: StackProps) {
     super(scope, id, props);
 
@@ -38,7 +38,7 @@ class RetainCycleCargoBucketDeploymentStack extends Stack {
     });
 
     new CfnOutput(this, "DestroyRetainDemoCommand", {
-      value: "pnpm example:retain:destroy",
+      value: "pnpm example destroy retain-on-delete",
     });
   }
 }
@@ -52,4 +52,6 @@ const env =
       }
     : undefined;
 
-new RetainCycleCargoBucketDeploymentStack(app, "CargoBucketDeploymentRetainDemo", { env });
+new RetainOnDeleteCargoBucketDeploymentStack(app, "CargoBucketDeploymentRetainOnDeleteDemo", {
+  env,
+});

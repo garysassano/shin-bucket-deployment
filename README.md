@@ -1,8 +1,17 @@
 # CargoBucketDeployment
 
-Rust-backed alternative to `aws-cdk-lib/aws-s3-deployment`'s `BucketDeployment`.
+Rust-backed alternative to `aws-cdk-lib/aws-s3-deployment`'s [`BucketDeployment`](https://docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.aws_s3_deployment.BucketDeployment.html).
 
 This repo is currently a local prototype, not a published construct library, but the construct and runtime paths are working and manually validated.
+
+Examples are driven through a single runner:
+
+```bash
+pnpm example list
+pnpm example synth simple
+pnpm example deploy cloudfront-sync
+pnpm example destroy retain-on-delete
+```
 
 ## Why Use It
 
@@ -105,7 +114,7 @@ export class DemoStack extends Stack {
 | --- | --- | --- |
 | TypeScript synth/build path | Done | `pnpm typecheck`, `pnpm build` |
 | Formatting/lint | Done | `pnpm lint` |
-| Replacement matrix | Done | Manual S3 verification on March 30, 2026 |
+| Replacement behavior | Done | Manual S3 verification on March 30, 2026 |
 | CloudFront invalidation with wait | Done | Manual deploy/update on April 10, 2026 |
 | CloudFront invalidation without wait | Done | Manual deploy/update on April 10, 2026 |
 | Include / exclude filters | Done | Manual deploy and S3 inspection on April 10, 2026 |
@@ -119,12 +128,26 @@ export class DemoStack extends Stack {
 | Example | File | Purpose |
 | --- | --- | --- |
 | Simple asset deploy | [examples/simple-app.ts](./examples/simple-app.ts) | Plain deployment under `site/`. |
-| Replacement matrix | [examples/replacement-matrix-app.ts](./examples/replacement-matrix-app.ts) | Replacement behavior across `asset`, `data`, JSON, and YAML sources. |
-| CloudFront invalidation (sync) | [examples/cloudfront-invalidation-app.ts](./examples/cloudfront-invalidation-app.ts) | Stack waits for invalidation completion. |
+| Replacement behavior | [examples/replacement-behavior-app.ts](./examples/replacement-behavior-app.ts) | Replacement behavior across `asset`, `data`, JSON, and YAML sources. |
+| CloudFront invalidation (sync) | [examples/cloudfront-invalidation-sync-app.ts](./examples/cloudfront-invalidation-sync-app.ts) | Stack waits for invalidation completion. |
 | CloudFront invalidation (async) | [examples/cloudfront-invalidation-async-app.ts](./examples/cloudfront-invalidation-async-app.ts) | Stack returns before invalidation completes. |
-| Metadata and filters | [examples/controls-matrix-app.ts](./examples/controls-matrix-app.ts) | Include/exclude and metadata behavior. |
-| Prune cycle | [examples/prune-cycle-v1-app.ts](./examples/prune-cycle-v1-app.ts), [examples/prune-cycle-v2-app.ts](./examples/prune-cycle-v2-app.ts) | Update path that removes no-longer-deployed objects. |
-| Retain cycle | [examples/retain-cycle-v1-app.ts](./examples/retain-cycle-v1-app.ts), [examples/retain-cycle-v2-app.ts](./examples/retain-cycle-v2-app.ts) | Update/delete path when `retainOnDelete: true`. |
+| Metadata and filters | [examples/metadata-filters-app.ts](./examples/metadata-filters-app.ts) | Include/exclude and metadata behavior. |
+| Prune update | [examples/prune-update-v1-app.ts](./examples/prune-update-v1-app.ts), [examples/prune-update-v2-app.ts](./examples/prune-update-v2-app.ts) | Update path that removes no-longer-deployed objects. |
+| Retain on delete | [examples/retain-on-delete-v1-app.ts](./examples/retain-on-delete-v1-app.ts), [examples/retain-on-delete-v2-app.ts](./examples/retain-on-delete-v2-app.ts) | Update/delete path when `retainOnDelete: true`. |
+
+Runner names:
+
+- `simple`
+- `replacement`
+- `cloudfront-sync`
+- `cloudfront-async`
+- `metadata-filters`
+- `prune-update-v1`
+- `prune-update-v2`
+- `prune-update`
+- `retain-on-delete-v1`
+- `retain-on-delete-v2`
+- `retain-on-delete`
 
 ## Implementation Notes
 
