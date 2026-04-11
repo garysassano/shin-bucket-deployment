@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, HashSet};
-use std::fs::File;
+use std::env;
+use std::fs::{File, create_dir_all};
 use std::io::{Read, Write};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
@@ -28,6 +30,8 @@ mod metadata;
 use self::metadata::{apply_copy_metadata, apply_put_metadata};
 
 const MAX_PARALLEL_TRANSFERS: usize = 8;
+const MOUNT_PATH_ENV: &str = "MOUNT_PATH";
+const WORKDIR_NAME: &str = "cargo-bucket-deployment";
 
 #[derive(Clone)]
 struct CopyPlan {
@@ -237,7 +241,7 @@ async fn download_source_zip(state: &AppState, bucket: &str, key: &str) -> Resul
         .await
         .with_context(|| format!("failed to download s3://{bucket}/{key}"))?;
 
-    let temp = NamedTempFile::new().context("failed to create temp archive")?;
+    let temp = create_work_temp_file().context("failed to create temp archive")?;
     let mut output = tokio::fs::File::from_std(temp.reopen()?);
     let mut reader = response.body.into_async_read();
     tokio::io::copy(&mut reader, &mut output).await?;
@@ -513,7 +517,7 @@ fn prepare_zip_upload_payload(
     source_index: usize,
 ) -> Result<UploadPayload> {
     if request.source_markers[source_index].is_empty() {
-        let mut temp = NamedTempFile::new().context("failed to create temp entry file")?;
+        let mut temp = create_work_temp_file().context("failed to create temp entry file")?;
         std::io::copy(entry, &mut temp)?;
         temp.flush()?;
         Ok(UploadPayload::TempFile(temp))
@@ -576,9 +580,37 @@ fn namespace_list_prefix(prefix: &str) -> Option<String> {
     Some(normalized)
 }
 
+fn create_work_temp_file() -> Result<NamedTempFile> {
+    if let Some(work_dir) = work_dir_root()? {
+        return tempfile::Builder::new()
+            .prefix("cargo-bucket-deployment-")
+            .tempfile_in(work_dir)
+            .context("failed to create temp file in configured work directory");
+    }
+
+    NamedTempFile::new().context("failed to create temp file")
+}
+
+fn work_dir_root() -> Result<Option<PathBuf>> {
+    let Some(mount_path) = env::var_os(MOUNT_PATH_ENV) else {
+        return Ok(None);
+    };
+
+    let work_dir = PathBuf::from(mount_path).join(WORKDIR_NAME);
+    create_dir_all(&work_dir).with_context(|| {
+        format!(
+            "failed to create configured work directory at {}",
+            work_dir.display()
+        )
+    })?;
+    Ok(Some(work_dir))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::namespace_list_prefix;
+    use super::{namespace_list_prefix, work_dir_root, WORKDIR_NAME};
+    use std::env;
+    use tempfile::TempDir;
 
     #[test]
     fn namespace_list_prefix_adds_trailing_slash() {
@@ -593,5 +625,20 @@ mod tests {
     #[test]
     fn namespace_list_prefix_omits_empty_prefix() {
         assert_eq!(namespace_list_prefix(""), None);
+    }
+
+    #[test]
+    fn work_dir_root_uses_mount_path_when_present() {
+        let temp_dir = TempDir::new().unwrap();
+        unsafe {
+            env::set_var("MOUNT_PATH", temp_dir.path());
+        }
+
+        let work_dir = work_dir_root().unwrap().unwrap();
+        assert_eq!(work_dir, temp_dir.path().join(WORKDIR_NAME));
+
+        unsafe {
+            env::remove_var("MOUNT_PATH");
+        }
     }
 }

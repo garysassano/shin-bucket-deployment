@@ -46,7 +46,6 @@ Current limitations:
 - not packaged as a publishable construct library yet
 - assumes `cargo lambda` is available locally at synth time
 - not integrated into `aws-cdk-lib`'s handler generation
-- does not support `useEfs`
 - rejects `expires`
 - rejects `signContent`
 - rejects `serverSideEncryptionCustomerAlgorithm`
@@ -72,7 +71,7 @@ This tracks parity against the upstream [`BucketDeployment`](https://docs.aws.am
 | `addSource()` | ✅ | Supported. |
 | Deploy-time replacement for `Source.data`, `Source.jsonData`, `Source.yamlData` | ✅ | Supported and validated. |
 | `vpc`, `vpcSubnets`, `securityGroups`, `role`, `memoryLimit`, `ephemeralStorageSize`, `logRetention`, `logGroup` | ✅ | Wired through to the Rust provider function. |
-| `useEfs` | ❌ | Not supported yet. |
+| `useEfs` | ✅ | Supported with the same VPC requirement as upstream. |
 | `expires` | ❌ | Not supported yet. |
 | `signContent` | ❌ | Not supported yet. |
 | `serverSideEncryptionCustomerAlgorithm` | ❌ | Not supported yet. |
@@ -84,7 +83,7 @@ This tracks parity against the upstream [`BucketDeployment`](https://docs.aws.am
 | Provider runtime | Python singleton Lambda | Shared Rust Lambda per compatible configuration within a stack | Already implemented. |
 | S3 transfer engine | AWS CLI `s3 cp` / `s3 sync` from the handler | AWS SDK copy/upload/delete calls with bounded transfer concurrency | Tune concurrency and large-transfer behavior further if needed. |
 | Extracted deploy path | Download zip, extract full tree to a working directory, rewrite files in place, then sync the tree | Plan directly from the zip archive, open each archive once, and upload entries individually | Already in a good place. |
-| Working storage | `/tmp` by default, optional EFS support | `/tmp` only | Add EFS parity if large-workdir support becomes necessary. |
+| Working storage | `/tmp` by default, optional EFS support | `/tmp` by default, optional EFS-backed work directory via `MOUNT_PATH` | Already implemented. |
 | CloudFront invalidation | One batched invalidation request for all paths | One batched invalidation request for all paths | Already in a good place. |
 | Prune/delete path | AWS CLI sync/delete behavior | SDK list + batched delete with namespace-safe prefixes, page-by-page cleanup, and per-object delete error checks | Already in a good place. |
 
@@ -198,9 +197,5 @@ Runner names:
   - marker replacement in `replace.rs`
 - S3 metadata handling lives under `s3/metadata.rs` because it is tightly coupled to S3 upload/copy behavior.
 - The TypeScript test suite uses [test/test-bundling.ts](./test/test-bundling.ts) to stub local bundling during synth/unit tests without Docker.
-
-## Next Optimizations
-
-- Add EFS parity if `/tmp` becomes a practical limit for large deployments.
 
 The Rust provider lives under [rust](./rust), the construct code under [src](./src), and the AWS/manual validation examples under [examples](./examples).
