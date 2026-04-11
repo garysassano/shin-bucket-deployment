@@ -8,15 +8,15 @@ use tracing::error;
 use uuid::Uuid;
 
 use crate::cloudfront::invalidate as invalidate_cloudfront;
-use crate::request::{parse_old_destination, parse_request};
+use crate::request::{RawDeploymentRequest, parse_old_destination, parse_request};
 use crate::s3::{bucket_owned, delete_prefix, deploy};
-use crate::types::{AppState, Properties, ResponsePayload};
+use crate::types::{AppState, ResponsePayload};
 
 pub(crate) async fn handle_event(
     state: Arc<AppState>,
     event: lambda_runtime::LambdaEvent<Value>,
 ) -> Result<Value, Error> {
-    let request: CloudFormationCustomResourceRequest<Properties, Properties> =
+    let request: CloudFormationCustomResourceRequest<RawDeploymentRequest, RawDeploymentRequest> =
         serde_json::from_value(event.payload)
             .context("failed to deserialize CloudFormation event")?;
 
@@ -113,10 +113,10 @@ async fn process_request(
     state: &AppState,
     request_type: &str,
     physical_resource_id: Option<&str>,
-    resource_properties: &Properties,
-    old_resource_properties: Option<&Properties>,
+    resource_properties: &RawDeploymentRequest,
+    old_resource_properties: Option<&RawDeploymentRequest>,
 ) -> Result<ResponsePayload> {
-    let request = parse_request(resource_properties)?;
+    let request = parse_request(resource_properties);
 
     let physical_resource_id = match request_type {
         "Create" => format!("aws.cdk.cargobucketdeployment.{}", Uuid::new_v4()),
@@ -145,14 +145,10 @@ async fn process_request(
 
     if request_type == "Update" && !request.retain_on_delete {
         if let Some(old_props) = old_resource_properties {
-            let (old_bucket, old_prefix) = parse_old_destination(old_props)?;
+            let (old_bucket, old_prefix) = parse_old_destination(old_props);
 
-            if old_bucket.as_deref() != Some(request.dest_bucket_name.as_str())
-                || old_prefix != request.dest_bucket_prefix
-            {
-                if let Some(old_bucket_name) = old_bucket {
-                    delete_prefix(state, &old_bucket_name, &old_prefix).await?;
-                }
+            if old_bucket != request.dest_bucket_name || old_prefix != request.dest_bucket_prefix {
+                delete_prefix(state, &old_bucket, &old_prefix).await?;
             }
         }
     }
@@ -197,7 +193,7 @@ async fn process_request(
 }
 
 fn response_target(
-    request: &CloudFormationCustomResourceRequest<Properties, Properties>,
+    request: &CloudFormationCustomResourceRequest<RawDeploymentRequest, RawDeploymentRequest>,
 ) -> (&str, &str, &str, &str) {
     match request {
         CloudFormationCustomResourceRequest::Create(request) => (
@@ -222,7 +218,7 @@ fn response_target(
 }
 
 fn physical_resource_id(
-    request: &CloudFormationCustomResourceRequest<Properties, Properties>,
+    request: &CloudFormationCustomResourceRequest<RawDeploymentRequest, RawDeploymentRequest>,
 ) -> Option<&str> {
     match request {
         CloudFormationCustomResourceRequest::Create(_) => None,

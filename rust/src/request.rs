@@ -3,9 +3,47 @@ use std::path::Path;
 
 use anyhow::{Context, Result, anyhow};
 use globset::{Glob, GlobMatcher};
-use serde_json::Value;
+use serde::{Deserialize, Serialize};
 
-use crate::types::{DeploymentRequest, Filters, MarkerConfig, Properties};
+use crate::types::{DeploymentRequest, Filters, MarkerConfig};
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "PascalCase")]
+pub(crate) struct RawDeploymentRequest {
+    pub(crate) source_bucket_names: Vec<String>,
+    pub(crate) source_object_keys: Vec<String>,
+    #[serde(default)]
+    pub(crate) source_markers: Vec<HashMap<String, String>>,
+    #[serde(default)]
+    pub(crate) source_markers_config: Vec<MarkerConfig>,
+    pub(crate) destination_bucket_name: String,
+    #[serde(default)]
+    pub(crate) destination_bucket_key_prefix: Option<String>,
+    #[serde(default = "default_true")]
+    pub(crate) extract: bool,
+    #[serde(default = "default_true")]
+    pub(crate) retain_on_delete: bool,
+    #[serde(default)]
+    pub(crate) distribution_id: Option<String>,
+    #[serde(default)]
+    pub(crate) distribution_paths: Option<Vec<String>>,
+    #[serde(default = "default_true")]
+    pub(crate) wait_for_distribution_invalidation: bool,
+    #[serde(default)]
+    pub(crate) user_metadata: HashMap<String, String>,
+    #[serde(default)]
+    pub(crate) system_metadata: HashMap<String, String>,
+    #[serde(default = "default_true")]
+    pub(crate) prune: bool,
+    #[serde(default)]
+    pub(crate) exclude: Vec<String>,
+    #[serde(default)]
+    pub(crate) include: Vec<String>,
+    #[serde(default = "default_true")]
+    pub(crate) output_object_keys: bool,
+    #[serde(default)]
+    pub(crate) destination_bucket_arn: Option<String>,
+}
 
 impl Filters {
     pub(crate) fn should_include(&self, key: &str) -> bool {
@@ -27,58 +65,57 @@ impl Filters {
     }
 }
 
-pub(crate) fn parse_request(props: &Properties) -> Result<DeploymentRequest> {
-    let source_bucket_names = get_required_string_vec(props, "SourceBucketNames")?;
-    let source_object_keys = get_required_string_vec(props, "SourceObjectKeys")?;
-    let mut source_markers = get_markers_list(props, "SourceMarkers")?;
-    let mut source_markers_config = get_marker_config_list(props, "SourceMarkersConfig")?;
+pub(crate) fn parse_request(raw: &RawDeploymentRequest) -> DeploymentRequest {
+    let mut source_markers = raw.source_markers.clone();
+    let mut source_markers_config = raw.source_markers_config.clone();
 
     if source_markers.is_empty() {
-        source_markers = vec![HashMap::new(); source_bucket_names.len()];
+        source_markers = vec![HashMap::new(); raw.source_bucket_names.len()];
     }
     if source_markers_config.is_empty() {
-        source_markers_config = vec![MarkerConfig::default(); source_bucket_names.len()];
+        source_markers_config = vec![MarkerConfig::default(); raw.source_bucket_names.len()];
     }
 
     let dest_bucket_prefix = normalize_destination_prefix(
-        get_optional_string(props, "DestinationBucketKeyPrefix")?.unwrap_or_default(),
+        raw.destination_bucket_key_prefix
+            .clone()
+            .unwrap_or_default(),
     );
 
     let default_distribution_path = default_distribution_path(&dest_bucket_prefix);
 
-    Ok(DeploymentRequest {
-        source_bucket_names,
-        source_object_keys,
+    DeploymentRequest {
+        source_bucket_names: raw.source_bucket_names.clone(),
+        source_object_keys: raw.source_object_keys.clone(),
         source_markers,
         source_markers_config,
-        dest_bucket_name: get_required_string(props, "DestinationBucketName")?,
+        dest_bucket_name: raw.destination_bucket_name.clone(),
         dest_bucket_prefix,
-        extract: get_bool(props, "Extract", true)?,
-        retain_on_delete: get_bool(props, "RetainOnDelete", true)?,
-        distribution_id: get_optional_string(props, "DistributionId")?,
-        distribution_paths: get_string_vec(props, "DistributionPaths")?
+        extract: raw.extract,
+        retain_on_delete: raw.retain_on_delete,
+        distribution_id: raw.distribution_id.clone(),
+        distribution_paths: raw
+            .distribution_paths
+            .clone()
             .unwrap_or_else(|| vec![default_distribution_path]),
-        wait_for_distribution_invalidation: get_bool(
-            props,
-            "WaitForDistributionInvalidation",
-            true,
-        )?,
-        user_metadata: get_string_map(props, "UserMetadata")?,
-        system_metadata: get_string_map(props, "SystemMetadata")?,
-        prune: get_bool(props, "Prune", true)?,
-        exclude: get_string_vec(props, "Exclude")?.unwrap_or_default(),
-        include: get_string_vec(props, "Include")?.unwrap_or_default(),
-        output_object_keys: get_bool(props, "OutputObjectKeys", true)?,
-        destination_bucket_arn: get_optional_string(props, "DestinationBucketArn")?,
-    })
+        wait_for_distribution_invalidation: raw.wait_for_distribution_invalidation,
+        user_metadata: raw.user_metadata.clone(),
+        system_metadata: raw.system_metadata.clone(),
+        prune: raw.prune,
+        exclude: raw.exclude.clone(),
+        include: raw.include.clone(),
+        output_object_keys: raw.output_object_keys,
+        destination_bucket_arn: raw.destination_bucket_arn.clone(),
+    }
 }
 
-pub(crate) fn parse_old_destination(props: &Properties) -> Result<(Option<String>, String)> {
-    let old_bucket = get_optional_string(props, "DestinationBucketName")?;
+pub(crate) fn parse_old_destination(raw: &RawDeploymentRequest) -> (String, String) {
     let old_prefix = normalize_destination_prefix(
-        get_optional_string(props, "DestinationBucketKeyPrefix")?.unwrap_or_default(),
+        raw.destination_bucket_key_prefix
+            .clone()
+            .unwrap_or_default(),
     );
-    Ok((old_bucket, old_prefix))
+    (raw.destination_bucket_name.clone(), old_prefix)
 }
 
 pub(crate) fn compile_filters(exclude: &[String], include: &[String]) -> Result<Filters> {
@@ -153,205 +190,8 @@ fn default_distribution_path(dest_bucket_prefix: &str) -> String {
     prefix
 }
 
-fn get_required_string(props: &Properties, key: &str) -> Result<String> {
-    get_optional_string(props, key)
-        .and_then(|value| value.ok_or_else(|| anyhow!("missing request resource property {key}")))
-}
-
-fn get_optional_string(props: &Properties, key: &str) -> Result<Option<String>> {
-    match props.get(key) {
-        Some(value) => render_scalar_string(value, key).map(Some),
-        None => Ok(None),
-    }
-}
-
-fn get_required_string_vec(props: &Properties, key: &str) -> Result<Vec<String>> {
-    get_string_vec(props, key)
-        .and_then(|value| value.ok_or_else(|| anyhow!("missing request resource property {key}")))
-}
-
-fn get_string_vec(props: &Properties, key: &str) -> Result<Option<Vec<String>>> {
-    let Some(value) = props.get(key) else {
-        return Ok(None);
-    };
-
-    let Value::Array(items) = value else {
-        return Err(anyhow!("request resource property {key} must be an array"));
-    };
-
-    items
-        .iter()
-        .enumerate()
-        .map(|(index, value)| render_scalar_string(value, &format!("{key}[{index}]")))
-        .collect::<Result<Vec<_>>>()
-        .map(Some)
-}
-
-fn get_bool(props: &Properties, key: &str, default: bool) -> Result<bool> {
-    match props.get(key) {
-        Some(Value::Bool(value)) => Ok(*value),
-        Some(Value::String(value)) => Ok(value.eq_ignore_ascii_case("true")),
-        Some(Value::Number(value)) => Ok(value.as_i64().unwrap_or_default() != 0),
-        Some(_) => Err(anyhow!(
-            "request resource property {key} must be a scalar boolean"
-        )),
-        None => Ok(default),
-    }
-}
-
-fn get_string_map(props: &Properties, key: &str) -> Result<HashMap<String, String>> {
-    let Some(Value::Object(object)) = props.get(key) else {
-        return Ok(HashMap::new());
-    };
-
-    let mut result = HashMap::new();
-    for (entry_key, value) in object {
-        let rendered = match value {
-            Value::String(value) => value.clone(),
-            Value::Number(value) => value.to_string(),
-            Value::Bool(value) => value.to_string(),
-            Value::Null => String::new(),
-            other => serde_json::to_string(other)?,
-        };
-        result.insert(entry_key.to_lowercase(), rendered);
-    }
-
-    Ok(result)
-}
-
-fn get_markers_list(props: &Properties, key: &str) -> Result<Vec<HashMap<String, String>>> {
-    let Some(Value::Array(items)) = props.get(key) else {
-        return Ok(Vec::new());
-    };
-
-    let mut result = Vec::new();
-    for (index, item) in items.iter().enumerate() {
-        let Value::Object(object) = item else {
-            return Err(anyhow!(
-                "request resource property {key}[{index}] must be an object"
-            ));
-        };
-
-        let mut markers = HashMap::new();
-        for (marker_key, marker_value) in object {
-            let rendered = match marker_value {
-                Value::String(value) => value.clone(),
-                Value::Number(value) => value.to_string(),
-                Value::Bool(value) => value.to_string(),
-                Value::Null => String::new(),
-                other => serde_json::to_string(other)?,
-            };
-            markers.insert(marker_key.clone(), rendered);
-        }
-        result.push(markers);
-    }
-
-    Ok(result)
-}
-
-fn get_marker_config_list(props: &Properties, key: &str) -> Result<Vec<MarkerConfig>> {
-    let Some(Value::Array(items)) = props.get(key) else {
-        return Ok(Vec::new());
-    };
-
-    let mut result = Vec::new();
-    for (index, item) in items.iter().enumerate() {
-        let Value::Object(object) = item else {
-            return Err(anyhow!(
-                "request resource property {key}[{index}] must be an object"
-            ));
-        };
-        result.push(MarkerConfig {
-            json_escape: get_bool(object, "jsonEscape", false)?,
-        });
-    }
-
-    Ok(result)
-}
-
-fn render_scalar_string(value: &Value, key: &str) -> Result<String> {
-    match value {
-        Value::String(value) => Ok(value.clone()),
-        Value::Number(value) => Ok(value.to_string()),
-        Value::Bool(value) => Ok(value.to_string()),
-        other => Err(anyhow!(
-            "request resource property {key} must be a scalar string-compatible value, got {other}"
-        )),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use serde_json::{Map, json};
-
-    use super::*;
-
-    fn minimal_request() -> Properties {
-        let mut props = Map::new();
-        props.insert("SourceBucketNames".into(), json!(["source-bucket"]));
-        props.insert("SourceObjectKeys".into(), json!(["source.zip"]));
-        props.insert("DestinationBucketName".into(), json!("dest-bucket"));
-        props
-    }
-
-    #[test]
-    fn parse_request_rejects_non_scalar_distribution_paths() {
-        let mut props = minimal_request();
-        props.insert(
-            "DistributionPaths".into(),
-            json!(["/index.html", {"bad": true}]),
-        );
-
-        let error = parse_request(&props).expect_err("invalid distribution paths should fail");
-
-        assert!(
-            error
-                .to_string()
-                .contains("request resource property DistributionPaths[1]"),
-        );
-    }
-
-    #[test]
-    fn parse_request_rejects_non_object_marker_entries() {
-        let mut props = minimal_request();
-        props.insert("SourceMarkers".into(), json!([true]));
-
-        let error = parse_request(&props).expect_err("invalid marker entries should fail");
-
-        assert!(
-            error
-                .to_string()
-                .contains("request resource property SourceMarkers[0] must be an object"),
-        );
-    }
-
-    #[test]
-    fn parse_request_rejects_non_object_marker_config_entries() {
-        let mut props = minimal_request();
-        props.insert("SourceMarkersConfig".into(), json!(["bad"]));
-
-        let error = parse_request(&props).expect_err("invalid marker config entries should fail");
-
-        assert!(
-            error
-                .to_string()
-                .contains("request resource property SourceMarkersConfig[0] must be an object"),
-        );
-    }
-
-    #[test]
-    fn parse_request_rejects_non_scalar_boolean_properties() {
-        let mut props = minimal_request();
-        props.insert("Prune".into(), json!({"bad": true}));
-
-        let error = parse_request(&props).expect_err("invalid boolean property should fail");
-
-        assert!(
-            error
-                .to_string()
-                .contains("request resource property Prune must be a scalar boolean"),
-        );
-    }
+fn default_true() -> bool {
+    true
 }
 
 fn compile_globs(patterns: &[String]) -> Result<Vec<GlobMatcher>> {
@@ -363,4 +203,64 @@ fn compile_globs(patterns: &[String]) -> Result<Vec<GlobMatcher>> {
                 .map(|glob| glob.compile_matcher())
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    fn minimal_request() -> serde_json::Value {
+        json!({
+            "SourceBucketNames": ["source-bucket"],
+            "SourceObjectKeys": ["source.zip"],
+            "DestinationBucketName": "dest-bucket"
+        })
+    }
+
+    #[test]
+    fn deserializes_minimal_request_with_defaults() {
+        let raw: RawDeploymentRequest =
+            serde_json::from_value(minimal_request()).expect("minimal request should deserialize");
+        let request = parse_request(&raw);
+
+        assert!(request.extract);
+        assert!(request.retain_on_delete);
+        assert!(request.prune);
+        assert!(request.output_object_keys);
+        assert_eq!(request.distribution_paths, vec!["/*"]);
+    }
+
+    #[test]
+    fn serde_rejects_non_string_distribution_paths() {
+        let mut props = minimal_request();
+        props["DistributionPaths"] = json!(["/index.html", {"bad": true}]);
+
+        assert!(serde_json::from_value::<RawDeploymentRequest>(props).is_err());
+    }
+
+    #[test]
+    fn serde_rejects_non_object_marker_entries() {
+        let mut props = minimal_request();
+        props["SourceMarkers"] = json!([true]);
+
+        assert!(serde_json::from_value::<RawDeploymentRequest>(props).is_err());
+    }
+
+    #[test]
+    fn serde_rejects_non_object_marker_config_entries() {
+        let mut props = minimal_request();
+        props["SourceMarkersConfig"] = json!(["bad"]);
+
+        assert!(serde_json::from_value::<RawDeploymentRequest>(props).is_err());
+    }
+
+    #[test]
+    fn serde_rejects_non_boolean_properties() {
+        let mut props = minimal_request();
+        props["Prune"] = json!({"bad": true});
+
+        assert!(serde_json::from_value::<RawDeploymentRequest>(props).is_err());
+    }
 }
