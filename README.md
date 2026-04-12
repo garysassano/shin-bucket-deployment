@@ -55,27 +55,43 @@ Current limitations:
 
 This tracks parity against the upstream [`BucketDeployment`](https://docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.aws_s3_deployment.BucketDeployment.html) surface.
 
-| Capability or prop from `BucketDeployment` | CargoBucketDeployment | Notes |
+| `BucketDeployment` prop | CargoBucketDeployment | Notes |
 | --- | --- | --- |
-| Basic asset deployment | ✅ | Supported. |
+| `accessControl` | ✅ | Supported. |
+| `cacheControl` | ✅ | Supported. |
+| `contentDisposition` | ✅ | Supported. |
+| `contentEncoding` | ✅ | Supported. |
+| `contentLanguage` | ✅ | Supported. |
+| `contentType` | ✅ | Supported. |
+| `destinationBucket` | ✅ | Supported. |
 | `destinationKeyPrefix` | ✅ | Supported. |
+| `distribution` | ✅ | Supported. |
+| `distributionPaths` | ✅ | Supported and manually validated through CloudFront invalidation flows. |
+| `ephemeralStorageSize` | ✅ | Supported. |
+| `exclude` | ✅ | Supported and manually validated. |
+| `expires` | ❌ | Intentionally not supported. Prefer `cacheControl`, which is the more common and safer control surface for deployment-time caching behavior. |
+| `extract` | ✅ | Supported. |
+| `include` | ✅ | Supported and manually validated. |
+| `logGroup` | ✅ | Supported. |
+| `logRetention` | ✅ | Supported. |
+| `memoryLimit` | ✅ | Supported. |
+| `metadata` | ✅ | Supported and manually validated. |
+| `outputObjectKeys` | ✅ | Supported and covered by tests. |
 | `prune` | ✅ | Supported and manually validated. |
 | `retainOnDelete` | ✅ | Supported and manually validated. |
-| `distribution` | ✅ | Supported. |
-| `distributionPaths` | ✅ | Supported and validated. |
-| `waitForDistributionInvalidation` | ✅ | Supported in both sync and async modes. |
-| `exclude` / `include` | ✅ | Supported and manually validated. |
-| User metadata (`metadata`) | ✅ | Supported and manually validated. |
-| Common system metadata (`cacheControl`, `contentType`, `contentDisposition`, `contentLanguage`, `contentEncoding`, SSE, storage class, redirect, ACL) | ✅ | Supported. |
-| `outputObjectKeys` | ✅ | Supported and covered by tests. |
-| `deployedBucket` | ✅ | Supported and covered by tests. |
-| `addSource()` | ✅ | Supported. |
-| Deploy-time replacement for `Source.data`, `Source.jsonData`, `Source.yamlData` | ✅ | Supported and validated. |
-| `vpc`, `vpcSubnets`, `securityGroups`, `role`, `memoryLimit`, `ephemeralStorageSize`, `logRetention`, `logGroup` | ✅ | Wired through to the Rust provider function. |
-| `useEfs` | ❌ | Intentionally not supported. Prefer increasing `ephemeralStorageSize` first now that Lambda supports up to 10,240 MiB of ephemeral storage. Longer term, S3 Files is the more interesting direction once CloudFormation supports it. |
-| `expires` | ❌ | Intentionally not supported. Prefer `cacheControl`, which is the more common and safer control surface for deployment-time caching behavior. |
-| `signContent` | ❌ | Intentionally not supported. This runtime uses the AWS SDK directly instead of the upstream AWS CLI-based upload path, so this transport-level knob does not map cleanly or usefully here. |
+| `role` | ✅ | Supported. |
+| `securityGroups` | ✅ | Supported. |
+| `serverSideEncryption` | ✅ | Supported. |
+| `serverSideEncryptionAwsKmsKeyId` | ✅ | Supported. |
 | `serverSideEncryptionCustomerAlgorithm` | ❌ | Intentionally not supported. Prefer S3-managed encryption (`AES256`) or KMS-backed encryption instead of the more specialized SSE-C request flow. |
+| `signContent` | ❌ | Intentionally not supported. This runtime uses the AWS SDK directly instead of the upstream AWS CLI-based upload path, so this transport-level knob does not map cleanly or usefully here. |
+| `sources` | ✅ | Supported. |
+| `storageClass` | ✅ | Supported. |
+| `useEfs` | ❌ | Intentionally not supported. Prefer increasing `ephemeralStorageSize` first now that Lambda supports up to 10,240 MiB of ephemeral storage. Longer term, S3 Files is the more interesting direction once CloudFormation supports it. |
+| `vpc` | ✅ | Supported. |
+| `vpcSubnets` | ✅ | Supported. |
+| `waitForDistributionInvalidation` | ✅ | Supported in both sync and async modes and manually validated. |
+| `websiteRedirectLocation` | ✅ | Supported. |
 
 ## Quick Start
 
