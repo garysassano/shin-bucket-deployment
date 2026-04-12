@@ -74,8 +74,8 @@ This tracks parity against the upstream [`BucketDeployment`](https://docs.aws.am
 | `vpc`, `vpcSubnets`, `securityGroups`, `role`, `memoryLimit`, `ephemeralStorageSize`, `logRetention`, `logGroup` | ✅ | Wired through to the Rust provider function. |
 | `useEfs` | ❌ | Intentionally not supported. Prefer increasing `ephemeralStorageSize` first now that Lambda supports up to 10,240 MiB of ephemeral storage. Longer term, S3 Files is the more interesting direction once CloudFormation supports it. |
 | `expires` | ❌ | Intentionally not supported. Prefer `cacheControl`, which is the more common and safer control surface for deployment-time caching behavior. |
-| `signContent` | ❌ | Not supported yet. |
-| `serverSideEncryptionCustomerAlgorithm` | ❌ | Not supported yet. |
+| `signContent` | ❌ | Intentionally not supported. This runtime uses the AWS SDK directly instead of the upstream AWS CLI-based upload path, so this transport-level knob does not map cleanly or usefully here. |
+| `serverSideEncryptionCustomerAlgorithm` | ❌ | Intentionally not supported. Prefer S3-managed encryption (`AES256`) or KMS-backed encryption instead of the more specialized SSE-C request flow. |
 
 ## Quick Start
 
