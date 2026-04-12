@@ -73,7 +73,7 @@ This tracks parity against the upstream [`BucketDeployment`](https://docs.aws.am
 | Deploy-time replacement for `Source.data`, `Source.jsonData`, `Source.yamlData` | ✅ | Supported and validated. |
 | `vpc`, `vpcSubnets`, `securityGroups`, `role`, `memoryLimit`, `ephemeralStorageSize`, `logRetention`, `logGroup` | ✅ | Wired through to the Rust provider function. |
 | `useEfs` | ❌ | Intentionally not supported. Prefer increasing `ephemeralStorageSize` first now that Lambda supports up to 10,240 MiB of ephemeral storage. Longer term, S3 Files is the more interesting direction once CloudFormation supports it. |
-| `expires` | ❌ | Not supported yet. |
+| `expires` | ❌ | Intentionally not supported. Prefer `cacheControl`, which is the more common and safer control surface for deployment-time caching behavior. |
 | `signContent` | ❌ | Not supported yet. |
 | `serverSideEncryptionCustomerAlgorithm` | ❌ | Not supported yet. |
 
