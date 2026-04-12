@@ -13,13 +13,16 @@ pnpm example deploy cloudfront-sync
 pnpm example destroy retain-on-delete
 ```
 
-## Why Use It
+## Why Migrate from `BucketDeployment`
 
-| Verified difference from `BucketDeployment` | What it means here |
+If `BucketDeployment` already works well for your stack, you do not need to move. Migrate when you want a lower-overhead provider and a leaner deployment path.
+
+| Why migrate | What changes compared with `BucketDeployment` |
 | --- | --- |
-| Rust provider runtime | The custom resource runs as a Rust Lambda on `provided.al2023` instead of the standard Python handler. |
-| SDK-driven deploy path instead of AWS CLI shell-outs | The Rust runtime uses AWS SDK calls for copy, upload, delete, and invalidation instead of orchestrating `aws s3 cp` / `aws s3 sync` from the handler. |
-| More efficient extracted deploy path | The upstream Python handler downloads each zip, extracts it to a working directory, rewrites files in place, and then syncs the extracted tree. This runtime plans directly from the archive and uploads entries one at a time without materializing the full extracted tree first. |
+| Lower-overhead provider Lambda | `CargoBucketDeployment` uses the Rust Lambda runtime (`provided.al2023`) instead of the upstream Python Lambda runtime. In practice this can mean faster cold starts and lower memory footprint; for background, see the independent benchmark at [lambda-perf](https://maxday.github.io/lambda-perf/). |
+| Direct SDK-based deployment instead of CLI orchestration | `CargoBucketDeployment` uses AWS SDK calls for copy, upload, delete, and invalidation, whereas upstream `BucketDeployment` orchestrates `aws s3 cp` / `aws s3 sync` from its handler. |
+| Skips replacement work when no markers are present | `CargoBucketDeployment` only runs deploy-time marker replacement for sources that actually declare markers. Plain sources avoid that rewrite path entirely. |
+| More efficient archive handling when extraction is needed | The upstream Python handler downloads each zip, extracts it to a working directory, rewrites files in place, and then syncs the extracted tree. `CargoBucketDeployment` plans directly from the archive and uploads entries one at a time without materializing the full extracted tree first. |
 
 ## `BucketDeployment` Parity
 
