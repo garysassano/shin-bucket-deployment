@@ -1,6 +1,6 @@
 # CargoBucketDeployment
 
-Rust-backed alternative to `aws-cdk-lib/aws-s3-deployment`'s [`BucketDeployment`](https://docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.aws_s3_deployment.BucketDeployment.html).
+Rust-backed alternative to AWS CDK's official [`BucketDeployment`](https://docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.aws_s3_deployment.BucketDeployment.html) construct.
 
 This repo is currently a local prototype, not a published construct library, but the construct and runtime paths are working and manually validated.
 
@@ -19,16 +19,16 @@ If `BucketDeployment` already works well for your stack, you do not need to move
 
 | Why migrate | What changes compared with `BucketDeployment` |
 | --- | --- |
-| Lower-overhead provider Lambda | `CargoBucketDeployment` uses the Rust Lambda runtime (`provided.al2023`) instead of the upstream Python Lambda runtime. In practice this can mean faster cold starts and lower memory footprint; for background, see the independent benchmark at [lambda-perf](https://maxday.github.io/lambda-perf/). |
+| Lower-overhead provider Lambda | `CargoBucketDeployment` uses the [Lambda Rust runtime](https://github.com/aws/aws-lambda-rust-runtime) on `provided.al2023` instead of the upstream Python Lambda runtime. In practice this can mean faster cold starts and lower memory footprint; for background, see the independent benchmark at [lambda-perf](https://maxday.github.io/lambda-perf/). |
 | Direct SDK-based deployment instead of CLI orchestration | `CargoBucketDeployment` uses AWS SDK calls for copy, upload, delete, and invalidation, whereas upstream `BucketDeployment` orchestrates `aws s3 cp` / `aws s3 sync` from its handler. |
 | Skips replacement work when no markers are present | `CargoBucketDeployment` only runs deploy-time marker replacement for sources that actually declare markers. Plain sources avoid that rewrite path entirely. |
 | More efficient archive handling when extraction is needed | The upstream Python handler downloads each zip, extracts it to a working directory, rewrites files in place, and then syncs the extracted tree. `CargoBucketDeployment` plans directly from the archive and uploads entries one at a time without materializing the full extracted tree first. |
 
 ## `BucketDeployment` Parity
 
-This tracks parity against the upstream [`BucketDeployment`](https://docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.aws_s3_deployment.BucketDeployment.html) surface.
+This tracks parity against the upstream [`BucketDeployment`](https://docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.aws_s3_deployment.BucketDeployment.html) construct API.
 
-| `BucketDeployment` prop | CargoBucketDeployment |
+| `BucketDeployment` prop | Supported in `CargoBucketDeployment` |
 | --- | --- |
 | `accessControl` | ✅ |
 | `cacheControl` | ✅ |
