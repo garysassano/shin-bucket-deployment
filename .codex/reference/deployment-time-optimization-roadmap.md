@@ -46,25 +46,7 @@ Tradeoff:
 - Managed prune is much faster and safer for shared prefixes, but it intentionally leaves unmanaged
   destination objects alone.
 
-### 3. Keep CloudFront Invalidation Off The Critical Path
-
-CloudFront invalidation can dominate total stack deployment time. The construct currently defaults
-`waitForDistributionInvalidation` to `true`, and the Rust handler polls CloudFront until the
-invalidation completes.
-
-Potential improvements:
-
-- Prefer `waitForDistributionInvalidation: false` in performance-focused examples.
-- Invalidate only entry documents such as `/index.html`, `/asset-manifest.json`, or equivalent
-  runtime manifests.
-- Use content-hashed filenames for JS, CSS, images, and other immutable assets.
-- Document the recommended pattern: immutable assets plus narrow or asynchronous invalidation.
-
-AWS reference:
-
-- https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/Invalidation.html
-
-### 4. Expose Transfer Parallelism
+### 3. Expose Transfer Parallelism
 
 Transfers are currently capped by a fixed `MAX_PARALLEL_TRANSFERS = 8`. That is conservative.
 Amazon S3 supports high request rates per partitioned prefix, and parallelization is the normal
@@ -93,7 +75,7 @@ AWS reference:
 
 - https://docs.aws.amazon.com/AmazonS3/latest/userguide/optimizing-performance.html
 
-### 5. Tune Lambda Memory Intentionally
+### 4. Tune Lambda Memory Intentionally
 
 `memoryLimit` is already passed through to the handler Lambda. For this workload, Lambda memory is
 also CPU and network tuning.
@@ -113,7 +95,7 @@ AWS reference:
 
 - https://docs.aws.amazon.com/lambda/latest/dg/configuration-memory.html
 
-### 6. Use Multipart Upload And Multipart Copy For Large Objects
+### 5. Use Multipart Upload And Multipart Copy For Large Objects
 
 Extracted zip entries currently use single `PutObject` calls. Direct source object deployments use
 single `CopyObject` calls.
@@ -129,7 +111,7 @@ AWS reference:
 
 - https://docs.aws.amazon.com/AmazonS3/latest/userguide/mpuoverview.html
 
-### 7. Prebuild Handler Artifacts
+### 6. Prebuild Handler Artifacts
 
 The construct currently creates a `RustFunction` from the Rust manifest. That is useful while
 iterating on the handler, but compiling Rust during CDK asset bundling can be a major synth/deploy
@@ -160,7 +142,6 @@ current/asset-manifest.json
 Benefits:
 
 - Fewer overwritten objects.
-- Narrower CloudFront invalidations.
 - Easier rollback by pointing entry documents at a prior release.
 - Lifecycle rules can clean up old releases asynchronously.
 
@@ -178,17 +159,15 @@ AWS reference:
 
 ## Recommended Priority
 
-1. Add timing metrics around download, plan, upload, prune, delete, and invalidation.
-2. Set `waitForDistributionInvalidation: false` in performance-focused examples and docs.
-3. Add manifest-based diff uploads and managed prune.
-4. Add configurable transfer concurrency.
-5. Benchmark and document recommended Lambda memory settings.
-6. Add multipart upload and multipart copy thresholds.
-7. Ship prebuilt handler artifacts for normal construct users.
+1. Add timing metrics around download, plan, upload, prune, and delete.
+2. Add manifest-based diff uploads and managed prune.
+3. Add configurable transfer concurrency.
+4. Benchmark and document recommended Lambda memory settings.
+5. Add multipart upload and multipart copy thresholds.
+6. Ship prebuilt handler artifacts for normal construct users.
 
 
-The highest-impact code change is the manifest/diff system. The highest-impact usage change is
-CloudFront versioned filenames plus asynchronous or narrow invalidation.
+The highest-impact code change is the manifest/diff system.
 
 ## Open Question: Use `s3sync` As A Library
 
