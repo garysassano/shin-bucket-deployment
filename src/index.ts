@@ -5,4 +5,4 @@ export {
   Source,
   StorageClass,
 } from "aws-cdk-lib/aws-s3-deployment";
-export * from "./cargo-bucket-deployment";
+export * from "./rust-bucket-deployment";

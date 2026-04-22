@@ -1,9 +1,9 @@
 import { join } from "node:path";
 import { App, CfnOutput, RemovalPolicy, Stack, type StackProps } from "aws-cdk-lib";
 import { Bucket } from "aws-cdk-lib/aws-s3";
-import { CargoBucketDeployment, Source } from "../src";
+import { RustBucketDeployment, Source } from "../src";
 
-class RetainOnDeleteCargoBucketDeploymentStack extends Stack {
+class RetainOnDeleteRustBucketDeploymentStack extends Stack {
   constructor(scope: App, id: string, props?: StackProps) {
     super(scope, id, props);
 
@@ -11,7 +11,7 @@ class RetainOnDeleteCargoBucketDeploymentStack extends Stack {
       removalPolicy: RemovalPolicy.RETAIN,
     });
 
-    new CargoBucketDeployment(this, "DeployWebsite", {
+    new RustBucketDeployment(this, "DeployWebsite", {
       sources: [
         Source.asset(join(__dirname, "..", "..", "test", "fixtures", "my-website")),
         Source.data("runtime/current.txt", "version=v2\nstate=retain-previous-prefix-and-delete"),
@@ -52,6 +52,6 @@ const env =
       }
     : undefined;
 
-new RetainOnDeleteCargoBucketDeploymentStack(app, "CargoBucketDeploymentRetainOnDeleteDemo", {
+new RetainOnDeleteRustBucketDeploymentStack(app, "RustBucketDeploymentRetainOnDeleteDemo", {
   env,
 });

@@ -5,7 +5,7 @@ import { AllowedMethods, Distribution, ViewerProtocolPolicy } from "aws-cdk-lib/
 import { S3BucketOrigin } from "aws-cdk-lib/aws-cloudfront-origins";
 import { Bucket } from "aws-cdk-lib/aws-s3";
 import { describe, expect, test } from "vitest";
-import { CargoBucketDeployment, Source } from "../src";
+import { RustBucketDeployment, Source } from "../src";
 import { testBundling } from "./test-bundling";
 
 function customResourceProperties(stack: Stack) {
@@ -14,23 +14,23 @@ function customResourceProperties(stack: Stack) {
   };
 
   const resource = Object.values(template.Resources).find(
-    (candidate) => candidate.Type === "Custom::CargoBucketDeployment",
+    (candidate) => candidate.Type === "Custom::RustBucketDeployment",
   );
 
   if (!resource) {
-    throw new Error("Custom::CargoBucketDeployment resource not found");
+    throw new Error("Custom::RustBucketDeployment resource not found");
   }
 
   return resource.Properties;
 }
 
-describe("CargoBucketDeployment validation and option coverage", () => {
+describe("RustBucketDeployment validation and option coverage", () => {
   test("throws when distributionPaths are provided without a distribution", () => {
     const stack = new Stack();
     const destinationBucket = new Bucket(stack, "Dest");
 
     expect(() => {
-      new CargoBucketDeployment(stack, "Deploy", {
+      new RustBucketDeployment(stack, "Deploy", {
         sources: [Source.asset(join(__dirname, "fixtures", "my-website"))],
         destinationBucket,
         distributionPaths: ["/index.html"],
@@ -50,7 +50,7 @@ describe("CargoBucketDeployment validation and option coverage", () => {
     });
 
     expect(() => {
-      new CargoBucketDeployment(stack, "Deploy", {
+      new RustBucketDeployment(stack, "Deploy", {
         sources: [Source.asset(join(__dirname, "fixtures", "my-website"))],
         destinationBucket,
         distribution,
@@ -73,7 +73,7 @@ describe("CargoBucketDeployment validation and option coverage", () => {
     const destinationBucket = new Bucket(stack, "Dest");
 
     expect(() => {
-      new CargoBucketDeployment(stack, "Deploy", {
+      new RustBucketDeployment(stack, "Deploy", {
         sources: [Source.asset(join(__dirname, "fixtures", "my-website"))],
         destinationBucket,
         [propName]: value,
@@ -86,7 +86,7 @@ describe("CargoBucketDeployment validation and option coverage", () => {
     const stack = new Stack(app, "ValidationStack");
     const destinationBucket = new Bucket(stack, "Dest");
 
-    new CargoBucketDeployment(stack, "Deploy", {
+    new RustBucketDeployment(stack, "Deploy", {
       sources: [Source.data("runtime/plain.txt", `region=${Aws.REGION}`)],
       destinationBucket,
       extract: false,
@@ -107,7 +107,7 @@ describe("CargoBucketDeployment validation and option coverage", () => {
       },
     });
 
-    new CargoBucketDeployment(stack, "Deploy", {
+    new RustBucketDeployment(stack, "Deploy", {
       sources: [Source.asset(join(__dirname, "fixtures", "my-website"))],
       destinationBucket,
       distribution,
@@ -118,7 +118,7 @@ describe("CargoBucketDeployment validation and option coverage", () => {
 
     const template = Template.fromStack(stack);
 
-    template.hasResourceProperties("Custom::CargoBucketDeployment", {
+    template.hasResourceProperties("Custom::RustBucketDeployment", {
       DistributionId: {
         Ref: Match.anyValue(),
       },
@@ -141,7 +141,7 @@ describe("CargoBucketDeployment validation and option coverage", () => {
     const stack = new Stack();
     const destinationBucket = new Bucket(stack, "Dest");
 
-    new CargoBucketDeployment(stack, "Deploy", {
+    new RustBucketDeployment(stack, "Deploy", {
       sources: [Source.asset(join(__dirname, "fixtures", "my-website"))],
       destinationBucket,
       outputObjectKeys: false,
@@ -154,7 +154,7 @@ describe("CargoBucketDeployment validation and option coverage", () => {
   test("requests DestinationBucketArn when deployedBucket is accessed", () => {
     const stack = new Stack();
     const destinationBucket = new Bucket(stack, "Dest");
-    const deployment = new CargoBucketDeployment(stack, "Deploy", {
+    const deployment = new RustBucketDeployment(stack, "Deploy", {
       sources: [Source.asset(join(__dirname, "fixtures", "my-website"))],
       destinationBucket,
       bundling: testBundling(),

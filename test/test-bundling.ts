@@ -1,8 +1,8 @@
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { CargoBucketDeploymentProps } from "../src";
+import type { RustBucketDeploymentProps } from "../src";
 
-export function testBundling(): CargoBucketDeploymentProps["bundling"] {
+export function testBundling(): RustBucketDeploymentProps["bundling"] {
   return {
     forcedDockerBundling: false,
     dockerOptions: {

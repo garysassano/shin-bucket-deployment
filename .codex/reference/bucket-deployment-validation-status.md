@@ -1,12 +1,12 @@
-# `CargoBucketDeployment` Validation Status
+# `RustBucketDeployment` Validation Status
 
-This note records what has actually been tested in the standalone Rust-backed `CargoBucketDeployment` prototype, what is still missing, and what follow-up implementations are still reasonable.
+This note records what has actually been tested in the standalone Rust-backed `RustBucketDeployment` prototype, what is still missing, and what follow-up implementations are still reasonable.
 
 ## Scope
 
 This status note applies to the standalone prototype in:
 
-- `/home/user/github/cargo-bucket-deployment`
+- `/home/user/github/rust-bucket-deployment`
 
 It is not a statement about full parity with `aws-cdk-lib` `BucketDeployment`.
 

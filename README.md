@@ -1,4 +1,4 @@
-# CargoBucketDeployment
+# RustBucketDeployment
 
 Rust-backed alternative to AWS CDK's official [`BucketDeployment`](https://docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.aws_s3_deployment.BucketDeployment.html) construct.
 
@@ -19,16 +19,16 @@ If `BucketDeployment` already works well for your stack, you do not need to move
 
 | Why migrate | What changes compared with `BucketDeployment` |
 | --- | --- |
-| Lower-overhead provider Lambda | `CargoBucketDeployment` uses the [Lambda Rust runtime](https://github.com/aws/aws-lambda-rust-runtime) on `provided.al2023` instead of the upstream Python Lambda runtime. In practice this can mean faster cold starts and lower memory footprint; for background, see the independent benchmark at [lambda-perf](https://maxday.github.io/lambda-perf/). |
-| Direct SDK-based deployment instead of CLI orchestration | `CargoBucketDeployment` uses AWS SDK calls for copy, upload, delete, and invalidation, whereas upstream `BucketDeployment` orchestrates `aws s3 cp` / `aws s3 sync` from its handler. |
-| Skips replacement work when no markers are present | `CargoBucketDeployment` only runs deploy-time marker replacement for sources that actually declare markers. Plain sources avoid that rewrite path entirely. |
-| More efficient archive handling when extraction is needed | The upstream Python handler downloads each zip, extracts it to a working directory, rewrites files in place, and then syncs the extracted tree. `CargoBucketDeployment` plans directly from the archive and uploads entries one at a time without materializing the full extracted tree first. |
+| Lower-overhead provider Lambda | `RustBucketDeployment` uses the [Lambda Rust runtime](https://github.com/aws/aws-lambda-rust-runtime) on `provided.al2023` instead of the upstream Python Lambda runtime. In practice this can mean faster cold starts and lower memory footprint; for background, see the independent benchmark at [lambda-perf](https://maxday.github.io/lambda-perf/). |
+| Direct SDK-based deployment instead of CLI orchestration | `RustBucketDeployment` uses AWS SDK calls for copy, upload, delete, and invalidation, whereas upstream `BucketDeployment` orchestrates `aws s3 cp` / `aws s3 sync` from its handler. |
+| Skips replacement work when no markers are present | `RustBucketDeployment` only runs deploy-time marker replacement for sources that actually declare markers. Plain sources avoid that rewrite path entirely. |
+| More efficient archive handling when extraction is needed | The upstream Python handler downloads each zip, extracts it to a working directory, rewrites files in place, and then syncs the extracted tree. `RustBucketDeployment` plans directly from the archive and uploads entries one at a time without materializing the full extracted tree first. |
 
 ## `BucketDeployment` Parity
 
 This tracks parity against the upstream [`BucketDeployment`](https://docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.aws_s3_deployment.BucketDeployment.html) construct API.
 
-| `BucketDeployment` prop | Supported in `CargoBucketDeployment` |
+| `BucketDeployment` prop | Supported in `RustBucketDeployment` |
 | --- | --- |
 | `accessControl` | ✅ |
 | `cacheControl` | ✅ |
@@ -81,7 +81,7 @@ import * as origins from "aws-cdk-lib/aws-cloudfront-origins";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import { Stack } from "aws-cdk-lib";
 import { Construct } from "constructs";
-import { CargoBucketDeployment, Source } from "./src";
+import { RustBucketDeployment, Source } from "./src";
 
 export class DemoStack extends Stack {
   constructor(scope: Construct, id: string) {
@@ -94,7 +94,7 @@ export class DemoStack extends Stack {
       },
     });
 
-    new CargoBucketDeployment(this, "DeployWebsite", {
+    new RustBucketDeployment(this, "DeployWebsite", {
       sources: [Source.asset("site")],
       destinationBucket: bucket,
       destinationKeyPrefix: "site",

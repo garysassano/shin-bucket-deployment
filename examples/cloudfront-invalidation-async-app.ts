@@ -17,9 +17,9 @@ import {
 } from "aws-cdk-lib/aws-cloudfront";
 import { S3BucketOrigin } from "aws-cdk-lib/aws-cloudfront-origins";
 import { Bucket } from "aws-cdk-lib/aws-s3";
-import { CacheControl, CargoBucketDeployment, Source } from "../src";
+import { CacheControl, RustBucketDeployment, Source } from "../src";
 
-class CloudFrontInvalidationAsyncCargoBucketDeploymentStack extends Stack {
+class CloudFrontInvalidationAsyncRustBucketDeploymentStack extends Stack {
   constructor(scope: App, id: string, props?: StackProps) {
     super(scope, id, props);
 
@@ -29,7 +29,7 @@ class CloudFrontInvalidationAsyncCargoBucketDeploymentStack extends Stack {
     });
 
     const distribution = new Distribution(this, "WebsiteDistribution", {
-      comment: "Manual validation target for async CargoBucketDeployment CloudFront invalidations.",
+      comment: "Manual validation target for async RustBucketDeployment CloudFront invalidations.",
       defaultRootObject: "site/index.html",
       defaultBehavior: {
         origin: S3BucketOrigin.withOriginAccessControl(websiteBucket),
@@ -52,7 +52,7 @@ class CloudFrontInvalidationAsyncCargoBucketDeploymentStack extends Stack {
         "Change this value between deploys to prove CloudFront invalidation runs asynchronously.",
     });
 
-    new CargoBucketDeployment(this, "DeployWebsite", {
+    new RustBucketDeployment(this, "DeployWebsite", {
       sources: [
         Source.asset(join(__dirname, "..", "..", "test", "fixtures", "my-website")),
         Source.jsonData(
@@ -110,7 +110,7 @@ class CloudFrontInvalidationAsyncCargoBucketDeploymentStack extends Stack {
 
     new CfnOutput(this, "RedeployWithNewTokenCommand", {
       value:
-        "pnpm example deploy cloudfront-async -- --parameters CargoBucketDeploymentCloudFrontInvalidationAsyncDemo:CacheProbeToken=<new-token-value>",
+        "pnpm example deploy cloudfront-async -- --parameters RustBucketDeploymentCloudFrontInvalidationAsyncDemo:CacheProbeToken=<new-token-value>",
     });
   }
 }
@@ -124,8 +124,8 @@ const env =
       }
     : undefined;
 
-new CloudFrontInvalidationAsyncCargoBucketDeploymentStack(
+new CloudFrontInvalidationAsyncRustBucketDeploymentStack(
   app,
-  "CargoBucketDeploymentCloudFrontInvalidationAsyncDemo",
+  "RustBucketDeploymentCloudFrontInvalidationAsyncDemo",
   { env },
 );

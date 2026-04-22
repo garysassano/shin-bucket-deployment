@@ -1,6 +1,6 @@
 # Deployment Time Optimization Roadmap
 
-This note tracks implementation and architecture options for making `CargoBucketDeployment`
+This note tracks implementation and architecture options for making `RustBucketDeployment`
 deploy faster. It focuses on the mainline construct behavior, not the experimental
 `feature/rust-sdk-sync` branch.
 
@@ -21,7 +21,7 @@ Relevant code:
 Potential improvement:
 
 - Write a deployment manifest to S3, for example
-  `.cargo-bucket-deployment/manifest.json`.
+  `.rust-bucket-deployment/manifest.json`.
 - Include each deployed key, size, checksum or CRC, metadata hash, marker hash, and source asset key.
 - On update, compare the old manifest with the new manifest and upload or copy only changed keys.
 - Use the same manifest to identify managed keys for cheaper pruning.
