@@ -1,9 +1,9 @@
 import { join } from "node:path";
 import { App, CfnOutput, Fn, RemovalPolicy, Stack, type StackProps } from "aws-cdk-lib";
 import { Bucket } from "aws-cdk-lib/aws-s3";
-import { CargoBucketDeployment, Source } from "../src";
+import { RustBucketDeployment, Source } from "../src";
 
-class SimpleCargoBucketDeploymentStack extends Stack {
+class SimpleRustBucketDeploymentStack extends Stack {
   constructor(scope: App, id: string, props?: StackProps) {
     super(scope, id, props);
 
@@ -12,7 +12,7 @@ class SimpleCargoBucketDeploymentStack extends Stack {
       removalPolicy: RemovalPolicy.DESTROY,
     });
 
-    const deployment = new CargoBucketDeployment(this, "DeployWebsite", {
+    const deployment = new RustBucketDeployment(this, "DeployWebsite", {
       sources: [Source.asset(join(__dirname, "..", "..", "test", "fixtures", "my-website"))],
       destinationBucket: websiteBucket,
       destinationKeyPrefix: "site",
@@ -37,4 +37,4 @@ const env =
       }
     : undefined;
 
-new SimpleCargoBucketDeploymentStack(app, "CargoBucketDeploymentSimpleDemo", { env });
+new SimpleRustBucketDeploymentStack(app, "RustBucketDeploymentSimpleDemo", { env });

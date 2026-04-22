@@ -10,46 +10,46 @@ type ExampleDefinition = {
 };
 
 const EXAMPLES = {
-  simple: { file: "simple-app.js", stackHint: "CargoBucketDeploymentSimpleDemo" },
+  simple: { file: "simple-app.js", stackHint: "RustBucketDeploymentSimpleDemo" },
   replacement: {
     file: "replacement-behavior-app.js",
-    stackHint: "CargoBucketDeploymentReplacementBehaviorDemo",
+    stackHint: "RustBucketDeploymentReplacementBehaviorDemo",
   },
   "cloudfront-sync": {
     file: "cloudfront-invalidation-sync-app.js",
-    stackHint: "CargoBucketDeploymentCloudFrontInvalidationSyncDemo",
+    stackHint: "RustBucketDeploymentCloudFrontInvalidationSyncDemo",
   },
   "cloudfront-async": {
     file: "cloudfront-invalidation-async-app.js",
-    stackHint: "CargoBucketDeploymentCloudFrontInvalidationAsyncDemo",
+    stackHint: "RustBucketDeploymentCloudFrontInvalidationAsyncDemo",
   },
   "metadata-filters": {
     file: "metadata-filters-app.js",
-    stackHint: "CargoBucketDeploymentMetadataFiltersDemo",
+    stackHint: "RustBucketDeploymentMetadataFiltersDemo",
   },
   "prune-update": {
     file: "prune-update-v2-app.js",
-    stackHint: "CargoBucketDeploymentPruneUpdateDemo",
+    stackHint: "RustBucketDeploymentPruneUpdateDemo",
   },
   "prune-update-v1": {
     file: "prune-update-v1-app.js",
-    stackHint: "CargoBucketDeploymentPruneUpdateDemo",
+    stackHint: "RustBucketDeploymentPruneUpdateDemo",
   },
   "prune-update-v2": {
     file: "prune-update-v2-app.js",
-    stackHint: "CargoBucketDeploymentPruneUpdateDemo",
+    stackHint: "RustBucketDeploymentPruneUpdateDemo",
   },
   "retain-on-delete": {
     file: "retain-on-delete-v2-app.js",
-    stackHint: "CargoBucketDeploymentRetainOnDeleteDemo",
+    stackHint: "RustBucketDeploymentRetainOnDeleteDemo",
   },
   "retain-on-delete-v1": {
     file: "retain-on-delete-v1-app.js",
-    stackHint: "CargoBucketDeploymentRetainOnDeleteDemo",
+    stackHint: "RustBucketDeploymentRetainOnDeleteDemo",
   },
   "retain-on-delete-v2": {
     file: "retain-on-delete-v2-app.js",
-    stackHint: "CargoBucketDeploymentRetainOnDeleteDemo",
+    stackHint: "RustBucketDeploymentRetainOnDeleteDemo",
   },
 } as const satisfies Record<string, ExampleDefinition>;
 
@@ -61,7 +61,7 @@ function printUsage(): void {
   console.error("  pnpm example list");
   console.error("  pnpm example synth simple");
   console.error("  pnpm example deploy cloudfront-sync");
-  console.error("  pnpm example deploy cloudfront-sync -- --parameters CargoBucketDeploymentCloudFrontInvalidationSyncDemo:CacheProbeToken=v2");
+  console.error("  pnpm example deploy cloudfront-sync -- --parameters RustBucketDeploymentCloudFrontInvalidationSyncDemo:CacheProbeToken=v2");
   console.error("  pnpm example destroy retain-on-delete");
   console.error("");
   console.error(`Known names: ${names.join(", ")}`);

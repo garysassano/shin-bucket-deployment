@@ -94,7 +94,7 @@ mod tests {
         );
         markers.insert(
             "<<marker:0xbaba:1>>".to_string(),
-            "CargoBucketDeploymentTokenDemo".to_string(),
+            "RustBucketDeploymentTokenDemo".to_string(),
         );
 
         let rendered = replace_markers(
@@ -107,7 +107,7 @@ mod tests {
 
         assert_eq!(
             String::from_utf8(rendered).expect("output should be valid utf-8"),
-            "region=eu-central-1\nstack=CargoBucketDeploymentTokenDemo\nregion-again=eu-central-1",
+            "region=eu-central-1\nstack=RustBucketDeploymentTokenDemo\nregion-again=eu-central-1",
         );
     }
 
@@ -116,7 +116,7 @@ mod tests {
         let mut markers = HashMap::new();
         markers.insert(
             "<<marker:0xbaba:0>>".to_string(),
-            r#""CargoBucketDeploymentTokenDemo""#.to_string(),
+            r#""RustBucketDeploymentTokenDemo""#.to_string(),
         );
 
         let rendered = replace_markers(
@@ -128,7 +128,7 @@ mod tests {
 
         assert_eq!(
             String::from_utf8(rendered).expect("output should be valid utf-8"),
-            r#"{"stackName":"CargoBucketDeploymentTokenDemo"}"#,
+            r#"{"stackName":"RustBucketDeploymentTokenDemo"}"#,
         );
     }
 
@@ -179,7 +179,7 @@ mod tests {
         let mut markers = HashMap::new();
         markers.insert(
             "<<marker:0xbaba:0>>".to_string(),
-            "\"CargoBucketDeploymentTokenDemo\"".to_string(),
+            "\"RustBucketDeploymentTokenDemo\"".to_string(),
         );
 
         let rendered = replace_markers(
@@ -191,7 +191,7 @@ mod tests {
 
         assert_eq!(
             String::from_utf8(rendered).expect("output should be valid utf-8"),
-            r#"{"stackName":"CargoBucketDeploymentTokenDemo"}"#,
+            r#"{"stackName":"RustBucketDeploymentTokenDemo"}"#,
         );
     }
 }

@@ -3,13 +3,13 @@ import { App, Aws, CfnOutput, Duration, RemovalPolicy, Stack, type StackProps } 
 import { Bucket } from "aws-cdk-lib/aws-s3";
 import {
   CacheControl,
-  CargoBucketDeployment,
+  RustBucketDeployment,
   ServerSideEncryption,
   Source,
   StorageClass,
 } from "../src";
 
-class MetadataFiltersCargoBucketDeploymentStack extends Stack {
+class MetadataFiltersRustBucketDeploymentStack extends Stack {
   constructor(scope: App, id: string, props?: StackProps) {
     super(scope, id, props);
 
@@ -18,7 +18,7 @@ class MetadataFiltersCargoBucketDeploymentStack extends Stack {
       removalPolicy: RemovalPolicy.DESTROY,
     });
 
-    new CargoBucketDeployment(this, "FilteredDeployment", {
+    new RustBucketDeployment(this, "FilteredDeployment", {
       sources: [
         Source.asset(join(__dirname, "..", "..", "test", "fixtures", "my-website")),
         Source.data(
@@ -32,7 +32,7 @@ class MetadataFiltersCargoBucketDeploymentStack extends Stack {
       include: ["**/*.html", "runtime/**"],
     });
 
-    new CargoBucketDeployment(this, "MetadataDeployment", {
+    new RustBucketDeployment(this, "MetadataDeployment", {
       sources: [
         Source.asset(join(__dirname, "..", "..", "test", "fixtures", "my-website")),
         Source.data(
@@ -104,6 +104,6 @@ const env =
       }
     : undefined;
 
-new MetadataFiltersCargoBucketDeploymentStack(app, "CargoBucketDeploymentMetadataFiltersDemo", {
+new MetadataFiltersRustBucketDeploymentStack(app, "RustBucketDeploymentMetadataFiltersDemo", {
   env,
 });

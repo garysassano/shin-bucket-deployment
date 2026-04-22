@@ -3,7 +3,7 @@ import { Aws, Stack } from "aws-cdk-lib";
 import { Template } from "aws-cdk-lib/assertions";
 import { Bucket } from "aws-cdk-lib/aws-s3";
 import { expect, test } from "vitest";
-import { CargoBucketDeployment, Source } from "../src";
+import { RustBucketDeployment, Source } from "../src";
 import { testBundling } from "./test-bundling";
 
 function customResourceProperties(stack: Stack) {
@@ -12,11 +12,11 @@ function customResourceProperties(stack: Stack) {
   };
 
   const resource = Object.values(template.Resources).find(
-    (candidate) => candidate.Type === "Custom::CargoBucketDeployment",
+    (candidate) => candidate.Type === "Custom::RustBucketDeployment",
   );
 
   if (!resource) {
-    throw new Error("Custom::CargoBucketDeployment resource not found");
+    throw new Error("Custom::RustBucketDeployment resource not found");
   }
 
   return resource.Properties;
@@ -26,7 +26,7 @@ test("renders plain markers for Source.data", () => {
   const stack = new Stack();
   const destinationBucket = new Bucket(stack, "Dest");
 
-  new CargoBucketDeployment(stack, "Deploy", {
+  new RustBucketDeployment(stack, "Deploy", {
     sources: [
       Source.data(
         "runtime/plain.txt",
@@ -49,7 +49,7 @@ test("renders plain markers for Source.yamlData", () => {
   const stack = new Stack();
   const destinationBucket = new Bucket(stack, "Dest");
 
-  new CargoBucketDeployment(stack, "Deploy", {
+  new RustBucketDeployment(stack, "Deploy", {
     sources: [
       Source.yamlData("runtime/config.yaml", {
         stackName: Aws.STACK_NAME,
@@ -72,7 +72,7 @@ test("renders jsonEscape config for Source.data markers", () => {
   const stack = new Stack();
   const destinationBucket = new Bucket(stack, "Dest");
 
-  new CargoBucketDeployment(stack, "Deploy", {
+  new RustBucketDeployment(stack, "Deploy", {
     sources: [
       Source.data("runtime/from-data-escaped.json", `{"specialValue":"${Aws.STACK_NAME}"}`, {
         jsonEscape: true,
@@ -91,7 +91,7 @@ test("renders source markers for jsonData sources with escape enabled", () => {
   const stack = new Stack();
   const destinationBucket = new Bucket(stack, "Dest");
 
-  new CargoBucketDeployment(stack, "Deploy", {
+  new RustBucketDeployment(stack, "Deploy", {
     sources: [
       Source.asset(join(__dirname, "fixtures", "my-website")),
       Source.jsonData(
@@ -117,7 +117,7 @@ test("keeps jsonData without escape on the plain replacement path", () => {
   const stack = new Stack();
   const destinationBucket = new Bucket(stack, "Dest");
 
-  new CargoBucketDeployment(stack, "Deploy", {
+  new RustBucketDeployment(stack, "Deploy", {
     sources: [
       Source.jsonData(
         "runtime/config.json",
@@ -143,7 +143,7 @@ test("keeps source marker config aligned across mixed source types", () => {
   const stack = new Stack();
   const destinationBucket = new Bucket(stack, "Dest");
 
-  new CargoBucketDeployment(stack, "Deploy", {
+  new RustBucketDeployment(stack, "Deploy", {
     sources: [
       Source.asset(join(__dirname, "fixtures", "my-website")),
       Source.data("runtime/plain.txt", `region=${Aws.REGION}`),

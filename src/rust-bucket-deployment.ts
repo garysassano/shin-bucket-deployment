@@ -16,10 +16,10 @@ import { type BundlingOptions as CargoLambdaBundlingOptions, RustFunction } from
 import { Construct } from "constructs";
 
 const CUSTOM_RESOURCE_OWNER_TAG = "aws-cdk:cr-owned";
-const HANDLER_BINARY_NAME = "cargo-bucket-deployment-handler";
-const SHARED_HANDLER_ID_PREFIX = "CargoBucketDeploymentHandler";
+const HANDLER_BINARY_NAME = "rust-bucket-deployment-handler";
+const SHARED_HANDLER_ID_PREFIX = "RustBucketDeploymentHandler";
 
-export interface CargoBucketDeploymentProps
+export interface RustBucketDeploymentProps
   extends Omit<
     BucketDeploymentProps,
     "expires" | "signContent" | "serverSideEncryptionCustomerAlgorithm" | "useEfs"
@@ -49,7 +49,7 @@ export interface CargoBucketDeploymentProps
 /**
  * Prototype Rust-backed alternative to `BucketDeployment`.
  */
-export class CargoBucketDeployment extends Construct {
+export class RustBucketDeployment extends Construct {
   private readonly cr: CustomResource;
   private readonly destinationBucket: IBucket;
   private readonly sources: SourceConfig[];
@@ -66,7 +66,7 @@ export class CargoBucketDeployment extends Construct {
    */
   public readonly handlerFunction: LambdaFunction;
 
-  constructor(scope: Construct, id: string, props: CargoBucketDeploymentProps) {
+  constructor(scope: Construct, id: string, props: RustBucketDeploymentProps) {
     super(scope, id);
 
     const maybeUnsupported = props as BucketDeploymentProps;
@@ -97,32 +97,32 @@ export class CargoBucketDeployment extends Construct {
 
     if (maybeUnsupported.useEfs) {
       throw new ValidationError(
-        "CargoBucketDeploymentUseEfsUnsupported",
-        "CargoBucketDeployment does not support useEfs. Increase ephemeralStorageSize instead.",
+        "RustBucketDeploymentUseEfsUnsupported",
+        "RustBucketDeployment does not support useEfs. Increase ephemeralStorageSize instead.",
         this,
       );
     }
 
     if (maybeUnsupported.signContent) {
       throw new ValidationError(
-        "CargoBucketDeploymentSignContentUnsupported",
-        "CargoBucketDeployment does not support signContent in this prototype.",
+        "RustBucketDeploymentSignContentUnsupported",
+        "RustBucketDeployment does not support signContent in this prototype.",
         this,
       );
     }
 
     if (maybeUnsupported.serverSideEncryptionCustomerAlgorithm) {
       throw new ValidationError(
-        "CargoBucketDeploymentSseCustomerAlgorithmUnsupported",
-        "CargoBucketDeployment does not support serverSideEncryptionCustomerAlgorithm in this prototype.",
+        "RustBucketDeploymentSseCustomerAlgorithmUnsupported",
+        "RustBucketDeployment does not support serverSideEncryptionCustomerAlgorithm in this prototype.",
         this,
       );
     }
 
     if (maybeUnsupported.expires) {
       throw new ValidationError(
-        "CargoBucketDeploymentExpiresUnsupported",
-        "CargoBucketDeployment does not support expires in this prototype.",
+        "RustBucketDeploymentExpiresUnsupported",
+        "RustBucketDeployment does not support expires in this prototype.",
         this,
       );
     }
@@ -140,7 +140,7 @@ export class CargoBucketDeployment extends Construct {
     const handlerRole = this.handlerFunction.role;
     if (!handlerRole) {
       throw new ValidationError(
-        "CargoBucketDeploymentHandlerRole",
+        "RustBucketDeploymentHandlerRole",
         "lambda.Function should have created a Role",
         this,
       );
@@ -187,7 +187,7 @@ export class CargoBucketDeployment extends Construct {
 
     this.cr = new CustomResource(this, "CustomResource", {
       serviceToken: this.handlerFunction.functionArn,
-      resourceType: "Custom::CargoBucketDeployment",
+      resourceType: "Custom::RustBucketDeployment",
       properties: {
         SourceBucketNames: Lazy.uncachedList({
           produce: () => this.sources.map((source) => source.bucket.bucketName),
@@ -257,7 +257,7 @@ export class CargoBucketDeployment extends Construct {
 
     if (!Token.isUnresolved(tagKey) && tagKey.length > 128) {
       throw new ValidationError(
-        "CargoBucketDeploymentConstructRequiresDestination",
+        "RustBucketDeploymentConstructRequiresDestination",
         "The destinationKeyPrefix must be <=104 characters.",
         this,
       );
@@ -301,7 +301,7 @@ function resolveDefaultRustProjectPath(scope: Construct): string {
   }
 
   throw new ValidationError(
-    "CargoBucketDeploymentRustProjectPath",
+    "RustBucketDeploymentRustProjectPath",
     "Unable to locate rust/Cargo.toml. Pass rustProjectPath explicitly.",
     scope,
   );
@@ -309,7 +309,7 @@ function resolveDefaultRustProjectPath(scope: Construct): string {
 
 function getOrCreateHandler(
   scope: Construct,
-  props: CargoBucketDeploymentProps,
+  props: RustBucketDeploymentProps,
   architecture: Architecture,
   rustProjectPath: string,
 ): RustFunction {
@@ -326,7 +326,7 @@ function getOrCreateHandler(
   if (existing) {
     if (!(existing instanceof RustFunction)) {
       throw new ValidationError(
-        "CargoBucketDeploymentHandlerCollision",
+        "RustBucketDeploymentHandlerCollision",
         `Found non-RustFunction child for shared handler id ${handlerId}.`,
         scope,
       );
@@ -358,7 +358,7 @@ function getOrCreateHandler(
 
 function renderHandlerConfigHash(
   stack: Stack,
-  props: CargoBucketDeploymentProps,
+  props: RustBucketDeploymentProps,
   architecture: Architecture,
   manifestPath: string,
 ): string {
@@ -447,7 +447,7 @@ function mapUserMetadata(metadata: { [key: string]: string }) {
   return normalized;
 }
 
-function mapSystemMetadata(metadata: CargoBucketDeploymentProps) {
+function mapSystemMetadata(metadata: RustBucketDeploymentProps) {
   const res: { [key: string]: string } = {};
 
   if (metadata.cacheControl) {

@@ -395,9 +395,9 @@ In this context:
 
 For the standalone prototype:
 
-- construct: `src/cargo-bucket-deployment.ts`
+- construct: `src/rust-bucket-deployment.ts`
 - provider: `rust/src/main.rs`
-- custom resource type: `Custom::CargoBucketDeployment`
+- custom resource type: `Custom::RustBucketDeployment`
 
 For the original AWS CDK implementation:
 
@@ -433,7 +433,7 @@ This means:
 
 During testing, a bug in JSON token replacement was fixed in the Rust provider implementation. A subsequent `cdk deploy` updated the Lambda bundle, but the custom resource inputs did not change.
 
-So CloudFormation updated the Lambda function resource, but did not necessarily send an `Update` event to `Custom::CargoBucketDeployment`. The already-written object in S3 therefore stayed as it was.
+So CloudFormation updated the Lambda function resource, but did not necessarily send an `Update` event to `Custom::RustBucketDeployment`. The already-written object in S3 therefore stayed as it was.
 
 This is an awkward behavior during provider development, but it is not fundamentally different from the original `BucketDeployment` update model.
 

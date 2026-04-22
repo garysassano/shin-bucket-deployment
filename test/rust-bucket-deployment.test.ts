@@ -3,14 +3,14 @@ import { Stack } from "aws-cdk-lib";
 import { Match, Template } from "aws-cdk-lib/assertions";
 import { Bucket } from "aws-cdk-lib/aws-s3";
 import { expect, test } from "vitest";
-import { CargoBucketDeployment, Source } from "../src";
+import { RustBucketDeployment, Source } from "../src";
 import { testBundling } from "./test-bundling";
 
 test("renders a Rust-backed custom resource", () => {
   const stack = new Stack();
   const destinationBucket = new Bucket(stack, "Dest");
 
-  new CargoBucketDeployment(stack, "Deploy", {
+  new RustBucketDeployment(stack, "Deploy", {
     sources: [Source.asset(join(__dirname, "fixtures", "my-website"))],
     destinationBucket,
     bundling: testBundling(),
@@ -24,7 +24,7 @@ test("renders a Rust-backed custom resource", () => {
     Architectures: ["arm64"],
   });
 
-  template.hasResourceProperties("Custom::CargoBucketDeployment", {
+  template.hasResourceProperties("Custom::RustBucketDeployment", {
     DestinationBucketName: {
       Ref: Match.anyValue(),
     },
@@ -38,13 +38,13 @@ test("reuses a shared handler for compatible deployments in the same stack", () 
   const firstBucket = new Bucket(stack, "FirstDest");
   const secondBucket = new Bucket(stack, "SecondDest");
 
-  const first = new CargoBucketDeployment(stack, "FirstDeploy", {
+  const first = new RustBucketDeployment(stack, "FirstDeploy", {
     sources: [Source.asset(join(__dirname, "fixtures", "my-website"))],
     destinationBucket: firstBucket,
     bundling: testBundling(),
   });
 
-  const second = new CargoBucketDeployment(stack, "SecondDeploy", {
+  const second = new RustBucketDeployment(stack, "SecondDeploy", {
     sources: [Source.asset(join(__dirname, "fixtures", "my-website"))],
     destinationBucket: secondBucket,
     bundling: testBundling(),
@@ -61,13 +61,13 @@ test("creates separate handlers when the provider configuration differs", () => 
   const firstBucket = new Bucket(stack, "FirstDest");
   const secondBucket = new Bucket(stack, "SecondDest");
 
-  const first = new CargoBucketDeployment(stack, "FirstDeploy", {
+  const first = new RustBucketDeployment(stack, "FirstDeploy", {
     sources: [Source.asset(join(__dirname, "fixtures", "my-website"))],
     destinationBucket: firstBucket,
     bundling: testBundling(),
   });
 
-  const second = new CargoBucketDeployment(stack, "SecondDeploy", {
+  const second = new RustBucketDeployment(stack, "SecondDeploy", {
     sources: [Source.asset(join(__dirname, "fixtures", "my-website"))],
     destinationBucket: secondBucket,
     memoryLimit: 1024,

@@ -17,9 +17,9 @@ import {
 } from "aws-cdk-lib/aws-cloudfront";
 import { S3BucketOrigin } from "aws-cdk-lib/aws-cloudfront-origins";
 import { Bucket } from "aws-cdk-lib/aws-s3";
-import { CacheControl, CargoBucketDeployment, Source } from "../src";
+import { CacheControl, RustBucketDeployment, Source } from "../src";
 
-class CloudFrontInvalidationSyncCargoBucketDeploymentStack extends Stack {
+class CloudFrontInvalidationSyncRustBucketDeploymentStack extends Stack {
   constructor(scope: App, id: string, props?: StackProps) {
     super(scope, id, props);
 
@@ -29,7 +29,7 @@ class CloudFrontInvalidationSyncCargoBucketDeploymentStack extends Stack {
     });
 
     const distribution = new Distribution(this, "WebsiteDistribution", {
-      comment: "Manual validation target for CargoBucketDeployment CloudFront invalidations.",
+      comment: "Manual validation target for RustBucketDeployment CloudFront invalidations.",
       defaultRootObject: "site/index.html",
       defaultBehavior: {
         origin: S3BucketOrigin.withOriginAccessControl(websiteBucket),
@@ -52,7 +52,7 @@ class CloudFrontInvalidationSyncCargoBucketDeploymentStack extends Stack {
         "Change this value between deploys to prove CloudFront invalidation serves the fresh object instead of the cached one.",
     });
 
-    new CargoBucketDeployment(this, "DeployWebsite", {
+    new RustBucketDeployment(this, "DeployWebsite", {
       sources: [
         Source.asset(join(__dirname, "..", "..", "test", "fixtures", "my-website")),
         Source.jsonData(
@@ -110,7 +110,7 @@ class CloudFrontInvalidationSyncCargoBucketDeploymentStack extends Stack {
 
     new CfnOutput(this, "RedeployWithNewTokenCommand", {
       value:
-        "pnpm example deploy cloudfront-sync -- --parameters CargoBucketDeploymentCloudFrontInvalidationSyncDemo:CacheProbeToken=<new-token-value>",
+        "pnpm example deploy cloudfront-sync -- --parameters RustBucketDeploymentCloudFrontInvalidationSyncDemo:CacheProbeToken=<new-token-value>",
     });
   }
 }
@@ -124,8 +124,8 @@ const env =
       }
     : undefined;
 
-new CloudFrontInvalidationSyncCargoBucketDeploymentStack(
+new CloudFrontInvalidationSyncRustBucketDeploymentStack(
   app,
-  "CargoBucketDeploymentCloudFrontInvalidationSyncDemo",
+  "RustBucketDeploymentCloudFrontInvalidationSyncDemo",
   { env },
 );
