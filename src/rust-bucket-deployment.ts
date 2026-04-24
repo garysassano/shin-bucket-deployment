@@ -19,6 +19,8 @@ const CUSTOM_RESOURCE_OWNER_TAG = "aws-cdk:cr-owned";
 const HANDLER_BINARY_NAME = "rust-bucket-deployment-handler";
 const SHARED_HANDLER_ID_PREFIX = "RustBucketDeploymentHandler";
 
+export type PruneMode = "full" | "managed";
+
 export interface RustBucketDeploymentProps
   extends Omit<
     BucketDeploymentProps,
@@ -44,6 +46,16 @@ export interface RustBucketDeploymentProps
    * @default - local cargo-lambda bundling with the current process environment
    */
   readonly bundling?: CargoLambdaBundlingOptions;
+
+  /**
+   * Controls how destination objects are pruned when `prune` is enabled.
+   *
+   * - `full` preserves CDK-compatible behavior by listing the whole destination prefix.
+   * - `managed` only deletes objects recorded in the previous deployment manifest.
+   *
+   * @default "full"
+   */
+  readonly pruneMode?: PruneMode;
 }
 
 /**
@@ -237,6 +249,7 @@ export class RustBucketDeployment extends Construct {
         RetainOnDelete: props.retainOnDelete,
         Extract: props.extract ?? true,
         Prune: props.prune ?? true,
+        PruneMode: props.pruneMode ?? "full",
         Exclude: props.exclude,
         Include: props.include,
         UserMetadata: props.metadata ? mapUserMetadata(props.metadata) : undefined,

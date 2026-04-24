@@ -151,6 +151,20 @@ describe("RustBucketDeployment validation and option coverage", () => {
     expect(customResourceProperties(stack).OutputObjectKeys).toBe(false);
   });
 
+  test("renders managed prune mode when requested", () => {
+    const stack = new Stack();
+    const destinationBucket = new Bucket(stack, "Dest");
+
+    new RustBucketDeployment(stack, "Deploy", {
+      sources: [Source.asset(join(__dirname, "fixtures", "my-website"))],
+      destinationBucket,
+      pruneMode: "managed",
+      bundling: testBundling(),
+    });
+
+    expect(customResourceProperties(stack).PruneMode).toBe("managed");
+  });
+
   test("requests DestinationBucketArn when deployedBucket is accessed", () => {
     const stack = new Stack();
     const destinationBucket = new Bucket(stack, "Dest");

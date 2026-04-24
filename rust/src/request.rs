@@ -5,7 +5,7 @@ use anyhow::{Context, Result, anyhow};
 use globset::{Glob, GlobMatcher};
 use serde::{Deserialize, Serialize};
 
-use crate::types::{DeploymentRequest, Filters, MarkerConfig};
+use crate::types::{DeploymentRequest, Filters, MarkerConfig, PruneMode};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "PascalCase")]
@@ -35,6 +35,8 @@ pub(crate) struct RawDeploymentRequest {
     pub(crate) system_metadata: HashMap<String, String>,
     #[serde(default = "default_true")]
     pub(crate) prune: bool,
+    #[serde(default)]
+    pub(crate) prune_mode: PruneMode,
     #[serde(default)]
     pub(crate) exclude: Vec<String>,
     #[serde(default)]
@@ -102,6 +104,7 @@ pub(crate) fn parse_request(raw: &RawDeploymentRequest) -> DeploymentRequest {
         user_metadata: raw.user_metadata.clone(),
         system_metadata: raw.system_metadata.clone(),
         prune: raw.prune,
+        prune_mode: raw.prune_mode,
         exclude: raw.exclude.clone(),
         include: raw.include.clone(),
         output_object_keys: raw.output_object_keys,
@@ -228,8 +231,21 @@ mod tests {
         assert!(request.extract);
         assert!(request.retain_on_delete);
         assert!(request.prune);
+        assert_eq!(request.prune_mode, PruneMode::Full);
         assert!(request.output_object_keys);
         assert_eq!(request.distribution_paths, vec!["/*"]);
+    }
+
+    #[test]
+    fn deserializes_managed_prune_mode() {
+        let mut props = minimal_request();
+        props["PruneMode"] = json!("managed");
+
+        let raw: RawDeploymentRequest =
+            serde_json::from_value(props).expect("request should deserialize");
+        let request = parse_request(&raw);
+
+        assert_eq!(request.prune_mode, PruneMode::Managed);
     }
 
     #[test]
