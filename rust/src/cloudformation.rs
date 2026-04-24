@@ -78,12 +78,13 @@ pub(crate) async fn handle_event(
             .context("failed to send success response")?;
         }
         Err(err) => {
-            error!(error = %err, "request failed");
+            let reason = format!("{err:#}");
+            error!(error = %reason, "request failed");
             let failure = ResponsePayload {
                 physical_resource_id: physical_resource_id(&request)
                     .map(ToOwned::to_owned)
                     .unwrap_or_else(|| request_id.to_string()),
-                reason: Some(err.to_string()),
+                reason: Some(reason),
                 data: Map::new(),
             };
 
