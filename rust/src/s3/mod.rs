@@ -29,6 +29,7 @@ mod metadata;
 use self::metadata::{apply_copy_metadata, apply_put_metadata};
 
 const MAX_PARALLEL_TRANSFERS: usize = 8;
+const IN_MEMORY_ZIP_ENTRY_THRESHOLD_BYTES: u64 = 32 * 1024 * 1024;
 
 #[derive(Clone)]
 struct CopyPlan {
@@ -61,6 +62,20 @@ enum UploadPayload {
 struct PreparedUploadPayload {
     payload: UploadPayload,
     etag: String,
+}
+
+enum ZipEntryPreparation {
+    Ready(PreparedUploadPayload),
+    HashedOnly { etag: String },
+}
+
+impl ZipEntryPreparation {
+    fn etag(&self) -> &str {
+        match self {
+            Self::Ready(prepared) => &prepared.etag,
+            Self::HashedOnly { etag } => etag,
+        }
+    }
 }
 
 pub(crate) async fn deploy(state: &AppState, request: &DeploymentRequest) -> Result<()> {
@@ -393,10 +408,21 @@ async fn upload_zip_entries(
                 .await
                 .context("failed to acquire upload semaphore")?;
             let mut entry = zip.by_index(plan.entry_index)?;
-            let prepared = prepare_zip_upload_payload(&mut entry, request, plan.source_index)?;
-            if destination_etag_matches(destination_objects, &plan.relative_key, &prepared.etag) {
+            let prepared =
+                prepare_zip_entry_for_comparison(&mut entry, request, plan.source_index)?;
+            if destination_etag_matches(destination_objects, &plan.relative_key, prepared.etag()) {
                 continue;
             }
+            drop(entry);
+
+            let payload = match prepared {
+                ZipEntryPreparation::Ready(prepared) => prepared.payload,
+                ZipEntryPreparation::HashedOnly { .. } => {
+                    let mut entry = zip.by_index(plan.entry_index)?;
+                    stage_zip_entry_to_temp(&mut entry)?
+                }
+            };
+
             let state = state.clone();
             let metadata = metadata.clone();
             let destination_bucket = request.dest_bucket_name.clone();
@@ -409,7 +435,7 @@ async fn upload_zip_entries(
                     &destination_bucket,
                     &destination_key,
                     &metadata,
-                    prepared.payload,
+                    payload,
                 )
                 .await
             });
@@ -581,20 +607,27 @@ fn collect_zip_entry_plans(
     grouped
 }
 
-fn prepare_zip_upload_payload(
+fn prepare_zip_entry_for_comparison(
     entry: &mut zip::read::ZipFile<'_, File>,
     request: &DeploymentRequest,
     source_index: usize,
-) -> Result<PreparedUploadPayload> {
+) -> Result<ZipEntryPreparation> {
     if request.source_markers[source_index].is_empty() {
-        let mut temp = NamedTempFile::new().context("failed to create temp entry file")?;
-        let mut hasher = Md5::new();
-        copy_and_hash(entry, &mut temp, &mut hasher)?;
-        temp.flush()?;
-        Ok(PreparedUploadPayload {
-            payload: UploadPayload::TempFile(temp),
-            etag: finalize_md5(hasher),
-        })
+        if entry.size() <= IN_MEMORY_ZIP_ENTRY_THRESHOLD_BYTES {
+            let mut bytes = Vec::with_capacity(entry.size() as usize);
+            entry.read_to_end(&mut bytes)?;
+            let etag = md5_hex(&bytes);
+            Ok(ZipEntryPreparation::Ready(PreparedUploadPayload {
+                payload: UploadPayload::Bytes(bytes),
+                etag,
+            }))
+        } else {
+            let mut hasher = Md5::new();
+            hash_reader(entry, &mut hasher)?;
+            Ok(ZipEntryPreparation::HashedOnly {
+                etag: finalize_md5(hasher),
+            })
+        }
     } else {
         let mut bytes = Vec::new();
         entry.read_to_end(&mut bytes)?;
@@ -604,11 +637,18 @@ fn prepare_zip_upload_payload(
             &request.source_markers_config[source_index],
         )?;
         let etag = md5_hex(&replaced);
-        Ok(PreparedUploadPayload {
+        Ok(ZipEntryPreparation::Ready(PreparedUploadPayload {
             payload: UploadPayload::Bytes(replaced),
             etag,
-        })
+        }))
     }
+}
+
+fn stage_zip_entry_to_temp(entry: &mut zip::read::ZipFile<'_, File>) -> Result<UploadPayload> {
+    let mut temp = NamedTempFile::new().context("failed to create temp entry file")?;
+    std::io::copy(entry, &mut temp)?;
+    temp.flush()?;
+    Ok(UploadPayload::TempFile(temp))
 }
 
 fn destination_etag_matches(
@@ -631,13 +671,12 @@ fn normalize_etag(etag: &str) -> Option<String> {
     }
 }
 
-fn copy_and_hash<R, W>(reader: &mut R, writer: &mut W, hasher: &mut Md5) -> Result<u64>
+fn hash_reader<R>(reader: &mut R, hasher: &mut Md5) -> Result<u64>
 where
     R: Read,
-    W: Write,
 {
     let mut buffer = [0; 64 * 1024];
-    let mut written = 0;
+    let mut read = 0;
 
     loop {
         let bytes_read = reader.read(&mut buffer)?;
@@ -645,11 +684,10 @@ where
             break;
         }
         hasher.update(&buffer[..bytes_read]);
-        writer.write_all(&buffer[..bytes_read])?;
-        written += bytes_read as u64;
+        read += bytes_read as u64;
     }
 
-    Ok(written)
+    Ok(read)
 }
 
 fn md5_hex(bytes: &[u8]) -> String {
@@ -720,7 +758,7 @@ fn namespace_list_prefix(prefix: &str) -> Option<String> {
 mod tests {
     use md5::{Digest, Md5};
 
-    use super::{copy_and_hash, finalize_md5, md5_hex, namespace_list_prefix, normalize_etag};
+    use super::{finalize_md5, hash_reader, md5_hex, namespace_list_prefix, normalize_etag};
 
     #[test]
     fn namespace_list_prefix_adds_trailing_slash() {
@@ -751,15 +789,13 @@ mod tests {
     }
 
     #[test]
-    fn copy_and_hash_writes_bytes_and_updates_digest() {
-        let mut reader = &b"asset bytes"[..];
-        let mut writer = Vec::new();
+    fn hash_reader_updates_digest_without_writing_bytes() {
+        let mut reader = &b"large asset bytes"[..];
         let mut hasher = Md5::new();
 
-        let written = copy_and_hash(&mut reader, &mut writer, &mut hasher).unwrap();
+        let read = hash_reader(&mut reader, &mut hasher).unwrap();
 
-        assert_eq!(written, 11);
-        assert_eq!(writer, b"asset bytes");
-        assert_eq!(finalize_md5(hasher), md5_hex(b"asset bytes"));
+        assert_eq!(read, 17);
+        assert_eq!(finalize_md5(hasher), md5_hex(b"large asset bytes"));
     }
 }

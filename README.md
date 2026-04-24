@@ -22,7 +22,7 @@ If `BucketDeployment` already works well for your stack, you do not need to move
 | Lower-overhead provider Lambda | `RustBucketDeployment` uses the [Lambda Rust runtime](https://github.com/aws/aws-lambda-rust-runtime) on `provided.al2023` instead of the upstream Python Lambda runtime. In practice this can mean faster cold starts and lower memory footprint; for background, see the independent benchmark at [lambda-perf](https://maxday.github.io/lambda-perf/). |
 | Direct SDK-based deployment instead of CLI orchestration | `RustBucketDeployment` uses AWS SDK calls for copy, upload, delete, and invalidation, whereas upstream `BucketDeployment` orchestrates `aws s3 cp` / `aws s3 sync` from its handler. |
 | Skips replacement work when no markers are present | `RustBucketDeployment` only runs deploy-time marker replacement for sources that actually declare markers. Plain sources avoid that rewrite path entirely. |
-| More efficient archive handling when extraction is needed | The upstream Python handler downloads each zip, extracts it to a working directory, rewrites files in place, and then syncs the extracted tree. `RustBucketDeployment` plans directly from the archive and uploads entries one at a time without materializing the full extracted tree first. |
+| More efficient archive handling when extraction is needed | The upstream Python handler downloads each zip, extracts it to a working directory, rewrites files in place, and then syncs the extracted tree. `RustBucketDeployment` plans directly from the archive, compares planned content with destination `ETag` values, and avoids materializing the full extracted tree first. |
 
 ## `BucketDeployment` Parity
 
@@ -119,21 +119,40 @@ export class DemoStack extends Stack {
 
 ### Extraction and copy behavior
 
-- `extract=false` copies each source object directly with `CopyObject`.
-- `extract=true` downloads the source zip, walks entries from the archive, and uploads only the planned objects.
-- Entries with deploy-time replacements are rewritten in memory.
-- Entries without replacements are staged one at a time rather than expanding the whole archive to disk.
+- `extract=false` compares the source object's `ETag` with the destination object's `ETag`. If they match, the copy is skipped; otherwise the source object is copied with `CopyObject`.
+- `extract=true` downloads the source zip, walks entries from the archive, and uploads only objects whose planned content differs from the destination.
+- Zip entries with deploy-time replacements are rewritten in memory, because the final bytes are only known after replacement.
+- Zip entries without replacements up to 32 MiB are read into memory, hashed with MD5, compared to the destination `ETag`, and uploaded from memory only when changed.
+- Zip entries without replacements larger than 32 MiB are streamed once to compute MD5. If the destination `ETag` matches, the entry is skipped without using `/tmp`; if it differs, the entry is reopened and staged as a single temporary file for upload.
+- The handler never extracts the whole archive to disk. At most one large changed zip entry is staged in `/tmp` at a time.
 
 ### Update and delete behavior
 
 - `prune=true` removes destination objects that are no longer part of the source set.
-- Deployments compare planned object content with destination `ETag` values from `ListObjectsV2`
-  and skip uploads/copies whose content already matches.
-- The `ETag` optimization is intended for simple static website assets. It does not detect
-  metadata-only changes, and it is not supported for SSE-KMS/SSE-C objects, multipart uploads,
-  multipart copies, or any other case where S3 `ETag` is not the MD5 of the object bytes.
+- The destination prefix is listed with `ListObjectsV2` during deployment. The returned object keys and `ETag` values are used both for skip decisions and, when `prune=true`, for delete decisions.
+- There is no separate manifest or managed cache. If a destination object is manually removed, moved, or changed, the next deployment observes the current bucket state from S3 and reconciles it.
 - `retainOnDelete=true` preserves prior deployment data on update and on stack delete.
 - `outputObjectKeys=false` suppresses the returned `SourceObjectKeys` payload.
+
+### ETag optimization limits
+
+The `ETag` skip path is intentionally narrow. It is optimized for simple static website assets where each uploaded object is a single-part S3 object and the `ETag` is the MD5 of the object bytes.
+
+Supported by the optimization:
+
+- Plain static assets uploaded as single-part objects.
+- Zip entries without replacements, using in-memory comparison up to 32 MiB and streaming MD5 comparison above 32 MiB.
+- Zip entries with deploy-time replacements, after the replacement output is computed in memory.
+- `extract=false` source object copies, when the source and destination `ETag` values match.
+
+Not supported by the optimization:
+
+- Metadata-only changes. If bytes are unchanged but `cacheControl`, `contentType`, custom metadata, storage class, encryption, or other object attributes need to change, matching `ETag` values can cause the upload/copy to be skipped.
+- Multipart uploads or multipart copies, because their S3 `ETag` is not the plain MD5 of the object bytes.
+- SSE-KMS or SSE-C objects, or any other S3 mode where the `ETag` is not a reliable MD5 content hash.
+- Cases that need byte-range reads or custom backend semantics. This construct targets S3 static asset deployment, not a general sync framework.
+
+When most files are unchanged, the optimization avoids unnecessary PUT/COPY work and avoids rewriting unchanged zip entries to `/tmp`. When most files are changed, the runtime still has to read and hash archive entries before uploading them, so the value should be validated with your asset mix if deployment time is critical.
 
 ## Validated Behavior
 
