@@ -20,13 +20,11 @@ Relevant code:
 
 Implementation:
 
-- Write a deployment manifest to S3, for example
-  `.rust-bucket-deployment/manifest.json`.
-- Include each deployed key, size, checksum or CRC, metadata hash, marker hash, and source asset key.
-- On update, compare the old manifest with the new manifest and upload or copy only changed keys.
-- Use the same manifest to identify managed keys for cheaper pruning.
-- Treat the manifest as an optimization cache. If it is missing, corrupt, has the wrong identity,
-  or fails checksum validation, fall back to full transfer behavior and avoid managed deletes.
+- List the destination prefix once with `ListObjectsV2`.
+- Compare planned object content with destination `ETag` values.
+- Upload or copy only objects whose content differs or whose destination key is missing.
+- Document the static-asset restriction: this optimization assumes `ETag` is the MD5 of the object
+  bytes and does not detect metadata-only changes.
 
 This is likely the highest-impact code change.
 
@@ -35,18 +33,11 @@ This is likely the highest-impact code change.
 Current `prune=true` behavior lists the whole destination prefix on every deployment. That preserves
 CDK-compatible semantics, but it becomes expensive for large prefixes.
 
-Implementation:
+Decision:
 
 - Keep `prune: true` as the current full-prefix compatibility mode.
-- Add `pruneMode: "managed"`.
-- In managed mode, delete only objects recorded in the previous deployment manifest and absent from
-  the new manifest.
-
-Tradeoff:
-
-- Full-prefix prune removes unmanaged destination objects.
-- Managed prune is much faster and safer for shared prefixes, but it intentionally leaves unmanaged
-  destination objects alone.
+- Do not add a managed prune mode for now. `ListObjectsV2` returns up to 1,000 objects per request,
+  so pruning modest static-site prefixes is not the main deployment cost.
 
 ### 3. Expose Transfer Parallelism
 
@@ -162,14 +153,14 @@ AWS reference:
 ## Recommended Priority
 
 1. Add timing metrics around download, plan, upload, prune, and delete.
-2. Add manifest-based diff uploads and managed prune.
+2. Add ETag-based diff uploads for simple static assets.
 3. Add configurable transfer concurrency.
 4. Benchmark and document recommended Lambda memory settings.
 5. Add multipart upload and multipart copy thresholds.
 6. Ship prebuilt handler artifacts for normal construct users.
 
 
-The highest-impact code change is the manifest/diff system.
+The highest-impact code change is avoiding unchanged uploads.
 
 ## Decision: Do Not Use `s3sync` As A Library
 

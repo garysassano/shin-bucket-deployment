@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::sync::Arc;
@@ -7,6 +7,7 @@ use anyhow::{Context, Result, anyhow};
 use aws_sdk_s3::error::ProvideErrorMetadata;
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::{Delete, MetadataDirective, ObjectIdentifier};
+use md5::{Digest, Md5};
 use tempfile::NamedTempFile;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Semaphore;
@@ -19,18 +20,12 @@ use crate::request::{
     compile_filters, join_s3_key, normalize_archive_key, source_basename, strip_destination_prefix,
 };
 use crate::types::{
-    AppState, DeploymentIdentity, DeploymentManifest, DeploymentRequest, Filters, ObjectMetadata,
-    PlannedAction, PlannedObject, PruneMode, SourceArchive,
+    AppState, DeploymentManifest, DeploymentRequest, Filters, ObjectMetadata, PlannedAction,
+    PlannedObject, SourceArchive,
 };
 
-mod manifest;
 mod metadata;
 
-use self::manifest::{
-    CopyObjectSignature, ZipEntrySignature, build_stored_manifest, hash_json,
-    is_internal_relative_key, load_previous_manifest, manifest_relative_key, metadata_signature,
-    planned_object_changed, removed_destination_keys, write_manifest,
-};
 use self::metadata::{apply_copy_metadata, apply_put_metadata};
 
 const MAX_PARALLEL_TRANSFERS: usize = 8;
@@ -45,12 +40,17 @@ struct CopyPlan {
 struct ZipEntryPlan {
     entry_index: usize,
     source_index: usize,
+    relative_key: String,
     destination_key: String,
 }
 
-struct FullPrunePlan {
-    existing_relative_keys: HashSet<String>,
+struct DestinationPlan {
+    objects: HashMap<String, DestinationObject>,
     keys_to_delete: Vec<String>,
+}
+
+struct DestinationObject {
+    etag: Option<String>,
 }
 
 enum UploadPayload {
@@ -58,76 +58,44 @@ enum UploadPayload {
     TempFile(NamedTempFile),
 }
 
-pub(crate) async fn deploy(
-    state: &AppState,
-    request: &DeploymentRequest,
-    identity: &DeploymentIdentity,
-) -> Result<()> {
+struct PreparedUploadPayload {
+    payload: UploadPayload,
+    etag: String,
+}
+
+pub(crate) async fn deploy(state: &AppState, request: &DeploymentRequest) -> Result<()> {
     validate_request_lengths(request)?;
 
     let filters = compile_filters(&request.exclude, &request.include)?;
     let metadata = ObjectMetadata::from_request(request);
-    let (archives, deployment_manifest) =
-        plan_deployment(state, request, &filters, &metadata).await?;
-    let previous_manifest = load_previous_manifest(state, request, identity).await?;
-    let stored_manifest = build_stored_manifest(request, identity, &deployment_manifest);
-    let full_prune_plan = if request.prune && request.prune_mode == PruneMode::Full {
-        let mut expected: HashSet<String> = deployment_manifest.keys().cloned().collect();
-        expected.insert(manifest_relative_key(identity));
-        Some(plan_full_prune(state, request, &filters, &expected).await?)
-    } else {
-        None
-    };
+    let (archives, deployment_manifest) = plan_deployment(state, request, &filters).await?;
+    let destination_plan = plan_destination(state, request, &filters, &deployment_manifest).await?;
 
     if request.extract {
-        let zip_plans = collect_zip_entry_plans(
-            &deployment_manifest,
-            &request.dest_bucket_prefix,
-            previous_manifest.as_ref(),
-            full_prune_plan
-                .as_ref()
-                .map(|plan| &plan.existing_relative_keys),
-        );
-        upload_zip_entries(state, &archives, request, &metadata, zip_plans).await?;
-    } else {
-        let copy_plans = collect_copy_plans(
-            &deployment_manifest,
+        let zip_plans = collect_zip_entry_plans(&deployment_manifest, &request.dest_bucket_prefix);
+        upload_zip_entries(
+            state,
+            &archives,
             request,
-            previous_manifest.as_ref(),
-            full_prune_plan
-                .as_ref()
-                .map(|plan| &plan.existing_relative_keys),
-        );
+            &metadata,
+            zip_plans,
+            &destination_plan.objects,
+        )
+        .await?;
+    } else {
+        let copy_plans =
+            collect_copy_plans(&deployment_manifest, request, &destination_plan.objects);
         execute_copy_plans(state, &request.dest_bucket_name, &metadata, copy_plans).await?;
     }
 
     if request.prune {
-        match request.prune_mode {
-            PruneMode::Full => {
-                if let Some(full_prune_plan) = full_prune_plan {
-                    delete_keys(
-                        state,
-                        &request.dest_bucket_name,
-                        &full_prune_plan.keys_to_delete,
-                    )
-                    .await?;
-                }
-            }
-            PruneMode::Managed => {
-                if let Some(previous_manifest) = previous_manifest.as_ref() {
-                    let keys_to_delete =
-                        removed_destination_keys(previous_manifest, &stored_manifest);
-                    delete_keys(state, &request.dest_bucket_name, &keys_to_delete).await?;
-                } else {
-                    warn!(
-                        "managed prune requested without a valid previous manifest; skipping deletes"
-                    );
-                }
-            }
-        }
+        delete_keys(
+            state,
+            &request.dest_bucket_name,
+            &destination_plan.keys_to_delete,
+        )
+        .await?;
     }
-
-    write_manifest(state, request, identity, &metadata, &stored_manifest).await?;
 
     Ok(())
 }
@@ -226,7 +194,6 @@ async fn plan_deployment(
     state: &AppState,
     request: &DeploymentRequest,
     filters: &Filters,
-    metadata: &ObjectMetadata,
 ) -> Result<(Vec<SourceArchive>, DeploymentManifest)> {
     let mut archives = Vec::new();
     let mut manifest = DeploymentManifest::new();
@@ -253,33 +220,15 @@ async fn plan_deployment(
                 }
 
                 let relative_key = normalize_archive_key(entry.name())?;
-                if is_internal_relative_key(&relative_key) {
-                    return Err(anyhow!(
-                        "source object key {relative_key} uses the reserved .rust-bucket-deployment namespace"
-                    ));
-                }
                 if !filters.should_include(&relative_key) {
                     continue;
                 }
-                let destination_key = join_s3_key(&request.dest_bucket_prefix, &relative_key);
-                let signature = hash_json(&ZipEntrySignature {
-                    source_bucket: &request.source_bucket_names[source_index],
-                    source_key: &request.source_object_keys[source_index],
-                    entry_name: entry.name(),
-                    size: entry.size(),
-                    crc32: entry.crc32(),
-                    markers_hash: hash_json(&(
-                        &request.source_markers[source_index],
-                        &request.source_markers_config[source_index],
-                    ))?,
-                    metadata_hash: metadata_signature(metadata, &destination_key)?,
-                })?;
 
                 manifest.insert(
                     relative_key.clone(),
                     PlannedObject {
                         relative_key,
-                        signature,
+                        expected_etag: None,
                         action: PlannedAction::ZipEntry {
                             archive_index,
                             entry_index,
@@ -290,26 +239,21 @@ async fn plan_deployment(
             }
         } else {
             let relative_key = source_basename(&request.source_object_keys[source_index])?;
-            if is_internal_relative_key(&relative_key) {
-                return Err(anyhow!(
-                    "source object key {relative_key} uses the reserved .rust-bucket-deployment namespace"
-                ));
-            }
             if !filters.should_include(&relative_key) {
                 continue;
             }
-            let destination_key = join_s3_key(&request.dest_bucket_prefix, &relative_key);
-            let signature = hash_json(&CopyObjectSignature {
-                source_bucket: &request.source_bucket_names[source_index],
-                source_key: &request.source_object_keys[source_index],
-                metadata_hash: metadata_signature(metadata, &destination_key)?,
-            })?;
+            let expected_etag = source_object_etag(
+                state,
+                &request.source_bucket_names[source_index],
+                &request.source_object_keys[source_index],
+            )
+            .await?;
 
             manifest.insert(
                 relative_key.clone(),
                 PlannedObject {
                     relative_key,
-                    signature,
+                    expected_etag,
                     action: PlannedAction::CopyObject { source_index },
                 },
             );
@@ -338,6 +282,19 @@ async fn download_source_zip(state: &AppState, bucket: &str, key: &str) -> Resul
     output.flush().await?;
 
     Ok(temp)
+}
+
+async fn source_object_etag(state: &AppState, bucket: &str, key: &str) -> Result<Option<String>> {
+    let response = state
+        .s3
+        .head_object()
+        .bucket(bucket)
+        .key(key)
+        .send()
+        .await
+        .with_context(|| format!("failed to read source object metadata s3://{bucket}/{key}"))?;
+
+    Ok(response.e_tag().and_then(normalize_etag))
 }
 
 async fn copy_source_object(
@@ -419,6 +376,7 @@ async fn upload_zip_entries(
     request: &DeploymentRequest,
     metadata: &ObjectMetadata,
     zip_plans: BTreeMap<usize, Vec<ZipEntryPlan>>,
+    destination_objects: &HashMap<String, DestinationObject>,
 ) -> Result<()> {
     let semaphore = Arc::new(Semaphore::new(MAX_PARALLEL_TRANSFERS));
     let mut tasks = JoinSet::new();
@@ -435,7 +393,10 @@ async fn upload_zip_entries(
                 .await
                 .context("failed to acquire upload semaphore")?;
             let mut entry = zip.by_index(plan.entry_index)?;
-            let payload = prepare_zip_upload_payload(&mut entry, request, plan.source_index)?;
+            let prepared = prepare_zip_upload_payload(&mut entry, request, plan.source_index)?;
+            if destination_etag_matches(destination_objects, &plan.relative_key, &prepared.etag) {
+                continue;
+            }
             let state = state.clone();
             let metadata = metadata.clone();
             let destination_bucket = request.dest_bucket_name.clone();
@@ -448,7 +409,7 @@ async fn upload_zip_entries(
                     &destination_bucket,
                     &destination_key,
                     &metadata,
-                    payload,
+                    prepared.payload,
                 )
                 .await
             });
@@ -458,16 +419,16 @@ async fn upload_zip_entries(
     join_transfer_tasks(tasks).await
 }
 
-async fn plan_full_prune(
+async fn plan_destination(
     state: &AppState,
     request: &DeploymentRequest,
     filters: &Filters,
-    expected_relative_keys: &HashSet<String>,
-) -> Result<FullPrunePlan> {
+    manifest: &DeploymentManifest,
+) -> Result<DestinationPlan> {
     let list_prefix = namespace_list_prefix(&request.dest_bucket_prefix);
     let strip_prefix = list_prefix.as_deref().unwrap_or("");
     let mut start_after = None;
-    let mut existing_relative_keys = HashSet::new();
+    let mut objects = HashMap::new();
     let mut keys_to_delete = Vec::new();
 
     loop {
@@ -486,14 +447,12 @@ async fn plan_full_prune(
             if relative_key.is_empty() {
                 continue;
             }
-            if is_internal_relative_key(&relative_key) {
-                continue;
-            }
-            existing_relative_keys.insert(relative_key.clone());
+            let etag = object.e_tag().and_then(normalize_etag);
+            objects.insert(relative_key.clone(), DestinationObject { etag });
             if !filters.should_include(&relative_key) {
                 continue;
             }
-            if !expected_relative_keys.contains(&relative_key) {
+            if request.prune && !manifest.contains_key(&relative_key) {
                 keys_to_delete.push(key.to_string());
             }
         }
@@ -511,8 +470,8 @@ async fn plan_full_prune(
         start_after = last_key;
     }
 
-    Ok(FullPrunePlan {
-        existing_relative_keys,
+    Ok(DestinationPlan {
+        objects,
         keys_to_delete,
     })
 }
@@ -565,18 +524,15 @@ async fn delete_keys(state: &AppState, bucket: &str, keys: &[String]) -> Result<
 fn collect_copy_plans(
     manifest: &DeploymentManifest,
     request: &DeploymentRequest,
-    previous_manifest: Option<&manifest::StoredDeploymentManifest>,
-    existing_relative_keys: Option<&HashSet<String>>,
+    destination_objects: &HashMap<String, DestinationObject>,
 ) -> Vec<CopyPlan> {
     manifest
         .values()
         .filter_map(|planned| match planned.action {
             PlannedAction::CopyObject { source_index }
-                if should_transfer_planned_object(
-                    previous_manifest,
-                    existing_relative_keys,
-                    planned,
-                ) =>
+                if planned.expected_etag.as_deref().is_none_or(|etag| {
+                    !destination_etag_matches(destination_objects, &planned.relative_key, etag)
+                }) =>
             {
                 Some(CopyPlan {
                     source_bucket: request.source_bucket_names[source_index].clone(),
@@ -596,8 +552,6 @@ fn collect_copy_plans(
 fn collect_zip_entry_plans(
     manifest: &DeploymentManifest,
     destination_prefix: &str,
-    previous_manifest: Option<&manifest::StoredDeploymentManifest>,
-    existing_relative_keys: Option<&HashSet<String>>,
 ) -> BTreeMap<usize, Vec<ZipEntryPlan>> {
     let mut grouped = BTreeMap::<usize, Vec<ZipEntryPlan>>::new();
 
@@ -608,15 +562,13 @@ fn collect_zip_entry_plans(
             source_index,
         } = planned.action
         {
-            if !should_transfer_planned_object(previous_manifest, existing_relative_keys, planned) {
-                continue;
-            }
             grouped
                 .entry(archive_index)
                 .or_default()
                 .push(ZipEntryPlan {
                     entry_index,
                     source_index,
+                    relative_key: planned.relative_key.clone(),
                     destination_key: join_s3_key(destination_prefix, &planned.relative_key),
                 });
         }
@@ -629,28 +581,20 @@ fn collect_zip_entry_plans(
     grouped
 }
 
-fn should_transfer_planned_object(
-    previous_manifest: Option<&manifest::StoredDeploymentManifest>,
-    existing_relative_keys: Option<&HashSet<String>>,
-    planned: &PlannedObject,
-) -> bool {
-    if planned_object_changed(previous_manifest, &planned.relative_key, &planned.signature) {
-        return true;
-    }
-
-    existing_relative_keys.is_some_and(|existing| !existing.contains(&planned.relative_key))
-}
-
 fn prepare_zip_upload_payload(
     entry: &mut zip::read::ZipFile<'_, File>,
     request: &DeploymentRequest,
     source_index: usize,
-) -> Result<UploadPayload> {
+) -> Result<PreparedUploadPayload> {
     if request.source_markers[source_index].is_empty() {
         let mut temp = NamedTempFile::new().context("failed to create temp entry file")?;
-        std::io::copy(entry, &mut temp)?;
+        let mut hasher = Md5::new();
+        copy_and_hash(entry, &mut temp, &mut hasher)?;
         temp.flush()?;
-        Ok(UploadPayload::TempFile(temp))
+        Ok(PreparedUploadPayload {
+            payload: UploadPayload::TempFile(temp),
+            etag: finalize_md5(hasher),
+        })
     } else {
         let mut bytes = Vec::new();
         entry.read_to_end(&mut bytes)?;
@@ -659,8 +603,63 @@ fn prepare_zip_upload_payload(
             &request.source_markers[source_index],
             &request.source_markers_config[source_index],
         )?;
-        Ok(UploadPayload::Bytes(replaced))
+        let etag = md5_hex(&replaced);
+        Ok(PreparedUploadPayload {
+            payload: UploadPayload::Bytes(replaced),
+            etag,
+        })
     }
+}
+
+fn destination_etag_matches(
+    destination_objects: &HashMap<String, DestinationObject>,
+    relative_key: &str,
+    expected_etag: &str,
+) -> bool {
+    destination_objects
+        .get(relative_key)
+        .and_then(|object| object.etag.as_deref())
+        == Some(expected_etag)
+}
+
+fn normalize_etag(etag: &str) -> Option<String> {
+    let normalized = etag.trim().trim_matches('"').to_ascii_lowercase();
+    if normalized.is_empty() {
+        None
+    } else {
+        Some(normalized)
+    }
+}
+
+fn copy_and_hash<R, W>(reader: &mut R, writer: &mut W, hasher: &mut Md5) -> Result<u64>
+where
+    R: Read,
+    W: Write,
+{
+    let mut buffer = [0; 64 * 1024];
+    let mut written = 0;
+
+    loop {
+        let bytes_read = reader.read(&mut buffer)?;
+        if bytes_read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..bytes_read]);
+        writer.write_all(&buffer[..bytes_read])?;
+        written += bytes_read as u64;
+    }
+
+    Ok(written)
+}
+
+fn md5_hex(bytes: &[u8]) -> String {
+    let mut hasher = Md5::new();
+    hasher.update(bytes);
+    finalize_md5(hasher)
+}
+
+fn finalize_md5(hasher: Md5) -> String {
+    format!("{:x}", hasher.finalize())
 }
 
 async fn upload_payload(
@@ -712,7 +711,9 @@ fn namespace_list_prefix(prefix: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::namespace_list_prefix;
+    use md5::{Digest, Md5};
+
+    use super::{copy_and_hash, finalize_md5, md5_hex, namespace_list_prefix, normalize_etag};
 
     #[test]
     fn namespace_list_prefix_adds_trailing_slash() {
@@ -727,5 +728,31 @@ mod tests {
     #[test]
     fn namespace_list_prefix_omits_empty_prefix() {
         assert_eq!(namespace_list_prefix(""), None);
+    }
+
+    #[test]
+    fn normalize_etag_strips_quotes_and_lowercases() {
+        assert_eq!(normalize_etag("\"A1B2C3\""), Some("a1b2c3".to_string()));
+    }
+
+    #[test]
+    fn md5_hex_matches_known_digest() {
+        assert_eq!(
+            md5_hex(b"hello"),
+            "5d41402abc4b2a76b9719d911017c592".to_string()
+        );
+    }
+
+    #[test]
+    fn copy_and_hash_writes_bytes_and_updates_digest() {
+        let mut reader = &b"asset bytes"[..];
+        let mut writer = Vec::new();
+        let mut hasher = Md5::new();
+
+        let written = copy_and_hash(&mut reader, &mut writer, &mut hasher).unwrap();
+
+        assert_eq!(written, 11);
+        assert_eq!(writer, b"asset bytes");
+        assert_eq!(finalize_md5(hasher), md5_hex(b"asset bytes"));
     }
 }

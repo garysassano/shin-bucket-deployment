@@ -10,7 +10,7 @@ use uuid::Uuid;
 use crate::cloudfront::invalidate as invalidate_cloudfront;
 use crate::request::{RawDeploymentRequest, parse_old_destination, parse_request};
 use crate::s3::{bucket_owned, delete_prefix, deploy};
-use crate::types::{AppState, DeploymentIdentity, ResponsePayload};
+use crate::types::{AppState, ResponsePayload};
 
 pub(crate) async fn handle_event(
     state: Arc<AppState>,
@@ -27,16 +27,7 @@ pub(crate) async fn handle_event(
                 logical_resource_id = request.logical_resource_id,
                 "processing request"
             );
-            process_request(
-                &state,
-                "Create",
-                None,
-                &request.stack_id,
-                &request.logical_resource_id,
-                &request.resource_properties,
-                None,
-            )
-            .await
+            process_request(&state, "Create", None, &request.resource_properties, None).await
         }
         CloudFormationCustomResourceRequest::Update(request) => {
             tracing::info!(
@@ -48,8 +39,6 @@ pub(crate) async fn handle_event(
                 &state,
                 "Update",
                 Some(&request.physical_resource_id),
-                &request.stack_id,
-                &request.logical_resource_id,
                 &request.resource_properties,
                 Some(&request.old_resource_properties),
             )
@@ -65,8 +54,6 @@ pub(crate) async fn handle_event(
                 &state,
                 "Delete",
                 Some(&request.physical_resource_id),
-                &request.stack_id,
-                &request.logical_resource_id,
                 &request.resource_properties,
                 None,
             )
@@ -121,8 +108,6 @@ async fn process_request(
     state: &AppState,
     request_type: &str,
     physical_resource_id: Option<&str>,
-    stack_id: &str,
-    logical_resource_id: &str,
     resource_properties: &RawDeploymentRequest,
     old_resource_properties: Option<&RawDeploymentRequest>,
 ) -> Result<ResponsePayload> {
@@ -134,12 +119,6 @@ async fn process_request(
             .map(ToOwned::to_owned)
             .ok_or_else(|| anyhow!("PhysicalResourceId is required for {request_type}"))?,
         other => return Err(anyhow!("Unsupported request type: {other}")),
-    };
-
-    let identity = DeploymentIdentity {
-        stack_id: stack_id.to_string(),
-        logical_resource_id: logical_resource_id.to_string(),
-        physical_resource_id: physical_resource_id.clone(),
     };
 
     if request_type == "Delete" && !request.retain_on_delete {
@@ -160,7 +139,7 @@ async fn process_request(
     }
 
     if matches!(request_type, "Create" | "Update") {
-        deploy(state, &request, &identity).await?;
+        deploy(state, &request).await?;
     }
 
     if let Some(distribution_id) = request.distribution_id.as_deref() {
