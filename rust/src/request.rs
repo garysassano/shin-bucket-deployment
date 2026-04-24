@@ -3,7 +3,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, anyhow};
 use globset::{Glob, GlobMatcher};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::types::{DeploymentRequest, Filters, MarkerConfig};
 
@@ -19,27 +19,27 @@ pub(crate) struct RawDeploymentRequest {
     pub(crate) destination_bucket_name: String,
     #[serde(default)]
     pub(crate) destination_bucket_key_prefix: Option<String>,
-    #[serde(default = "default_true")]
+    #[serde(default = "default_true", deserialize_with = "deserialize_boolish")]
     pub(crate) extract: bool,
-    #[serde(default = "default_true")]
+    #[serde(default = "default_true", deserialize_with = "deserialize_boolish")]
     pub(crate) retain_on_delete: bool,
     #[serde(default)]
     pub(crate) distribution_id: Option<String>,
     #[serde(default)]
     pub(crate) distribution_paths: Option<Vec<String>>,
-    #[serde(default = "default_true")]
+    #[serde(default = "default_true", deserialize_with = "deserialize_boolish")]
     pub(crate) wait_for_distribution_invalidation: bool,
     #[serde(default)]
     pub(crate) user_metadata: HashMap<String, String>,
     #[serde(default)]
     pub(crate) system_metadata: HashMap<String, String>,
-    #[serde(default = "default_true")]
+    #[serde(default = "default_true", deserialize_with = "deserialize_boolish")]
     pub(crate) prune: bool,
     #[serde(default)]
     pub(crate) exclude: Vec<String>,
     #[serde(default)]
     pub(crate) include: Vec<String>,
-    #[serde(default = "default_true")]
+    #[serde(default = "default_true", deserialize_with = "deserialize_boolish")]
     pub(crate) output_object_keys: bool,
     #[serde(default)]
     pub(crate) destination_bucket_arn: Option<String>,
@@ -194,6 +194,38 @@ fn default_true() -> bool {
     true
 }
 
+fn deserialize_boolish<'de, D>(deserializer: D) -> std::result::Result<bool, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct BoolishVisitor;
+
+    impl serde::de::Visitor<'_> for BoolishVisitor {
+        type Value = bool;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("a boolean or a string containing true or false")
+        }
+
+        fn visit_bool<E>(self, value: bool) -> std::result::Result<Self::Value, E> {
+            Ok(value)
+        }
+
+        fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            match value.to_ascii_lowercase().as_str() {
+                "true" => Ok(true),
+                "false" => Ok(false),
+                _ => Err(E::invalid_value(serde::de::Unexpected::Str(value), &self)),
+            }
+        }
+    }
+
+    deserializer.deserialize_any(BoolishVisitor)
+}
+
 fn compile_globs(patterns: &[String]) -> Result<Vec<GlobMatcher>> {
     patterns
         .iter()
@@ -262,5 +294,25 @@ mod tests {
         props["Prune"] = json!({"bad": true});
 
         assert!(serde_json::from_value::<RawDeploymentRequest>(props).is_err());
+    }
+
+    #[test]
+    fn deserializes_cloudformation_string_booleans() {
+        let mut props = minimal_request();
+        props["Extract"] = json!("true");
+        props["RetainOnDelete"] = json!("false");
+        props["WaitForDistributionInvalidation"] = json!("true");
+        props["Prune"] = json!("false");
+        props["OutputObjectKeys"] = json!("true");
+
+        let raw: RawDeploymentRequest =
+            serde_json::from_value(props).expect("string booleans should deserialize");
+        let request = parse_request(&raw);
+
+        assert!(request.extract);
+        assert!(!request.retain_on_delete);
+        assert!(request.wait_for_distribution_invalidation);
+        assert!(!request.prune);
+        assert!(request.output_object_keys);
     }
 }

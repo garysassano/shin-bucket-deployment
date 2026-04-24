@@ -675,9 +675,14 @@ async fn upload_payload(
         .bucket(destination_bucket)
         .key(destination_key);
 
+    let mut temp_guard = None;
     let body = match payload {
         UploadPayload::Bytes(bytes) => ByteStream::from(bytes),
-        UploadPayload::TempFile(temp) => ByteStream::from_path(temp.path().to_path_buf()).await?,
+        UploadPayload::TempFile(temp) => {
+            let body = ByteStream::from_path(temp.path().to_path_buf()).await?;
+            temp_guard = Some(temp);
+            body
+        }
     };
 
     apply_put_metadata(builder, metadata, destination_key)
@@ -685,6 +690,8 @@ async fn upload_payload(
         .send()
         .await
         .with_context(|| format!("failed to upload {destination_key}"))?;
+
+    drop(temp_guard);
 
     Ok(())
 }
