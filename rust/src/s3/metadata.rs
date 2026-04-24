@@ -21,7 +21,7 @@ impl ObjectMetadata {
         }
     }
 
-    fn resolved_content_type(&self, key: &str) -> Option<String> {
+    pub(crate) fn resolved_content_type(&self, key: &str) -> Option<String> {
         self.content_type.clone().or_else(|| {
             mime_guess::from_path(key)
                 .first_raw()

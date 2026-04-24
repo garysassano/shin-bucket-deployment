@@ -14,6 +14,13 @@ pub(crate) struct AppState {
     pub(crate) http: HttpClient,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct DeploymentIdentity {
+    pub(crate) stack_id: String,
+    pub(crate) logical_resource_id: String,
+    pub(crate) physical_resource_id: String,
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct MarkerConfig {
@@ -37,10 +44,19 @@ pub(crate) struct DeploymentRequest {
     pub(crate) user_metadata: HashMap<String, String>,
     pub(crate) system_metadata: HashMap<String, String>,
     pub(crate) prune: bool,
+    pub(crate) prune_mode: PruneMode,
     pub(crate) exclude: Vec<String>,
     pub(crate) include: Vec<String>,
     pub(crate) output_object_keys: bool,
     pub(crate) destination_bucket_arn: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum PruneMode {
+    #[default]
+    Full,
+    Managed,
 }
 
 #[derive(Clone)]
@@ -66,6 +82,7 @@ pub(crate) struct ObjectMetadata {
 
 pub(crate) struct PlannedObject {
     pub(crate) relative_key: String,
+    pub(crate) signature: String,
     pub(crate) action: PlannedAction,
 }
 

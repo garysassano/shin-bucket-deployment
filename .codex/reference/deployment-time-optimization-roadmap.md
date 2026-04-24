@@ -18,13 +18,15 @@ Relevant code:
 - `rust/src/s3/mod.rs`: zip entry uploads through `upload_zip_entries`
 - `rust/src/s3/mod.rs`: direct object copies through `execute_copy_plans`
 
-Potential improvement:
+Implementation:
 
 - Write a deployment manifest to S3, for example
   `.rust-bucket-deployment/manifest.json`.
 - Include each deployed key, size, checksum or CRC, metadata hash, marker hash, and source asset key.
 - On update, compare the old manifest with the new manifest and upload or copy only changed keys.
 - Use the same manifest to identify managed keys for cheaper pruning.
+- Treat the manifest as an optimization cache. If it is missing, corrupt, has the wrong identity,
+  or fails checksum validation, fall back to full transfer behavior and avoid managed deletes.
 
 This is likely the highest-impact code change.
 
@@ -33,10 +35,10 @@ This is likely the highest-impact code change.
 Current `prune=true` behavior lists the whole destination prefix on every deployment. That preserves
 CDK-compatible semantics, but it becomes expensive for large prefixes.
 
-Potential improvement:
+Implementation:
 
 - Keep `prune: true` as the current full-prefix compatibility mode.
-- Add a faster mode such as `pruneMode: "managed"`.
+- Add `pruneMode: "managed"`.
 - In managed mode, delete only objects recorded in the previous deployment manifest and absent from
   the new manifest.
 
@@ -169,17 +171,8 @@ AWS reference:
 
 The highest-impact code change is the manifest/diff system.
 
-## Open Question: Use `s3sync` As A Library
+## Decision: Do Not Use `s3sync` As A Library
 
-The `s3sync` crate already implements a mature Rust sync engine and can be used as a library. The
-main mismatch is that it naturally syncs local directories and S3 prefixes, while this handler's
-source is usually an S3 zip object plus optional deploy-time rewrites.
-
-Options:
-
-- Extract/rewrite to `/tmp` and let `s3sync` handle local-directory-to-S3 sync.
-- Keep the current streaming-from-zip design and implement sync behavior in this handler.
-- Ask upstream whether a custom virtual source API could let callers provide object listings and
-  async object streams without materializing a full local directory.
-
-The third option is tracked by `issue.md` on the experimental sync branch.
+The `s3sync` maintainer declined a virtual source API because the crate is intentionally a thin
+library surface over the CLI. This handler should keep its custom AWS SDK-based sync path and build
+the manifest/diff optimization locally.

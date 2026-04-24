@@ -51,6 +51,7 @@ This tracks parity against the upstream [`BucketDeployment`](https://docs.aws.am
 | `metadata` | ✅ |
 | `outputObjectKeys` | ✅ |
 | `prune` | ✅ |
+| `pruneMode` | ✅ |
 | `retainOnDelete` | ✅ |
 | `role` | ✅ |
 | `securityGroups` | ✅ |
@@ -127,6 +128,8 @@ export class DemoStack extends Stack {
 ### Update and delete behavior
 
 - `prune=true` removes destination objects that are no longer part of the source set.
+- `pruneMode: "full"` preserves CDK-compatible full-prefix pruning.
+- `pruneMode: "managed"` deletes only objects tracked by the previous deployment manifest; if the manifest is missing or invalid, uploads still proceed and managed deletes are skipped for that deployment.
 - `retainOnDelete=true` preserves prior deployment data on update and on stack delete.
 - `outputObjectKeys=false` suppresses the returned `SourceObjectKeys` payload.
 
