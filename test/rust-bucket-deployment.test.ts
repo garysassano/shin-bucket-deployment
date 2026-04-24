@@ -30,7 +30,6 @@ test("renders a Rust-backed custom resource", () => {
     },
     Extract: true,
     Prune: true,
-    PruneMode: "full",
   });
 }, 120_000);
 

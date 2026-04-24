@@ -51,7 +51,6 @@ This tracks parity against the upstream [`BucketDeployment`](https://docs.aws.am
 | `metadata` | ✅ |
 | `outputObjectKeys` | ✅ |
 | `prune` | ✅ |
-| `pruneMode` | ✅ |
 | `retainOnDelete` | ✅ |
 | `role` | ✅ |
 | `securityGroups` | ✅ |
@@ -128,8 +127,11 @@ export class DemoStack extends Stack {
 ### Update and delete behavior
 
 - `prune=true` removes destination objects that are no longer part of the source set.
-- `pruneMode: "full"` preserves CDK-compatible full-prefix pruning.
-- `pruneMode: "managed"` deletes only objects tracked by the previous deployment manifest; if the manifest is missing or invalid, uploads still proceed and managed deletes are skipped for that deployment.
+- Deployments compare planned object content with destination `ETag` values from `ListObjectsV2`
+  and skip uploads/copies whose content already matches.
+- The `ETag` optimization is intended for simple static website assets. It does not detect
+  metadata-only changes, and it is not supported for SSE-KMS/SSE-C objects, multipart uploads,
+  multipart copies, or any other case where S3 `ETag` is not the MD5 of the object bytes.
 - `retainOnDelete=true` preserves prior deployment data on update and on stack delete.
 - `outputObjectKeys=false` suppresses the returned `SourceObjectKeys` payload.
 
