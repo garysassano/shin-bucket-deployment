@@ -111,6 +111,8 @@ pub(crate) enum PlannedAction {
         archive_index: usize,
         entry_index: usize,
         source_index: usize,
+        crc32: u32,
+        size: u64,
     },
 }
 

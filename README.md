@@ -15,8 +15,8 @@ The official `BucketDeployment` is a good default for many stacks, but its provi
 | Lower-overhead provider | The custom resource runs on the [Lambda Rust runtime](https://github.com/aws/aws-lambda-rust-runtime) (`provided.al2023`) instead of the upstream Python provider. In practice this can mean faster cold starts and lower memory footprint; for background, see [lambda-perf](https://maxday.github.io/lambda-perf/). |
 | Direct AWS SDK operations | Copy, upload, delete, and CloudFront invalidation are executed through SDK calls instead of shelling out to `aws s3 cp` / `aws s3 sync`. |
 | Archive-aware planning | For extracted assets, the provider plans directly from the zip archive instead of extracting the whole archive to a working directory before syncing. |
-| ETag-aware skip decisions | Destination `ETag` values are compared with source object ETags or computed planned-content hashes, so unchanged objects can be skipped instead of copied or uploaded again. |
-| Marker-free streaming path | Sources without deploy-time markers are hashed and uploaded directly from archive entries; replacement buffers are only used for sources that declare markers. |
+| Checksum-aware skip decisions | Marker-free zip entries use zip CRC32 and size against S3 `ChecksumCRC32` when available, with an `ETag` fallback for older or checksum-inaccessible objects. |
+| Marker-free streaming path | Sources without deploy-time markers can be skipped from archive metadata or streamed directly from archive entries; replacement buffers are only used for sources that declare markers. |
 
 ## Quick Start
 
@@ -80,15 +80,19 @@ For `extract=true`, the provider streams each source zip from S3 to a temporary 
 
 For `extract=false`, each source object is copied directly with S3 `CopyObject`.
 
-Before uploading or copying, the provider lists the destination prefix. Destination keys and `ETag` values are used to skip unchanged objects and, when `prune=true`, delete objects that are no longer in the source set.
+Before uploading or copying, the provider lists the destination prefix. Destination keys are used for `prune=true`; size, checksum metadata, and `ETag` values are used to skip unchanged objects.
+
+For marker-free zip entries, the provider compares zip entry CRC32 plus uncompressed size with S3 `ChecksumCRC32` plus object size when that checksum metadata is available. Changed entries are streamed to S3 with `x-amz-checksum-crc32`, so S3 validates the upload and stores checksum metadata for later deployments. If checksum metadata cannot be used, the provider falls back to the `ETag` comparison path.
 
 CloudFront invalidation is created after S3 changes when `distribution` is provided. If `distributionPaths` is omitted, the default path is the destination prefix plus `*`, for example `/site/*`.
 
 ## Limits
 
-The unchanged-object optimization depends on S3 `ETag` values behaving like MD5 content hashes. That is generally true for simple single-part static objects, but not for all S3 configurations.
+The preferred unchanged-object optimization for marker-free zip entries depends on S3 full-object CRC32 checksum metadata. Objects uploaded by this provider include CRC32 checksums, but older destination objects or objects written by other tools might not have compatible checksum metadata.
 
-Uploads or copies may not be skipped correctly for metadata-only changes, multipart objects, SSE-KMS or SSE-C objects, or any case where the destination `ETag` is not the MD5 of the object bytes.
+When CRC32 cannot be used, the fallback optimization depends on S3 `ETag` values behaving like MD5 content hashes. That is generally true for simple single-part static objects, but not for all S3 configurations.
+
+Uploads or copies may not be skipped correctly for metadata-only changes, multipart objects, SSE-KMS or SSE-C objects, or any case where neither full-object CRC32 nor MD5-like `ETag` metadata is available.
 
 Zip entries with deploy-time marker replacements are fully materialized in memory after replacement so the final bytes can be hashed and uploaded. Plain zip entries are read and uploaded in chunks.
 
@@ -107,6 +111,6 @@ pnpm example deploy cloudfront-sync
 pnpm example destroy retain-on-delete
 ```
 
-See [docs/examples.md](./docs/examples.md) for the full example list and [docs/validation.md](./docs/validation.md) for the current validation log.
+See [docs/examples.md](./docs/examples.md) for the full example list, [docs/checksum-strategy.md](./docs/checksum-strategy.md) for skip/checksum behavior, and [docs/validation.md](./docs/validation.md) for the current validation log.
 
 The Rust provider lives under [rust](./rust), the construct code under [src](./src), and detailed provider workflow diagrams are in [docs/lambda-workflow.md](./docs/lambda-workflow.md).

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use anyhow::{Context, Result, anyhow};
 use aws_sdk_s3::error::ProvideErrorMetadata;
-use aws_sdk_s3::types::{Delete, ObjectIdentifier};
+use aws_sdk_s3::types::{ChecksumAlgorithm, ChecksumType, Delete, ObjectIdentifier};
 use tracing::warn;
 
 use crate::request::strip_destination_prefix;
@@ -15,6 +15,8 @@ pub(super) struct DestinationPlan {
 
 pub(super) struct DestinationObject {
     pub(super) etag: Option<String>,
+    pub(super) size: Option<u64>,
+    pub(super) has_full_object_crc32: bool,
 }
 
 pub(crate) async fn delete_prefix(state: &AppState, bucket: &str, prefix: &str) -> Result<()> {
@@ -114,6 +116,9 @@ pub(super) async fn plan_destination(
             record_destination_object(
                 key,
                 object.e_tag(),
+                object.size(),
+                object.checksum_algorithm(),
+                object.checksum_type(),
                 strip_prefix,
                 filters,
                 manifest,
@@ -222,6 +227,9 @@ fn namespace_list_prefix(prefix: &str) -> Option<String> {
 fn record_destination_object(
     key: &str,
     etag: Option<&str>,
+    size: Option<i64>,
+    checksum_algorithm: &[ChecksumAlgorithm],
+    checksum_type: Option<&ChecksumType>,
     strip_prefix: &str,
     filters: &Filters,
     manifest: &DeploymentManifest,
@@ -238,6 +246,9 @@ fn record_destination_object(
         relative_key.clone(),
         DestinationObject {
             etag: etag.and_then(normalize_etag),
+            size: size.and_then(|value| u64::try_from(value).ok()),
+            has_full_object_crc32: checksum_algorithm.contains(&ChecksumAlgorithm::Crc32)
+                && checksum_type == Some(&ChecksumType::FullObject),
         },
     );
     if !filters.should_include(&relative_key) {
@@ -288,6 +299,9 @@ mod tests {
         record_destination_object(
             "site/old.txt",
             Some("\"ABC123\""),
+            Some(42),
+            &[aws_sdk_s3::types::ChecksumAlgorithm::Crc32],
+            Some(&aws_sdk_s3::types::ChecksumType::FullObject),
             "site/",
             &filters,
             &manifest,
@@ -297,6 +311,8 @@ mod tests {
         );
 
         assert_eq!(objects["old.txt"].etag.as_deref(), Some("abc123"));
+        assert_eq!(objects["old.txt"].size, Some(42));
+        assert!(objects["old.txt"].has_full_object_crc32);
         assert_eq!(keys_to_delete, vec!["site/old.txt".to_string()]);
     }
 
@@ -318,6 +334,9 @@ mod tests {
         record_destination_object(
             "site/keep.txt",
             None,
+            None,
+            &[],
+            None,
             "site/",
             &filters,
             &manifest,
@@ -327,6 +346,9 @@ mod tests {
         );
         record_destination_object(
             "site/debug.map",
+            None,
+            None,
+            &[],
             None,
             "site/",
             &filters,
@@ -350,6 +372,9 @@ mod tests {
 
         record_destination_object(
             "site/",
+            None,
+            None,
+            &[],
             None,
             "site/",
             &filters,

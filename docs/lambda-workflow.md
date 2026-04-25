@@ -84,7 +84,7 @@ flowchart TD
   H --> I["Walk zip entries"]
   I --> J{"Entry is file and passes filters?"}
   J -->|No| I
-  J -->|Yes| K["Add planned ZipEntry with archive index and entry index"]
+  J -->|Yes| K["Add planned ZipEntry with archive index, entry index, CRC32, and size"]
   K --> I
 
   E -->|false| L["For each source object: HeadObject source"]
@@ -93,7 +93,7 @@ flowchart TD
 
   I --> O["List destination prefix with ListObjectsV2"]
   N --> O
-  O --> P["Record destination key to ETag map"]
+  O --> P["Record destination key to size, checksum hints, and ETag map"]
   O --> Q{"prune=true and destination key missing from plan?"}
   Q -->|Yes| R["Queue key for DeleteObjects"]
   Q -->|No| S["Keep key"]
@@ -114,53 +114,62 @@ flowchart TD
 
   AC -->|Yes| AD["Read full entry into memory"]
   AD --> AE["Apply marker replacement"]
-  AE --> AF["MD5 final replaced bytes"]
+  AE --> AF["MD5 and CRC32 final replaced bytes"]
   AF --> AG{"MD5 equals destination ETag?"}
   AG -->|Yes| AH["Skip PutObject"]
-  AG -->|No| AI["PutObject from in-memory replaced bytes"]
+  AG -->|No| AI["PutObject replaced bytes with x-amz-checksum-crc32"]
 
-  AC -->|No| AJ["Read entry in 8 MiB chunks"]
-  AJ --> AK["Compute MD5 without building full object buffer"]
-  AK --> AL{"MD5 equals destination ETag?"}
+  AC -->|No| AJ{"Destination size and CRC32 metadata can be checked?"}
+  AJ -->|Yes| AK["HeadObject with ChecksumMode=Enabled"]
+  AK --> AL{"ChecksumCRC32 equals zip CRC32?"}
   AL -->|Yes| AM["Skip PutObject"]
-  AL -->|No| AN["Create retryable S3 body from source archive and entry index"]
-  AN --> AO["Stream entry to S3 in 8 MiB chunks"]
+  AL -->|No| AN["Create retryable S3 body with x-amz-checksum-crc32"]
+  AJ -->|No| AO["Fallback: read entry in 8 MiB chunks and compute MD5"]
+  AO --> AP{"MD5 equals destination ETag?"}
+  AP -->|Yes| AM
+  AP -->|No| AN
+  AN --> AQ["Stream entry to S3 in 8 MiB chunks"]
 
-  AI --> AP["Run uploads with up to 8 parallel transfers"]
-  AO --> AP
-  AH --> AP
-  AM --> AP
+  AI --> AR["Run uploads with up to 8 parallel transfers"]
+  AQ --> AR
+  AH --> AR
+  AM --> AR
 
-  Y --> AQ{"prune=true?"}
-  AP --> AQ
-  AQ -->|Yes| AR["Delete queued keys with DeleteObjects in 1000-key chunks"]
-  AQ -->|No| AS["Deployment complete"]
+  Y --> AS{"prune=true?"}
   AR --> AS
+  AS -->|Yes| AT["Delete queued keys with DeleteObjects in 1000-key chunks"]
+  AS -->|No| AU["Deployment complete"]
+  AT --> AU
 ```
 
-## ETag Decision Path
+## Skip Decision Path
 
 ```mermaid
 flowchart LR
-  A["Planned object"] --> B["Destination ListObjectsV2 ETag"]
-  B --> C{"Expected content ETag available?"}
-  C -->|No| D["Upload or copy"]
-  C -->|Yes| E{"Expected ETag equals destination ETag?"}
-  E -->|Yes| F["Skip upload or copy"]
-  E -->|No| D
+  A["Planned object"] --> B["Destination ListObjectsV2 metadata"]
+  B --> C{"Marker-free zip entry with destination CRC32 FULL_OBJECT and matching size?"}
+  C -->|Yes| D["HeadObject with ChecksumMode=Enabled"]
+  D --> E{"ChecksumCRC32 equals zip CRC32?"}
+  E -->|Yes| F["Skip upload"]
+  E -->|No| G["Upload"]
+  C -->|No| H{"ETag fallback available?"}
+  H -->|Yes| I{"Expected ETag equals destination ETag?"}
+  I -->|Yes| F
+  I -->|No| G
+  H -->|No| G
 
-  G["extract=false"] --> H["Expected ETag from source HeadObject"]
-  I["extract=true without markers"] --> J["Expected ETag from MD5 of zip entry bytes"]
-  K["extract=true with markers"] --> L["Expected ETag from MD5 after replacement"]
+  J["extract=false"] --> K["Expected ETag from source HeadObject"]
+  L["extract=true without markers"] --> M["Expected CRC32 + size from zip central directory"]
+  N["extract=true with markers"] --> O["Expected ETag from MD5 after replacement"]
 
-  H --> A
-  J --> A
-  L --> A
+  K --> A
+  M --> A
+  O --> A
 ```
 
 ## File Upload Handling
 
-The destination ETags are listed once per deployment after the source plan is built. They are stored in memory as a key-to-ETag map, not as the upload payload itself.
+The destination objects are listed once per deployment after the source plan is built. Key, size, checksum algorithm/type, and `ETag` metadata are stored in memory as a key-to-metadata map, not as upload payloads.
 
 ```mermaid
 flowchart TD
@@ -176,7 +185,7 @@ flowchart TD
   E --> H["List destination prefix once with ListObjectsV2"]
   G --> H
   H --> I["Store destination objects in memory"]
-  I --> J["HashMap: relative key -> destination ETag"]
+  I --> J["HashMap: relative key -> size, checksum hints, ETag"]
   J --> K{"Planned item type"}
 
   K -->|CopyObject extract=false| L["Read expected ETag from source HeadObject"]
@@ -184,39 +193,41 @@ flowchart TD
   M -->|Yes| N["Skip CopyObject"]
   M -->|No| O["CopyObject source to destination"]
 
-  K -->|Zip entry without markers| P["Open entry from temporary archive file"]
-  P --> Q["Read entry in 8 MiB chunks"]
-  Q --> R["Update MD5 incrementally"]
-  R --> S{"MD5 equals destination ETag?"}
-  S -->|Yes| T["Skip PutObject"]
-  S -->|No| U["Create retryable upload body"]
-  U --> V["Reopen entry from temporary archive file"]
-  V --> W["Stream PutObject body in 8 MiB chunks"]
+  K -->|Zip entry without markers| P{"Destination size matches and advertises CRC32 FULL_OBJECT?"}
+  P -->|Yes| Q["HeadObject with ChecksumMode=Enabled"]
+  Q --> R{"ChecksumCRC32 equals zip CRC32?"}
+  R -->|Yes| T["Skip PutObject"]
+  R -->|No| U["Create retryable upload body with x-amz-checksum-crc32"]
+  P -->|No| V["Fallback: read entry in 8 MiB chunks and compute MD5"]
+  V --> W{"MD5 equals destination ETag?"}
+  W -->|Yes| T
+  W -->|No| U
+  U --> X["Stream PutObject body from temporary archive file"]
 
-  K -->|Zip entry with markers| X["Read full entry into memory"]
-  X --> Y["Apply marker replacement"]
-  Y --> Z["Compute MD5 of replaced bytes"]
-  Z --> AA{"MD5 equals destination ETag?"}
-  AA -->|Yes| AB["Skip PutObject"]
-  AA -->|No| AC["PutObject replaced bytes from memory"]
+  K -->|Zip entry with markers| Y["Read full entry into memory"]
+  Y --> Z["Apply marker replacement"]
+  Z --> AA["Compute MD5 and CRC32 of replaced bytes"]
+  AA --> AB{"MD5 equals destination ETag?"}
+  AB -->|Yes| AC["Skip PutObject"]
+  AB -->|No| AD["PutObject replaced bytes with x-amz-checksum-crc32"]
 
-  O --> AD["Transfer concurrency bounded to 8"]
-  W --> AD
-  AC --> AD
-  N --> AE["Item complete"]
-  T --> AE
-  AB --> AE
+  O --> AE["Transfer concurrency bounded to 8"]
+  X --> AE
   AD --> AE
+  N --> AF["Item complete"]
+  T --> AF
+  AC --> AF
+  AE --> AF
 ```
 
-For plain zip entries, the handler does not load the whole entry into an upload buffer. It reads chunks to compute MD5, compares against the destination ETag map, and only if changed creates a streaming `PutObject` body that emits 8 MiB chunks. With 8 active upload streams, the queued chunk payloads are bounded by the transfer concurrency.
+For plain zip entries, the handler prefers zip CRC32 plus uncompressed size against S3 full-object CRC32 metadata. When that is available, unchanged entries are skipped without decompressing the entry. If checksum metadata is unavailable, it falls back to reading chunks to compute MD5, compares against the destination ETag map, and only if changed creates a streaming `PutObject` body that emits 8 MiB chunks. With 8 active upload streams, the queued chunk payloads are bounded by the transfer concurrency.
 
 ## Current Runtime Notes
 
 - Source zip archives are streamed to temporary files in Lambda `/tmp` and then opened as `ZipArchive` readers.
-- Plain zip entries are hashed in 8 MiB chunks. If changed, the upload stream reopens the entry from the temporary archive file and sends one 8 MiB chunk at a time.
+- Plain zip entries use zip CRC32 and S3 checksum metadata when available. If changed, the upload stream reopens the entry from the temporary archive file and sends one 8 MiB chunk at a time with `x-amz-checksum-crc32`.
 - The upload stream is retryable because the body can be rebuilt from the retained temporary source archive.
-- Zip entries with deploy-time replacements are still fully materialized in memory after replacement, because the final bytes must be known before computing the ETag and uploading.
+- Zip entries with deploy-time replacements are still fully materialized in memory after replacement, because the final bytes must be known before computing the ETag/CRC32 and uploading.
 - The handler does not extract the archive to disk and does not stage individual zip entries in `/tmp`.
 - Copy and upload transfers are bounded by `MAX_PARALLEL_TRANSFERS = 8`.
 - `prune=true` lists the destination prefix and deletes destination objects that are not in the planned source set.
