@@ -211,7 +211,7 @@ flowchart TD
   AB -->|Yes| AC["Skip PutObject"]
   AB -->|No| AD["PutObject replaced bytes with x-amz-checksum-crc32"]
 
-  O --> AE["Transfer concurrency bounded to 8"]
+  O --> AE["Copy/checksum/upload concurrency bounded to 8"]
   X --> AE
   AD --> AE
   N --> AF["Item complete"]
@@ -220,7 +220,7 @@ flowchart TD
   AE --> AF
 ```
 
-For plain zip entries, the handler prefers zip CRC32 plus uncompressed size against S3 full-object CRC32 metadata. When that is available, unchanged entries are skipped without decompressing the entry. If checksum metadata is unavailable, it falls back to reading chunks to compute MD5, compares against the destination ETag map, and only if changed creates a streaming `PutObject` body that emits 8 MiB chunks. With 8 active upload streams, the queued chunk payloads are bounded by the transfer concurrency.
+For plain zip entries, the handler prefers zip CRC32 plus uncompressed size against S3 full-object CRC32 metadata. When that is available, unchanged entries are skipped without decompressing the entry. If checksum metadata is unavailable, it falls back to reading chunks to compute MD5, compares against the destination ETag map, and only if changed creates a streaming `PutObject` body that emits 8 MiB chunks. Checksum reads, fallback hashing, and uploads run inside the bounded transfer task pool.
 
 ## Current Runtime Notes
 
@@ -229,6 +229,6 @@ For plain zip entries, the handler prefers zip CRC32 plus uncompressed size agai
 - The upload stream is retryable because the body can be rebuilt from the retained temporary source archive.
 - Zip entries with deploy-time replacements are still fully materialized in memory after replacement, because the final bytes must be known before computing the ETag/CRC32 and uploading.
 - The handler does not extract the archive to disk and does not stage individual zip entries in `/tmp`.
-- Copy and upload transfers are bounded by `MAX_PARALLEL_TRANSFERS = 8`.
+- Copy, checksum read, fallback hash, and upload work is bounded by `MAX_PARALLEL_TRANSFERS = 8`.
 - `prune=true` lists the destination prefix and deletes destination objects that are not in the planned source set.
 - CloudFront invalidation is created after S3 deployment or delete handling; if waiting is enabled, the handler polls until completion or timeout.
