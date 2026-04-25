@@ -22,6 +22,7 @@ test("renders a Rust-backed custom resource", () => {
     Runtime: "provided.al2023",
     Handler: "bootstrap",
     Architectures: ["arm64"],
+    MemorySize: 256,
   });
 
   template.hasResourceProperties("Custom::RustBucketDeployment", {

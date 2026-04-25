@@ -18,6 +18,7 @@ import { Construct } from "constructs";
 const CUSTOM_RESOURCE_OWNER_TAG = "aws-cdk:cr-owned";
 const HANDLER_BINARY_NAME = "rust-bucket-deployment-handler";
 const SHARED_HANDLER_ID_PREFIX = "RustBucketDeploymentHandler";
+const DEFAULT_MEMORY_LIMIT_MB = 256;
 
 export interface RustBucketDeploymentProps
   extends Omit<
@@ -341,7 +342,7 @@ function getOrCreateHandler(
     manifestPath,
     bundling: props.bundling,
     timeout: Duration.minutes(15),
-    memorySize: props.memoryLimit,
+    memorySize: props.memoryLimit ?? DEFAULT_MEMORY_LIMIT_MB,
     ephemeralStorageSize: props.ephemeralStorageSize,
     role: props.role,
     vpc: props.vpc,
@@ -369,7 +370,7 @@ function renderHandlerConfigHash(
     logGroup: normalizeSingletonValue(props.logGroup),
     logRetention: normalizeSingletonValue(props.logRetention),
     manifestPath,
-    memoryLimit: normalizeSingletonValue(props.memoryLimit),
+    memoryLimit: normalizeSingletonValue(props.memoryLimit ?? DEFAULT_MEMORY_LIMIT_MB),
     role: normalizeSingletonValue(props.role),
     securityGroups:
       props.securityGroups && props.securityGroups.length > 0

@@ -1,15 +1,17 @@
 use std::collections::{BTreeMap, HashMap};
-use std::fs::File;
-use std::io::{Read, Write};
+use std::error::Error as StdError;
+use std::io::{Cursor, Read};
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::task::{Context as TaskContext, Poll};
 
 use anyhow::{Context, Result, anyhow};
 use aws_sdk_s3::error::ProvideErrorMetadata;
-use aws_sdk_s3::primitives::ByteStream;
+use aws_sdk_s3::primitives::{ByteStream, SdkBody};
 use aws_sdk_s3::types::{Delete, MetadataDirective, ObjectIdentifier};
+use bytes::Bytes;
+use http_body::{Body, Frame};
 use md5::{Digest, Md5};
-use tempfile::NamedTempFile;
-use tokio::io::AsyncWriteExt;
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use tracing::{info, warn};
@@ -29,7 +31,9 @@ mod metadata;
 use self::metadata::{apply_copy_metadata, apply_put_metadata};
 
 const MAX_PARALLEL_TRANSFERS: usize = 8;
-const IN_MEMORY_ZIP_ENTRY_THRESHOLD_BYTES: u64 = 32 * 1024 * 1024;
+const ZIP_ENTRY_READ_CHUNK_BYTES: usize = 8 * 1024 * 1024;
+
+type BodyError = Box<dyn StdError + Send + Sync>;
 
 #[derive(Clone)]
 struct CopyPlan {
@@ -56,26 +60,15 @@ struct DestinationObject {
 
 enum UploadPayload {
     Bytes(Vec<u8>),
-    TempFile(NamedTempFile),
+    ZipEntry {
+        archive: Arc<Vec<u8>>,
+        entry_index: usize,
+    },
 }
 
 struct PreparedUploadPayload {
     payload: UploadPayload,
     etag: String,
-}
-
-enum ZipEntryPreparation {
-    Ready(PreparedUploadPayload),
-    HashedOnly { etag: String },
-}
-
-impl ZipEntryPreparation {
-    fn etag(&self) -> &str {
-        match self {
-            Self::Ready(prepared) => &prepared.etag,
-            Self::HashedOnly { etag } => etag,
-        }
-    }
 }
 
 pub(crate) async fn deploy(state: &AppState, request: &DeploymentRequest) -> Result<()> {
@@ -215,18 +208,19 @@ async fn plan_deployment(
 
     for source_index in 0..request.source_bucket_names.len() {
         if request.extract {
-            let archive = download_source_zip(
+            let archive_bytes = download_source_zip(
                 state,
                 &request.source_bucket_names[source_index],
                 &request.source_object_keys[source_index],
             )
             .await?;
             let archive_index = archives.len();
-            archives.push(SourceArchive { file: archive });
+            archives.push(SourceArchive {
+                bytes: Arc::new(archive_bytes),
+            });
 
-            let file = File::open(archives[archive_index].file.path())
-                .context("failed to open downloaded archive")?;
-            let mut zip = ZipArchive::new(file).context("failed to read zip archive")?;
+            let cursor = Cursor::new(archives[archive_index].bytes.as_slice());
+            let mut zip = ZipArchive::new(cursor).context("failed to read zip archive")?;
 
             for entry_index in 0..zip.len() {
                 let entry = zip.by_index(entry_index)?;
@@ -278,7 +272,7 @@ async fn plan_deployment(
     Ok((archives, manifest))
 }
 
-async fn download_source_zip(state: &AppState, bucket: &str, key: &str) -> Result<NamedTempFile> {
+async fn download_source_zip(state: &AppState, bucket: &str, key: &str) -> Result<Vec<u8>> {
     info!(bucket, key, "downloading source archive");
 
     let response = state
@@ -290,13 +284,15 @@ async fn download_source_zip(state: &AppState, bucket: &str, key: &str) -> Resul
         .await
         .with_context(|| format!("failed to download s3://{bucket}/{key}"))?;
 
-    let temp = NamedTempFile::new().context("failed to create temp archive")?;
-    let mut output = tokio::fs::File::from_std(temp.reopen()?);
-    let mut reader = response.body.into_async_read();
-    tokio::io::copy(&mut reader, &mut output).await?;
-    output.flush().await?;
+    let bytes = response
+        .body
+        .collect()
+        .await
+        .context("failed to read source archive body")?
+        .into_bytes()
+        .to_vec();
 
-    Ok(temp)
+    Ok(bytes)
 }
 
 async fn source_object_etag(state: &AppState, bucket: &str, key: &str) -> Result<Option<String>> {
@@ -397,9 +393,8 @@ async fn upload_zip_entries(
     let mut tasks = JoinSet::new();
 
     for (archive_index, plans) in zip_plans {
-        let file = File::open(archives[archive_index].file.path())
-            .context("failed to reopen source archive")?;
-        let mut zip = ZipArchive::new(file).context("failed to reopen zip archive")?;
+        let cursor = Cursor::new(archives[archive_index].bytes.as_slice());
+        let mut zip = ZipArchive::new(cursor).context("failed to reopen zip archive")?;
 
         for plan in plans {
             let permit = semaphore
@@ -408,25 +403,23 @@ async fn upload_zip_entries(
                 .await
                 .context("failed to acquire upload semaphore")?;
             let mut entry = zip.by_index(plan.entry_index)?;
-            let prepared =
-                prepare_zip_entry_for_comparison(&mut entry, request, plan.source_index)?;
-            if destination_etag_matches(destination_objects, &plan.relative_key, prepared.etag()) {
+            let prepared = prepare_zip_entry_for_comparison(
+                archives[archive_index].bytes.clone(),
+                &mut entry,
+                request,
+                plan.source_index,
+                plan.entry_index,
+            )?;
+            if destination_etag_matches(destination_objects, &plan.relative_key, &prepared.etag) {
                 continue;
             }
             drop(entry);
-
-            let payload = match prepared {
-                ZipEntryPreparation::Ready(prepared) => prepared.payload,
-                ZipEntryPreparation::HashedOnly { .. } => {
-                    let mut entry = zip.by_index(plan.entry_index)?;
-                    stage_zip_entry_to_temp(&mut entry)?
-                }
-            };
 
             let state = state.clone();
             let metadata = metadata.clone();
             let destination_bucket = request.dest_bucket_name.clone();
             let destination_key = plan.destination_key;
+            let payload = prepared.payload;
 
             tasks.spawn(async move {
                 let _permit = permit;
@@ -608,47 +601,34 @@ fn collect_zip_entry_plans(
 }
 
 fn prepare_zip_entry_for_comparison(
-    entry: &mut zip::read::ZipFile<'_, File>,
+    archive: Arc<Vec<u8>>,
+    entry: &mut zip::read::ZipFile<'_, impl Read + ?Sized>,
     request: &DeploymentRequest,
     source_index: usize,
-) -> Result<ZipEntryPreparation> {
+    entry_index: usize,
+) -> Result<PreparedUploadPayload> {
     if request.source_markers[source_index].is_empty() {
-        if entry.size() <= IN_MEMORY_ZIP_ENTRY_THRESHOLD_BYTES {
-            let mut bytes = Vec::with_capacity(entry.size() as usize);
-            entry.read_to_end(&mut bytes)?;
-            let etag = md5_hex(&bytes);
-            Ok(ZipEntryPreparation::Ready(PreparedUploadPayload {
-                payload: UploadPayload::Bytes(bytes),
-                etag,
-            }))
-        } else {
-            let mut hasher = Md5::new();
-            hash_reader(entry, &mut hasher)?;
-            Ok(ZipEntryPreparation::HashedOnly {
-                etag: finalize_md5(hasher),
-            })
-        }
+        let etag = hash_reader(entry)?;
+        Ok(PreparedUploadPayload {
+            payload: UploadPayload::ZipEntry {
+                archive,
+                entry_index,
+            },
+            etag,
+        })
     } else {
-        let mut bytes = Vec::new();
-        entry.read_to_end(&mut bytes)?;
+        let bytes = read_reader_to_vec(entry, entry.size() as usize)?;
         let replaced = replace_markers(
             bytes,
             &request.source_markers[source_index],
             &request.source_markers_config[source_index],
         )?;
         let etag = md5_hex(&replaced);
-        Ok(ZipEntryPreparation::Ready(PreparedUploadPayload {
+        Ok(PreparedUploadPayload {
             payload: UploadPayload::Bytes(replaced),
             etag,
-        }))
+        })
     }
-}
-
-fn stage_zip_entry_to_temp(entry: &mut zip::read::ZipFile<'_, File>) -> Result<UploadPayload> {
-    let mut temp = NamedTempFile::new().context("failed to create temp entry file")?;
-    std::io::copy(entry, &mut temp)?;
-    temp.flush()?;
-    Ok(UploadPayload::TempFile(temp))
 }
 
 fn destination_etag_matches(
@@ -671,23 +651,41 @@ fn normalize_etag(etag: &str) -> Option<String> {
     }
 }
 
-fn hash_reader<R>(reader: &mut R, hasher: &mut Md5) -> Result<u64>
+fn hash_reader<R>(reader: &mut R) -> Result<String>
 where
     R: Read,
 {
-    let mut buffer = [0; 64 * 1024];
-    let mut read = 0;
+    let mut hasher = Md5::new();
+    let mut buffer = vec![0; ZIP_ENTRY_READ_CHUNK_BYTES];
 
     loop {
         let bytes_read = reader.read(&mut buffer)?;
         if bytes_read == 0 {
             break;
         }
-        hasher.update(&buffer[..bytes_read]);
-        read += bytes_read as u64;
+        let chunk = &buffer[..bytes_read];
+        hasher.update(chunk);
     }
 
-    Ok(read)
+    Ok(finalize_md5(hasher))
+}
+
+fn read_reader_to_vec<R>(reader: &mut R, capacity: usize) -> Result<Vec<u8>>
+where
+    R: Read,
+{
+    let mut bytes = Vec::with_capacity(capacity);
+    let mut buffer = vec![0; ZIP_ENTRY_READ_CHUNK_BYTES];
+
+    loop {
+        let bytes_read = reader.read(&mut buffer)?;
+        if bytes_read == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&buffer[..bytes_read]);
+    }
+
+    Ok(bytes)
 }
 
 fn md5_hex(bytes: &[u8]) -> String {
@@ -713,14 +711,12 @@ async fn upload_payload(
         .bucket(destination_bucket)
         .key(destination_key);
 
-    let mut temp_guard = None;
     let body = match payload {
         UploadPayload::Bytes(bytes) => ByteStream::from(bytes),
-        UploadPayload::TempFile(temp) => {
-            let body = ByteStream::from_path(temp.path().to_path_buf()).await?;
-            temp_guard = Some(temp);
-            body
-        }
+        UploadPayload::ZipEntry {
+            archive,
+            entry_index,
+        } => zip_entry_body(archive, entry_index),
     };
 
     apply_put_metadata(builder, metadata, destination_key)
@@ -729,9 +725,86 @@ async fn upload_payload(
         .await
         .with_context(|| format!("failed to upload {destination_key}"))?;
 
-    drop(temp_guard);
+    Ok(())
+}
+
+fn zip_entry_body(archive: Arc<Vec<u8>>, entry_index: usize) -> ByteStream {
+    ByteStream::new(SdkBody::retryable(move || {
+        zip_entry_sdk_body(archive.clone(), entry_index)
+    }))
+}
+
+fn zip_entry_sdk_body(archive: Arc<Vec<u8>>, entry_index: usize) -> SdkBody {
+    let (sender, receiver) = tokio::sync::mpsc::channel(1);
+
+    tokio::task::spawn_blocking(move || {
+        if let Err(error) = send_zip_entry_chunks(archive, entry_index, sender.clone()) {
+            let _ = sender.blocking_send(Err(error));
+        }
+    });
+
+    SdkBody::from_body_1_x(ReceiverBody {
+        receiver: Mutex::new(receiver),
+    })
+}
+
+fn send_zip_entry_chunks(
+    archive: Arc<Vec<u8>>,
+    entry_index: usize,
+    sender: tokio::sync::mpsc::Sender<std::result::Result<Bytes, BodyError>>,
+) -> std::result::Result<(), BodyError> {
+    let cursor = Cursor::new(archive.as_slice());
+    let mut zip = ZipArchive::new(cursor).map_err(boxed_body_error)?;
+    let mut entry = zip.by_index(entry_index).map_err(boxed_body_error)?;
+
+    loop {
+        let mut chunk = Vec::with_capacity(ZIP_ENTRY_READ_CHUNK_BYTES);
+        let bytes_read = entry
+            .by_ref()
+            .take(ZIP_ENTRY_READ_CHUNK_BYTES as u64)
+            .read_to_end(&mut chunk)
+            .map_err(boxed_body_error)?;
+
+        if bytes_read == 0 {
+            break;
+        }
+
+        if sender.blocking_send(Ok(Bytes::from(chunk))).is_err() {
+            break;
+        }
+    }
 
     Ok(())
+}
+
+fn boxed_body_error(error: impl StdError + Send + Sync + 'static) -> BodyError {
+    Box::new(error)
+}
+
+struct ReceiverBody {
+    receiver: Mutex<tokio::sync::mpsc::Receiver<std::result::Result<Bytes, BodyError>>>,
+}
+
+impl Body for ReceiverBody {
+    type Data = Bytes;
+    type Error = BodyError;
+
+    fn poll_frame(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut TaskContext<'_>,
+    ) -> Poll<Option<std::result::Result<Frame<Self::Data>, Self::Error>>> {
+        let mut receiver = self
+            .receiver
+            .lock()
+            .expect("receiver body mutex should not be poisoned");
+
+        match receiver.poll_recv(cx) {
+            Poll::Ready(Some(Ok(bytes))) => Poll::Ready(Some(Ok(Frame::data(bytes)))),
+            Poll::Ready(Some(Err(error))) => Poll::Ready(Some(Err(error))),
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Pending => Poll::Pending,
+        }
+    }
 }
 
 async fn join_transfer_tasks(mut tasks: JoinSet<Result<()>>) -> Result<()> {
@@ -756,9 +829,7 @@ fn namespace_list_prefix(prefix: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use md5::{Digest, Md5};
-
-    use super::{finalize_md5, hash_reader, md5_hex, namespace_list_prefix, normalize_etag};
+    use super::{hash_reader, md5_hex, namespace_list_prefix, normalize_etag, read_reader_to_vec};
 
     #[test]
     fn namespace_list_prefix_adds_trailing_slash() {
@@ -789,13 +860,20 @@ mod tests {
     }
 
     #[test]
-    fn hash_reader_updates_digest_without_writing_bytes() {
+    fn hash_reader_returns_digest() {
         let mut reader = &b"large asset bytes"[..];
-        let mut hasher = Md5::new();
 
-        let read = hash_reader(&mut reader, &mut hasher).unwrap();
+        let etag = hash_reader(&mut reader).unwrap();
 
-        assert_eq!(read, 17);
-        assert_eq!(finalize_md5(hasher), md5_hex(b"large asset bytes"));
+        assert_eq!(etag, md5_hex(b"large asset bytes"));
+    }
+
+    #[test]
+    fn read_reader_to_vec_returns_bytes() {
+        let mut reader = &b"replacement asset bytes"[..];
+
+        let bytes = read_reader_to_vec(&mut reader, 23).unwrap();
+
+        assert_eq!(bytes, b"replacement asset bytes");
     }
 }
