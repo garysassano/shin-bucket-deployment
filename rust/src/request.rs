@@ -289,6 +289,19 @@ mod tests {
     }
 
     #[test]
+    fn deserializes_cloudformation_string_booleans_in_marker_config() {
+        let mut props = minimal_request();
+        props["SourceMarkers"] = json!([{}]);
+        props["SourceMarkersConfig"] = json!([{ "jsonEscape": "true" }]);
+
+        let raw: RawDeploymentRequest = serde_json::from_value(props)
+            .expect("marker config string booleans should deserialize");
+        let request = parse_request(&raw);
+
+        assert!(request.source_markers_config[0].json_escape);
+    }
+
+    #[test]
     fn serde_rejects_non_boolean_properties() {
         let mut props = minimal_request();
         props["Prune"] = json!({"bad": true});
