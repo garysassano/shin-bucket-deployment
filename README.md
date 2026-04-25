@@ -2,7 +2,7 @@
 
 Rust-backed alternative to AWS CDK's official [`BucketDeployment`](https://docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.aws_s3_deployment.BucketDeployment.html) construct.
 
-This repo is currently a local prototype, not a published construct library, but the construct and runtime paths are working and manually validated.
+This repo is currently a local prototype, not a published construct library, but the construct and runtime paths are working and tracked through AWS validation runs.
 
 Examples are driven through a single runner:
 
@@ -12,6 +12,8 @@ pnpm example synth simple
 pnpm example deploy cloudfront-sync
 pnpm example destroy retain-on-delete
 ```
+
+See [docs/examples.md](./docs/examples.md) for the full example stack list.
 
 ## Why Migrate from `BucketDeployment`
 
@@ -157,19 +159,7 @@ When most files are unchanged, the optimization avoids unnecessary PUT/COPY work
 
 ## Validated Behavior
 
-Validation status changes over time as the provider Lambda changes. See [docs/validation.md](./docs/validation.md) for the prioritized validation plan, current run log, and historical manual validation notes.
-
-## Example Stacks
-
-| Example | File | Purpose |
-| --- | --- | --- |
-| Simple asset deploy | [examples/simple-app.ts](./examples/simple-app.ts) | Plain deployment under `site/`. |
-| Replacement behavior | [examples/replacement-behavior-app.ts](./examples/replacement-behavior-app.ts) | Replacement behavior across `asset`, `data`, JSON, and YAML sources. |
-| CloudFront invalidation (sync) | [examples/cloudfront-invalidation-sync-app.ts](./examples/cloudfront-invalidation-sync-app.ts) | Stack waits for invalidation completion. |
-| CloudFront invalidation (async) | [examples/cloudfront-invalidation-async-app.ts](./examples/cloudfront-invalidation-async-app.ts) | Stack returns before invalidation completes. |
-| Metadata and filters | [examples/metadata-filters-app.ts](./examples/metadata-filters-app.ts) | Include/exclude and metadata behavior. |
-| Prune update | [examples/prune-update-v1-app.ts](./examples/prune-update-v1-app.ts), [examples/prune-update-v2-app.ts](./examples/prune-update-v2-app.ts) | Update path that removes no-longer-deployed objects. |
-| Retain on delete | [examples/retain-on-delete-v1-app.ts](./examples/retain-on-delete-v1-app.ts), [examples/retain-on-delete-v2-app.ts](./examples/retain-on-delete-v2-app.ts) | Update/delete path when `retainOnDelete: true`. |
+Validation status changes over time as the provider Lambda changes. See [docs/validation.md](./docs/validation.md) for the prioritized validation plan and current run log.
 
 ## Implementation Notes
 
@@ -184,6 +174,6 @@ Validation status changes over time as the provider Lambda changes. See [docs/va
 - S3 metadata handling lives under `s3/metadata.rs` because it is tightly coupled to S3 upload/copy behavior.
 - The TypeScript test suite uses [test/test-bundling.ts](./test/test-bundling.ts) to stub local bundling during synth/unit tests without Docker.
 
-The Rust provider lives under [rust](./rust), the construct code under [src](./src), and the AWS/manual validation examples under [examples](./examples).
+The Rust provider lives under [rust](./rust), the construct code under [src](./src), and the validation examples under [examples](./examples).
 
 See [docs/lambda-workflow.md](./docs/lambda-workflow.md) for the provider Lambda workflow diagrams.
