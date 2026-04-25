@@ -27,3 +27,28 @@ Do not commit raw AWS run logs, local profile names, account IDs, resource IDs, 
 - AWS validation should use disposable stacks and buckets. Clean up retained objects manually when testing `retainOnDelete=true`.
 - Run example synth/deploy commands sequentially, or use separate CDK output directories, to avoid `cdk.out` lock contention.
 - If a validation failure leads to a code fix, update the matrix with either `Pass` after rerunning or `Fix added; needs clean rerun` until the scenario is validated again.
+
+## Backlog
+
+These gaps should be promoted into the matrix as they get implemented and run.
+
+### AWS Validation
+
+| Priority | Gap | Why it matters |
+| --- | --- | --- |
+| P0 | Clean rerun for `replacement` | Confirms the nested marker-config fix works in a fresh stack lifecycle. |
+| P1 | `extract=false` deploy/update/destroy | Exercises the `HeadObject` and `CopyObject` path separately from zip extraction. |
+| P1 | Marker source unchanged redeploy | Confirms marker-expanded final bytes can be compared and skipped when unchanged. |
+| P1 | `retainOnDelete=false` delete/update cleanup | Validates destination-prefix cleanup and ownership-tag behavior. |
+| P1 | Multi-source overwrite order | Confirms duplicate relative keys across sources resolve to the expected final object. |
+| P2 | Larger archive deploy | Exercises `/tmp` archive handling and streaming uploads beyond tiny fixtures. |
+| P2 | Metadata-only update limitation | Documents and validates the known limitation where matching bytes can skip metadata-only changes. |
+
+### Local Tests
+
+| Priority | Gap | Why it matters |
+| --- | --- | --- |
+| P1 | Archive planning unit tests | Cover directory skipping, include/exclude filters, duplicate keys, and path traversal rejection without AWS. |
+| P1 | Retryable zip-entry body tests | Prove the upload body reopens the archive and reports an exact size hint. |
+| P2 | Temp archive cleanup tests | Catch leaked `/tmp` archive files on download or write failures. |
+| P2 | Destination prune planning tests | Cover prefix stripping, excluded keys, empty relative keys, and delete-list decisions without AWS. |
