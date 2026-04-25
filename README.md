@@ -15,7 +15,8 @@ The official `BucketDeployment` is a good default for many stacks, but its provi
 | Lower-overhead provider | The custom resource runs on the [Lambda Rust runtime](https://github.com/aws/aws-lambda-rust-runtime) (`provided.al2023`) instead of the upstream Python provider. In practice this can mean faster cold starts and lower memory footprint; for background, see [lambda-perf](https://maxday.github.io/lambda-perf/). |
 | Direct AWS SDK operations | Copy, upload, delete, and CloudFront invalidation are executed through SDK calls instead of shelling out to `aws s3 cp` / `aws s3 sync`. |
 | Archive-aware planning | For extracted assets, the provider plans directly from the zip archive instead of extracting the whole archive to a working directory before syncing. |
-| ETag-aware skip decisions | Destination `ETag` values are compared with planned content, including marker-replaced entries, so unchanged objects can be skipped without staging a full extracted tree. |
+| ETag-aware skip decisions | Destination `ETag` values are compared with planned content so unchanged objects can be skipped instead of copied or uploaded again. |
+| Targeted marker replacement | Marker replacement is applied while preparing planned content for comparison, so marker-expanded objects can also be skipped when their final bytes are unchanged. |
 
 ## Quick Start
 
