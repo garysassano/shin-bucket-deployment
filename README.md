@@ -16,7 +16,7 @@ The official `BucketDeployment` is a good default for many stacks, but its provi
 | Direct AWS SDK operations | Copy, upload, delete, and CloudFront invalidation are executed through SDK calls instead of shelling out to `aws s3 cp` / `aws s3 sync`. |
 | Archive-aware planning | For extracted assets, the provider plans directly from the zip archive instead of extracting the whole archive to a working directory before syncing. |
 | ETag-aware skip decisions | Destination `ETag` values are compared with source object ETags or computed planned-content hashes, so unchanged objects can be skipped instead of copied or uploaded again. |
-| Marker-aware skip path | Marker-expanded bytes are hashed before upload and compared with destination `ETag` values, so marked sources do not force `PutObject` when the final bytes are unchanged. |
+| Marker-free streaming path | Sources without deploy-time markers are hashed and uploaded directly from archive entries; replacement buffers are only used for sources that declare markers. |
 
 ## Quick Start
 
