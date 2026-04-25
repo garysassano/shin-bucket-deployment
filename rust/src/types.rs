@@ -137,3 +137,27 @@ pub(crate) struct ResponsePayload {
     pub(crate) reason: Option<String>,
     pub(crate) data: Map<String, Value>,
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::SourceArchive;
+
+    #[test]
+    fn source_archive_removes_temporary_file_on_drop() {
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "rust-bucket-deployment-drop-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::write(&path, b"temporary archive").unwrap();
+
+        let archive = SourceArchive {
+            path: Arc::new(path.clone()),
+        };
+        drop(archive);
+
+        assert!(!path.exists());
+    }
+}

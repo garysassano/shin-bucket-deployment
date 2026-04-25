@@ -168,3 +168,67 @@ impl Body for ReceiverBody {
         SizeHint::with_exact(self.content_length)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::fs::File;
+    use std::io::Write;
+    use std::sync::Arc;
+
+    use zip::write::{SimpleFileOptions, ZipWriter};
+
+    use super::zip_entry_body;
+
+    #[tokio::test]
+    async fn zip_entry_body_streams_entry_and_reports_exact_size() {
+        let archive_path = Arc::new(write_test_zip(&[("index.html", b"hello world" as &[u8])]));
+
+        let body = zip_entry_body(archive_path.clone(), 0, 11);
+
+        assert_eq!(body.size_hint(), (11, Some(11)));
+        assert_eq!(body.collect().await.unwrap().into_bytes(), "hello world");
+
+        std::fs::remove_file(archive_path.as_ref()).unwrap();
+    }
+
+    #[tokio::test]
+    async fn zip_entry_body_can_be_rebuilt_from_archive_path() {
+        let archive_path = Arc::new(write_test_zip(&[("asset.txt", b"retryable body" as &[u8])]));
+
+        let first = zip_entry_body(archive_path.clone(), 0, 14)
+            .collect()
+            .await
+            .unwrap()
+            .into_bytes();
+        let second = zip_entry_body(archive_path.clone(), 0, 14)
+            .collect()
+            .await
+            .unwrap()
+            .into_bytes();
+
+        assert_eq!(first, "retryable body");
+        assert_eq!(second, "retryable body");
+
+        std::fs::remove_file(archive_path.as_ref()).unwrap();
+    }
+
+    fn write_test_zip(entries: &[(&str, &[u8])]) -> std::path::PathBuf {
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "rust-bucket-deployment-test-{}.zip",
+            uuid::Uuid::new_v4()
+        ));
+
+        let file = File::create(&path).unwrap();
+        let mut writer = ZipWriter::new(file);
+        let options = SimpleFileOptions::default();
+
+        for (name, bytes) in entries {
+            writer.start_file(name, options).unwrap();
+            writer.write_all(bytes).unwrap();
+        }
+        writer.finish().unwrap();
+
+        path
+    }
+}
