@@ -196,3 +196,5 @@ When most files are unchanged, the optimization avoids unnecessary PUT/COPY work
 - The TypeScript test suite uses [test/test-bundling.ts](./test/test-bundling.ts) to stub local bundling during synth/unit tests without Docker.
 
 The Rust provider lives under [rust](./rust), the construct code under [src](./src), and the AWS/manual validation examples under [examples](./examples).
+
+See [docs/lambda-workflow.md](./docs/lambda-workflow.md) for the provider Lambda workflow diagrams.
