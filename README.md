@@ -2,78 +2,21 @@
 
 Rust-backed alternative to AWS CDK's official [`BucketDeployment`](https://docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.aws_s3_deployment.BucketDeployment.html) construct.
 
-This repo is currently a local prototype, not a published construct library, but the construct and runtime paths are working and tracked through AWS validation runs.
+This repository is currently a local prototype, not a published construct library. The construct API and Rust provider Lambda are working and tracked through AWS validation runs.
 
-Examples are driven through a single runner:
+`RustBucketDeployment` is intended for S3 static asset deployment when you want a lower-overhead provider than the upstream Python Lambda and a deployment path that avoids extracting whole archives before syncing them.
 
-```bash
-pnpm example list
-pnpm example synth simple
-pnpm example deploy cloudfront-sync
-pnpm example destroy retain-on-delete
-```
+## Why Build This
 
-See [docs/examples.md](./docs/examples.md) for the full example stack list.
+The official `BucketDeployment` is a good default for many stacks, but its provider is built around AWS CLI copy/sync orchestration. This construct keeps the familiar CDK surface while using a purpose-built Rust Lambda for static asset deployment.
 
-## Why Migrate from `BucketDeployment`
-
-If `BucketDeployment` already works well for your stack, you do not need to move. Migrate when you want a lower-overhead provider and a leaner deployment path.
-
-| Why migrate | What changes compared with `BucketDeployment` |
+| Advantage | What changes |
 | --- | --- |
-| Lower-overhead provider Lambda | `RustBucketDeployment` uses the [Lambda Rust runtime](https://github.com/aws/aws-lambda-rust-runtime) on `provided.al2023` instead of the upstream Python Lambda runtime. In practice this can mean faster cold starts and lower memory footprint; for background, see the independent benchmark at [lambda-perf](https://maxday.github.io/lambda-perf/). |
-| Direct SDK-based deployment instead of CLI orchestration | `RustBucketDeployment` uses AWS SDK calls for copy, upload, delete, and invalidation, whereas upstream `BucketDeployment` orchestrates `aws s3 cp` / `aws s3 sync` from its handler. |
-| Skips replacement work when no markers are present | `RustBucketDeployment` only runs deploy-time marker replacement for sources that actually declare markers. Plain sources avoid that rewrite path entirely. |
-| More efficient archive handling when extraction is needed | The upstream Python handler downloads each zip, extracts it to a working directory, rewrites files in place, and then syncs the extracted tree. `RustBucketDeployment` plans directly from the archive, compares planned content with destination `ETag` values, and avoids materializing the full extracted tree first. |
-
-## `BucketDeployment` Parity
-
-This tracks parity against the upstream [`BucketDeployment`](https://docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.aws_s3_deployment.BucketDeployment.html) construct API.
-
-| `BucketDeployment` prop | Supported in `RustBucketDeployment` |
-| --- | --- |
-| `accessControl` | ✅ |
-| `cacheControl` | ✅ |
-| `contentDisposition` | ✅ |
-| `contentEncoding` | ✅ |
-| `contentLanguage` | ✅ |
-| `contentType` | ✅ |
-| `destinationBucket` | ✅ |
-| `destinationKeyPrefix` | ✅ |
-| `distribution` | ✅ |
-| `distributionPaths` | ✅ |
-| `ephemeralStorageSize` | ✅ |
-| `exclude` | ✅ |
-| `expires` | ❌ |
-| `extract` | ✅ |
-| `include` | ✅ |
-| `logGroup` | ✅ |
-| `logRetention` | ✅ |
-| `memoryLimit` | ✅ |
-| `metadata` | ✅ |
-| `outputObjectKeys` | ✅ |
-| `prune` | ✅ |
-| `retainOnDelete` | ✅ |
-| `role` | ✅ |
-| `securityGroups` | ✅ |
-| `serverSideEncryption` | ✅ |
-| `serverSideEncryptionAwsKmsKeyId` | ✅ |
-| `serverSideEncryptionCustomerAlgorithm` | ❌ |
-| `signContent` | ❌ |
-| `sources` | ✅ |
-| `storageClass` | ✅ |
-| `useEfs` | ❌ |
-| `vpc` | ✅ |
-| `vpcSubnets` | ✅ |
-| `waitForDistributionInvalidation` | ✅ |
-| `websiteRedirectLocation` | ✅ |
-
-Unsupported by design:
-
-- `expires`: prefer `cacheControl`, which is the more common and safer control surface for deployment-time caching behavior.
-- `serverSideEncryptionCustomerAlgorithm`: prefer S3-managed encryption (`AES256`) or KMS-backed encryption instead of the more specialized SSE-C request flow.
-- `signContent`: this runtime uses the AWS SDK directly instead of the upstream AWS CLI-based upload path, so this transport-level knob does not map cleanly or usefully here.
-- `useEfs`: prefer increasing `ephemeralStorageSize`; Lambda supports up to 10,240 MiB of ephemeral storage. Longer term, S3 Files is the more interesting direction once CloudFormation supports it.
+| Lower-overhead provider | The custom resource runs on the Lambda Rust runtime (`provided.al2023`) instead of the upstream Python provider. |
+| Direct AWS SDK operations | Copy, upload, delete, and CloudFront invalidation are executed through SDK calls instead of shelling out to `aws s3 cp` / `aws s3 sync`. |
+| Archive-aware planning | For extracted assets, the provider plans directly from the zip archive instead of extracting the whole archive to a working directory before syncing. |
+| Less unnecessary work | Destination `ETag` values are used to skip unchanged objects, and marker replacement only runs for sources that declare deploy-time markers. |
+| Focused pruning | `prune=true` is resolved from the same planned source set, so removed source objects are deleted without maintaining a separate manifest cache. |
 
 ## Quick Start
 
@@ -108,72 +51,62 @@ export class DemoStack extends Stack {
 }
 ```
 
-## Key Behavior
+## What It Supports
 
-### CloudFront invalidation
+The construct follows the upstream `BucketDeployment` API where the behavior maps cleanly to the Rust provider.
 
-- If you provide `distribution`, the runtime can create a CloudFront invalidation after upload.
-- If you do not provide `distributionPaths`, the default invalidation path is the destination prefix plus `*`.
-- Example: deploying to `site/runtime/` defaults to invalidating `/site/runtime/*`.
-- Multiple paths are sent in a single `CreateInvalidation` call as one batch.
-- `waitForDistributionInvalidation: true` blocks the stack until CloudFront reports completion.
-- `waitForDistributionInvalidation: false` returns faster and lets invalidation finish after the stack completes.
+| Area | Supported |
+| --- | --- |
+| Sources | `sources`, `Source.asset`, `Source.data`, `Source.jsonData`, `Source.yamlData`, deploy-time markers |
+| Destination | `destinationBucket`, `destinationKeyPrefix`, `deployedBucket`, `objectKeys` |
+| Filtering | `include`, `exclude` |
+| Update behavior | `extract`, `prune`, `retainOnDelete`, `outputObjectKeys` |
+| S3 metadata | `accessControl`, `cacheControl`, `contentDisposition`, `contentEncoding`, `contentLanguage`, `contentType`, `metadata`, `serverSideEncryption`, `serverSideEncryptionAwsKmsKeyId`, `storageClass`, `websiteRedirectLocation` |
+| CloudFront | `distribution`, `distributionPaths`, `waitForDistributionInvalidation` |
+| Provider Lambda | `architecture`, `bundling`, `ephemeralStorageSize`, `logGroup`, `logRetention`, `memoryLimit`, `role`, `securityGroups`, `vpc`, `vpcSubnets` |
 
-### Extraction and copy behavior
+Unsupported upstream props:
 
-- `extract=false` compares the source object's `ETag` with the destination object's `ETag`. If they match, the copy is skipped; otherwise the source object is copied with `CopyObject`.
-- `extract=true` streams the source zip to a temporary file in `/tmp`, walks entries from that archive file, and uploads only objects whose planned content differs from the destination.
-- Zip entries with deploy-time replacements are rewritten in memory, because the final bytes are only known after replacement.
-- Zip entries without replacements are read in 8 MiB chunks while computing MD5. If changed, the upload body is streamed to S3 in 8 MiB chunks instead of building a full per-object upload buffer.
-- The handler never extracts the whole archive to disk and does not stage individual zip entries in `/tmp`; only the source zip archive itself is retained there while deployment and prune planning run.
-- The provider Lambda defaults to 256 MiB of memory and runs up to 8 S3 transfers in parallel. For plain zip-entry uploads, the handler queues one 8 MiB chunk per active upload stream.
+| Prop | Reason |
+| --- | --- |
+| `expires` | Prefer `cacheControl` for deployment-time cache behavior. |
+| `serverSideEncryptionCustomerAlgorithm` | SSE-C is intentionally not implemented; use SSE-S3 or SSE-KMS. |
+| `signContent` | The provider uses AWS SDK calls directly, not the upstream AWS CLI upload path. |
+| `useEfs` | Increase `ephemeralStorageSize` instead; the provider works from Lambda `/tmp`. |
 
-### Update and delete behavior
+## How It Works
 
-- `prune=true` removes destination objects that are no longer part of the source set.
-- The destination prefix is listed with `ListObjectsV2` during deployment. The returned object keys and `ETag` values are used both for skip decisions and, when `prune=true`, for delete decisions.
-- There is no separate manifest or managed cache. If a destination object is manually removed, moved, or changed, the next deployment observes the current bucket state from S3 and reconciles it.
-- `retainOnDelete=true` preserves prior deployment data on update and on stack delete.
-- `outputObjectKeys=false` suppresses the returned `SourceObjectKeys` payload.
+For `extract=true`, the provider streams each source zip from S3 to a temporary file in Lambda `/tmp`, walks the archive entries, applies filters, and builds the deployment plan from the archive contents. It does not extract the whole archive to a working directory.
 
-### ETag optimization limits
+For `extract=false`, each source object is copied directly with S3 `CopyObject`.
 
-The `ETag` skip path is intentionally narrow. It is optimized for simple static website assets where each uploaded object is a single-part S3 object and the `ETag` is the MD5 of the object bytes.
+Before uploading or copying, the provider lists the destination prefix. Destination keys and `ETag` values are used to skip unchanged objects and, when `prune=true`, delete objects that are no longer in the source set.
 
-Supported by the optimization:
+CloudFront invalidation is created after S3 changes when `distribution` is provided. If `distributionPaths` is omitted, the default path is the destination prefix plus `*`, for example `/site/*`.
 
-- Plain static assets uploaded as single-part objects.
-- Zip entries without replacements, using 8 MiB read chunks for MD5 comparison and changed-object upload streaming.
-- Zip entries with deploy-time replacements, after the replacement output is computed in memory.
-- `extract=false` source object copies, when the source and destination `ETag` values match.
+## Limits
 
-Not supported by the optimization:
+The unchanged-object optimization depends on S3 `ETag` values behaving like MD5 content hashes. That is generally true for simple single-part static objects, but not for all S3 configurations.
 
-- Metadata-only changes. If bytes are unchanged but `cacheControl`, `contentType`, custom metadata, storage class, encryption, or other object attributes need to change, matching `ETag` values can cause the upload/copy to be skipped.
-- Multipart uploads or multipart copies, because their S3 `ETag` is not the plain MD5 of the object bytes.
-- SSE-KMS or SSE-C objects, or any other S3 mode where the `ETag` is not a reliable MD5 content hash.
-- Very large source archives that exceed available Lambda `/tmp` storage, or replacement-expanded entries that are too large for the configured Lambda memory.
-- Cases that need byte-range reads or custom backend semantics. This construct targets S3 static asset deployment, not a general sync framework.
+Uploads or copies may not be skipped correctly for metadata-only changes, multipart objects, SSE-KMS or SSE-C objects, or any case where the destination `ETag` is not the MD5 of the object bytes.
 
-When most files are unchanged, the optimization avoids unnecessary PUT/COPY work. When most files are changed, the runtime still has to read and hash archive entries before uploading them, so the value should be validated with your asset mix if deployment time is critical.
+Zip entries with deploy-time marker replacements are fully materialized in memory after replacement so the final bytes can be hashed and uploaded. Plain zip entries are read and uploaded in chunks.
 
-## Validated Behavior
+Large source archives must fit in Lambda ephemeral storage. Large replacement-expanded entries must fit in Lambda memory.
 
-Validation status changes over time as the provider Lambda changes. See [docs/validation.md](./docs/validation.md) for the prioritized validation plan and current run log.
+This construct targets static asset deployment to S3. It is not a general-purpose sync engine and does not provide byte-range diffing, persistent manifests, or non-S3 backend behavior.
 
-## Implementation Notes
+## Examples and Validation
 
-- The Lambda custom-resource envelope uses the official [`aws_lambda_events`](https://docs.rs/aws_lambda_events/latest/aws_lambda_events/event/cloudformation/index.html) CloudFormation request types.
-- `ResourceProperties` and `OldResourceProperties` are deserialized directly into a typed Rust struct (`RawDeploymentRequest`).
-- The Rust runtime is organized by responsibility:
-  - top-level orchestration in `cloudformation.rs`
-  - CloudFront-specific logic in `cloudfront.rs`
-  - S3-specific logic under `s3/`
-  - request parsing and normalization in `request.rs`
-  - marker replacement in `replace.rs`
-- S3 metadata handling lives under `s3/metadata.rs` because it is tightly coupled to S3 upload/copy behavior.
-- The TypeScript test suite uses [test/test-bundling.ts](./test/test-bundling.ts) to stub local bundling during synth/unit tests without Docker.
+Examples are driven through the repository runner:
 
-The Rust provider lives under [rust](./rust), the construct code under [src](./src), and the validation examples under [examples](./examples).
+```bash
+pnpm example list
+pnpm example synth simple
+pnpm example deploy cloudfront-sync
+pnpm example destroy retain-on-delete
+```
 
-See [docs/lambda-workflow.md](./docs/lambda-workflow.md) for the provider Lambda workflow diagrams.
+See [docs/examples.md](./docs/examples.md) for the full example list and [docs/validation.md](./docs/validation.md) for the current validation log.
+
+The Rust provider lives under [rust](./rust), the construct code under [src](./src), and detailed provider workflow diagrams are in [docs/lambda-workflow.md](./docs/lambda-workflow.md).
