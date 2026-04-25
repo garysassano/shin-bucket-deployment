@@ -15,10 +15,10 @@ use tokio::task::JoinSet;
 use tracing::warn;
 
 use crate::replace::replace_markers;
-use crate::types::{AppState, DeploymentRequest, ObjectMetadata, SourceArchive};
+use crate::types::{AppState, DeploymentRequest, MarkerConfig, ObjectMetadata, SourceArchive};
 
 use super::archive::{open_zip_archive, zip_entry_body};
-use super::destination::{DestinationObject, destination_etag_matches};
+use super::destination::DestinationObject;
 use super::metadata::{apply_copy_metadata, apply_put_metadata};
 use super::planner::{CopyPlan, ZipEntryPlan};
 use super::{MAX_PARALLEL_TRANSFERS, ZIP_ENTRY_READ_CHUNK_BYTES};
@@ -96,79 +96,33 @@ pub(super) async fn upload_zip_entries(
                 .await
                 .context("failed to acquire upload semaphore")?;
             let archive_path = archives[archive_index].path.clone();
-            let destination_object = destination_objects.get(&plan.relative_key);
-            let prepared = if request.source_markers[plan.source_index].is_empty() {
-                match marker_free_entry_matches_destination(
-                    state,
-                    &request.dest_bucket_name,
-                    &plan.destination_key,
-                    destination_object,
-                    plan.size,
-                    plan.crc32,
-                )
-                .await?
-                {
-                    Some(true) => continue,
-                    Some(false) => PreparedUploadPayload {
-                        payload: UploadPayload::ZipEntry {
-                            archive_path,
-                            entry_index: plan.entry_index,
-                            content_length: plan.size,
-                            checksum_crc32: crc32_base64(plan.crc32),
-                        },
-                        etag: String::new(),
-                    },
-                    None => {
-                        let mut zip = open_zip_archive(&archive_path)
-                            .context("failed to reopen zip archive")?;
-                        let mut entry = zip.by_index(plan.entry_index)?;
-                        let prepared = prepare_zip_entry_for_comparison(
-                            archive_path.clone(),
-                            &mut entry,
-                            request,
-                            plan.source_index,
-                            plan.entry_index,
-                        )?;
-                        if destination_etag_matches(
-                            destination_objects,
-                            &plan.relative_key,
-                            &prepared.etag,
-                        ) {
-                            continue;
-                        }
-                        prepared
-                    }
-                }
-            } else {
-                let mut zip =
-                    open_zip_archive(&archive_path).context("failed to reopen zip archive")?;
-                let mut entry = zip.by_index(plan.entry_index)?;
-                let prepared = prepare_zip_entry_for_comparison(
-                    archive_path.clone(),
-                    &mut entry,
-                    request,
-                    plan.source_index,
-                    plan.entry_index,
-                )?;
-                if destination_etag_matches(destination_objects, &plan.relative_key, &prepared.etag)
-                {
-                    continue;
-                }
-                prepared
-            };
-
             let state = state.clone();
             let metadata = metadata.clone();
             let destination_bucket = request.dest_bucket_name.clone();
-            let destination_key = plan.destination_key;
-            let payload = prepared.payload;
+            let source_markers = request.source_markers[plan.source_index].clone();
+            let source_marker_config = request.source_markers_config[plan.source_index].clone();
+            let destination_object = destination_objects.get(&plan.relative_key).cloned();
 
             tasks.spawn(async move {
                 let _permit = permit;
+                let Some(payload) = prepare_zip_entry_upload(
+                    &state,
+                    &destination_bucket,
+                    &archive_path,
+                    &plan,
+                    &source_markers,
+                    &source_marker_config,
+                    destination_object.as_ref(),
+                )
+                .await?
+                else {
+                    return Ok(());
+                };
+
                 upload_payload(
                     &state,
                     &destination_bucket,
-                    &destination_key,
+                    &plan.destination_key,
                     &metadata,
                     payload,
                 )
@@ -178,6 +132,56 @@ pub(super) async fn upload_zip_entries(
     }
 
     join_transfer_tasks(tasks).await
+}
+
+async fn prepare_zip_entry_upload(
+    state: &AppState,
+    destination_bucket: &str,
+    archive_path: &Arc<PathBuf>,
+    plan: &ZipEntryPlan,
+    source_markers: &HashMap<String, String>,
+    source_marker_config: &MarkerConfig,
+    destination_object: Option<&DestinationObject>,
+) -> Result<Option<UploadPayload>> {
+    if source_markers.is_empty() {
+        match marker_free_entry_matches_destination(
+            state,
+            destination_bucket,
+            &plan.destination_key,
+            destination_object,
+            plan.size,
+            plan.crc32,
+        )
+        .await?
+        {
+            Some(true) => return Ok(None),
+            Some(false) => {
+                return Ok(Some(UploadPayload::ZipEntry {
+                    archive_path: archive_path.clone(),
+                    entry_index: plan.entry_index,
+                    content_length: plan.size,
+                    checksum_crc32: crc32_base64(plan.crc32),
+                }));
+            }
+            None => {}
+        }
+    }
+
+    let mut zip = open_zip_archive(archive_path).context("failed to reopen zip archive")?;
+    let mut entry = zip.by_index(plan.entry_index)?;
+    let prepared = prepare_zip_entry_for_comparison(
+        archive_path.clone(),
+        &mut entry,
+        source_markers,
+        source_marker_config,
+        plan.entry_index,
+    )?;
+
+    if destination_object_etag_matches(destination_object, &prepared.etag) {
+        return Ok(None);
+    }
+
+    Ok(Some(prepared.payload))
 }
 
 async fn copy_source_object(
@@ -223,11 +227,11 @@ async fn copy_source_object(
 fn prepare_zip_entry_for_comparison(
     archive_path: Arc<PathBuf>,
     entry: &mut zip::read::ZipFile<'_, impl Read + ?Sized>,
-    request: &DeploymentRequest,
-    source_index: usize,
+    source_markers: &HashMap<String, String>,
+    source_marker_config: &MarkerConfig,
     entry_index: usize,
 ) -> Result<PreparedUploadPayload> {
-    if request.source_markers[source_index].is_empty() {
+    if source_markers.is_empty() {
         let content_length = entry.size();
         let etag = hash_reader(entry)?;
         Ok(PreparedUploadPayload {
@@ -241,11 +245,7 @@ fn prepare_zip_entry_for_comparison(
         })
     } else {
         let bytes = read_reader_to_vec(entry, entry.size() as usize)?;
-        let replaced = replace_markers(
-            bytes,
-            &request.source_markers[source_index],
-            &request.source_markers_config[source_index],
-        )?;
+        let replaced = replace_markers(bytes, source_markers, source_marker_config)?;
         let etag = md5_hex(&replaced);
         let checksum_crc32 = crc32_base64(crc32_bytes(&replaced));
         Ok(PreparedUploadPayload {
@@ -297,6 +297,13 @@ async fn upload_payload(
         .with_context(|| format!("failed to upload {destination_key}"))?;
 
     Ok(())
+}
+
+fn destination_object_etag_matches(
+    destination_object: Option<&DestinationObject>,
+    expected_etag: &str,
+) -> bool {
+    destination_object.and_then(|object| object.etag.as_deref()) == Some(expected_etag)
 }
 
 async fn marker_free_entry_matches_destination(

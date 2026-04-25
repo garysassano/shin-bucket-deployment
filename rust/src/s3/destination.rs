@@ -13,6 +13,7 @@ pub(super) struct DestinationPlan {
     pub(super) keys_to_delete: Vec<String>,
 }
 
+#[derive(Clone)]
 pub(super) struct DestinationObject {
     pub(super) etag: Option<String>,
     pub(super) size: Option<u64>,

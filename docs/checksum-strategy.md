@@ -10,7 +10,7 @@ For `extract=true` sources without deploy-time markers, the source archive alrea
 - uncompressed size
 - zip entry CRC32
 
-The destination prefix is listed once with `ListObjectsV2`. The list response provides each object's key, size, `ETag`, checksum algorithms, and checksum type. When a destination object has the same size and advertises `CRC32` with `FULL_OBJECT`, the provider issues a targeted `HeadObject` with `ChecksumMode::Enabled` to read the actual `ChecksumCRC32` value.
+The destination prefix is listed once with `ListObjectsV2`. The list response provides each object's key, size, `ETag`, checksum algorithms, and checksum type. When a destination object has the same size and advertises `CRC32` with `FULL_OBJECT`, the provider issues a targeted `HeadObject` with `ChecksumMode::Enabled` to read the actual `ChecksumCRC32` value. These checksum reads run inside the same bounded transfer task pool as fallback hashing and uploads.
 
 The provider skips a marker-free entry when:
 
@@ -47,4 +47,3 @@ The skip decision for `extract=false` still uses the source object's `ETag` from
 CRC32 is not a cryptographic identity. The provider compares both CRC32 and object size to avoid obvious false matches, and uses this only as a deployment skip optimization.
 
 Checksum reads may require extra permissions for some encrypted objects. In particular, `HeadObject` with checksum mode can require KMS permissions for SSE-KMS objects. When checksum reads fail, the provider falls back to the MD5/`ETag` path instead of failing the deployment.
-
