@@ -79,8 +79,8 @@ flowchart TD
   D --> E{"extract?"}
 
   E -->|true| F["For each source object: GetObject source zip"]
-  F --> G["Read source zip into memory"]
-  G --> H["Open ZipArchive from in-memory bytes"]
+  F --> G["Stream source zip to /tmp"]
+  G --> H["Open ZipArchive from temporary file"]
   H --> I["Walk zip entries"]
   I --> J{"Entry is file and passes filters?"}
   J -->|No| I
@@ -108,7 +108,7 @@ flowchart TD
   W --> Y
 
   T -->|true| Z["Group zip entries by source archive"]
-  Z --> AA["Open ZipArchive from in-memory archive bytes"]
+  Z --> AA["Open ZipArchive from temporary archive file"]
   AA --> AB["Read planned entry"]
   AB --> AC{"Source has deploy-time markers?"}
 
@@ -166,7 +166,7 @@ The destination ETags are listed once per deployment after the source plan is bu
 flowchart TD
   A["Start S3 deployment"] --> B{"extract?"}
 
-  B -->|true| C["Download source zip into memory"]
+  B -->|true| C["Stream source zip to /tmp"]
   C --> D["Walk archive entries"]
   D --> E["Build source manifest: relative key -> zip entry location"]
 
@@ -184,13 +184,13 @@ flowchart TD
   M -->|Yes| N["Skip CopyObject"]
   M -->|No| O["CopyObject source to destination"]
 
-  K -->|Zip entry without markers| P["Open entry from in-memory archive"]
+  K -->|Zip entry without markers| P["Open entry from temporary archive file"]
   P --> Q["Read entry in 8 MiB chunks"]
   Q --> R["Update MD5 incrementally"]
   R --> S{"MD5 equals destination ETag?"}
   S -->|Yes| T["Skip PutObject"]
   S -->|No| U["Create retryable upload body"]
-  U --> V["Reopen entry from in-memory archive"]
+  U --> V["Reopen entry from temporary archive file"]
   V --> W["Stream PutObject body in 8 MiB chunks"]
 
   K -->|Zip entry with markers| X["Read full entry into memory"]
@@ -213,11 +213,11 @@ For plain zip entries, the handler does not load the whole entry into an upload 
 
 ## Current Runtime Notes
 
-- Source zip archives are downloaded into Lambda memory and then opened as `ZipArchive` readers.
-- Plain zip entries are hashed in 8 MiB chunks. If changed, the upload stream reopens the entry from the in-memory archive and sends one 8 MiB chunk at a time.
-- The upload stream is retryable because the body can be rebuilt from the retained in-memory source archive.
+- Source zip archives are streamed to temporary files in Lambda `/tmp` and then opened as `ZipArchive` readers.
+- Plain zip entries are hashed in 8 MiB chunks. If changed, the upload stream reopens the entry from the temporary archive file and sends one 8 MiB chunk at a time.
+- The upload stream is retryable because the body can be rebuilt from the retained temporary source archive.
 - Zip entries with deploy-time replacements are still fully materialized in memory after replacement, because the final bytes must be known before computing the ETag and uploading.
-- The handler does not extract the archive to disk and does not stage zip entries in `/tmp`.
+- The handler does not extract the archive to disk and does not stage individual zip entries in `/tmp`.
 - Copy and upload transfers are bounded by `MAX_PARALLEL_TRANSFERS = 8`.
 - `prune=true` lists the destination prefix and deletes destination objects that are not in the planned source set.
 - CloudFront invalidation is created after S3 deployment or delete handling; if waiting is enabled, the handler polls until completion or timeout.

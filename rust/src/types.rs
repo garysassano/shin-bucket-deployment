@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashMap};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use aws_sdk_cloudfront::Client as CloudFrontClient;
@@ -116,7 +117,19 @@ pub(crate) enum PlannedAction {
 pub(crate) type DeploymentManifest = BTreeMap<String, PlannedObject>;
 
 pub(crate) struct SourceArchive {
-    pub(crate) bytes: Arc<Vec<u8>>,
+    pub(crate) path: Arc<PathBuf>,
+}
+
+impl Drop for SourceArchive {
+    fn drop(&mut self) {
+        if let Err(error) = std::fs::remove_file(self.path.as_ref()) {
+            tracing::warn!(
+                path = %self.path.display(),
+                error = %error,
+                "failed to remove temporary source archive"
+            );
+        }
+    }
 }
 
 pub(crate) struct ResponsePayload {

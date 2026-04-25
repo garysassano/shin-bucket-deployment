@@ -122,10 +122,10 @@ export class DemoStack extends Stack {
 ### Extraction and copy behavior
 
 - `extract=false` compares the source object's `ETag` with the destination object's `ETag`. If they match, the copy is skipped; otherwise the source object is copied with `CopyObject`.
-- `extract=true` downloads the source zip, walks entries from the archive, and uploads only objects whose planned content differs from the destination.
+- `extract=true` streams the source zip to a temporary file in `/tmp`, walks entries from that archive file, and uploads only objects whose planned content differs from the destination.
 - Zip entries with deploy-time replacements are rewritten in memory, because the final bytes are only known after replacement.
 - Zip entries without replacements are read in 8 MiB chunks while computing MD5. If changed, the upload body is streamed to S3 in 8 MiB chunks instead of building a full per-object upload buffer.
-- The handler never extracts the whole archive to disk and does not stage zip entries in `/tmp`.
+- The handler never extracts the whole archive to disk and does not stage individual zip entries in `/tmp`; only the source zip archive itself is retained there while deployment and prune planning run.
 - The provider Lambda defaults to 256 MiB of memory and runs up to 8 S3 transfers in parallel. For plain zip-entry uploads, the handler queues one 8 MiB chunk per active upload stream.
 
 ### Update and delete behavior
@@ -152,7 +152,7 @@ Not supported by the optimization:
 - Metadata-only changes. If bytes are unchanged but `cacheControl`, `contentType`, custom metadata, storage class, encryption, or other object attributes need to change, matching `ETag` values can cause the upload/copy to be skipped.
 - Multipart uploads or multipart copies, because their S3 `ETag` is not the plain MD5 of the object bytes.
 - SSE-KMS or SSE-C objects, or any other S3 mode where the `ETag` is not a reliable MD5 content hash.
-- Very large source archives or replacement-expanded entries that are too large for the configured Lambda memory. Increase `memoryLimit` for larger static sites.
+- Very large source archives that exceed available Lambda `/tmp` storage, or replacement-expanded entries that are too large for the configured Lambda memory.
 - Cases that need byte-range reads or custom backend semantics. This construct targets S3 static asset deployment, not a general sync framework.
 
 When most files are unchanged, the optimization avoids unnecessary PUT/COPY work. When most files are changed, the runtime still has to read and hash archive entries before uploading them, so the value should be validated with your asset mix if deployment time is critical.
