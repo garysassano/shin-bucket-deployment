@@ -10,7 +10,7 @@ use aws_sdk_s3::error::ProvideErrorMetadata;
 use aws_sdk_s3::primitives::{ByteStream, SdkBody};
 use aws_sdk_s3::types::{Delete, MetadataDirective, ObjectIdentifier};
 use bytes::Bytes;
-use http_body::{Body, Frame};
+use http_body::{Body, Frame, SizeHint};
 use md5::{Digest, Md5};
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
@@ -63,6 +63,7 @@ enum UploadPayload {
     ZipEntry {
         archive: Arc<Vec<u8>>,
         entry_index: usize,
+        content_length: u64,
     },
 }
 
@@ -608,11 +609,13 @@ fn prepare_zip_entry_for_comparison(
     entry_index: usize,
 ) -> Result<PreparedUploadPayload> {
     if request.source_markers[source_index].is_empty() {
+        let content_length = entry.size();
         let etag = hash_reader(entry)?;
         Ok(PreparedUploadPayload {
             payload: UploadPayload::ZipEntry {
                 archive,
                 entry_index,
+                content_length,
             },
             etag,
         })
@@ -716,7 +719,8 @@ async fn upload_payload(
         UploadPayload::ZipEntry {
             archive,
             entry_index,
-        } => zip_entry_body(archive, entry_index),
+            content_length,
+        } => zip_entry_body(archive, entry_index, content_length),
     };
 
     apply_put_metadata(builder, metadata, destination_key)
@@ -728,13 +732,13 @@ async fn upload_payload(
     Ok(())
 }
 
-fn zip_entry_body(archive: Arc<Vec<u8>>, entry_index: usize) -> ByteStream {
+fn zip_entry_body(archive: Arc<Vec<u8>>, entry_index: usize, content_length: u64) -> ByteStream {
     ByteStream::new(SdkBody::retryable(move || {
-        zip_entry_sdk_body(archive.clone(), entry_index)
+        zip_entry_sdk_body(archive.clone(), entry_index, content_length)
     }))
 }
 
-fn zip_entry_sdk_body(archive: Arc<Vec<u8>>, entry_index: usize) -> SdkBody {
+fn zip_entry_sdk_body(archive: Arc<Vec<u8>>, entry_index: usize, content_length: u64) -> SdkBody {
     let (sender, receiver) = tokio::sync::mpsc::channel(1);
 
     tokio::task::spawn_blocking(move || {
@@ -745,6 +749,7 @@ fn zip_entry_sdk_body(archive: Arc<Vec<u8>>, entry_index: usize) -> SdkBody {
 
     SdkBody::from_body_1_x(ReceiverBody {
         receiver: Mutex::new(receiver),
+        content_length,
     })
 }
 
@@ -783,6 +788,7 @@ fn boxed_body_error(error: impl StdError + Send + Sync + 'static) -> BodyError {
 
 struct ReceiverBody {
     receiver: Mutex<tokio::sync::mpsc::Receiver<std::result::Result<Bytes, BodyError>>>,
+    content_length: u64,
 }
 
 impl Body for ReceiverBody {
@@ -804,6 +810,10 @@ impl Body for ReceiverBody {
             Poll::Ready(None) => Poll::Ready(None),
             Poll::Pending => Poll::Pending,
         }
+    }
+
+    fn size_hint(&self) -> SizeHint {
+        SizeHint::with_exact(self.content_length)
     }
 }
 
