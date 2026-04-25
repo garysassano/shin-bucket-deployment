@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, HashMap};
 use std::error::Error as StdError;
-use std::io::{Cursor, Read};
+use std::fs::File;
+use std::io::Read;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::task::{Context as TaskContext, Poll};
@@ -12,9 +14,11 @@ use aws_sdk_s3::types::{Delete, MetadataDirective, ObjectIdentifier};
 use bytes::Bytes;
 use http_body::{Body, Frame, SizeHint};
 use md5::{Digest, Md5};
+use tokio::io::AsyncWriteExt;
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use tracing::{info, warn};
+use uuid::Uuid;
 use zip::ZipArchive;
 
 use crate::replace::replace_markers;
@@ -61,7 +65,7 @@ struct DestinationObject {
 enum UploadPayload {
     Bytes(Vec<u8>),
     ZipEntry {
-        archive: Arc<Vec<u8>>,
+        archive_path: Arc<PathBuf>,
         entry_index: usize,
         content_length: u64,
     },
@@ -209,7 +213,7 @@ async fn plan_deployment(
 
     for source_index in 0..request.source_bucket_names.len() {
         if request.extract {
-            let archive_bytes = download_source_zip(
+            let archive_path = download_source_zip(
                 state,
                 &request.source_bucket_names[source_index],
                 &request.source_object_keys[source_index],
@@ -217,11 +221,11 @@ async fn plan_deployment(
             .await?;
             let archive_index = archives.len();
             archives.push(SourceArchive {
-                bytes: Arc::new(archive_bytes),
+                path: Arc::new(archive_path),
             });
 
-            let cursor = Cursor::new(archives[archive_index].bytes.as_slice());
-            let mut zip = ZipArchive::new(cursor).context("failed to read zip archive")?;
+            let mut zip = open_zip_archive(&archives[archive_index].path)
+                .context("failed to read zip archive")?;
 
             for entry_index in 0..zip.len() {
                 let entry = zip.by_index(entry_index)?;
@@ -273,7 +277,7 @@ async fn plan_deployment(
     Ok((archives, manifest))
 }
 
-async fn download_source_zip(state: &AppState, bucket: &str, key: &str) -> Result<Vec<u8>> {
+async fn download_source_zip(state: &AppState, bucket: &str, key: &str) -> Result<PathBuf> {
     info!(bucket, key, "downloading source archive");
 
     let response = state
@@ -285,15 +289,30 @@ async fn download_source_zip(state: &AppState, bucket: &str, key: &str) -> Resul
         .await
         .with_context(|| format!("failed to download s3://{bucket}/{key}"))?;
 
-    let bytes = response
-        .body
-        .collect()
+    let archive_path = temporary_archive_path();
+    let mut archive_file = tokio::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&archive_path)
         .await
-        .context("failed to read source archive body")?
-        .into_bytes()
-        .to_vec();
+        .with_context(|| {
+            format!(
+                "failed to create temporary source archive {}",
+                archive_path.display()
+            )
+        })?;
+    let mut body = response.body.into_async_read();
 
-    Ok(bytes)
+    if let Err(error) = tokio::io::copy(&mut body, &mut archive_file).await {
+        let _ = tokio::fs::remove_file(&archive_path).await;
+        return Err(error).context("failed to write source archive body to temporary file");
+    }
+    archive_file
+        .flush()
+        .await
+        .context("failed to flush temporary source archive")?;
+
+    Ok(archive_path)
 }
 
 async fn source_object_etag(state: &AppState, bucket: &str, key: &str) -> Result<Option<String>> {
@@ -394,8 +413,8 @@ async fn upload_zip_entries(
     let mut tasks = JoinSet::new();
 
     for (archive_index, plans) in zip_plans {
-        let cursor = Cursor::new(archives[archive_index].bytes.as_slice());
-        let mut zip = ZipArchive::new(cursor).context("failed to reopen zip archive")?;
+        let mut zip = open_zip_archive(&archives[archive_index].path)
+            .context("failed to reopen zip archive")?;
 
         for plan in plans {
             let permit = semaphore
@@ -405,7 +424,7 @@ async fn upload_zip_entries(
                 .context("failed to acquire upload semaphore")?;
             let mut entry = zip.by_index(plan.entry_index)?;
             let prepared = prepare_zip_entry_for_comparison(
-                archives[archive_index].bytes.clone(),
+                archives[archive_index].path.clone(),
                 &mut entry,
                 request,
                 plan.source_index,
@@ -601,8 +620,23 @@ fn collect_zip_entry_plans(
     grouped
 }
 
+fn open_zip_archive(path: &Path) -> Result<ZipArchive<File>> {
+    let archive_file = File::open(path)
+        .with_context(|| format!("failed to open temporary source archive {}", path.display()))?;
+    ZipArchive::new(archive_file).context("failed to open zip archive")
+}
+
+fn temporary_archive_path() -> PathBuf {
+    let mut path = std::env::temp_dir();
+    path.push(format!(
+        "rust-bucket-deployment-source-{}.zip",
+        Uuid::new_v4()
+    ));
+    path
+}
+
 fn prepare_zip_entry_for_comparison(
-    archive: Arc<Vec<u8>>,
+    archive_path: Arc<PathBuf>,
     entry: &mut zip::read::ZipFile<'_, impl Read + ?Sized>,
     request: &DeploymentRequest,
     source_index: usize,
@@ -613,7 +647,7 @@ fn prepare_zip_entry_for_comparison(
         let etag = hash_reader(entry)?;
         Ok(PreparedUploadPayload {
             payload: UploadPayload::ZipEntry {
-                archive,
+                archive_path,
                 entry_index,
                 content_length,
             },
@@ -717,10 +751,10 @@ async fn upload_payload(
     let body = match payload {
         UploadPayload::Bytes(bytes) => ByteStream::from(bytes),
         UploadPayload::ZipEntry {
-            archive,
+            archive_path,
             entry_index,
             content_length,
-        } => zip_entry_body(archive, entry_index, content_length),
+        } => zip_entry_body(archive_path, entry_index, content_length),
     };
 
     apply_put_metadata(builder, metadata, destination_key)
@@ -732,17 +766,25 @@ async fn upload_payload(
     Ok(())
 }
 
-fn zip_entry_body(archive: Arc<Vec<u8>>, entry_index: usize, content_length: u64) -> ByteStream {
+fn zip_entry_body(
+    archive_path: Arc<PathBuf>,
+    entry_index: usize,
+    content_length: u64,
+) -> ByteStream {
     ByteStream::new(SdkBody::retryable(move || {
-        zip_entry_sdk_body(archive.clone(), entry_index, content_length)
+        zip_entry_sdk_body(archive_path.clone(), entry_index, content_length)
     }))
 }
 
-fn zip_entry_sdk_body(archive: Arc<Vec<u8>>, entry_index: usize, content_length: u64) -> SdkBody {
+fn zip_entry_sdk_body(
+    archive_path: Arc<PathBuf>,
+    entry_index: usize,
+    content_length: u64,
+) -> SdkBody {
     let (sender, receiver) = tokio::sync::mpsc::channel(1);
 
     tokio::task::spawn_blocking(move || {
-        if let Err(error) = send_zip_entry_chunks(archive, entry_index, sender.clone()) {
+        if let Err(error) = send_zip_entry_chunks(archive_path, entry_index, sender.clone()) {
             let _ = sender.blocking_send(Err(error));
         }
     });
@@ -754,12 +796,12 @@ fn zip_entry_sdk_body(archive: Arc<Vec<u8>>, entry_index: usize, content_length:
 }
 
 fn send_zip_entry_chunks(
-    archive: Arc<Vec<u8>>,
+    archive_path: Arc<PathBuf>,
     entry_index: usize,
     sender: tokio::sync::mpsc::Sender<std::result::Result<Bytes, BodyError>>,
 ) -> std::result::Result<(), BodyError> {
-    let cursor = Cursor::new(archive.as_slice());
-    let mut zip = ZipArchive::new(cursor).map_err(boxed_body_error)?;
+    let archive_file = File::open(archive_path.as_ref()).map_err(boxed_body_error)?;
+    let mut zip = ZipArchive::new(archive_file).map_err(boxed_body_error)?;
     let mut entry = zip.by_index(entry_index).map_err(boxed_body_error)?;
 
     loop {
