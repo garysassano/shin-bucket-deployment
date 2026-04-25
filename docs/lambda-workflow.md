@@ -158,6 +158,59 @@ flowchart LR
   L --> A
 ```
 
+## File Upload Handling
+
+The destination ETags are listed once per deployment after the source plan is built. They are stored in memory as a key-to-ETag map, not as the upload payload itself.
+
+```mermaid
+flowchart TD
+  A["Start S3 deployment"] --> B{"extract?"}
+
+  B -->|true| C["Download source zip into memory"]
+  C --> D["Walk archive entries"]
+  D --> E["Build source manifest: relative key -> zip entry location"]
+
+  B -->|false| F["HeadObject each source object"]
+  F --> G["Build source manifest: relative key -> source object + source ETag"]
+
+  E --> H["List destination prefix once with ListObjectsV2"]
+  G --> H
+  H --> I["Store destination objects in memory"]
+  I --> J["HashMap: relative key -> destination ETag"]
+  J --> K{"Planned item type"}
+
+  K -->|CopyObject extract=false| L["Read expected ETag from source HeadObject"]
+  L --> M{"Expected ETag equals destination ETag?"}
+  M -->|Yes| N["Skip CopyObject"]
+  M -->|No| O["CopyObject source to destination"]
+
+  K -->|Zip entry without markers| P["Open entry from in-memory archive"]
+  P --> Q["Read entry in 8 MiB chunks"]
+  Q --> R["Update MD5 incrementally"]
+  R --> S{"MD5 equals destination ETag?"}
+  S -->|Yes| T["Skip PutObject"]
+  S -->|No| U["Create retryable upload body"]
+  U --> V["Reopen entry from in-memory archive"]
+  V --> W["Stream PutObject body in 8 MiB chunks"]
+
+  K -->|Zip entry with markers| X["Read full entry into memory"]
+  X --> Y["Apply marker replacement"]
+  Y --> Z["Compute MD5 of replaced bytes"]
+  Z --> AA{"MD5 equals destination ETag?"}
+  AA -->|Yes| AB["Skip PutObject"]
+  AA -->|No| AC["PutObject replaced bytes from memory"]
+
+  O --> AD["Transfer concurrency bounded to 8"]
+  W --> AD
+  AC --> AD
+  N --> AE["Item complete"]
+  T --> AE
+  AB --> AE
+  AD --> AE
+```
+
+For plain zip entries, the handler does not load the whole entry into an upload buffer. It reads chunks to compute MD5, compares against the destination ETag map, and only if changed creates a streaming `PutObject` body that emits 8 MiB chunks. With 8 active upload streams, the queued chunk payloads are bounded by the transfer concurrency.
+
 ## Current Runtime Notes
 
 - Source zip archives are downloaded into Lambda memory and then opened as `ZipArchive` readers.
