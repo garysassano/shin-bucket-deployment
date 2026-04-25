@@ -157,18 +157,7 @@ When most files are unchanged, the optimization avoids unnecessary PUT/COPY work
 
 ## Validated Behavior
 
-| Capability | Status | Evidence |
-| --- | --- | --- |
-| TypeScript synth/build path | Done | `pnpm typecheck`, `pnpm build` |
-| Formatting/lint | Done | `pnpm lint` |
-| Replacement behavior | Done | Manual S3 verification on March 30, 2026 |
-| CloudFront invalidation with wait | Done | Manual deploy/update on April 10, 2026 |
-| CloudFront invalidation without wait | Done | Manual deploy/update on April 10, 2026 |
-| Include / exclude filters | Done | Manual deploy and S3 inspection on April 10, 2026 |
-| Metadata mapping | Done | Manual deploy and `head-object` inspection on April 10, 2026 |
-| Prune on update | Done | Manual v1/v2 deploy cycle on April 10, 2026 |
-| `retainOnDelete` update/delete semantics | Done | Manual deploy/update/destroy cycle on April 10-11, 2026 |
-| Validation/error branches | Done | Targeted Vitest synth/unit tests |
+Validation status changes over time as the provider Lambda changes. See [docs/validation.md](./docs/validation.md) for the prioritized validation plan, current run log, and historical manual validation notes.
 
 ## Example Stacks
 
