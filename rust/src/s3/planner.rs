@@ -26,6 +26,8 @@ pub(super) struct ZipEntryPlan {
     pub(super) source_index: usize,
     pub(super) relative_key: String,
     pub(super) destination_key: String,
+    pub(super) crc32: u32,
+    pub(super) size: u64,
 }
 
 pub(super) fn validate_request_lengths(request: &DeploymentRequest) -> Result<()> {
@@ -144,6 +146,8 @@ pub(super) fn collect_zip_entry_plans(
             archive_index,
             entry_index,
             source_index,
+            crc32,
+            size,
         } = planned.action
         {
             grouped
@@ -154,6 +158,8 @@ pub(super) fn collect_zip_entry_plans(
                     source_index,
                     relative_key: planned.relative_key.clone(),
                     destination_key: join_s3_key(destination_prefix, &planned.relative_key),
+                    crc32,
+                    size,
                 });
         }
     }
@@ -208,6 +214,8 @@ where
                     archive_index,
                     entry_index,
                     source_index,
+                    crc32: entry.crc32(),
+                    size: entry.size(),
                 },
             },
         );
@@ -273,10 +281,14 @@ mod tests {
                 archive_index,
                 entry_index,
                 source_index,
+                crc32,
+                size,
             } => {
                 assert_eq!(archive_index, 5);
                 assert_eq!(entry_index, 0);
                 assert_eq!(source_index, 6);
+                assert_eq!(crc32, 0xb61f_1169);
+                assert_eq!(size, 6);
             }
             PlannedAction::CopyObject { .. } => panic!("expected zip entry plan"),
         }

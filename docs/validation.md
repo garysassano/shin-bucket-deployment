@@ -10,8 +10,8 @@ Do not commit raw AWS run logs, local profile names, account IDs, resource IDs, 
 
 | Priority | Area | Coverage | How to validate | Last checked | Status |
 | --- | --- | --- | --- | --- | --- |
-| P0 | Rust provider tests | CloudFormation parsing, marker replacement, archive planning, destination prune planning, temp archive cleanup, chunked hashing, retryable body helpers. | `cargo test --manifest-path rust/Cargo.toml` | 2026-04-25 | Pass |
-| P0 | TypeScript tests | CDK synthesis, custom resource properties, unsupported prop validation, provider singleton behavior. | `pnpm test` | 2026-04-25 | Pass |
+| P0 | Rust provider tests | CloudFormation parsing, marker replacement, archive planning, destination prune planning, temp archive cleanup, chunked hashing, CRC32 encoding, retryable body helpers. | `cargo test --manifest-path rust/Cargo.toml` | 2026-04-26 | Pass |
+| P0 | TypeScript tests | CDK synthesis, custom resource properties, unsupported prop validation, provider singleton behavior. | `pnpm test` | 2026-04-26 | Pass |
 | P0 | Build and lint | Distributable construct build, type checking, repository lint rules. | `pnpm build`, `pnpm typecheck`, `pnpm lint` | 2026-04-25 | Pass |
 | P0 | Example synthesis | All example stacks synthesize from the public runner. | `pnpm example synth <example>` for every example in [examples.md](./examples.md) | 2026-04-25 | Pass |
 | P0 | Simple AWS deployment | Create, update, unchanged-object skip, and destroy for a plain static site. | Deploy, update, inspect, and destroy `simple` | 2026-04-25 | Pass |
@@ -36,4 +36,8 @@ Do not commit raw AWS run logs, local profile names, account IDs, resource IDs, 
 
 ## Backlog
 
-No validation gaps are currently tracked here. Add new gaps as they are identified, then promote them into the matrix when covered.
+These gaps should be promoted into the matrix as they get implemented and run.
+
+| Priority | Gap | Why it matters |
+| --- | --- | --- |
+| P1 | CRC32 skip path AWS rerun | Confirms marker-free unchanged files skip through zip CRC32 plus S3 `ChecksumCRC32`, and that uploads store explicit CRC32 checksums. |
