@@ -1,11 +1,11 @@
 use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 
 use aws_sdk_cloudfront::Client as CloudFrontClient;
 use aws_sdk_s3::Client as S3Client;
 use reqwest::Client as HttpClient;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use tempfile::NamedTempFile;
 
 #[derive(Clone)]
 pub(crate) struct AppState {
@@ -84,7 +84,7 @@ pub(crate) enum PlannedAction {
 pub(crate) type DeploymentManifest = BTreeMap<String, PlannedObject>;
 
 pub(crate) struct SourceArchive {
-    pub(crate) file: NamedTempFile,
+    pub(crate) bytes: Arc<Vec<u8>>,
 }
 
 pub(crate) struct ResponsePayload {

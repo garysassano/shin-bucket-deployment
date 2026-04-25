@@ -122,9 +122,9 @@ export class DemoStack extends Stack {
 - `extract=false` compares the source object's `ETag` with the destination object's `ETag`. If they match, the copy is skipped; otherwise the source object is copied with `CopyObject`.
 - `extract=true` downloads the source zip, walks entries from the archive, and uploads only objects whose planned content differs from the destination.
 - Zip entries with deploy-time replacements are rewritten in memory, because the final bytes are only known after replacement.
-- Zip entries without replacements up to 32 MiB are read into memory, hashed with MD5, compared to the destination `ETag`, and uploaded from memory only when changed.
-- Zip entries without replacements larger than 32 MiB are streamed once to compute MD5. If the destination `ETag` matches, the entry is skipped without using `/tmp`; if it differs, the entry is reopened and staged as a single temporary file for upload.
-- The handler never extracts the whole archive to disk. At most one large changed zip entry is staged in `/tmp` at a time.
+- Zip entries without replacements are read in 8 MiB chunks while computing MD5. If changed, the upload body is streamed to S3 in 8 MiB chunks instead of building a full per-object upload buffer.
+- The handler never extracts the whole archive to disk and does not stage zip entries in `/tmp`.
+- The provider Lambda defaults to 256 MiB of memory and runs up to 8 S3 transfers in parallel. For plain zip-entry uploads, the handler queues one 8 MiB chunk per active upload stream.
 
 ### Update and delete behavior
 
@@ -141,7 +141,7 @@ The `ETag` skip path is intentionally narrow. It is optimized for simple static 
 Supported by the optimization:
 
 - Plain static assets uploaded as single-part objects.
-- Zip entries without replacements, using in-memory comparison up to 32 MiB and streaming MD5 comparison above 32 MiB.
+- Zip entries without replacements, using 8 MiB read chunks for MD5 comparison and changed-object upload streaming.
 - Zip entries with deploy-time replacements, after the replacement output is computed in memory.
 - `extract=false` source object copies, when the source and destination `ETag` values match.
 
@@ -150,9 +150,10 @@ Not supported by the optimization:
 - Metadata-only changes. If bytes are unchanged but `cacheControl`, `contentType`, custom metadata, storage class, encryption, or other object attributes need to change, matching `ETag` values can cause the upload/copy to be skipped.
 - Multipart uploads or multipart copies, because their S3 `ETag` is not the plain MD5 of the object bytes.
 - SSE-KMS or SSE-C objects, or any other S3 mode where the `ETag` is not a reliable MD5 content hash.
+- Very large source archives or replacement-expanded entries that are too large for the configured Lambda memory. Increase `memoryLimit` for larger static sites.
 - Cases that need byte-range reads or custom backend semantics. This construct targets S3 static asset deployment, not a general sync framework.
 
-When most files are unchanged, the optimization avoids unnecessary PUT/COPY work and avoids rewriting unchanged zip entries to `/tmp`. When most files are changed, the runtime still has to read and hash archive entries before uploading them, so the value should be validated with your asset mix if deployment time is critical.
+When most files are unchanged, the optimization avoids unnecessary PUT/COPY work. When most files are changed, the runtime still has to read and hash archive entries before uploading them, so the value should be validated with your asset mix if deployment time is critical.
 
 ## Validated Behavior
 
