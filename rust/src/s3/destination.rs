@@ -111,18 +111,16 @@ pub(super) async fn plan_destination(
 
         for object in response.contents() {
             let Some(key) = object.key() else { continue };
-            let relative_key = strip_destination_prefix(strip_prefix, key);
-            if relative_key.is_empty() {
-                continue;
-            }
-            let etag = object.e_tag().and_then(normalize_etag);
-            objects.insert(relative_key.clone(), DestinationObject { etag });
-            if !filters.should_include(&relative_key) {
-                continue;
-            }
-            if request.prune && !manifest.contains_key(&relative_key) {
-                keys_to_delete.push(key.to_string());
-            }
+            record_destination_object(
+                key,
+                object.e_tag(),
+                strip_prefix,
+                filters,
+                manifest,
+                request.prune,
+                &mut objects,
+                &mut keys_to_delete,
+            );
         }
 
         let last_key = response
@@ -221,9 +219,44 @@ fn namespace_list_prefix(prefix: &str) -> Option<String> {
     Some(normalized)
 }
 
+fn record_destination_object(
+    key: &str,
+    etag: Option<&str>,
+    strip_prefix: &str,
+    filters: &Filters,
+    manifest: &DeploymentManifest,
+    prune: bool,
+    objects: &mut HashMap<String, DestinationObject>,
+    keys_to_delete: &mut Vec<String>,
+) {
+    let relative_key = strip_destination_prefix(strip_prefix, key);
+    if relative_key.is_empty() {
+        return;
+    }
+
+    objects.insert(
+        relative_key.clone(),
+        DestinationObject {
+            etag: etag.and_then(normalize_etag),
+        },
+    );
+    if !filters.should_include(&relative_key) {
+        return;
+    }
+    if prune && !manifest.contains_key(&relative_key) {
+        keys_to_delete.push(key.to_string());
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{namespace_list_prefix, normalize_etag};
+    use std::collections::HashMap;
+
+    use super::{
+        DestinationObject, namespace_list_prefix, normalize_etag, record_destination_object,
+    };
+    use crate::request::compile_filters;
+    use crate::types::{DeploymentManifest, PlannedAction, PlannedObject};
 
     #[test]
     fn namespace_list_prefix_adds_trailing_slash() {
@@ -243,5 +276,90 @@ mod tests {
     #[test]
     fn normalize_etag_strips_quotes_and_lowercases() {
         assert_eq!(normalize_etag("\"A1B2C3\""), Some("a1b2c3".to_string()));
+    }
+
+    #[test]
+    fn destination_entry_records_etag_and_queues_missing_manifest_key_for_prune() {
+        let filters = compile_filters(&[], &[]).unwrap();
+        let manifest = DeploymentManifest::new();
+        let mut objects = HashMap::<String, DestinationObject>::new();
+        let mut keys_to_delete = Vec::new();
+
+        record_destination_object(
+            "site/old.txt",
+            Some("\"ABC123\""),
+            "site/",
+            &filters,
+            &manifest,
+            true,
+            &mut objects,
+            &mut keys_to_delete,
+        );
+
+        assert_eq!(objects["old.txt"].etag.as_deref(), Some("abc123"));
+        assert_eq!(keys_to_delete, vec!["site/old.txt".to_string()]);
+    }
+
+    #[test]
+    fn destination_entry_keeps_manifest_key_and_excluded_key_out_of_delete_list() {
+        let filters = compile_filters(&["*.map".to_string()], &[]).unwrap();
+        let mut manifest = DeploymentManifest::new();
+        manifest.insert(
+            "keep.txt".to_string(),
+            PlannedObject {
+                relative_key: "keep.txt".to_string(),
+                expected_etag: None,
+                action: PlannedAction::CopyObject { source_index: 0 },
+            },
+        );
+        let mut objects = HashMap::<String, DestinationObject>::new();
+        let mut keys_to_delete = Vec::new();
+
+        record_destination_object(
+            "site/keep.txt",
+            None,
+            "site/",
+            &filters,
+            &manifest,
+            true,
+            &mut objects,
+            &mut keys_to_delete,
+        );
+        record_destination_object(
+            "site/debug.map",
+            None,
+            "site/",
+            &filters,
+            &manifest,
+            true,
+            &mut objects,
+            &mut keys_to_delete,
+        );
+
+        assert!(objects.contains_key("keep.txt"));
+        assert!(objects.contains_key("debug.map"));
+        assert!(keys_to_delete.is_empty());
+    }
+
+    #[test]
+    fn destination_entry_ignores_empty_relative_key() {
+        let filters = compile_filters(&[], &[]).unwrap();
+        let manifest = DeploymentManifest::new();
+        let mut objects = HashMap::<String, DestinationObject>::new();
+        let mut keys_to_delete = Vec::new();
+
+        record_destination_object(
+            "site/",
+            None,
+            "site/",
+            &filters,
+            &manifest,
+            true,
+            &mut objects,
+            &mut keys_to_delete,
+        );
+
+        assert!(objects.is_empty());
+        assert!(keys_to_delete.is_empty());
     }
 }
