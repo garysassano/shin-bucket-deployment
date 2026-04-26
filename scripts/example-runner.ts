@@ -27,6 +27,10 @@ const EXAMPLES = {
     file: "metadata-filters-app.js",
     stackHint: "RustBucketDeploymentMetadataFiltersDemo",
   },
+  "benchmark-assets": {
+    file: "benchmark-assets-app.js",
+    stackHint: "RustBucketDeploymentBenchmarkAssetsDemo",
+  },
   "prune-update": {
     file: "prune-update-v2-app.js",
     stackHint: "RustBucketDeploymentPruneUpdateDemo",
