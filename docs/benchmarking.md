@@ -8,19 +8,19 @@ Keep this benchmark harness identical on both branches before comparing results.
 
 The generator writes deterministic files under `.benchmark-assets/`, which is ignored by git.
 
-| Profile | Shape | Intended signal |
-| --- | --- | --- |
-| `tiny-many` | Thousands of small JS, CSS, and JSON files. | Shows whether per-object API overhead dominates. |
-| `mixed` | SPA-like bundle with JS chunks, source maps, JSON, media, and fonts. | Best default for realistic static-site behavior. |
-| `large-few` | Fewer large JS, map, and media files. | Shows whether CRC32 avoids expensive local hashing. |
+| Profile     | Shape                                                                | Intended signal                                     |
+| ----------- | -------------------------------------------------------------------- | --------------------------------------------------- |
+| `tiny-many` | Thousands of small JS, CSS, and JSON files.                          | Shows whether per-object API overhead dominates.    |
+| `mixed`     | SPA-like bundle with JS chunks, source maps, JSON, media, and fonts. | Best default for realistic static-site behavior.    |
+| `large-few` | Fewer large JS, map, and media files.                                | Shows whether CRC32 avoids expensive local hashing. |
 
 Variants:
 
-| Variant | Behavior |
-| --- | --- |
-| `v1` | Baseline bundle. |
-| `v2` | Same file set and sizes, with a few changed files. |
-| `pruned` | Removes about ten percent of files. |
+| Variant  | Behavior                                           |
+| -------- | -------------------------------------------------- |
+| `v1`     | Baseline bundle.                                   |
+| `v2`     | Same file set and sizes, with a few changed files. |
+| `pruned` | Removes about ten percent of files.                |
 
 ## Commands
 
@@ -94,9 +94,33 @@ Run each unchanged redeploy at least five times and compare median plus p90. The
 
 Run date: 2026-04-26. Profile: `mixed`. Variant: `v1`. Bundle: 442 files, 52,904,649 bytes. Both test stacks were destroyed after the run.
 
-| Branch | Provider cold create | Unchanged update 1 | Unchanged update 2 | Max memory |
-| --- | ---: | ---: | ---: | ---: |
-| `crc32` | 40.63 s | 3.00 s | 3.37 s | 100 MB |
-| `pre-crc32` | 55.85 s | 1.83 s | 1.81 s | 158 MB |
+| Branch      | Provider cold create | Unchanged update 1 | Unchanged update 2 | Max memory |
+| ----------- | -------------------: | -----------------: | -----------------: | ---------: |
+| `crc32`     |              40.63 s |             3.00 s |             3.37 s |     100 MB |
+| `pre-crc32` |              55.85 s |             1.83 s |             1.81 s |     158 MB |
 
-On this mixed bundle, CRC32 improved cold-create provider duration and memory, but unchanged redeploys were slower than the MD5/ETag path. The likely reason is that the CRC32 path pays one checksum-mode `HeadObject` per unchanged object, while the old path hashes the local zip entries directly. This points toward a size threshold before using remote checksum reads.
+On this mixed bundle, CRC32 improved cold-create provider duration and memory, but unchanged redeploys were slower than the MD5/ETag path. The likely reason is that the CRC32 path pays one checksum-mode `HeadObject` per unchanged object, while the old path hashes the local zip entries directly. The implementation now uses `REMOTE_CHECKSUM_MIN_BYTES = 8 MiB` so smaller files use local MD5/ETag comparison instead of remote checksum reads.
+
+## V2 AWS Result
+
+Run date: 2026-04-26. Branch: `v2`. Commit: `f767885`. Profile: `mixed`. Variant: `v1`. Bundle: 442 files, 52,904,649 bytes. Stack suffix: `V2`. The benchmark stack was destroyed after the run.
+
+| Run         | CDK deploy time | Local wall time | Provider duration | Billed duration | Max memory |
+| ----------- | --------------: | --------------: | ----------------: | --------------: | ---------: |
+| Cold create |         60.57 s |         91.48 s |           2.636 s |         2.809 s |     113 MB |
+| Unchanged 1 |         16.17 s |         23.03 s |           0.793 s |         0.793 s |     113 MB |
+| Unchanged 2 |         21.48 s |         27.15 s |           0.740 s |         0.741 s |     113 MB |
+| Unchanged 3 |         21.89 s |         27.53 s |           0.748 s |         0.749 s |     113 MB |
+| Unchanged 4 |         22.42 s |         27.24 s |           0.743 s |         0.743 s |     113 MB |
+| Unchanged 5 |         23.10 s |         28.82 s |           0.739 s |         0.739 s |     113 MB |
+
+Unchanged redeploy summary:
+
+| Metric            |  Median |     p90 |
+| ----------------- | ------: | ------: |
+| CDK deploy time   | 21.89 s | 23.10 s |
+| Local wall time   | 27.24 s | 28.82 s |
+| Provider duration | 0.743 s | 0.793 s |
+| Billed duration   | 0.743 s | 0.793 s |
+
+The `v2` branch result reflects the hybrid skip strategy: files below `REMOTE_CHECKSUM_MIN_BYTES = 8 MiB` avoid checksum-mode `HeadObject` and use local MD5/ETag comparison, while larger marker-free entries can still use S3 CRC32 when compatible checksum metadata is available.
