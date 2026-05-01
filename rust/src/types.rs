@@ -1,5 +1,4 @@
 use std::collections::{BTreeMap, HashMap};
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use aws_sdk_cloudfront::Client as CloudFrontClient;
@@ -10,7 +9,8 @@ use serde_json::{Map, Value};
 
 #[derive(Clone)]
 pub(crate) struct AppState {
-    pub(crate) s3: S3Client,
+    pub(crate) source_s3: S3Client,
+    pub(crate) destination_s3: S3Client,
     pub(crate) cloudfront: CloudFrontClient,
     pub(crate) http: HttpClient,
 }
@@ -109,57 +109,24 @@ pub(crate) enum PlannedAction {
     },
     ZipEntry {
         archive_index: usize,
-        entry_index: usize,
         source_index: usize,
         crc32: u32,
         size: u64,
+        compressed_size: u64,
+        compression_code: u16,
+        source_offset: u64,
+        source_span_end: u64,
     },
 }
 
 pub(crate) type DeploymentManifest = BTreeMap<String, PlannedObject>;
 
 pub(crate) struct SourceArchive {
-    pub(crate) path: Arc<PathBuf>,
-}
-
-impl Drop for SourceArchive {
-    fn drop(&mut self) {
-        if let Err(error) = std::fs::remove_file(self.path.as_ref()) {
-            tracing::warn!(
-                path = %self.path.display(),
-                error = %error,
-                "failed to remove temporary source archive"
-            );
-        }
-    }
+    pub(crate) source: Arc<crate::s3::archive::SourceClient>,
 }
 
 pub(crate) struct ResponsePayload {
     pub(crate) physical_resource_id: String,
     pub(crate) reason: Option<String>,
     pub(crate) data: Map<String, Value>,
-}
-
-#[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-
-    use super::SourceArchive;
-
-    #[test]
-    fn source_archive_removes_temporary_file_on_drop() {
-        let mut path = std::env::temp_dir();
-        path.push(format!(
-            "rust-bucket-deployment-drop-test-{}",
-            uuid::Uuid::new_v4()
-        ));
-        std::fs::write(&path, b"temporary archive").unwrap();
-
-        let archive = SourceArchive {
-            path: Arc::new(path.clone()),
-        };
-        drop(archive);
-
-        assert!(!path.exists());
-    }
 }

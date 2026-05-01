@@ -72,11 +72,11 @@ Unsupported upstream props:
 | `expires` | Prefer `cacheControl` for deployment-time cache behavior. |
 | `serverSideEncryptionCustomerAlgorithm` | SSE-C is intentionally not implemented; use SSE-S3 or SSE-KMS. |
 | `signContent` | The provider uses AWS SDK calls directly, not the upstream AWS CLI upload path. |
-| `useEfs` | Increase `ephemeralStorageSize` instead; the provider works from Lambda `/tmp`. |
+| `useEfs` | The provider reads source archives with S3 ranges and does not use EFS. |
 
 ## How It Works
 
-For `extract=true`, the provider streams each source zip from S3 to a temporary file in Lambda `/tmp`, walks the archive entries, applies filters, and builds the deployment plan from the archive contents. It does not extract the whole archive to a working directory.
+For `extract=true`, the provider reads each source zip's central directory with ranged S3 `GetObject` requests, walks the archive entries, applies filters, and builds the deployment plan from the archive contents. It does not download the whole archive and does not write the archive or extracted entries to Lambda `/tmp`.
 
 For `extract=false`, each source object is copied directly with S3 `CopyObject`.
 
@@ -96,7 +96,7 @@ Uploads or copies may not be skipped correctly for metadata-only changes, multip
 
 Zip entries with deploy-time marker replacements are fully materialized in memory after replacement so the final bytes can be hashed and uploaded. Plain zip entries are read and uploaded in chunks.
 
-Large source archives must fit in Lambda ephemeral storage. Large replacement-expanded entries must fit in Lambda memory.
+Large replacement-expanded entries must fit in Lambda memory. Source archives are read with S3 ranges and do not need to fit in memory or ephemeral storage.
 
 This construct targets static asset deployment to S3. It is not a general-purpose sync engine and does not provide byte-range diffing, persistent manifests, or non-S3 backend behavior.
 

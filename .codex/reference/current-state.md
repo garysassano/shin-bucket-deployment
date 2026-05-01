@@ -21,6 +21,7 @@ the AWS CLI. The handler:
 - skips unchanged single-part static assets,
 - uploads changed objects with up to 8 parallel transfers,
 - computes MD5 for zip entries in 8 MiB chunks,
+- reads source archives and zip entries with ranged S3 `GetObject`,
 - avoids extracting the full archive to disk,
 - uses in-memory replacement bytes for entries with deploy-time markers,
 - prunes destination keys when `prune=true`,

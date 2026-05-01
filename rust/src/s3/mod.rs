@@ -3,7 +3,7 @@ use anyhow::Result;
 use crate::request::compile_filters;
 use crate::types::{AppState, DeploymentRequest, ObjectMetadata};
 
-mod archive;
+pub(crate) mod archive;
 mod destination;
 mod metadata;
 mod planner;
@@ -12,6 +12,9 @@ mod transfer;
 pub(crate) use destination::{bucket_owned, delete_prefix};
 
 const MAX_PARALLEL_TRANSFERS: usize = 8;
+const SOURCE_BLOCK_BYTES: usize = 8 * 1024 * 1024;
+const SOURCE_BLOCK_MERGE_GAP_BYTES: usize = 256 * 1024;
+const SOURCE_WINDOW_BYTES: usize = 64 * 1024 * 1024;
 const ZIP_ENTRY_READ_CHUNK_BYTES: usize = 8 * 1024 * 1024;
 
 pub(crate) async fn deploy(state: &AppState, request: &DeploymentRequest) -> Result<()> {

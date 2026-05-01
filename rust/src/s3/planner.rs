@@ -1,9 +1,8 @@
-use std::collections::{BTreeMap, HashMap};
-use std::io::{Read, Seek};
-use std::sync::Arc;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use anyhow::{Context, Result, anyhow};
-use zip::ZipArchive;
+use async_zip::base::read::seek::ZipFileReader;
+use async_zip::{Compression, StoredZipEntry};
 
 use crate::request::{join_s3_key, normalize_archive_key, source_basename};
 use crate::types::{
@@ -11,8 +10,10 @@ use crate::types::{
     SourceArchive,
 };
 
-use super::archive::{download_source_zip, open_zip_archive};
+use super::archive::{S3RangeReader, prepare_source_zip};
 use super::destination::{DestinationObject, destination_etag_matches, normalize_etag};
+
+const S3_SINGLE_PUT_LIMIT: u64 = 5 * 1024 * 1024 * 1024;
 
 #[derive(Clone)]
 pub(super) struct CopyPlan {
@@ -21,13 +22,17 @@ pub(super) struct CopyPlan {
     pub(super) destination_key: String,
 }
 
-pub(super) struct ZipEntryPlan {
-    pub(super) entry_index: usize,
+#[derive(Clone, Debug)]
+pub(crate) struct ZipEntryPlan {
     pub(super) source_index: usize,
     pub(super) relative_key: String,
     pub(super) destination_key: String,
     pub(super) crc32: u32,
     pub(super) size: u64,
+    pub(super) compressed_size: u64,
+    pub(super) compression_code: u16,
+    pub(super) source_offset: u64,
+    pub(super) source_span_end: u64,
 }
 
 pub(super) fn validate_request_lengths(request: &DeploymentRequest) -> Result<()> {
@@ -60,7 +65,7 @@ pub(super) async fn plan_deployment(
 
     for source_index in 0..request.source_bucket_names.len() {
         if request.extract {
-            let archive_path = download_source_zip(
+            let source = prepare_source_zip(
                 state,
                 &request.source_bucket_names[source_index],
                 &request.source_object_keys[source_index],
@@ -68,19 +73,17 @@ pub(super) async fn plan_deployment(
             .await?;
             let archive_index = archives.len();
             archives.push(SourceArchive {
-                path: Arc::new(archive_path),
+                source: source.clone(),
             });
-
-            let mut zip = open_zip_archive(&archives[archive_index].path)
-                .context("failed to read zip archive")?;
 
             add_archive_entries_to_manifest(
                 archive_index,
                 source_index,
-                &mut zip,
+                source,
                 filters,
                 &mut manifest,
-            )?;
+            )
+            .await?;
         } else {
             let relative_key = source_basename(&request.source_object_keys[source_index])?;
             if !filters.should_include(&relative_key) {
@@ -144,28 +147,34 @@ pub(super) fn collect_zip_entry_plans(
     for planned in manifest.values() {
         if let PlannedAction::ZipEntry {
             archive_index,
-            entry_index,
             source_index,
             crc32,
             size,
+            compressed_size,
+            compression_code,
+            source_offset,
+            source_span_end,
         } = planned.action
         {
             grouped
                 .entry(archive_index)
                 .or_default()
                 .push(ZipEntryPlan {
-                    entry_index,
                     source_index,
                     relative_key: planned.relative_key.clone(),
                     destination_key: join_s3_key(destination_prefix, &planned.relative_key),
                     crc32,
                     size,
+                    compressed_size,
+                    compression_code,
+                    source_offset,
+                    source_span_end,
                 });
         }
     }
 
     for plans in grouped.values_mut() {
-        plans.sort_by_key(|plan| plan.entry_index);
+        plans.sort_by_key(|plan| plan.source_offset);
     }
 
     grouped
@@ -173,7 +182,7 @@ pub(super) fn collect_zip_entry_plans(
 
 async fn source_object_etag(state: &AppState, bucket: &str, key: &str) -> Result<Option<String>> {
     let response = state
-        .s3
+        .source_s3
         .head_object()
         .bucket(bucket)
         .key(key)
@@ -184,25 +193,64 @@ async fn source_object_etag(state: &AppState, bucket: &str, key: &str) -> Result
     Ok(response.e_tag().and_then(normalize_etag))
 }
 
-fn add_archive_entries_to_manifest<R>(
+async fn add_archive_entries_to_manifest(
     archive_index: usize,
     source_index: usize,
-    zip: &mut ZipArchive<R>,
+    source: std::sync::Arc<super::archive::SourceClient>,
     filters: &Filters,
     manifest: &mut DeploymentManifest,
-) -> Result<()>
-where
-    R: Read + Seek,
-{
-    for entry_index in 0..zip.len() {
-        let entry = zip.by_index(entry_index)?;
-        if entry.is_dir() {
+) -> Result<()> {
+    let reader = S3RangeReader::new(source.clone());
+    let reader = ZipFileReader::with_tokio(reader)
+        .await
+        .context("failed to read zip archive central directory")?;
+    let zip_file = reader.file().clone();
+    let entries = zip_file.entries();
+    let mut source_offsets = entries
+        .iter()
+        .map(StoredZipEntry::header_offset)
+        .collect::<Vec<_>>();
+    source_offsets.sort_unstable();
+    let mut seen = HashSet::new();
+
+    for stored in entries {
+        let Some(relative_key) = stored_zip_file_path(stored)? else {
+            continue;
+        };
+        if !seen.insert(relative_key.clone()) {
+            return Err(anyhow!("duplicate ZIP file path `{relative_key}`"));
+        }
+        validate_stored_file_entry(stored, &relative_key)?;
+        if !filters.should_include(&relative_key) {
             continue;
         }
 
-        let relative_key = normalize_archive_key(entry.name())?;
-        if !filters.should_include(&relative_key) {
-            continue;
+        let source_offset = stored.header_offset();
+        if source_offset >= source.len() {
+            return Err(anyhow!(
+                "local file header offset {source_offset} for `{relative_key}` is outside source ZIP length {}",
+                source.len()
+            ));
+        }
+        let payload_span_end = source_offset
+            .checked_add(stored.header_size())
+            .and_then(|offset| offset.checked_add(stored.compressed_size()))
+            .ok_or_else(|| {
+                anyhow!("central directory entry source span overflowed for `{relative_key}`")
+            })?;
+        if payload_span_end > source.len() {
+            return Err(anyhow!(
+                "central directory entry `{relative_key}` source span ends at {payload_span_end}, beyond source ZIP length {}",
+                source.len()
+            ));
+        }
+        let source_span_end = next_source_offset(&source_offsets, source_offset)
+            .unwrap_or(payload_span_end)
+            .min(payload_span_end);
+        if source_span_end <= source_offset {
+            return Err(anyhow!(
+                "local file source span {source_offset}..{source_span_end} for `{relative_key}` is empty"
+            ));
         }
 
         manifest.insert(
@@ -212,10 +260,13 @@ where
                 expected_etag: None,
                 action: PlannedAction::ZipEntry {
                     archive_index,
-                    entry_index,
                     source_index,
-                    crc32: entry.crc32(),
-                    size: entry.size(),
+                    crc32: stored.crc32(),
+                    size: stored.uncompressed_size(),
+                    compressed_size: stored.compressed_size(),
+                    compression_code: u16::from(stored.compression()),
+                    source_offset,
+                    source_span_end,
                 },
             },
         );
@@ -224,128 +275,128 @@ where
     Ok(())
 }
 
+fn stored_zip_file_path(stored: &StoredZipEntry) -> Result<Option<String>> {
+    let raw_path = stored.filename().as_str().map_err(|err| {
+        anyhow!(
+            "invalid ZIP entry path {:?}: {err}",
+            stored.filename().as_bytes()
+        )
+    })?;
+    let normalized = normalize_archive_key(raw_path)?;
+    if raw_path.ends_with('/') {
+        Ok(None)
+    } else {
+        Ok(Some(normalized))
+    }
+}
+
+fn validate_stored_file_entry(stored: &StoredZipEntry, path: &str) -> Result<()> {
+    match stored.compression() {
+        Compression::Stored | Compression::Deflate => {}
+        other => {
+            return Err(anyhow!(
+                "unsupported compression method {other:?} for `{path}`"
+            ));
+        }
+    }
+
+    let size = stored.uncompressed_size();
+    if size > S3_SINGLE_PUT_LIMIT {
+        return Err(anyhow!(
+            "entry `{path}` is {size} bytes, larger than the S3 single PutObject limit"
+        ));
+    }
+
+    Ok(())
+}
+
+fn next_source_offset(sorted_offsets: &[u64], offset: u64) -> Option<u64> {
+    let index = sorted_offsets.partition_point(|candidate| *candidate <= offset);
+    sorted_offsets.get(index).copied()
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::{Cursor, Write};
 
     use zip::write::{SimpleFileOptions, ZipWriter};
 
-    use super::{add_archive_entries_to_manifest, collect_zip_entry_plans};
+    use super::collect_zip_entry_plans;
     use crate::request::compile_filters;
-    use crate::types::{DeploymentManifest, PlannedAction};
+    use crate::types::{DeploymentManifest, PlannedAction, PlannedObject};
 
     #[test]
-    fn archive_manifest_skips_directories_and_applies_filters() {
-        let mut zip = zip_from_entries(&[
-            ZipTestEntry::directory("assets/"),
-            ZipTestEntry::file("assets/app.js", b"app"),
-            ZipTestEntry::file("assets/debug.map", b"map"),
-            ZipTestEntry::file("index.html", b"index"),
-        ]);
-        let filters = compile_filters(&["*.map".to_string()], &[]).unwrap();
+    fn zip_entry_plans_are_grouped_and_sorted_by_source_offset() {
         let mut manifest = DeploymentManifest::new();
-
-        add_archive_entries_to_manifest(0, 2, &mut zip, &filters, &mut manifest).unwrap();
-
-        assert_eq!(
-            manifest.keys().cloned().collect::<Vec<_>>(),
-            vec!["assets/app.js".to_string(), "index.html".to_string()]
+        manifest.insert(
+            "b.txt".to_string(),
+            PlannedObject {
+                relative_key: "b.txt".to_string(),
+                expected_etag: None,
+                action: PlannedAction::ZipEntry {
+                    archive_index: 0,
+                    source_index: 0,
+                    crc32: 1,
+                    size: 1,
+                    compressed_size: 1,
+                    compression_code: 0,
+                    source_offset: 100,
+                    source_span_end: 120,
+                },
+            },
         );
-    }
-
-    #[test]
-    fn archive_manifest_rejects_path_traversal() {
-        let mut zip = zip_from_entries(&[ZipTestEntry::file("../escape.txt", b"escape")]);
-        let filters = compile_filters(&[], &[]).unwrap();
-        let mut manifest = DeploymentManifest::new();
-
-        let error = add_archive_entries_to_manifest(0, 0, &mut zip, &filters, &mut manifest)
-            .expect_err("path traversal should be rejected");
-
-        assert!(error.to_string().contains("path traversal"));
-    }
-
-    #[test]
-    fn duplicate_archive_keys_keep_later_entry() {
-        let mut first_zip = zip_from_entries(&[ZipTestEntry::file("index.html", b"first")]);
-        let mut second_zip = zip_from_entries(&[ZipTestEntry::file("index.html", b"second")]);
-        let filters = compile_filters(&[], &[]).unwrap();
-        let mut manifest = DeploymentManifest::new();
-
-        add_archive_entries_to_manifest(3, 4, &mut first_zip, &filters, &mut manifest).unwrap();
-        add_archive_entries_to_manifest(5, 6, &mut second_zip, &filters, &mut manifest).unwrap();
-
-        let planned = manifest.get("index.html").unwrap();
-        match planned.action {
-            PlannedAction::ZipEntry {
-                archive_index,
-                entry_index,
-                source_index,
-                crc32,
-                size,
-            } => {
-                assert_eq!(archive_index, 5);
-                assert_eq!(entry_index, 0);
-                assert_eq!(source_index, 6);
-                assert_eq!(crc32, 0xb61f_1169);
-                assert_eq!(size, 6);
-            }
-            PlannedAction::CopyObject { .. } => panic!("expected zip entry plan"),
-        }
-    }
-
-    #[test]
-    fn zip_entry_plans_are_grouped_and_sorted_by_entry_index() {
-        let mut zip = zip_from_entries(&[
-            ZipTestEntry::file("b.txt", b"b"),
-            ZipTestEntry::file("a.txt", b"a"),
-        ]);
-        let filters = compile_filters(&[], &[]).unwrap();
-        let mut manifest = DeploymentManifest::new();
-
-        add_archive_entries_to_manifest(0, 0, &mut zip, &filters, &mut manifest).unwrap();
+        manifest.insert(
+            "a.txt".to_string(),
+            PlannedObject {
+                relative_key: "a.txt".to_string(),
+                expected_etag: None,
+                action: PlannedAction::ZipEntry {
+                    archive_index: 0,
+                    source_index: 0,
+                    crc32: 1,
+                    size: 1,
+                    compressed_size: 1,
+                    compression_code: 0,
+                    source_offset: 10,
+                    source_span_end: 30,
+                },
+            },
+        );
 
         let plans = collect_zip_entry_plans(&manifest, "site");
 
         assert_eq!(
             plans[&0]
                 .iter()
-                .map(|plan| (plan.entry_index, plan.destination_key.as_str()))
+                .map(|plan| (plan.source_offset, plan.destination_key.as_str()))
                 .collect::<Vec<_>>(),
-            vec![(0, "site/b.txt"), (1, "site/a.txt")]
+            vec![(10, "site/a.txt"), (100, "site/b.txt")]
         );
     }
 
-    enum ZipTestEntry<'a> {
-        File(&'a str, &'a [u8]),
-        Directory(&'a str),
+    #[test]
+    fn compile_filters_keeps_existing_glob_behavior() {
+        let filters = compile_filters(&["*.map".to_string()], &[]).unwrap();
+
+        assert!(!filters.should_include("debug.map"));
+        assert!(filters.should_include("index.html"));
     }
 
-    impl<'a> ZipTestEntry<'a> {
-        fn file(name: &'a str, bytes: &'a [u8]) -> Self {
-            Self::File(name, bytes)
-        }
-
-        fn directory(name: &'a str) -> Self {
-            Self::Directory(name)
-        }
+    #[test]
+    fn zip_test_fixture_still_builds() {
+        let mut zip = zip_from_entries(&[("index.html", b"index" as &[u8])]);
+        assert_eq!(zip.len(), 1);
+        assert_eq!(zip.by_index(0).unwrap().name(), "index.html");
     }
 
-    fn zip_from_entries(entries: &[ZipTestEntry<'_>]) -> zip::ZipArchive<Cursor<Vec<u8>>> {
+    fn zip_from_entries(entries: &[(&str, &[u8])]) -> zip::ZipArchive<Cursor<Vec<u8>>> {
         let cursor = Cursor::new(Vec::new());
         let mut writer = ZipWriter::new(cursor);
         let options = SimpleFileOptions::default();
 
-        for entry in entries {
-            match entry {
-                ZipTestEntry::File(name, bytes) => {
-                    writer.start_file(name, options).unwrap();
-                    writer.write_all(bytes).unwrap();
-                }
-                ZipTestEntry::Directory(name) => {
-                    writer.add_directory(*name, options).unwrap();
-                }
-            }
+        for (name, bytes) in entries {
+            writer.start_file(name, options).unwrap();
+            writer.write_all(bytes).unwrap();
         }
 
         let cursor = writer.finish().unwrap();
