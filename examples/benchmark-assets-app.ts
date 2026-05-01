@@ -1,7 +1,7 @@
 import { App, CfnOutput, RemovalPolicy, Stack, type StackProps } from "aws-cdk-lib";
 import { Bucket } from "aws-cdk-lib/aws-s3";
-import { RustBucketDeployment, Source } from "../src";
 import { ensureBenchmarkAssets } from "../scripts/benchmark-assets";
+import { RustBucketDeployment, Source } from "../src";
 
 class BenchmarkAssetsRustBucketDeploymentStack extends Stack {
   constructor(scope: App, id: string, props?: StackProps) {

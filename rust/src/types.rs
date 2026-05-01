@@ -110,7 +110,6 @@ pub(crate) enum PlannedAction {
     ZipEntry {
         archive_index: usize,
         source_index: usize,
-        crc32: u32,
         size: u64,
         compressed_size: u64,
         compression_code: u16,

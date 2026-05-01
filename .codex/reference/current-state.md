@@ -1,60 +1,32 @@
 # Current State
 
-This folder is intentionally kept small. Project-facing documentation lives in:
+This folder is intentionally small. Project-facing documentation lives in:
 
 - `README.md`
-- `docs/lambda-workflow.md`
+- `docs/architecture.md`
 - `docs/validation.md`
-- `docs/examples.md`
+- `docs/benchmarking.md`
 
 ## Implementation
 
-`RustBucketDeployment` is a local prototype of a Rust-backed alternative to CDK's
-`BucketDeployment`.
+`RustBucketDeployment` is a local prototype of a Rust-backed alternative to CDK's `BucketDeployment`.
 
-The current runtime is a custom AWS SDK-based deployment engine, not `s3sync` and not
-the AWS CLI. The handler:
+The current provider is a custom AWS SDK-based deployment engine, not `s3sync` and not the AWS CLI. The handler plans objects from CDK source archives, reads extracted ZIP sources with ranged S3 `GetObject`, avoids full archive staging in Lambda `/tmp`, lists the destination prefix once, skips unchanged objects when destination metadata is sufficient, uploads changed extracted objects with conditional `PutObject`, copies `extract=false` sources with `CopyObject`, prunes destination keys when requested, and handles optional CloudFront invalidations.
 
-- plans objects directly from source archives,
-- lists the destination prefix with `ListObjectsV2`,
-- compares planned content against destination `ETag` values,
-- skips unchanged single-part static assets,
-- uploads changed objects with up to 8 parallel transfers,
-- computes MD5 for zip entries in 8 MiB chunks,
-- reads source archives and zip entries with ranged S3 `GetObject`,
-- avoids extracting the full archive to disk,
-- uses in-memory replacement bytes for entries with deploy-time markers,
-- prunes destination keys when `prune=true`,
-- handles CloudFront invalidations in sync or async mode.
+The provider Lambda defaults to 256 MiB memory. The unchanged-object optimization is intentionally narrow: existing ZIP entries are read through ranged source blocks, hashed with MD5, and compared with destination `ETag` values. Metadata-only changes, multipart objects, SSE-KMS/SSE-C ETag semantics, and arbitrary sync backends are outside that optimization.
 
-The provider Lambda defaults to 256 MiB memory. The ETag optimization is intentionally
-narrow: it assumes simple static website assets where S3 `ETag` is the MD5 of the
-object bytes. Metadata-only changes, multipart uploads/copies, SSE-KMS/SSE-C ETag
-semantics, and arbitrary sync backends are outside that optimization.
+## Current Focus
 
-## Important AWS validation notes
+The repository docs have been consolidated into fewer source-of-truth files. The next engineering focus is benchmark and validation depth:
 
-AWS validation with profile `gary-test` on 2026-04-25 covered:
+- add sanitized provider telemetry for every deployment phase
+- automate benchmark runs across deterministic asset profiles
+- collect CloudFormation, Lambda, S3, and destination-state evidence
+- rerun AWS validations against the current ranged no-disk engine
+- investigate cataloged asset packaging for metadata-only sparse-update skips
 
-- simple deploy/update/destroy,
-- unchanged-object skip behavior,
-- metadata and include/exclude filters,
-- prune update behavior,
-- retain-on-delete update/delete behavior,
-- CloudFront invalidation with and without waiting.
+## Validation Notes
 
-The replacement behavior AWS run found a real parser bug: nested
-`markerConfig.jsonEscape` can arrive from CloudFormation as string `"true"`. The
-Rust parser now accepts bool-like strings for that nested field and has a regression
-test.
+Durable validation status and runbooks are in `docs/validation.md`. Benchmark strategy and historical benchmark context are in `docs/benchmarking.md`.
 
-The failed replacement test stack was left in AWS as
-`RustBucketDeploymentReplacementBehaviorDemo` in `DELETE_IN_PROGRESS` after force
-delete was requested. Check `docs/validation.md` before rerunning replacement AWS
-validation.
-
-## Removed stale references
-
-The old analysis and roadmap files in this folder predated the implemented runtime
-and were removed to avoid preserving outdated assumptions, especially around a
-manifest cache, `s3sync`, temp staging, and unvalidated manual status.
+Do not store raw AWS logs, profile names, account IDs, resource IDs, ETags, bucket names, distribution IDs, or incident-specific stack names in this folder.
