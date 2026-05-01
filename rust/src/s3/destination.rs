@@ -26,7 +26,7 @@ pub(crate) async fn delete_prefix(state: &AppState, bucket: &str, prefix: &str) 
 
     loop {
         let response = state
-            .s3
+            .destination_s3
             .list_objects_v2()
             .bucket(bucket)
             .set_prefix(list_prefix.clone())
@@ -66,7 +66,13 @@ pub(crate) async fn bucket_owned(state: &AppState, bucket: &str, prefix: &str) -
         format!("aws-cdk:cr-owned:{prefix}")
     };
 
-    match state.s3.get_bucket_tagging().bucket(bucket).send().await {
+    match state
+        .destination_s3
+        .get_bucket_tagging()
+        .bucket(bucket)
+        .send()
+        .await
+    {
         Ok(response) => Ok(response
             .tag_set()
             .iter()
@@ -104,7 +110,7 @@ pub(super) async fn plan_destination(
 
     loop {
         let response = state
-            .s3
+            .destination_s3
             .list_objects_v2()
             .bucket(&request.dest_bucket_name)
             .set_prefix(list_prefix.clone())
@@ -164,7 +170,7 @@ pub(super) async fn delete_keys(state: &AppState, bucket: &str, keys: &[String])
             .build()?;
 
         let response = state
-            .s3
+            .destination_s3
             .delete_objects()
             .bucket(bucket)
             .delete(delete)

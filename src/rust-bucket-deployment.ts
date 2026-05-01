@@ -12,6 +12,7 @@ import type {
   SourceConfig,
 } from "aws-cdk-lib/aws-s3-deployment";
 import { ValidationError } from "aws-cdk-lib/core/lib/errors";
+import type { LiteralString } from "aws-cdk-lib/core/lib/private/literal-string";
 import { type BundlingOptions as CargoLambdaBundlingOptions, RustFunction } from "cargo-lambda-cdk";
 import { Construct } from "constructs";
 
@@ -75,7 +76,7 @@ export class RustBucketDeployment extends Construct {
     if (props.distributionPaths) {
       if (!props.distribution) {
         throw new ValidationError(
-          "DistributionSpecifiedDistributionPathsSpecified",
+          literalString("DistributionSpecifiedDistributionPathsSpecified"),
           "Distribution must be specified if distribution paths are specified",
           this,
         );
@@ -88,7 +89,7 @@ export class RustBucketDeployment extends Construct {
           )
         ) {
           throw new ValidationError(
-            "DistributionPathsStart",
+            literalString("DistributionPathsStart"),
             'Distribution paths must start with "/"',
             this,
           );
@@ -98,15 +99,15 @@ export class RustBucketDeployment extends Construct {
 
     if (maybeUnsupported.useEfs) {
       throw new ValidationError(
-        "RustBucketDeploymentUseEfsUnsupported",
-        "RustBucketDeployment does not support useEfs. Increase ephemeralStorageSize instead.",
+        literalString("RustBucketDeploymentUseEfsUnsupported"),
+        "RustBucketDeployment does not support useEfs; the provider keeps source archives in Lambda memory.",
         this,
       );
     }
 
     if (maybeUnsupported.signContent) {
       throw new ValidationError(
-        "RustBucketDeploymentSignContentUnsupported",
+        literalString("RustBucketDeploymentSignContentUnsupported"),
         "RustBucketDeployment does not support signContent in this prototype.",
         this,
       );
@@ -114,7 +115,7 @@ export class RustBucketDeployment extends Construct {
 
     if (maybeUnsupported.serverSideEncryptionCustomerAlgorithm) {
       throw new ValidationError(
-        "RustBucketDeploymentSseCustomerAlgorithmUnsupported",
+        literalString("RustBucketDeploymentSseCustomerAlgorithmUnsupported"),
         "RustBucketDeployment does not support serverSideEncryptionCustomerAlgorithm in this prototype.",
         this,
       );
@@ -122,7 +123,7 @@ export class RustBucketDeployment extends Construct {
 
     if (maybeUnsupported.expires) {
       throw new ValidationError(
-        "RustBucketDeploymentExpiresUnsupported",
+        literalString("RustBucketDeploymentExpiresUnsupported"),
         "RustBucketDeployment does not support expires in this prototype.",
         this,
       );
@@ -141,7 +142,7 @@ export class RustBucketDeployment extends Construct {
     const handlerRole = this.handlerFunction.role;
     if (!handlerRole) {
       throw new ValidationError(
-        "RustBucketDeploymentHandlerRole",
+        literalString("RustBucketDeploymentHandlerRole"),
         "lambda.Function should have created a Role",
         this,
       );
@@ -258,7 +259,7 @@ export class RustBucketDeployment extends Construct {
 
     if (!Token.isUnresolved(tagKey) && tagKey.length > 128) {
       throw new ValidationError(
-        "RustBucketDeploymentConstructRequiresDestination",
+        literalString("RustBucketDeploymentConstructRequiresDestination"),
         "The destinationKeyPrefix must be <=104 characters.",
         this,
       );
@@ -302,7 +303,7 @@ function resolveDefaultRustProjectPath(scope: Construct): string {
   }
 
   throw new ValidationError(
-    "RustBucketDeploymentRustProjectPath",
+    literalString("RustBucketDeploymentRustProjectPath"),
     "Unable to locate rust/Cargo.toml. Pass rustProjectPath explicitly.",
     scope,
   );
@@ -327,7 +328,7 @@ function getOrCreateHandler(
   if (existing) {
     if (!(existing instanceof RustFunction)) {
       throw new ValidationError(
-        "RustBucketDeploymentHandlerCollision",
+        literalString("RustBucketDeploymentHandlerCollision"),
         `Found non-RustFunction child for shared handler id ${handlerId}.`,
         scope,
       );
@@ -425,6 +426,10 @@ function normalizeSingletonValue(value: unknown): unknown {
 
 function stableStringify(value: unknown): string {
   return JSON.stringify(normalizeSingletonValue(value));
+}
+
+function literalString(value: string): LiteralString {
+  return value as LiteralString;
 }
 
 function sourceConfigEqual(stack: Stack, a: SourceConfig, b: SourceConfig) {

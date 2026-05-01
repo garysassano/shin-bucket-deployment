@@ -18,7 +18,7 @@ The provider skips a marker-free entry when:
 - destination checksum type is `FULL_OBJECT`
 - destination `ChecksumCRC32` equals the zip entry CRC32 encoded as base64 big-endian bytes
 
-If the object is missing, the size differs, or the CRC32 differs, the provider streams the zip entry to `PutObject` once. The upload includes the zip entry CRC32 as `x-amz-checksum-crc32`, so S3 validates the object during upload and stores the checksum for future deployments.
+If the object is missing, the size differs, or the CRC32 differs, the provider streams the zip entry to `PutObject` once. Missing entries use `If-None-Match: *`; changed existing entries use `If-Match` with the ETag observed during destination listing. The upload includes the zip entry CRC32 as `x-amz-checksum-crc32`, so S3 validates the object during upload and stores the checksum for future deployments.
 
 If checksum metadata is unavailable or checksum-mode `HeadObject` cannot be used, the provider falls back to the older `ETag` path: it reads the zip entry in chunks, computes MD5, compares it with the destination `ETag`, and only reopens the archive entry for upload if changed.
 

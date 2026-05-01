@@ -10,6 +10,7 @@ use std::sync::Arc;
 use aws_config::BehaviorVersion;
 use aws_sdk_cloudfront::Client as CloudFrontClient;
 use aws_sdk_s3::Client as S3Client;
+use aws_sdk_s3::config::StalledStreamProtectionConfig;
 use lambda_runtime::{Error, service_fn};
 use reqwest::Client as HttpClient;
 
@@ -26,8 +27,20 @@ async fn main() -> Result<(), Error> {
         .init();
 
     let config = aws_config::defaults(BehaviorVersion::latest()).load().await;
+    let source_s3 = S3Client::new(&config);
+    let destination_s3 = S3Client::from_conf(
+        aws_sdk_s3::config::Builder::from(&config)
+            .stalled_stream_protection(
+                StalledStreamProtectionConfig::enabled()
+                    .upload_enabled(false)
+                    .download_enabled(true)
+                    .build(),
+            )
+            .build(),
+    );
     let state = Arc::new(AppState {
-        s3: S3Client::new(&config),
+        source_s3,
+        destination_s3,
         cloudfront: CloudFrontClient::new(&config),
         http: HttpClient::new(),
     });

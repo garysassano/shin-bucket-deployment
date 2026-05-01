@@ -1,15 +1,15 @@
 use std::collections::{BTreeMap, HashMap};
-use std::io::Read;
-use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::{ChecksumAlgorithm, ChecksumMode, ChecksumType, MetadataDirective};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use crc32fast::Hasher as Crc32Hasher;
 use md5::{Digest as Md5Digest, Md5};
+use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use tracing::warn;
@@ -17,7 +17,7 @@ use tracing::warn;
 use crate::replace::replace_markers;
 use crate::types::{AppState, DeploymentRequest, MarkerConfig, ObjectMetadata, SourceArchive};
 
-use super::archive::{open_zip_archive, zip_entry_body};
+use super::archive::{SourceBlockStore, ZipEntryAsyncReader, zip_entry_body};
 use super::destination::DestinationObject;
 use super::metadata::{apply_copy_metadata, apply_put_metadata};
 use super::planner::{CopyPlan, ZipEntryPlan};
@@ -29,11 +29,16 @@ enum UploadPayload {
         checksum_crc32: String,
     },
     ZipEntry {
-        archive_path: Arc<PathBuf>,
-        entry_index: usize,
+        store: Arc<SourceBlockStore>,
+        plan: ZipEntryPlan,
         content_length: u64,
         checksum_crc32: String,
     },
+}
+
+enum PutCondition {
+    IfNoneMatch,
+    IfMatch(String),
 }
 
 struct PreparedUploadPayload {
@@ -89,13 +94,15 @@ pub(super) async fn upload_zip_entries(
     let mut tasks = JoinSet::new();
 
     for (archive_index, plans) in zip_plans {
+        let source = archives[archive_index].source.clone();
+        let store = SourceBlockStore::new(source, &plans);
         for plan in plans {
             let permit = semaphore
                 .clone()
                 .acquire_owned()
                 .await
                 .context("failed to acquire upload semaphore")?;
-            let archive_path = archives[archive_index].path.clone();
+            let store = store.clone();
             let state = state.clone();
             let metadata = metadata.clone();
             let destination_bucket = request.dest_bucket_name.clone();
@@ -108,7 +115,7 @@ pub(super) async fn upload_zip_entries(
                 let Some(payload) = prepare_zip_entry_upload(
                     &state,
                     &destination_bucket,
-                    &archive_path,
+                    &store,
                     &plan,
                     &source_markers,
                     &source_marker_config,
@@ -124,6 +131,7 @@ pub(super) async fn upload_zip_entries(
                     &destination_bucket,
                     &plan.destination_key,
                     &metadata,
+                    put_condition(destination_object.as_ref())?,
                     payload,
                 )
                 .await
@@ -137,7 +145,7 @@ pub(super) async fn upload_zip_entries(
 async fn prepare_zip_entry_upload(
     state: &AppState,
     destination_bucket: &str,
-    archive_path: &Arc<PathBuf>,
+    store: &Arc<SourceBlockStore>,
     plan: &ZipEntryPlan,
     source_markers: &HashMap<String, String>,
     source_marker_config: &MarkerConfig,
@@ -157,8 +165,8 @@ async fn prepare_zip_entry_upload(
             Some(true) => return Ok(None),
             Some(false) => {
                 return Ok(Some(UploadPayload::ZipEntry {
-                    archive_path: archive_path.clone(),
-                    entry_index: plan.entry_index,
+                    store: store.clone(),
+                    plan: plan.clone(),
                     content_length: plan.size,
                     checksum_crc32: crc32_base64(plan.crc32),
                 }));
@@ -167,15 +175,9 @@ async fn prepare_zip_entry_upload(
         }
     }
 
-    let mut zip = open_zip_archive(archive_path).context("failed to reopen zip archive")?;
-    let mut entry = zip.by_index(plan.entry_index)?;
-    let prepared = prepare_zip_entry_for_comparison(
-        archive_path.clone(),
-        &mut entry,
-        source_markers,
-        source_marker_config,
-        plan.entry_index,
-    )?;
+    let prepared =
+        prepare_zip_entry_for_comparison(store.clone(), plan, source_markers, source_marker_config)
+            .await?;
 
     if destination_object_etag_matches(destination_object, &prepared.etag) {
         return Ok(None);
@@ -206,7 +208,7 @@ async fn copy_source_object(
     );
 
     let builder = state
-        .s3
+        .destination_s3
         .copy_object()
         .bucket(destination_bucket)
         .key(destination_key)
@@ -224,27 +226,31 @@ async fn copy_source_object(
     Ok(())
 }
 
-fn prepare_zip_entry_for_comparison(
-    archive_path: Arc<PathBuf>,
-    entry: &mut zip::read::ZipFile<'_, impl Read + ?Sized>,
+async fn prepare_zip_entry_for_comparison(
+    store: Arc<SourceBlockStore>,
+    plan: &ZipEntryPlan,
     source_markers: &HashMap<String, String>,
     source_marker_config: &MarkerConfig,
-    entry_index: usize,
 ) -> Result<PreparedUploadPayload> {
     if source_markers.is_empty() {
-        let content_length = entry.size();
-        let etag = hash_reader(entry)?;
+        let etag = hash_async_reader(Box::pin(ZipEntryAsyncReader::new(
+            store.clone(),
+            plan.clone(),
+        )))
+        .await?;
         Ok(PreparedUploadPayload {
             payload: UploadPayload::ZipEntry {
-                archive_path,
-                entry_index,
-                content_length,
-                checksum_crc32: crc32_base64(entry.crc32()),
+                store,
+                plan: plan.clone(),
+                content_length: plan.size,
+                checksum_crc32: crc32_base64(plan.crc32),
             },
             etag,
         })
     } else {
-        let bytes = read_reader_to_vec(entry, entry.size() as usize)?;
+        let bytes =
+            read_async_reader_to_vec(Box::pin(ZipEntryAsyncReader::new(store, plan.clone())))
+                .await?;
         let replaced = replace_markers(bytes, source_markers, source_marker_config)?;
         let etag = md5_hex(&replaced);
         let checksum_crc32 = crc32_base64(crc32_bytes(&replaced));
@@ -263,13 +269,19 @@ async fn upload_payload(
     destination_bucket: &str,
     destination_key: &str,
     metadata: &ObjectMetadata,
+    condition: PutCondition,
     payload: UploadPayload,
 ) -> Result<()> {
     let mut builder = state
-        .s3
+        .destination_s3
         .put_object()
         .bucket(destination_bucket)
         .key(destination_key);
+
+    builder = match condition {
+        PutCondition::IfNoneMatch => builder.if_none_match("*"),
+        PutCondition::IfMatch(etag) => builder.if_match(etag),
+    };
 
     let body = match payload {
         UploadPayload::Bytes {
@@ -280,13 +292,13 @@ async fn upload_payload(
             ByteStream::from(bytes)
         }
         UploadPayload::ZipEntry {
-            archive_path,
-            entry_index,
+            store,
+            plan,
             content_length,
             checksum_crc32,
         } => {
             builder = builder.checksum_crc32(checksum_crc32);
-            zip_entry_body(archive_path, entry_index, content_length)
+            zip_entry_body(store, plan, content_length)
         }
     };
 
@@ -304,6 +316,17 @@ fn destination_object_etag_matches(
     expected_etag: &str,
 ) -> bool {
     destination_object.and_then(|object| object.etag.as_deref()) == Some(expected_etag)
+}
+
+fn put_condition(destination_object: Option<&DestinationObject>) -> Result<PutCondition> {
+    match destination_object {
+        None => Ok(PutCondition::IfNoneMatch),
+        Some(object) => object
+            .etag
+            .clone()
+            .map(PutCondition::IfMatch)
+            .ok_or_else(|| anyhow!("destination object exists but was listed without an ETag")),
+    }
 }
 
 async fn marker_free_entry_matches_destination(
@@ -327,7 +350,7 @@ async fn marker_free_entry_matches_destination(
     }
 
     let response = match state
-        .s3
+        .destination_s3
         .head_object()
         .bucket(destination_bucket)
         .key(destination_key)
@@ -364,34 +387,27 @@ async fn marker_free_entry_matches_destination(
         .or(Some(false)))
 }
 
-fn hash_reader<R>(reader: &mut R) -> Result<String>
-where
-    R: Read,
-{
+async fn hash_async_reader(mut reader: Pin<Box<dyn AsyncRead + Send>>) -> Result<String> {
     let mut hasher = Md5::new();
     let mut buffer = vec![0; ZIP_ENTRY_READ_CHUNK_BYTES];
 
     loop {
-        let bytes_read = reader.read(&mut buffer)?;
+        let bytes_read = reader.read(&mut buffer).await?;
         if bytes_read == 0 {
             break;
         }
-        let chunk = &buffer[..bytes_read];
-        hasher.update(chunk);
+        hasher.update(&buffer[..bytes_read]);
     }
 
     Ok(finalize_md5(hasher))
 }
 
-fn read_reader_to_vec<R>(reader: &mut R, capacity: usize) -> Result<Vec<u8>>
-where
-    R: Read,
-{
-    let mut bytes = Vec::with_capacity(capacity);
+async fn read_async_reader_to_vec(mut reader: Pin<Box<dyn AsyncRead + Send>>) -> Result<Vec<u8>> {
+    let mut bytes = Vec::new();
     let mut buffer = vec![0; ZIP_ENTRY_READ_CHUNK_BYTES];
 
     loop {
-        let bytes_read = reader.read(&mut buffer)?;
+        let bytes_read = reader.read(&mut buffer).await?;
         if bytes_read == 0 {
             break;
         }
@@ -431,7 +447,7 @@ async fn join_transfer_tasks(mut tasks: JoinSet<Result<()>>) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{crc32_base64, crc32_bytes, hash_reader, md5_hex, read_reader_to_vec};
+    use super::{crc32_base64, crc32_bytes, md5_hex};
 
     #[test]
     fn md5_hex_matches_known_digest() {
@@ -439,24 +455,6 @@ mod tests {
             md5_hex(b"hello"),
             "5d41402abc4b2a76b9719d911017c592".to_string()
         );
-    }
-
-    #[test]
-    fn hash_reader_returns_digest() {
-        let mut reader = &b"large asset bytes"[..];
-
-        let etag = hash_reader(&mut reader).unwrap();
-
-        assert_eq!(etag, md5_hex(b"large asset bytes"));
-    }
-
-    #[test]
-    fn read_reader_to_vec_returns_bytes() {
-        let mut reader = &b"replacement asset bytes"[..];
-
-        let bytes = read_reader_to_vec(&mut reader, 23).unwrap();
-
-        assert_eq!(bytes, b"replacement asset bytes");
     }
 
     #[test]

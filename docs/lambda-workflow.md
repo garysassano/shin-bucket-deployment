@@ -19,7 +19,7 @@ The diagrams below use GitHub-flavored Markdown Mermaid code blocks instead of s
 ```mermaid
 flowchart TD
   A["Lambda cold start"] --> B["Load AWS config"]
-  B --> C["Create shared clients: S3, CloudFront, HTTP"]
+  B --> C["Create clients: source S3, destination S3, CloudFront, HTTP"]
   C --> D["Register lambda_runtime service_fn"]
   D --> E["Receive CloudFormation custom resource event"]
   E --> F["Deserialize event into typed CloudFormation request"]
@@ -78,10 +78,10 @@ flowchart TD
   C --> D["Build object metadata from request"]
   D --> E{"extract?"}
 
-  E -->|true| F["For each source object: GetObject source zip"]
-  F --> G["Stream source zip to /tmp"]
-  G --> H["Open ZipArchive from temporary file"]
-  H --> I["Walk zip entries"]
+  E -->|true| F["For each source object: HeadObject source zip"]
+  F --> G["Read central directory with ranged GetObject"]
+  G --> H["Walk ZIP central directory entries"]
+  H --> I["Build source manifest"]
   I --> J{"Entry is file and passes filters?"}
   J -->|No| I
   J -->|Yes| K["Add planned ZipEntry with archive index, entry index, CRC32, and size"]
@@ -108,8 +108,8 @@ flowchart TD
   W --> Y
 
   T -->|true| Z["Group zip entries by source archive"]
-  Z --> AA["Open ZipArchive from temporary archive file"]
-  AA --> AB["Read planned entry"]
+  Z --> AA["Open planned entry from S3 ranges"]
+  AA --> AB["Stream/decompress planned entry"]
   AB --> AC{"Source has deploy-time markers?"}
 
   AC -->|Yes| AD["Read full entry into memory"]
@@ -117,7 +117,7 @@ flowchart TD
   AE --> AF["MD5 and CRC32 final replaced bytes"]
   AF --> AG{"MD5 equals destination ETag?"}
   AG -->|Yes| AH["Skip PutObject"]
-  AG -->|No| AI["PutObject replaced bytes with x-amz-checksum-crc32"]
+  AG -->|No| AI["Conditional PutObject replaced bytes with x-amz-checksum-crc32"]
 
   AC -->|No| AJ{"Destination size and CRC32 metadata can be checked?"}
   AJ -->|Yes| AK["HeadObject with ChecksumMode=Enabled"]
@@ -128,7 +128,7 @@ flowchart TD
   AO --> AP{"MD5 equals destination ETag?"}
   AP -->|Yes| AM
   AP -->|No| AN
-  AN --> AQ["Stream entry to S3 in 8 MiB chunks"]
+  AN --> AQ["Stream entry to conditional PutObject in 8 MiB chunks"]
 
   AI --> AR["Run uploads with up to 8 parallel transfers"]
   AQ --> AR
@@ -175,8 +175,8 @@ The destination objects are listed once per deployment after the source plan is 
 flowchart TD
   A["Start S3 deployment"] --> B{"extract?"}
 
-  B -->|true| C["Stream source zip to /tmp"]
-  C --> D["Walk archive entries"]
+  B -->|true| C["Read central directory with ranged GetObject"]
+  C --> D["Walk central directory entries"]
   D --> E["Build source manifest: relative key -> zip entry location"]
 
   B -->|false| F["HeadObject each source object"]
@@ -202,14 +202,14 @@ flowchart TD
   V --> W{"MD5 equals destination ETag?"}
   W -->|Yes| T
   W -->|No| U
-  U --> X["Stream PutObject body from temporary archive file"]
+  U --> X["Stream PutObject body from S3 ranges"]
 
   K -->|Zip entry with markers| Y["Read full entry into memory"]
   Y --> Z["Apply marker replacement"]
   Z --> AA["Compute MD5 and CRC32 of replaced bytes"]
   AA --> AB{"MD5 equals destination ETag?"}
   AB -->|Yes| AC["Skip PutObject"]
-  AB -->|No| AD["PutObject replaced bytes with x-amz-checksum-crc32"]
+  AB -->|No| AD["Conditional PutObject replaced bytes with x-amz-checksum-crc32"]
 
   O --> AE["Copy/checksum/upload concurrency bounded to 8"]
   X --> AE
@@ -220,15 +220,15 @@ flowchart TD
   AE --> AF
 ```
 
-For plain zip entries, the handler prefers zip CRC32 plus uncompressed size against S3 full-object CRC32 metadata. When that is available, unchanged entries are skipped without decompressing the entry. If checksum metadata is unavailable, it falls back to reading chunks to compute MD5, compares against the destination ETag map, and only if changed creates a streaming `PutObject` body that emits 8 MiB chunks. Checksum reads, fallback hashing, and uploads run inside the bounded transfer task pool.
+For plain zip entries, the handler prefers zip CRC32 plus uncompressed size against S3 full-object CRC32 metadata. When that is available, unchanged entries are skipped without decompressing the entry. If checksum metadata is unavailable, it falls back to reading chunks to compute MD5, compares against the destination ETag map, and only if changed creates a streaming `PutObject` body that emits 8 MiB chunks. Missing extracted objects use `If-None-Match: *`; changed existing extracted objects use `If-Match` with the ETag from the destination listing. Checksum reads, fallback hashing, and uploads run inside the bounded transfer task pool.
 
 ## Current Runtime Notes
 
-- Source zip archives are streamed to temporary files in Lambda `/tmp` and then opened as `ZipArchive` readers.
-- Plain zip entries use zip CRC32 and S3 checksum metadata when available. If changed, the upload stream reopens the entry from the temporary archive file and sends one 8 MiB chunk at a time with `x-amz-checksum-crc32`.
-- The upload stream is retryable because the body can be rebuilt from the retained temporary source archive.
+- Source zip central directories are read through ranged S3 `GetObject`; the full source ZIP is not downloaded or stored in memory.
+- Plain zip entries use zip CRC32 and S3 checksum metadata when available. If changed, the upload stream reopens the entry from S3 ranges and sends one 8 MiB chunk at a time with `x-amz-checksum-crc32`.
+- The upload stream is retryable because the body can be rebuilt from ranged source reads.
 - Zip entries with deploy-time replacements are still fully materialized in memory after replacement, because the final bytes must be known before computing the ETag/CRC32 and uploading.
-- The handler does not extract the archive to disk and does not stage individual zip entries in `/tmp`.
+- The handler does not write the source archive or extracted entries to disk.
 - Copy, checksum read, fallback hash, and upload work is bounded by `MAX_PARALLEL_TRANSFERS = 8`.
 - `prune=true` lists the destination prefix and deletes destination objects that are not in the planned source set.
 - CloudFront invalidation is created after S3 deployment or delete handling; if waiting is enabled, the handler polls until completion or timeout.
