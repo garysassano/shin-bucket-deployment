@@ -27,7 +27,6 @@ pub(crate) struct ZipEntryPlan {
     pub(super) source_index: usize,
     pub(super) relative_key: String,
     pub(super) destination_key: String,
-    pub(super) crc32: u32,
     pub(super) size: u64,
     pub(super) compressed_size: u64,
     pub(super) compression_code: u16,
@@ -148,7 +147,6 @@ pub(super) fn collect_zip_entry_plans(
         if let PlannedAction::ZipEntry {
             archive_index,
             source_index,
-            crc32,
             size,
             compressed_size,
             compression_code,
@@ -163,7 +161,6 @@ pub(super) fn collect_zip_entry_plans(
                     source_index,
                     relative_key: planned.relative_key.clone(),
                     destination_key: join_s3_key(destination_prefix, &planned.relative_key),
-                    crc32,
                     size,
                     compressed_size,
                     compression_code,
@@ -261,7 +258,6 @@ async fn add_archive_entries_to_manifest(
                 action: PlannedAction::ZipEntry {
                     archive_index,
                     source_index,
-                    crc32: stored.crc32(),
                     size: stored.uncompressed_size(),
                     compressed_size: stored.compressed_size(),
                     compression_code: u16::from(stored.compression()),
@@ -336,7 +332,6 @@ mod tests {
                 action: PlannedAction::ZipEntry {
                     archive_index: 0,
                     source_index: 0,
-                    crc32: 1,
                     size: 1,
                     compressed_size: 1,
                     compression_code: 0,
@@ -353,7 +348,6 @@ mod tests {
                 action: PlannedAction::ZipEntry {
                     archive_index: 0,
                     source_index: 0,
-                    crc32: 1,
                     size: 1,
                     compressed_size: 1,
                     compression_code: 0,
