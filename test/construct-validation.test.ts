@@ -131,6 +131,9 @@ describe("RustBucketDeployment validation and option coverage", () => {
         Statement: Match.arrayWith([
           Match.objectLike({
             Action: ["cloudfront:GetInvalidation", "cloudfront:CreateInvalidation"],
+            Resource: {
+              "Fn::Join": Match.anyValue(),
+            },
           }),
         ]),
       },
