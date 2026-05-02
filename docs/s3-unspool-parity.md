@@ -10,9 +10,9 @@ This document tracks how `RustBucketDeployment` maps `s3-unspool` ideas into the
 | Avoid full ZIP download | Implemented. The provider reads central-directory and entry ranges instead of loading the whole archive. |
 | Avoid Lambda `/tmp` archive extraction | Implemented. Source archives and extracted entries are not staged on disk. |
 | Separate source and destination S3 clients | Implemented. Source ranged reads and destination writes use separate SDK clients. |
-| Coalesce source byte spans into larger blocks | Implemented with configurable `sourceBlockBytes` and `sourceBlockMergeGapBytes`. |
-| Bound resident source block memory | Implemented with configurable `sourceWindowBytes` or an adaptive memory-derived window. |
-| Prefetch source blocks | Implemented with configurable or memory-derived `sourceGetConcurrency`. |
+| Coalesce source byte spans into larger blocks | Implemented with advanced `sourceBlockBytes` and `sourceBlockMergeGapBytes` tuning. |
+| Bound resident source block memory | Implemented with advanced `sourceWindowBytes` tuning or an adaptive memory-derived window. |
+| Prefetch source blocks | Implemented with advanced or memory-derived `sourceGetConcurrency` tuning. |
 | Track reader claims and release blocks | Implemented. Blocks stay resident while claimed and are released after active readers finish. |
 | Retryable entry upload bodies | Implemented. ZIP entry bodies can be reopened from source blocks, and replay claims are added for retries and hash-then-upload paths. |
 | Decompress ZIP entries from ranged source data | Implemented for stored and deflated entries. |
@@ -48,7 +48,7 @@ This document tracks how `RustBucketDeployment` maps `s3-unspool` ideas into the
 | --- | --- |
 | Public API | This is a CDK construct, not a standalone S3 sync library or CLI. |
 | Report model | The provider returns CloudFormation custom-resource responses, not a full `s3-unspool` operation report. |
-| Tuning surface | Runtime tuning is exposed as CDK props on `RustBucketDeployment`, not as a standalone `s3-unspool` CLI/API options object. |
+| Tuning surface | Normal runtime tuning is intentionally small: `memoryLimit` plus `maxParallelTransfers`. Source block/window and retry internals are grouped under `advancedRuntimeTuning` as escape hatches, not as prominent top-level props. |
 | Asset production | Cataloged ZIPs are produced by this construct's `Source.asset` wrapper for local directories. `s3-unspool` can produce catalogs through its own upload/build tooling. |
 | Marker replacement | Catalog MD5s are ignored for marker sources because final bytes are only known at deploy time. |
 | Destination write preconditions | Extracted uploads use plain `PutObject` instead of `If-None-Match` or `If-Match` destination guards because CloudFormation owns the custom-resource lifecycle and should converge changed files by overwriting them. |

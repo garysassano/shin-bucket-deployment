@@ -163,17 +163,21 @@ describe("RustBucketDeployment validation and option coverage", () => {
       destinationBucket,
       memoryLimit: 1024,
       maxParallelTransfers: 7,
-      sourceBlockBytes: 4 * 1024 * 1024,
-      sourceBlockMergeGapBytes: 64 * 1024,
-      sourceGetConcurrency: 3,
-      sourceWindowBytes: 32 * 1024 * 1024,
-      sourceWindowMemoryBudgetMb: 768,
-      putObjectMaxAttempts: 4,
-      putObjectRetryBaseDelayMs: 100,
-      putObjectRetryMaxDelayMs: 1_000,
-      putObjectSlowdownRetryBaseDelayMs: 2_000,
-      putObjectSlowdownRetryMaxDelayMs: 20_000,
-      putObjectRetryJitter: "none",
+      advancedRuntimeTuning: {
+        sourceBlockBytes: 4 * 1024 * 1024,
+        sourceBlockMergeGapBytes: 64 * 1024,
+        sourceGetConcurrency: 3,
+        sourceWindowBytes: 32 * 1024 * 1024,
+        sourceWindowMemoryBudgetMb: 768,
+        putObjectRetry: {
+          maxAttempts: 4,
+          baseDelayMs: 100,
+          maxDelayMs: 1_000,
+          slowdownBaseDelayMs: 2_000,
+          slowdownMaxDelayMs: 20_000,
+          jitter: "none",
+        },
+      },
       bundling: testBundling(),
     });
 
@@ -202,7 +206,9 @@ describe("RustBucketDeployment validation and option coverage", () => {
       new RustBucketDeployment(stack, "Deploy", {
         sources: [Source.asset(join(__dirname, "fixtures", "my-website"))],
         destinationBucket,
-        sourceGetConcurrency: 0,
+        advancedRuntimeTuning: {
+          sourceGetConcurrency: 0,
+        },
       });
     }).toThrow(/sourceGetConcurrency/);
 
@@ -210,27 +216,39 @@ describe("RustBucketDeployment validation and option coverage", () => {
       new RustBucketDeployment(stack, "BadRetryDelay", {
         sources: [Source.asset(join(__dirname, "fixtures", "my-website"))],
         destinationBucket,
-        putObjectRetryBaseDelayMs: 2_000,
-        putObjectRetryMaxDelayMs: 1_000,
+        advancedRuntimeTuning: {
+          putObjectRetry: {
+            baseDelayMs: 2_000,
+            maxDelayMs: 1_000,
+          },
+        },
       });
-    }).toThrow(/putObjectRetryMaxDelayMs/);
+    }).toThrow(/maxDelayMs/);
 
     expect(() => {
       new RustBucketDeployment(stack, "BadSlowdownRetryDelay", {
         sources: [Source.asset(join(__dirname, "fixtures", "my-website"))],
         destinationBucket,
-        putObjectSlowdownRetryBaseDelayMs: 2_000,
-        putObjectSlowdownRetryMaxDelayMs: 1_000,
+        advancedRuntimeTuning: {
+          putObjectRetry: {
+            slowdownBaseDelayMs: 2_000,
+            slowdownMaxDelayMs: 1_000,
+          },
+        },
       });
-    }).toThrow(/putObjectSlowdownRetryMaxDelayMs/);
+    }).toThrow(/slowdownMaxDelayMs/);
 
     expect(() => {
       new RustBucketDeployment(stack, "BadRetryJitter", {
         sources: [Source.asset(join(__dirname, "fixtures", "my-website"))],
         destinationBucket,
-        putObjectRetryJitter: "equal" as never,
+        advancedRuntimeTuning: {
+          putObjectRetry: {
+            jitter: "equal" as never,
+          },
+        },
       });
-    }).toThrow(/putObjectRetryJitter/);
+    }).toThrow(/jitter/);
   });
 
   test("requests DestinationBucketArn when deployedBucket is accessed", () => {
