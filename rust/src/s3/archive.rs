@@ -20,8 +20,8 @@ use tokio::sync::{Notify, Semaphore, mpsc};
 
 use crate::types::AppState;
 
-use super::ZIP_ENTRY_READ_CHUNK_BYTES;
 use super::planner::ZipEntryPlan;
+use super::{ZIP_ENTRY_BODY_CHUNK_BYTES, ZIP_ENTRY_BODY_PIPE_CHUNKS, ZIP_ENTRY_READ_CHUNK_BYTES};
 
 const GET_OBJECT_MAX_ATTEMPTS: usize = 3;
 const LOCAL_FILE_HEADER_SIGNATURE: u32 = 0x0403_4b50;
@@ -1344,7 +1344,7 @@ fn zip_entry_sdk_body(
     plan: ZipEntryPlan,
     content_length: u64,
 ) -> SdkBody {
-    let (sender, receiver) = mpsc::channel(1);
+    let (sender, receiver) = mpsc::channel(ZIP_ENTRY_BODY_PIPE_CHUNKS);
     tokio::spawn(async move {
         if let Err(error) = send_zip_entry_chunks(store, plan, sender.clone()).await {
             let _ = sender.send(Err(error)).await;
@@ -1385,29 +1385,70 @@ async fn send_zip_entry_chunks(
     let mut crc32 = Crc32Hasher::new();
     let mut bytes = 0_u64;
     let mut buffer = vec![0_u8; ZIP_ENTRY_READ_CHUNK_BYTES];
-    let mut pending = Bytes::new();
+    let mut body_chunk = Vec::with_capacity(ZIP_ENTRY_BODY_CHUNK_BYTES);
+    let mut pending = Vec::with_capacity(ZIP_ENTRY_READ_CHUNK_BYTES);
 
     loop {
         let bytes_read = reader.read(&mut buffer).await.map_err(boxed_body_error)?;
         if bytes_read == 0 {
             break;
         }
+        if !pending.is_empty()
+            && !append_and_send_body_chunks(&mut body_chunk, &pending, &sender).await?
+        {
+            return Ok(());
+        }
         let next_bytes = bytes.saturating_add(bytes_read as u64);
         validate_zip_entry_size_not_exceeded(&plan, next_bytes).map_err(boxed_body_error)?;
         crc32.update(&buffer[..bytes_read]);
-        if !pending.is_empty() && sender.send(Ok(pending)).await.is_err() {
-            return Ok(());
-        }
-        pending = Bytes::copy_from_slice(&buffer[..bytes_read]);
+        pending.clear();
+        pending.extend_from_slice(&buffer[..bytes_read]);
         bytes = next_bytes;
     }
 
     validate_zip_entry_output(&plan, bytes, crc32.finalize()).map_err(boxed_body_error)?;
-    if !pending.is_empty() && sender.send(Ok(pending)).await.is_err() {
+    if !pending.is_empty()
+        && !append_and_send_body_chunks(&mut body_chunk, &pending, &sender).await?
+    {
+        return Ok(());
+    }
+    if !body_chunk.is_empty()
+        && sender
+            .send(Ok(Bytes::copy_from_slice(body_chunk.as_slice())))
+            .await
+            .is_err()
+    {
         return Ok(());
     }
 
     Ok(())
+}
+
+async fn append_and_send_body_chunks(
+    body_chunk: &mut Vec<u8>,
+    bytes: &[u8],
+    sender: &mpsc::Sender<std::result::Result<Bytes, BodyError>>,
+) -> std::result::Result<bool, BodyError> {
+    let mut remaining = bytes;
+    while !remaining.is_empty() {
+        let available = ZIP_ENTRY_BODY_CHUNK_BYTES - body_chunk.len();
+        let take = available.min(remaining.len());
+        body_chunk.extend_from_slice(&remaining[..take]);
+        remaining = &remaining[take..];
+
+        if body_chunk.len() == ZIP_ENTRY_BODY_CHUNK_BYTES {
+            if sender
+                .send(Ok(Bytes::copy_from_slice(body_chunk.as_slice())))
+                .await
+                .is_err()
+            {
+                return Ok(false);
+            }
+            body_chunk.clear();
+        }
+    }
+
+    Ok(true)
 }
 
 impl Body for ReceiverBody {

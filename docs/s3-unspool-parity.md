@@ -17,6 +17,7 @@ This document tracks how `RustBucketDeployment` maps `s3-unspool` ideas into the
 | Retryable entry upload bodies | Implemented. ZIP entry bodies can be reopened from source blocks, and replay claims are added for retries and hash-then-upload paths. |
 | Decompress ZIP entries from ranged source data | Implemented for stored and deflated entries. |
 | Validate ZIP entry output size and CRC32 | Implemented for hashing, marker replacement input, catalog loading, and upload streaming. |
+| Small bounded entry streaming buffers | Implemented with the same defaults as the local `s3-unspool` extraction path: 64 KiB entry read buffers, 256 KiB S3 body chunks, and 1 MiB body pipe capacity. |
 | Destination prefix list as comparison input | Implemented. Destination `ListObjectsV2` drives skip and prune decisions. |
 | Destination size short-circuit | Implemented. Existing objects with different listed size upload without pre-hashing. |
 | Embedded MD5 catalog runtime support | Implemented. Existing `.s3-unspool/catalog.v1.json` entries are consumed. |
