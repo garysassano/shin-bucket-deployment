@@ -74,4 +74,35 @@ describe("benchmark result collector", () => {
       providerInvoked: true,
     });
   });
+
+  test("uses explicit metadata when command logs omit outputs", () => {
+    const dir = mkdtempSync(join(tmpdir(), "rbd-bench-collector-"));
+    const logFile = join(dir, "destroy.log");
+    const outputFile = join(dir, "history.jsonl");
+
+    writeFileSync(logFile, ["destroying...", "real 37.91", ""].join("\n"));
+
+    const collected = collectBenchmarkResult({
+      logFile,
+      outputFile,
+      runId: "test-run",
+      runDate: "2026-05-02",
+      phase: "destroy",
+      series: "large-few-create-unchanged-update",
+      profile: "large-few",
+      memoryMb: 2048,
+      fileCount: 32,
+      totalBytes: 144167470,
+    });
+
+    expect(collected).toMatchObject({
+      profile: "large-few",
+      memoryMb: 2048,
+      phase: "destroy",
+      variant: null,
+      fileCount: 32,
+      totalBytes: 144167470,
+      localWallSeconds: 37.91,
+    });
+  });
 });

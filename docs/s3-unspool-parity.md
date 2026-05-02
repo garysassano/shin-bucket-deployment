@@ -83,4 +83,4 @@ Local validation currently covers:
 - TypeScript synthesis tests for custom-resource properties and cataloged asset output.
 - TypeScript build, typecheck, lint, and Vitest suite.
 
-AWS validation still needs a post-change rerun for catalog sparse skips, source prefetch behavior, and changed-object overwrite behavior.
+AWS validation on 2026-05-02 covered catalog sparse skips, source prefetch behavior, and changed-object overwrite behavior with the `large-few` benchmark profile at 512, 1024, and 2048 MiB. The detailed sanitized records live in `docs/benchmark-history.jsonl`.

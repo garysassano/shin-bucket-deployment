@@ -21,10 +21,9 @@ The public runtime tuning surface is intentionally small: use `memoryLimit` and,
 
 The repository docs have been consolidated into fewer source-of-truth files. The next engineering focus is benchmark and validation depth:
 
-- expand sanitized provider telemetry for every deployment phase
 - automate full benchmark runs across deterministic asset profiles
 - collect CloudFormation, Lambda, S3, and destination-state evidence
-- rerun AWS validations against the current ranged no-disk engine
+- rerun AWS validations against each deterministic asset profile
 - investigate cataloged asset packaging for metadata-only sparse-update skips
 
 ## Validation Notes
