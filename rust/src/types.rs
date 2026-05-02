@@ -96,6 +96,14 @@ pub(crate) struct PutObjectRetryOptions {
     pub(crate) retry_max_delay_ms: u64,
     pub(crate) slowdown_retry_base_delay_ms: u64,
     pub(crate) slowdown_retry_max_delay_ms: u64,
+    pub(crate) jitter: PutObjectRetryJitter,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum PutObjectRetryJitter {
+    Full,
+    None,
 }
 
 #[derive(Clone)]

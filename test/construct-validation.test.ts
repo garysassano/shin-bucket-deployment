@@ -173,6 +173,7 @@ describe("RustBucketDeployment validation and option coverage", () => {
       putObjectRetryMaxDelayMs: 1_000,
       putObjectSlowdownRetryBaseDelayMs: 2_000,
       putObjectSlowdownRetryMaxDelayMs: 20_000,
+      putObjectRetryJitter: "none",
       bundling: testBundling(),
     });
 
@@ -189,6 +190,7 @@ describe("RustBucketDeployment validation and option coverage", () => {
       PutObjectRetryMaxDelayMs: 1_000,
       PutObjectSlowdownRetryBaseDelayMs: 2_000,
       PutObjectSlowdownRetryMaxDelayMs: 20_000,
+      PutObjectRetryJitter: "none",
     });
   });
 
@@ -203,6 +205,32 @@ describe("RustBucketDeployment validation and option coverage", () => {
         sourceGetConcurrency: 0,
       });
     }).toThrow(/sourceGetConcurrency/);
+
+    expect(() => {
+      new RustBucketDeployment(stack, "BadRetryDelay", {
+        sources: [Source.asset(join(__dirname, "fixtures", "my-website"))],
+        destinationBucket,
+        putObjectRetryBaseDelayMs: 2_000,
+        putObjectRetryMaxDelayMs: 1_000,
+      });
+    }).toThrow(/putObjectRetryMaxDelayMs/);
+
+    expect(() => {
+      new RustBucketDeployment(stack, "BadSlowdownRetryDelay", {
+        sources: [Source.asset(join(__dirname, "fixtures", "my-website"))],
+        destinationBucket,
+        putObjectSlowdownRetryBaseDelayMs: 2_000,
+        putObjectSlowdownRetryMaxDelayMs: 1_000,
+      });
+    }).toThrow(/putObjectSlowdownRetryMaxDelayMs/);
+
+    expect(() => {
+      new RustBucketDeployment(stack, "BadRetryJitter", {
+        sources: [Source.asset(join(__dirname, "fixtures", "my-website"))],
+        destinationBucket,
+        putObjectRetryJitter: "equal" as never,
+      });
+    }).toThrow(/putObjectRetryJitter/);
   });
 
   test("requests DestinationBucketArn when deployedBucket is accessed", () => {

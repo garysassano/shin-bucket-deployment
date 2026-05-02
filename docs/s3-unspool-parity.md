@@ -22,10 +22,8 @@ This document tracks how `RustBucketDeployment` maps `s3-unspool` ideas into the
 | Embedded MD5 catalog runtime support | Implemented. Existing `.s3-unspool/catalog.v1.json` entries are consumed. |
 | Cataloged asset production | Implemented for local directory `Source.asset` inputs through this construct's `Source` wrapper. |
 | Catalog sparse skip | Implemented. Marker-free files with catalog MD5 and matching destination size/ETag are skipped without reading entry data. |
-| Conditional destination writes | Implemented for extracted uploads with `If-None-Match` and `If-Match`. |
-| Conditional conflict surfacing | Implemented. 409/412 and known conditional errors fail the deployment instead of overwriting. |
-| `PutObject` retry/backoff | Implemented with capped retry delays and longer throttle-aware delays. |
-| Runtime tuning surface | Implemented for transfer concurrency, source block/window settings, source GET concurrency, and PUT retry delays. |
+| `PutObject` retry/backoff | Implemented with capped retry delays, full/no jitter, and a shared throttle cooldown. |
+| Runtime tuning surface | Implemented for transfer concurrency, source block/window settings, source GET concurrency, and PUT retry policy. |
 | Adaptive source tuning | Implemented. Source GET concurrency and source block window default from the provider Lambda memory size. |
 | Structured diagnostics counters | Implemented as provider logs for source GET attempts/retries/errors, bytes/amplification, block hits/waits/releases/refetches, active GET high-water, and PUT retry/failure counters. |
 
@@ -52,12 +50,12 @@ This document tracks how `RustBucketDeployment` maps `s3-unspool` ideas into the
 | Tuning surface | Runtime tuning is exposed as CDK props on `RustBucketDeployment`, not as a standalone `s3-unspool` CLI/API options object. |
 | Asset production | Cataloged ZIPs are produced by this construct's `Source.asset` wrapper for local directories. `s3-unspool` can produce catalogs through its own upload/build tooling. |
 | Marker replacement | Catalog MD5s are ignored for marker sources because final bytes are only known at deploy time. |
+| Destination write preconditions | Extracted uploads use plain `PutObject` instead of `If-None-Match` or `If-Match` destination guards because CloudFormation owns the custom-resource lifecycle and should converge changed files by overwriting them. |
 
 ## Partial Or Missing
 
 | `s3-unspool` capability | Current state | Reason or next step |
 | --- | --- | --- |
-| Full `PutObject` retry policy surface | Partial. Attempts and capped delay values are configurable, but retry jitter and shared destination PUT throttling are not implemented. | Add only if benchmark or live throttling data shows value. |
 | Cataloged CDK asset bundling | Missing. | The cataloged wrapper does not run CDK `bundling`; use a prebuilt directory or `embeddedCatalog: false`. |
 | Cataloged symlink handling | Missing. | Symlinks are rejected until follow/materialization semantics are implemented. |
 
@@ -84,4 +82,4 @@ Local validation currently covers:
 - TypeScript synthesis tests for custom-resource properties and cataloged asset output.
 - TypeScript build, typecheck, lint, and Vitest suite.
 
-AWS validation still needs a post-change rerun for catalog sparse skips, source prefetch behavior, and conditional conflict handling.
+AWS validation still needs a post-change rerun for catalog sparse skips, source prefetch behavior, and changed-object overwrite behavior.

@@ -20,6 +20,12 @@ const CUSTOM_RESOURCE_OWNER_TAG = "aws-cdk:cr-owned";
 const HANDLER_BINARY_NAME = "rust-bucket-deployment-handler";
 const SHARED_HANDLER_ID_PREFIX = "RustBucketDeploymentHandler";
 const DEFAULT_MEMORY_LIMIT_MB = 256;
+const DEFAULT_PUT_OBJECT_RETRY_BASE_DELAY_MS = 250;
+const DEFAULT_PUT_OBJECT_RETRY_MAX_DELAY_MS = 5_000;
+const DEFAULT_PUT_OBJECT_SLOWDOWN_RETRY_BASE_DELAY_MS = 1_000;
+const DEFAULT_PUT_OBJECT_SLOWDOWN_RETRY_MAX_DELAY_MS = 30_000;
+
+export type PutObjectRetryJitter = "full" | "none";
 
 export interface RustBucketDeploymentProps
   extends Omit<
@@ -112,6 +118,12 @@ export interface RustBucketDeploymentProps
    * @default 30000
    */
   readonly putObjectSlowdownRetryMaxDelayMs?: number;
+
+  /**
+   * Jitter mode applied to computed PutObject retry delays.
+   * @default "full"
+   */
+  readonly putObjectRetryJitter?: PutObjectRetryJitter;
 }
 
 /**
@@ -220,6 +232,7 @@ export class RustBucketDeployment extends Construct {
       ],
       0,
     );
+    validatePutObjectRetryProps(this, props);
 
     this.destinationBucket = props.destinationBucket;
 
@@ -358,6 +371,7 @@ export class RustBucketDeployment extends Construct {
         PutObjectRetryMaxDelayMs: props.putObjectRetryMaxDelayMs,
         PutObjectSlowdownRetryBaseDelayMs: props.putObjectSlowdownRetryBaseDelayMs,
         PutObjectSlowdownRetryMaxDelayMs: props.putObjectSlowdownRetryMaxDelayMs,
+        PutObjectRetryJitter: props.putObjectRetryJitter,
       },
     });
 
@@ -567,6 +581,43 @@ function validateIntegerProps(
         scope,
       );
     }
+  }
+}
+
+function validatePutObjectRetryProps(scope: Construct, props: RustBucketDeploymentProps): void {
+  const retryBaseDelayMs =
+    props.putObjectRetryBaseDelayMs ?? DEFAULT_PUT_OBJECT_RETRY_BASE_DELAY_MS;
+  const retryMaxDelayMs = props.putObjectRetryMaxDelayMs ?? DEFAULT_PUT_OBJECT_RETRY_MAX_DELAY_MS;
+  if (retryMaxDelayMs < retryBaseDelayMs) {
+    throw new ValidationError(
+      literalString("RustBucketDeploymentInvalidPutObjectRetryMaxDelayMs"),
+      "putObjectRetryMaxDelayMs must be greater than or equal to putObjectRetryBaseDelayMs.",
+      scope,
+    );
+  }
+
+  const slowdownRetryBaseDelayMs =
+    props.putObjectSlowdownRetryBaseDelayMs ?? DEFAULT_PUT_OBJECT_SLOWDOWN_RETRY_BASE_DELAY_MS;
+  const slowdownRetryMaxDelayMs =
+    props.putObjectSlowdownRetryMaxDelayMs ?? DEFAULT_PUT_OBJECT_SLOWDOWN_RETRY_MAX_DELAY_MS;
+  if (slowdownRetryMaxDelayMs < slowdownRetryBaseDelayMs) {
+    throw new ValidationError(
+      literalString("RustBucketDeploymentInvalidPutObjectSlowdownRetryMaxDelayMs"),
+      "putObjectSlowdownRetryMaxDelayMs must be greater than or equal to putObjectSlowdownRetryBaseDelayMs.",
+      scope,
+    );
+  }
+
+  if (
+    props.putObjectRetryJitter !== undefined &&
+    props.putObjectRetryJitter !== "full" &&
+    props.putObjectRetryJitter !== "none"
+  ) {
+    throw new ValidationError(
+      literalString("RustBucketDeploymentInvalidPutObjectRetryJitter"),
+      'putObjectRetryJitter must be either "full" or "none".',
+      scope,
+    );
   }
 }
 
