@@ -59,9 +59,15 @@ pub(crate) async fn handle_event(
             )
             .await
         }
+        _ => Err(anyhow!(
+            "unsupported CloudFormation custom resource request type"
+        )),
     };
 
-    let (response_url, stack_id, request_id, logical_resource_id) = response_target(&request);
+    let Some((response_url, stack_id, request_id, logical_resource_id)) = response_target(&request)
+    else {
+        return Err(anyhow!("unsupported CloudFormation custom resource request type").into());
+    };
 
     match response {
         Ok(success) => {
@@ -122,46 +128,47 @@ async fn process_request(
         other => return Err(anyhow!("Unsupported request type: {other}")),
     };
 
-    if request_type == "Delete" && !request.retain_on_delete {
-        if !bucket_owned(
+    if request_type == "Delete"
+        && !request.retain_on_delete
+        && !bucket_owned(
             state,
             &request.dest_bucket_name,
             &request.dest_bucket_prefix,
         )
         .await?
-        {
-            delete_prefix(
-                state,
-                &request.dest_bucket_name,
-                &request.dest_bucket_prefix,
-            )
-            .await?;
-        }
+    {
+        delete_prefix(
+            state,
+            &request.dest_bucket_name,
+            &request.dest_bucket_prefix,
+        )
+        .await?;
     }
 
     if matches!(request_type, "Create" | "Update") {
         deploy(state, &request).await?;
     }
 
-    if let Some(distribution_id) = request.distribution_id.as_deref() {
-        if !distribution_id.is_empty() {
-            invalidate_cloudfront(
-                state,
-                distribution_id,
-                &request.distribution_paths,
-                request.wait_for_distribution_invalidation,
-            )
-            .await?;
-        }
+    if let Some(distribution_id) = request.distribution_id.as_deref()
+        && !distribution_id.is_empty()
+    {
+        invalidate_cloudfront(
+            state,
+            distribution_id,
+            &request.distribution_paths,
+            request.wait_for_distribution_invalidation,
+        )
+        .await?;
     }
 
-    if request_type == "Update" && !request.retain_on_delete {
-        if let Some(old_props) = old_resource_properties {
-            let (old_bucket, old_prefix) = parse_old_destination(old_props);
+    if request_type == "Update"
+        && !request.retain_on_delete
+        && let Some(old_props) = old_resource_properties
+    {
+        let (old_bucket, old_prefix) = parse_old_destination(old_props);
 
-            if old_bucket != request.dest_bucket_name || old_prefix != request.dest_bucket_prefix {
-                delete_prefix(state, &old_bucket, &old_prefix).await?;
-            }
+        if old_bucket != request.dest_bucket_name || old_prefix != request.dest_bucket_prefix {
+            delete_prefix(state, &old_bucket, &old_prefix).await?;
         }
     }
 
@@ -190,26 +197,27 @@ async fn process_request(
 
 fn response_target(
     request: &CloudFormationCustomResourceRequest<RawDeploymentRequest, RawDeploymentRequest>,
-) -> (&str, &str, &str, &str) {
+) -> Option<(&str, &str, &str, &str)> {
     match request {
-        CloudFormationCustomResourceRequest::Create(request) => (
+        CloudFormationCustomResourceRequest::Create(request) => Some((
             &request.response_url,
             &request.stack_id,
             &request.request_id,
             &request.logical_resource_id,
-        ),
-        CloudFormationCustomResourceRequest::Update(request) => (
+        )),
+        CloudFormationCustomResourceRequest::Update(request) => Some((
             &request.response_url,
             &request.stack_id,
             &request.request_id,
             &request.logical_resource_id,
-        ),
-        CloudFormationCustomResourceRequest::Delete(request) => (
+        )),
+        CloudFormationCustomResourceRequest::Delete(request) => Some((
             &request.response_url,
             &request.stack_id,
             &request.request_id,
             &request.logical_resource_id,
-        ),
+        )),
+        _ => None,
     }
 }
 
@@ -220,6 +228,7 @@ fn physical_resource_id(
         CloudFormationCustomResourceRequest::Create(_) => None,
         CloudFormationCustomResourceRequest::Update(request) => Some(&request.physical_resource_id),
         CloudFormationCustomResourceRequest::Delete(request) => Some(&request.physical_resource_id),
+        _ => None,
     }
 }
 

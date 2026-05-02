@@ -18,6 +18,13 @@ pub(super) struct DestinationObject {
     pub(super) etag: Option<String>,
 }
 
+struct DestinationRecordContext<'a> {
+    strip_prefix: &'a str,
+    filters: &'a Filters,
+    manifest: &'a DeploymentManifest,
+    prune: bool,
+}
+
 pub(crate) async fn delete_prefix(state: &AppState, bucket: &str, prefix: &str) -> Result<()> {
     let list_prefix = namespace_list_prefix(prefix);
     let mut start_after = None;
@@ -121,10 +128,12 @@ pub(super) async fn plan_destination(
             record_destination_object(
                 key,
                 object.e_tag(),
-                strip_prefix,
-                filters,
-                manifest,
-                request.prune,
+                DestinationRecordContext {
+                    strip_prefix,
+                    filters,
+                    manifest,
+                    prune: request.prune,
+                },
                 &mut objects,
                 &mut keys_to_delete,
             );
@@ -229,14 +238,11 @@ fn namespace_list_prefix(prefix: &str) -> Option<String> {
 fn record_destination_object(
     key: &str,
     etag: Option<&str>,
-    strip_prefix: &str,
-    filters: &Filters,
-    manifest: &DeploymentManifest,
-    prune: bool,
+    context: DestinationRecordContext<'_>,
     objects: &mut HashMap<String, DestinationObject>,
     keys_to_delete: &mut Vec<String>,
 ) {
-    let relative_key = strip_destination_prefix(strip_prefix, key);
+    let relative_key = strip_destination_prefix(context.strip_prefix, key);
     if relative_key.is_empty() {
         return;
     }
@@ -247,10 +253,10 @@ fn record_destination_object(
             etag: etag.and_then(normalize_etag),
         },
     );
-    if !filters.should_include(&relative_key) {
+    if !context.filters.should_include(&relative_key) {
         return;
     }
-    if prune && !manifest.contains_key(&relative_key) {
+    if context.prune && !context.manifest.contains_key(&relative_key) {
         keys_to_delete.push(key.to_string());
     }
 }
@@ -260,7 +266,8 @@ mod tests {
     use std::collections::HashMap;
 
     use super::{
-        DestinationObject, namespace_list_prefix, normalize_etag, record_destination_object,
+        DestinationObject, DestinationRecordContext, namespace_list_prefix, normalize_etag,
+        record_destination_object,
     };
     use crate::request::compile_filters;
     use crate::types::{DeploymentManifest, PlannedAction, PlannedObject};
@@ -295,10 +302,12 @@ mod tests {
         record_destination_object(
             "site/old.txt",
             Some("\"ABC123\""),
-            "site/",
-            &filters,
-            &manifest,
-            true,
+            DestinationRecordContext {
+                strip_prefix: "site/",
+                filters: &filters,
+                manifest: &manifest,
+                prune: true,
+            },
             &mut objects,
             &mut keys_to_delete,
         );
@@ -325,20 +334,24 @@ mod tests {
         record_destination_object(
             "site/keep.txt",
             None,
-            "site/",
-            &filters,
-            &manifest,
-            true,
+            DestinationRecordContext {
+                strip_prefix: "site/",
+                filters: &filters,
+                manifest: &manifest,
+                prune: true,
+            },
             &mut objects,
             &mut keys_to_delete,
         );
         record_destination_object(
             "site/debug.map",
             None,
-            "site/",
-            &filters,
-            &manifest,
-            true,
+            DestinationRecordContext {
+                strip_prefix: "site/",
+                filters: &filters,
+                manifest: &manifest,
+                prune: true,
+            },
             &mut objects,
             &mut keys_to_delete,
         );
@@ -358,10 +371,12 @@ mod tests {
         record_destination_object(
             "site/",
             None,
-            "site/",
-            &filters,
-            &manifest,
-            true,
+            DestinationRecordContext {
+                strip_prefix: "site/",
+                filters: &filters,
+                manifest: &manifest,
+                prune: true,
+            },
             &mut objects,
             &mut keys_to_delete,
         );

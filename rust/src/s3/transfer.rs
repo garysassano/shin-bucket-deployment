@@ -324,7 +324,16 @@ fn md5_hex(bytes: &[u8]) -> String {
 }
 
 fn finalize_md5(hasher: Md5) -> String {
-    format!("{:x}", hasher.finalize())
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+
+    let digest = hasher.finalize();
+    let bytes: &[u8] = digest.as_ref();
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push(HEX[(byte >> 4) as usize] as char);
+        output.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    output
 }
 
 async fn join_transfer_tasks(mut tasks: JoinSet<Result<()>>) -> Result<()> {

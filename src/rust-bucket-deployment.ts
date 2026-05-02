@@ -12,7 +12,7 @@ import type {
   SourceConfig,
 } from "aws-cdk-lib/aws-s3-deployment";
 import { ValidationError } from "aws-cdk-lib/core/lib/errors";
-import type { LiteralString } from "aws-cdk-lib/core/lib/private/literal-string";
+import type { lit } from "aws-cdk-lib/core/lib/private/literal-string";
 import { type BundlingOptions as CargoLambdaBundlingOptions, RustFunction } from "cargo-lambda-cdk";
 import { Construct } from "constructs";
 
@@ -153,7 +153,9 @@ export class RustBucketDeployment extends Construct {
       source.bind(this, { handlerRole: this.handlerRole }),
     );
 
-    this.destinationBucket.grantReadWrite(this.handlerFunction);
+    this.destinationBucket.grantRead(this.handlerFunction);
+    this.destinationBucket.grantPut(this.handlerFunction);
+    this.destinationBucket.grantDelete(this.handlerFunction);
     this.handlerFunction.addToRolePolicy(
       new PolicyStatement({
         effect: Effect.ALLOW,
@@ -171,7 +173,9 @@ export class RustBucketDeployment extends Construct {
         new PolicyStatement({
           effect: Effect.ALLOW,
           actions: ["cloudfront:GetInvalidation", "cloudfront:CreateInvalidation"],
-          resources: ["*"],
+          resources: [
+            cloudFrontDistributionArn(this, props.distribution.distributionRef.distributionId),
+          ],
         }),
       );
     }
@@ -428,8 +432,17 @@ function stableStringify(value: unknown): string {
   return JSON.stringify(normalizeSingletonValue(value));
 }
 
-function literalString(value: string): LiteralString {
-  return value as LiteralString;
+function cloudFrontDistributionArn(scope: Construct, distributionId: string): string {
+  return Stack.of(scope).formatArn({
+    service: "cloudfront",
+    region: "",
+    resource: "distribution",
+    resourceName: distributionId,
+  });
+}
+
+function literalString(value: string): ReturnType<typeof lit> {
+  return value as ReturnType<typeof lit>;
 }
 
 function sourceConfigEqual(stack: Stack, a: SourceConfig, b: SourceConfig) {

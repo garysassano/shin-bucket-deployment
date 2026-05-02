@@ -6,6 +6,5 @@ export default defineConfig({
     testTimeout: 120_000,
     fileParallelism: false,
     maxWorkers: 1,
-    minWorkers: 1,
   },
 });
