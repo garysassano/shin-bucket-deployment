@@ -19,8 +19,8 @@ use tokio::task::JoinSet;
 
 use crate::replace::replace_markers;
 use crate::types::{
-    AppState, DeploymentRequest, MarkerConfig, ObjectMetadata, PutObjectRetryJitter,
-    PutObjectRetryOptions, SourceArchive,
+    AppState, DeploymentRequest, DeploymentStats, MarkerConfig, ObjectMetadata,
+    PutObjectRetryJitter, PutObjectRetryOptions, SourceArchive,
 };
 
 use super::archive::{
@@ -41,6 +41,15 @@ enum UploadPayload {
         plan: ZipEntryPlan,
         content_length: u64,
     },
+}
+
+impl UploadPayload {
+    fn content_length(&self) -> u64 {
+        match self {
+            UploadPayload::Bytes { bytes } => u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+            UploadPayload::ZipEntry { content_length, .. } => *content_length,
+        }
+    }
 }
 
 struct PreparedUploadPayload {
@@ -82,6 +91,7 @@ struct PutContext<'a> {
     retry: &'a PutObjectRetryOptions,
     retry_coordinator: &'a PutRetryCoordinator,
     diagnostics: &'a PutDiagnostics,
+    stats: &'a DeploymentStats,
 }
 
 pub(super) async fn execute_copy_plans(
@@ -90,6 +100,7 @@ pub(super) async fn execute_copy_plans(
     metadata: &ObjectMetadata,
     copy_plans: Vec<CopyPlan>,
     max_parallel_transfers: usize,
+    stats: Arc<DeploymentStats>,
 ) -> Result<()> {
     let semaphore = Arc::new(Semaphore::new(max_parallel_transfers.max(1)));
     let mut tasks = JoinSet::new();
@@ -103,6 +114,8 @@ pub(super) async fn execute_copy_plans(
         let state = state.clone();
         let metadata = metadata.clone();
         let destination_bucket = destination_bucket.to_string();
+        let copied_bytes = plan.size.unwrap_or(0);
+        let stats = Arc::clone(&stats);
 
         tasks.spawn(async move {
             let _permit = permit;
@@ -114,7 +127,9 @@ pub(super) async fn execute_copy_plans(
                 &plan.destination_key,
                 &metadata,
             )
-            .await
+            .await?;
+            stats.add_copied_object(copied_bytes);
+            Ok(())
         });
     }
 
@@ -128,6 +143,7 @@ pub(super) async fn upload_zip_entries(
     metadata: &ObjectMetadata,
     zip_plans: BTreeMap<usize, Vec<ZipEntryPlan>>,
     destination_objects: &HashMap<String, DestinationObject>,
+    stats: Arc<DeploymentStats>,
 ) -> Result<()> {
     let semaphore = Arc::new(Semaphore::new(
         request.runtime.max_parallel_transfers.max(1),
@@ -139,6 +155,7 @@ pub(super) async fn upload_zip_entries(
 
     for (archive_index, plans) in zip_plans {
         let source = archives[archive_index].source.clone();
+        archive_diagnostics_sources.push((archive_index, source.clone()));
         let plans = plans
             .into_iter()
             .filter(|plan| {
@@ -146,6 +163,7 @@ pub(super) async fn upload_zip_entries(
                     plan,
                     &request.source_markers[plan.source_index],
                     destination_objects.get(&plan.relative_key),
+                    &stats,
                 )
             })
             .collect::<Vec<_>>();
@@ -175,7 +193,6 @@ pub(super) async fn upload_zip_entries(
             max_parallel_transfers = request.runtime.max_parallel_transfers,
             "planned source block schedule"
         );
-        archive_diagnostics_sources.push((archive_index, source.clone()));
         let scheduler = store.start_scheduler();
         for plan in plans {
             let permit = semaphore
@@ -193,6 +210,7 @@ pub(super) async fn upload_zip_entries(
             let put_diagnostics = put_diagnostics.clone();
             let put_retry_coordinator = put_retry_coordinator.clone();
             let put_retry = request.runtime.put_object_retry.clone();
+            let stats = Arc::clone(&stats);
 
             tasks.spawn(async move {
                 let _permit = permit;
@@ -202,6 +220,7 @@ pub(super) async fn upload_zip_entries(
                     &source_markers,
                     &source_marker_config,
                     destination_object.as_ref(),
+                    &stats,
                 )
                 .await?
                 else {
@@ -216,6 +235,7 @@ pub(super) async fn upload_zip_entries(
                         retry: &put_retry,
                         retry_coordinator: &put_retry_coordinator,
                         diagnostics: &put_diagnostics,
+                        stats: &stats,
                     },
                     &plan.destination_key,
                     payload,
@@ -233,9 +253,9 @@ pub(super) async fn upload_zip_entries(
 
     join_transfer_tasks(tasks).await?;
     for (archive_index, source) in archive_diagnostics_sources {
-        log_source_diagnostics(archive_index, &source);
+        log_source_diagnostics(archive_index, &source, &stats);
     }
-    log_put_diagnostics(&request.runtime.put_object_retry, &put_diagnostics);
+    log_put_diagnostics(&request.runtime.put_object_retry, &put_diagnostics, &stats);
     Ok(())
 }
 
@@ -243,13 +263,18 @@ fn catalog_skips_zip_entry(
     plan: &ZipEntryPlan,
     source_markers: &HashMap<String, String>,
     destination_object: Option<&DestinationObject>,
+    stats: &DeploymentStats,
 ) -> bool {
-    source_markers.is_empty()
+    let skip = source_markers.is_empty()
         && plan
             .catalog_md5
             .as_deref()
             .zip(destination_object)
-            .is_some_and(|(md5, object)| destination_md5_and_size_match(object, md5, plan.size))
+            .is_some_and(|(md5, object)| destination_md5_and_size_match(object, md5, plan.size));
+    if skip {
+        stats.add_catalog_skip();
+    }
+    skip
 }
 
 async fn prepare_zip_entry_upload(
@@ -258,6 +283,7 @@ async fn prepare_zip_entry_upload(
     source_markers: &HashMap<String, String>,
     source_marker_config: &MarkerConfig,
     destination_object: Option<&DestinationObject>,
+    stats: &DeploymentStats,
 ) -> Result<Option<UploadPayload>> {
     if source_markers.is_empty() && destination_object.is_none() {
         return Ok(Some(UploadPayload::ZipEntry {
@@ -287,11 +313,14 @@ async fn prepare_zip_entry_upload(
         }));
     }
 
+    stats.add_md5_hash_attempt();
     let prepared =
         prepare_zip_entry_for_comparison(store.clone(), plan, source_markers, source_marker_config)
             .await?;
 
     if destination_object_etag_matches(destination_object, &prepared.etag) {
+        stats.add_md5_skip();
+        stats.add_skipped_object();
         return Ok(None);
     }
 
@@ -397,7 +426,10 @@ async fn upload_payload(
             .send()
             .await
         {
-            Ok(_) => return Ok(()),
+            Ok(_) => {
+                context.stats.add_uploaded_object(payload.content_length());
+                return Ok(());
+            }
             Err(error) if attempt < max_attempts => {
                 let code = put_error_code(&error);
                 let throttled = code.as_deref().is_some_and(is_put_throttle_error_code);
@@ -706,8 +738,13 @@ fn put_error_kind(error: &SdkError<PutObjectError>) -> &'static str {
     }
 }
 
-fn log_source_diagnostics(archive_index: usize, source: &super::archive::SourceClient) {
+fn log_source_diagnostics(
+    archive_index: usize,
+    source: &super::archive::SourceClient,
+    stats: &DeploymentStats,
+) {
     let diagnostics = source.diagnostics();
+    stats.add_source_stats(&diagnostics);
     tracing::info!(
         archive_index,
         source_zip_bytes = diagnostics.source_zip_bytes,
@@ -737,8 +774,20 @@ fn log_source_diagnostics(archive_index: usize, source: &super::archive::SourceC
     );
 }
 
-fn log_put_diagnostics(retry: &PutObjectRetryOptions, diagnostics: &PutDiagnostics) {
+fn log_put_diagnostics(
+    retry: &PutObjectRetryOptions,
+    diagnostics: &PutDiagnostics,
+    stats: &DeploymentStats,
+) {
     let diagnostics = diagnostics.snapshot();
+    stats.add_put_stats(
+        diagnostics.failed_attempts,
+        diagnostics.retry_attempts,
+        diagnostics.throttled_attempts,
+        diagnostics.retry_wait_millis,
+        diagnostics.throttle_cooldown_waits,
+        diagnostics.throttle_cooldown_wait_millis,
+    );
     tracing::info!(
         max_attempts = retry.max_attempts,
         retry_base_delay_ms = retry.retry_base_delay_ms,

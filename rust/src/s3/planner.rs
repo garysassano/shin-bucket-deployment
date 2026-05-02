@@ -8,8 +8,8 @@ use tokio::io::AsyncReadExt;
 
 use crate::request::{join_s3_key, normalize_archive_key, source_basename};
 use crate::types::{
-    AppState, DeploymentManifest, DeploymentRequest, Filters, PlannedAction, PlannedObject,
-    SourceArchive,
+    AppState, DeploymentManifest, DeploymentRequest, DeploymentStats, Filters, PlannedAction,
+    PlannedObject, SourceArchive,
 };
 
 use super::archive::{
@@ -29,6 +29,7 @@ pub(super) struct CopyPlan {
     pub(super) source_bucket: String,
     pub(super) source_key: String,
     pub(super) destination_key: String,
+    pub(super) size: Option<u64>,
 }
 
 #[derive(Clone, Debug)]
@@ -81,6 +82,7 @@ pub(super) async fn plan_deployment(
     state: &AppState,
     request: &DeploymentRequest,
     filters: &Filters,
+    stats: &DeploymentStats,
 ) -> Result<(Vec<SourceArchive>, DeploymentManifest)> {
     let mut archives = Vec::new();
     let mut manifest = DeploymentManifest::new();
@@ -94,6 +96,7 @@ pub(super) async fn plan_deployment(
             )
             .await?;
             let archive_index = archives.len();
+            stats.add_source_archive(source.len());
             archives.push(SourceArchive {
                 source: source.clone(),
             });
@@ -104,15 +107,17 @@ pub(super) async fn plan_deployment(
                 source,
                 request,
                 filters,
+                stats,
                 &mut manifest,
             )
             .await?;
         } else {
             let relative_key = source_basename(&request.source_object_keys[source_index])?;
             if !filters.should_include(&relative_key) {
+                stats.add_filtered_entry();
                 continue;
             }
-            let expected_etag = source_object_etag(
+            let (expected_etag, size) = source_object_metadata(
                 state,
                 &request.source_bucket_names[source_index],
                 &request.source_object_keys[source_index],
@@ -124,7 +129,7 @@ pub(super) async fn plan_deployment(
                 PlannedObject {
                     relative_key,
                     expected_etag,
-                    action: PlannedAction::CopyObject { source_index },
+                    action: PlannedAction::CopyObject { source_index, size },
                 },
             );
         }
@@ -141,7 +146,7 @@ pub(super) fn collect_copy_plans(
     manifest
         .values()
         .filter_map(|planned| match planned.action {
-            PlannedAction::CopyObject { source_index }
+            PlannedAction::CopyObject { source_index, size }
                 if planned.expected_etag.as_deref().is_none_or(|etag| {
                     !destination_etag_matches(destination_objects, &planned.relative_key, etag)
                 }) =>
@@ -153,6 +158,7 @@ pub(super) fn collect_copy_plans(
                         &request.dest_bucket_prefix,
                         &planned.relative_key,
                     ),
+                    size,
                 })
             }
             PlannedAction::ZipEntry { .. } => None,
@@ -205,7 +211,11 @@ pub(super) fn collect_zip_entry_plans(
     grouped
 }
 
-async fn source_object_etag(state: &AppState, bucket: &str, key: &str) -> Result<Option<String>> {
+async fn source_object_metadata(
+    state: &AppState,
+    bucket: &str,
+    key: &str,
+) -> Result<(Option<String>, Option<u64>)> {
     let response = state
         .source_s3
         .head_object()
@@ -215,7 +225,10 @@ async fn source_object_etag(state: &AppState, bucket: &str, key: &str) -> Result
         .await
         .with_context(|| format!("failed to read source object metadata s3://{bucket}/{key}"))?;
 
-    Ok(response.e_tag().and_then(normalize_etag))
+    let size = response
+        .content_length()
+        .and_then(|size| u64::try_from(size).ok());
+    Ok((response.e_tag().and_then(normalize_etag), size))
 }
 
 async fn add_archive_entries_to_manifest(
@@ -224,6 +237,7 @@ async fn add_archive_entries_to_manifest(
     source: std::sync::Arc<super::archive::SourceClient>,
     request: &DeploymentRequest,
     filters: &Filters,
+    stats: &DeploymentStats,
     manifest: &mut DeploymentManifest,
 ) -> Result<()> {
     let reader = S3RangeReader::new(source.clone(), request.runtime.source_block_bytes);
@@ -252,7 +266,11 @@ async fn add_archive_entries_to_manifest(
         }
         validate_stored_file_entry(stored, &relative_key)?;
         if !filters.should_include(&relative_key) {
+            stats.add_filtered_entry();
             continue;
+        }
+        if !request.source_markers[source_index].is_empty() {
+            stats.add_marker_entry();
         }
 
         let source_offset = stored.header_offset();

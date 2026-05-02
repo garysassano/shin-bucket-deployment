@@ -6,7 +6,7 @@ use aws_sdk_s3::types::{Delete, ObjectIdentifier};
 use tracing::warn;
 
 use crate::request::strip_destination_prefix;
-use crate::types::{AppState, DeploymentManifest, DeploymentRequest, Filters};
+use crate::types::{AppState, DeploymentManifest, DeploymentRequest, DeploymentStats, Filters};
 
 pub(super) struct DestinationPlan {
     pub(super) objects: HashMap<String, DestinationObject>,
@@ -26,7 +26,12 @@ struct DestinationRecordContext<'a> {
     prune: bool,
 }
 
-pub(crate) async fn delete_prefix(state: &AppState, bucket: &str, prefix: &str) -> Result<()> {
+pub(crate) async fn delete_prefix(
+    state: &AppState,
+    bucket: &str,
+    prefix: &str,
+    stats: Option<&DeploymentStats>,
+) -> Result<()> {
     let list_prefix = namespace_list_prefix(prefix);
     let mut start_after = None;
 
@@ -54,7 +59,7 @@ pub(crate) async fn delete_prefix(state: &AppState, bucket: &str, prefix: &str) 
             .next_back()
             .map(ToOwned::to_owned);
 
-        delete_keys(state, bucket, &keys_to_delete).await?;
+        delete_keys_optional_stats(state, bucket, &keys_to_delete, stats).await?;
 
         if !response.is_truncated().unwrap_or(false) || last_key.is_none() {
             break;
@@ -107,6 +112,7 @@ pub(super) async fn plan_destination(
     request: &DeploymentRequest,
     filters: &Filters,
     manifest: &DeploymentManifest,
+    stats: &DeploymentStats,
 ) -> Result<DestinationPlan> {
     let list_prefix = namespace_list_prefix(&request.dest_bucket_prefix);
     let strip_prefix = list_prefix.as_deref().unwrap_or("");
@@ -154,16 +160,35 @@ pub(super) async fn plan_destination(
         start_after = last_key;
     }
 
+    stats.add_destination_objects(objects.len() as u64);
+
     Ok(DestinationPlan {
         objects,
         keys_to_delete,
     })
 }
 
-pub(super) async fn delete_keys(state: &AppState, bucket: &str, keys: &[String]) -> Result<()> {
+pub(super) async fn delete_keys(
+    state: &AppState,
+    bucket: &str,
+    keys: &[String],
+    stats: &DeploymentStats,
+) -> Result<()> {
+    delete_keys_optional_stats(state, bucket, keys, Some(stats)).await
+}
+
+async fn delete_keys_optional_stats(
+    state: &AppState,
+    bucket: &str,
+    keys: &[String],
+    stats: Option<&DeploymentStats>,
+) -> Result<()> {
     for chunk in keys.chunks(1000) {
         if chunk.is_empty() {
             continue;
+        }
+        if let Some(stats) = stats {
+            stats.add_delete_objects(chunk.len() as u64);
         }
 
         let objects: Vec<ObjectIdentifier> = chunk
@@ -339,7 +364,10 @@ mod tests {
             PlannedObject {
                 relative_key: "keep.txt".to_string(),
                 expected_etag: None,
-                action: PlannedAction::CopyObject { source_index: 0 },
+                action: PlannedAction::CopyObject {
+                    source_index: 0,
+                    size: None,
+                },
             },
         );
         let mut objects = HashMap::<String, DestinationObject>::new();

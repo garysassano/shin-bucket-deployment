@@ -1,7 +1,9 @@
+use std::sync::Arc;
+
 use anyhow::Result;
 
 use crate::request::compile_filters;
-use crate::types::{AppState, DeploymentRequest, ObjectMetadata, RuntimeOptions};
+use crate::types::{AppState, DeploymentRequest, DeploymentStats, ObjectMetadata, RuntimeOptions};
 
 pub(crate) mod archive;
 mod destination;
@@ -113,16 +115,28 @@ pub(crate) fn source_window_bytes_for_archive(
     })
 }
 
-pub(crate) async fn deploy(state: &AppState, request: &DeploymentRequest) -> Result<()> {
+pub(crate) async fn deploy(
+    state: &AppState,
+    request: &DeploymentRequest,
+    stats: Arc<DeploymentStats>,
+) -> Result<()> {
+    let started = std::time::Instant::now();
     planner::validate_request_lengths(request)?;
 
     let filters = compile_filters(&request.exclude, &request.include)?;
     let metadata = ObjectMetadata::from_request(request);
     let (archives, deployment_manifest) =
-        planner::plan_deployment(state, request, &filters).await?;
-    let destination_plan =
-        destination::plan_destination(state, request, &filters, &deployment_manifest).await?;
+        planner::plan_deployment(state, request, &filters, &stats).await?;
+    stats.add_planned_entries(deployment_manifest.len() as u64);
+    stats.add_plan_millis(crate::types::duration_ms(started.elapsed()));
 
+    let started = std::time::Instant::now();
+    let destination_plan =
+        destination::plan_destination(state, request, &filters, &deployment_manifest, &stats)
+            .await?;
+    stats.add_destination_list_millis(crate::types::duration_ms(started.elapsed()));
+
+    let started = std::time::Instant::now();
     if request.extract {
         let zip_plans =
             planner::collect_zip_entry_plans(&deployment_manifest, &request.dest_bucket_prefix);
@@ -133,6 +147,7 @@ pub(crate) async fn deploy(state: &AppState, request: &DeploymentRequest) -> Res
             &metadata,
             zip_plans,
             &destination_plan.objects,
+            Arc::clone(&stats),
         )
         .await?;
     } else {
@@ -144,17 +159,22 @@ pub(crate) async fn deploy(state: &AppState, request: &DeploymentRequest) -> Res
             &metadata,
             copy_plans,
             request.runtime.max_parallel_transfers,
+            Arc::clone(&stats),
         )
         .await?;
     }
+    stats.add_transfer_millis(crate::types::duration_ms(started.elapsed()));
 
     if request.prune {
+        let started = std::time::Instant::now();
         destination::delete_keys(
             state,
             &request.dest_bucket_name,
             &destination_plan.keys_to_delete,
+            &stats,
         )
         .await?;
+        stats.add_delete_millis(crate::types::duration_ms(started.elapsed()));
     }
 
     Ok(())
@@ -282,14 +302,22 @@ mod aws_integration_tests {
                 put_object_retry_jitter: None,
             });
 
-            deploy(&state, &request)
-                .await
-                .context("initial deploy failed")?;
+            deploy(
+                &state,
+                &request,
+                std::sync::Arc::new(crate::types::DeploymentStats::default()),
+            )
+            .await
+            .context("initial deploy failed")?;
             verify_destination(&destination_s3, &destination_bucket, &prefix, file_count).await?;
 
-            deploy(&state, &request)
-                .await
-                .context("unchanged redeploy failed")?;
+            deploy(
+                &state,
+                &request,
+                std::sync::Arc::new(crate::types::DeploymentStats::default()),
+            )
+            .await
+            .context("unchanged redeploy failed")?;
             verify_destination(&destination_s3, &destination_bucket, &prefix, file_count).await?;
 
             Ok(())

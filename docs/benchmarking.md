@@ -55,7 +55,7 @@ Environment variables:
 | `RBD_BENCH_VARIANT` | `v1` | Asset variant: `v1`, `v2`, or `pruned`. |
 | `RBD_BENCH_STACK_SUFFIX` | none | Adds a suffix to the benchmark stack name so multiple runs can coexist. |
 | `RBD_BENCH_DESTINATION_PREFIX` | `benchmark-site` | Destination prefix inside the generated bucket. |
-| `RBD_BENCH_MEMORY_LIMIT_MB` | `256` | Provider Lambda memory size in MiB. Use distinct stack suffixes when comparing memory sizes. |
+| `RBD_BENCH_MEMORY_LIMIT_MB` | `512` | Provider Lambda memory size in MiB. Use distinct stack suffixes when comparing memory sizes. |
 | `RBD_BENCH_PRUNE` | `true` | Set to `false` to disable prune. |
 | `RBD_BENCH_WAIT` | `true` | Present for property toggling; the benchmark stack currently has no CloudFront distribution. |
 
@@ -105,7 +105,7 @@ Cold create:
 RBD_BENCH_PROFILE=mixed \
 RBD_BENCH_VARIANT=v1 \
 RBD_BENCH_STACK_SUFFIX=BenchA \
-RBD_BENCH_MEMORY_LIMIT_MB=256 \
+RBD_BENCH_MEMORY_LIMIT_MB=512 \
 pnpm example deploy benchmark-assets
 ```
 
@@ -115,7 +115,7 @@ Unchanged redeploy with a provider invocation:
 RBD_BENCH_PROFILE=mixed \
 RBD_BENCH_VARIANT=v1 \
 RBD_BENCH_STACK_SUFFIX=BenchA \
-RBD_BENCH_MEMORY_LIMIT_MB=256 \
+RBD_BENCH_MEMORY_LIMIT_MB=512 \
 RBD_BENCH_WAIT=false \
 pnpm example deploy benchmark-assets
 ```
@@ -128,7 +128,7 @@ Sparse same-size update:
 RBD_BENCH_PROFILE=mixed \
 RBD_BENCH_VARIANT=v2 \
 RBD_BENCH_STACK_SUFFIX=BenchA \
-RBD_BENCH_MEMORY_LIMIT_MB=256 \
+RBD_BENCH_MEMORY_LIMIT_MB=512 \
 pnpm example deploy benchmark-assets
 ```
 
@@ -138,17 +138,17 @@ Prune update:
 RBD_BENCH_PROFILE=mixed \
 RBD_BENCH_VARIANT=pruned \
 RBD_BENCH_STACK_SUFFIX=BenchA \
-RBD_BENCH_MEMORY_LIMIT_MB=256 \
+RBD_BENCH_MEMORY_LIMIT_MB=512 \
 pnpm example deploy benchmark-assets
 ```
 
 Destroy:
 
 ```bash
-RBD_BENCH_STACK_SUFFIX=BenchA RBD_BENCH_MEMORY_LIMIT_MB=256 pnpm example destroy benchmark-assets
+RBD_BENCH_STACK_SUFFIX=BenchA RBD_BENCH_MEMORY_LIMIT_MB=512 pnpm example destroy benchmark-assets
 ```
 
-Memory comparison runs should repeat the standard sequence with one suffix per memory size, for example `Mem256`, `Mem512`, and `Mem1024`, and set `RBD_BENCH_MEMORY_LIMIT_MB` to `256`, `512`, and `1024` respectively.
+The 512 MiB setting is the preferred default because the current benchmark matrix showed close to 2x provider-duration improvement over 256 MiB for cold create and prune while keeping billed cost in the same range. Memory comparison runs should repeat the standard sequence with one suffix per memory size, for example `Mem256`, `Mem512`, and `Mem1024`, and set `RBD_BENCH_MEMORY_LIMIT_MB` to `256`, `512`, and `1024` respectively.
 
 ## Data To Record
 
@@ -166,7 +166,7 @@ For every run:
 - CDK reported deploy time
 - CloudFormation custom resource elapsed time
 - Lambda duration, billed duration, init duration if present, and max memory
-- provider summary counters when available
+- provider summary counters from the sanitized `rbd_deployment_summary` log line
 - destination object inspection summary
 - cleanup status
 
@@ -191,11 +191,9 @@ Provider summary counters should include:
 - prune delete count and batches
 - CloudFront invalidation id and wait duration when applicable
 
-## Instrumentation Plan
+## Provider Telemetry
 
-The current docs and examples can drive benchmark deployments, but the provider still needs structured telemetry before the benchmark is thorough enough.
-
-Add a per-invocation deployment stats object in the Rust provider:
+The provider maintains a per-invocation deployment stats object:
 
 - initialize it when the handler starts processing a request
 - pass it through planning, destination listing, transfer, delete, and invalidation paths
@@ -204,35 +202,88 @@ Add a per-invocation deployment stats object in the Rust provider:
 - emit one sanitized JSON summary line at the end of each successful or failed request
 - include no bucket names, object keys, account IDs, distribution IDs, URLs, or ETags in the summary line
 
-Recommended log shape:
+The provider emits this as a single sanitized `rbd_deployment_summary` JSON object per custom-resource request. Shape:
 
 ```json
 {
   "event": "rbd_deployment_summary",
   "requestType": "Update",
+  "status": "success",
   "extract": true,
   "prune": true,
-  "sourceArchives": 1,
-  "plannedEntries": 442,
-  "filteredEntries": 0,
-  "destinationObjects": 442,
-  "missingDirectUploads": 0,
-  "md5HashAttempts": 442,
-  "md5Skips": 430,
-  "uploads": 12,
-  "uploadBytes": 10485760,
-  "sourceRangeRequests": 38,
-  "sourceBytesRead": 12582912,
-  "deleteObjects": 0,
-  "durationMs": 812
+  "availableMemoryMb": 512,
+  "maxParallelTransfers": 8,
+  "durationMs": 812,
+  "phaseMs": {
+    "plan": 120,
+    "destinationList": 180,
+    "transfer": 470,
+    "delete": 42,
+    "cloudfront": 0,
+    "oldPrefixDelete": 0
+  },
+  "counts": {
+    "sourceArchives": 1,
+    "plannedEntries": 442,
+    "filteredEntries": 0,
+    "markerEntries": 0,
+    "destinationObjects": 442,
+    "deleteObjects": 0,
+    "deleteBatches": 0,
+    "uploadedObjects": 12,
+    "skippedObjects": 430,
+    "copiedObjects": 0,
+    "md5HashAttempts": 442,
+    "md5Skips": 430,
+    "catalogSkips": 0
+  },
+  "bytes": {
+    "sourceZip": 1063997,
+    "uploaded": 10485760,
+    "copied": 0
+  },
+  "source": {
+    "plannedBlocks": 38,
+    "plannedBytes": 12582912,
+    "fetchedBlocks": 38,
+    "fetchedBytes": 12582912,
+    "getAttempts": 38,
+    "getRetries": 0,
+    "getErrors": 0,
+    "blockHits": 442,
+    "blockMisses": 0,
+    "blockRefetches": 0,
+    "blockWaits": 12
+  },
+  "putObject": {
+    "failedAttempts": 0,
+    "retryAttempts": 0,
+    "throttledAttempts": 0,
+    "retryWaitMs": 0,
+    "throttleCooldownWaits": 0,
+    "throttleCooldownWaitMs": 0
+  }
 }
 ```
 
-This should be emitted with `tracing::info!` as structured fields if possible, or as a single JSON string if that is easier to parse reliably from CloudWatch Logs.
+The summary intentionally omits bucket names, object keys, account IDs, distribution IDs, URLs, and ETags.
 
 ## Benchmark Runner Plan
 
-After provider telemetry exists, add a repository runner that automates the matrix:
+The current collector can append sanitized phase records to `docs/benchmark-history.jsonl` from command logs, CloudWatch `REPORT` files, and optional provider summary JSONL. A future runner should automate the full matrix end-to-end:
+
+```bash
+pnpm benchmark:collect \
+  --log-file /tmp/rbd-aws-validation-20260502/benchmark-memory/mem512-create-v1.log \
+  --report-file /tmp/rbd-aws-validation-20260502/benchmark-memory/report-example.json \
+  --run-id 2026-05-02-mixed-memory-matrix \
+  --run-date 2026-05-02 \
+  --phase cold-create \
+  --series full-create-update-prune \
+  --commit 345efe0 \
+  --subject "simplify runtime tuning props" \
+  --region ap-southeast-2
+```
 
 - builds the project once
 - deploys each profile/variant sequence with unique stack suffixes
@@ -376,4 +427,4 @@ Forced unchanged provider runs, using `RBD_BENCH_WAIT=false` on the second `v1` 
 | 1024 MiB | Forced unchanged | `v1` | 14.20 s | 57.56 s | 0.222 s | 0.223 s | n/a | 64 MB |
 | 1024 MiB | Destroy | n/a | n/a | 44.03 s | 0.048 s | 0.049 s | n/a | 64 MB |
 
-These results validate that the ranged, no-disk ZIP path stays comfortably below 256 MiB for the `mixed` profile. The highest reported memory across this matrix was 76 MB. Provider summary counters are still needed before using these numbers for detailed phase attribution.
+These results validate that the ranged, no-disk ZIP path stays comfortably below 256 MiB for the `mixed` profile. The highest reported memory across this matrix was 76 MB. Newer provider builds emit sanitized summary counters for detailed phase attribution; these historical rows predate that summary line.
