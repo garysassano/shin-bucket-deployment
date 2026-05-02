@@ -9,6 +9,7 @@ class BenchmarkAssetsRustBucketDeploymentStack extends Stack {
 
     const bundle = ensureBenchmarkAssets();
     const destinationPrefix = process.env.RBD_BENCH_DESTINATION_PREFIX ?? "benchmark-site";
+    const memoryLimitMb = parseOptionalPositiveIntegerEnv("RBD_BENCH_MEMORY_LIMIT_MB") ?? 256;
 
     const websiteBucket = new Bucket(this, "WebsiteBucket", {
       autoDeleteObjects: true,
@@ -19,6 +20,7 @@ class BenchmarkAssetsRustBucketDeploymentStack extends Stack {
       sources: [Source.asset(bundle.root)],
       destinationBucket: websiteBucket,
       destinationKeyPrefix: destinationPrefix,
+      memoryLimit: memoryLimitMb,
       prune: process.env.RBD_BENCH_PRUNE !== "false",
       waitForDistributionInvalidation: process.env.RBD_BENCH_WAIT !== "false",
     });
@@ -46,7 +48,24 @@ class BenchmarkAssetsRustBucketDeploymentStack extends Stack {
     new CfnOutput(this, "BenchmarkTotalBytes", {
       value: String(bundle.totalBytes),
     });
+
+    new CfnOutput(this, "BenchmarkMemoryLimitMb", {
+      value: String(memoryLimitMb),
+    });
   }
+}
+
+function parseOptionalPositiveIntegerEnv(name: string): number | undefined {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") {
+    return undefined;
+  }
+
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1) {
+    throw new Error(`${name} must be a positive integer number of MiB.`);
+  }
+  return value;
 }
 
 const app = new App();

@@ -57,9 +57,9 @@ Run synth commands sequentially, or use separate CDK output directories, to avoi
 | P2 | Metadata-only update limitation | Same object bytes with changed user metadata are skipped because comparison does not include metadata. | Inline metadata v1/v2 stack | 2026-04-25 | Known limitation observed |
 | P2 | CloudFront invalidation, sync | Invalidation is created and stack waits for completion. | `cloudfront-sync` | 2026-04-25 | Pass |
 | P2 | CloudFront invalidation, async | Invalidation is created without blocking stack completion. | `cloudfront-async` | 2026-04-25 | Pass |
-| P1 | Ranged ZIP extraction AWS rerun | Confirms the current no-disk ranged extraction path after the engine transition. | `simple`, `benchmark-assets`, logs | Not checked after engine transition | Needed |
-| P1 | ETag skip path AWS rerun | Confirms marker-free unchanged files are read through ranged ZIP entry streams, hashed with MD5, and skipped through destination `ETag` comparison without checksum `HeadObject` calls. | `benchmark-assets`, provider logs, destination inspection | Not checked after engine transition | Needed |
-| P1 | Changed-object overwrite AWS rerun | Confirms changed extracted files overwrite destination keys with plain `PutObject` under the CloudFormation custom-resource lifecycle. | `simple` or `benchmark-assets` update, provider logs, destination inspection | Not checked after conditional-write removal | Needed |
+| P1 | Ranged ZIP extraction AWS rerun | Confirms the current no-disk ranged extraction path after the engine transition at 256, 512, and 1024 MiB provider memory. | `benchmark-assets` `mixed` profile: `v1` create, `v2` sparse update, `pruned` update, destroy | 2026-05-02 | Pass; highest reported Lambda max memory was 76 MB |
+| P1 | ETag skip path AWS rerun | Confirms marker-free unchanged files are read through ranged ZIP entry streams, hashed with MD5, and skipped through destination `ETag` comparison without checksum `HeadObject` calls. | `benchmark-assets` forced unchanged `v1` update via `RBD_BENCH_WAIT=false`; see `docs/benchmarking.md` | 2026-05-02 | Pass at 256, 512, and 1024 MiB; provider Lambda invoked successfully |
+| P1 | Changed-object overwrite AWS rerun | Confirms changed extracted files overwrite destination keys with plain `PutObject` under the CloudFormation custom-resource lifecycle. | `benchmark-assets` `v1` -> `v2` sparse update at 256, 512, and 1024 MiB | 2026-05-02 | Pass |
 
 ## AWS Deployment Runbook
 
@@ -109,11 +109,13 @@ Benchmark-backed deployment validation:
 
 ```bash
 RBD_BENCH_PROFILE=mixed RBD_BENCH_VARIANT=v1 RBD_BENCH_STACK_SUFFIX=Validation pnpm example deploy benchmark-assets
-RBD_BENCH_PROFILE=mixed RBD_BENCH_VARIANT=v1 RBD_BENCH_STACK_SUFFIX=Validation pnpm example deploy benchmark-assets
+RBD_BENCH_PROFILE=mixed RBD_BENCH_VARIANT=v1 RBD_BENCH_STACK_SUFFIX=Validation RBD_BENCH_WAIT=false pnpm example deploy benchmark-assets
 RBD_BENCH_PROFILE=mixed RBD_BENCH_VARIANT=v2 RBD_BENCH_STACK_SUFFIX=Validation pnpm example deploy benchmark-assets
 RBD_BENCH_PROFILE=mixed RBD_BENCH_VARIANT=pruned RBD_BENCH_STACK_SUFFIX=Validation pnpm example deploy benchmark-assets
 RBD_BENCH_STACK_SUFFIX=Validation pnpm example destroy benchmark-assets
 ```
+
+The second `v1` command toggles an inert property for the benchmark stack so CloudFormation invokes the provider against unchanged assets. Without that toggle, CDK reports no changes and the provider Lambda is not invoked.
 
 ## Evidence To Capture
 
@@ -149,3 +151,4 @@ Validate destination state with SDK/CLI commands or purpose-built scripts, but d
 - For `retainOnDelete=false`, deleting the deployment and bucket together follows the upstream CDK ownership-tag lifecycle: the deployment does not clear objects while another ownership tag is still present. Validate delete cleanup by removing the deployment construct while keeping the bucket in the stack.
 - Replacement validation previously exposed that nested `markerConfig.jsonEscape` can arrive from CloudFormation as string `"true"`. The parser now accepts bool-like strings for that nested field and has a regression test.
 - Metadata-only updates remain a known limitation until metadata participates in skip identity or forces replacement.
+- On 2026-05-02, the `benchmark-assets` `mixed` profile completed create, sparse update, prune update, forced unchanged update, and destroy at 256, 512, and 1024 MiB. All stacks were destroyed after collection; sanitized timing and memory results are in `docs/benchmarking.md`.
