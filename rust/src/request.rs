@@ -5,7 +5,18 @@ use anyhow::{Context, Result, anyhow};
 use globset::{Glob, GlobMatcher};
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::types::{DeploymentRequest, Filters, MarkerConfig};
+use crate::s3::{
+    DEFAULT_MAX_PARALLEL_TRANSFERS, DEFAULT_SOURCE_BLOCK_BYTES,
+    DEFAULT_SOURCE_BLOCK_MERGE_GAP_BYTES, PUT_OBJECT_MAX_ATTEMPTS, PUT_OBJECT_RETRY_BASE_DELAY_MS,
+    PUT_OBJECT_RETRY_MAX_DELAY_MS, PUT_OBJECT_SLOWDOWN_RETRY_BASE_DELAY_MS,
+    PUT_OBJECT_SLOWDOWN_RETRY_MAX_DELAY_MS, adaptive_source_get_concurrency,
+    default_source_window_memory_budget_mb,
+};
+use crate::types::{
+    DeploymentRequest, Filters, MarkerConfig, PutObjectRetryOptions, RuntimeOptions,
+};
+
+const DEFAULT_AVAILABLE_MEMORY_MB: u64 = 256;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "PascalCase")]
@@ -43,6 +54,30 @@ pub(crate) struct RawDeploymentRequest {
     pub(crate) output_object_keys: bool,
     #[serde(default)]
     pub(crate) destination_bucket_arn: Option<String>,
+    #[serde(default)]
+    pub(crate) available_memory_mb: Option<u64>,
+    #[serde(default)]
+    pub(crate) max_parallel_transfers: Option<usize>,
+    #[serde(default)]
+    pub(crate) source_block_bytes: Option<usize>,
+    #[serde(default)]
+    pub(crate) source_block_merge_gap_bytes: Option<usize>,
+    #[serde(default)]
+    pub(crate) source_get_concurrency: Option<usize>,
+    #[serde(default)]
+    pub(crate) source_window_bytes: Option<usize>,
+    #[serde(default)]
+    pub(crate) source_window_memory_budget_mb: Option<u64>,
+    #[serde(default)]
+    pub(crate) put_object_max_attempts: Option<usize>,
+    #[serde(default)]
+    pub(crate) put_object_retry_base_delay_ms: Option<u64>,
+    #[serde(default)]
+    pub(crate) put_object_retry_max_delay_ms: Option<u64>,
+    #[serde(default)]
+    pub(crate) put_object_slowdown_retry_base_delay_ms: Option<u64>,
+    #[serde(default)]
+    pub(crate) put_object_slowdown_retry_max_delay_ms: Option<u64>,
 }
 
 impl Filters {
@@ -106,7 +141,54 @@ pub(crate) fn parse_request(raw: &RawDeploymentRequest) -> DeploymentRequest {
         include: raw.include.clone(),
         output_object_keys: raw.output_object_keys,
         destination_bucket_arn: raw.destination_bucket_arn.clone(),
+        runtime: runtime_options(raw),
     }
+}
+
+fn runtime_options(raw: &RawDeploymentRequest) -> RuntimeOptions {
+    let available_memory_mb = raw
+        .available_memory_mb
+        .unwrap_or(DEFAULT_AVAILABLE_MEMORY_MB);
+    RuntimeOptions {
+        available_memory_mb,
+        max_parallel_transfers: non_zero_usize(
+            raw.max_parallel_transfers,
+            DEFAULT_MAX_PARALLEL_TRANSFERS,
+        ),
+        source_block_bytes: non_zero_usize(raw.source_block_bytes, DEFAULT_SOURCE_BLOCK_BYTES),
+        source_block_merge_gap_bytes: raw
+            .source_block_merge_gap_bytes
+            .unwrap_or(DEFAULT_SOURCE_BLOCK_MERGE_GAP_BYTES),
+        source_get_concurrency: non_zero_usize(
+            raw.source_get_concurrency,
+            adaptive_source_get_concurrency(available_memory_mb),
+        ),
+        source_window_bytes: raw.source_window_bytes.filter(|bytes| *bytes > 0),
+        source_window_memory_budget_mb: raw
+            .source_window_memory_budget_mb
+            .unwrap_or_else(|| default_source_window_memory_budget_mb(available_memory_mb)),
+        put_object_retry: PutObjectRetryOptions {
+            max_attempts: non_zero_usize(raw.put_object_max_attempts, PUT_OBJECT_MAX_ATTEMPTS),
+            retry_base_delay_ms: raw
+                .put_object_retry_base_delay_ms
+                .unwrap_or(PUT_OBJECT_RETRY_BASE_DELAY_MS),
+            retry_max_delay_ms: raw
+                .put_object_retry_max_delay_ms
+                .unwrap_or(PUT_OBJECT_RETRY_MAX_DELAY_MS),
+            slowdown_retry_base_delay_ms: raw
+                .put_object_slowdown_retry_base_delay_ms
+                .unwrap_or(PUT_OBJECT_SLOWDOWN_RETRY_BASE_DELAY_MS),
+            slowdown_retry_max_delay_ms: raw
+                .put_object_slowdown_retry_max_delay_ms
+                .unwrap_or(PUT_OBJECT_SLOWDOWN_RETRY_MAX_DELAY_MS),
+        },
+    }
+}
+
+fn non_zero_usize(value: Option<usize>, default_value: usize) -> usize {
+    value
+        .filter(|value| *value > 0)
+        .unwrap_or(default_value.max(1))
 }
 
 pub(crate) fn parse_old_destination(raw: &RawDeploymentRequest) -> (String, String) {
@@ -262,6 +344,10 @@ mod tests {
         assert!(request.prune);
         assert!(request.output_object_keys);
         assert_eq!(request.distribution_paths, vec!["/*"]);
+        assert_eq!(request.runtime.available_memory_mb, 256);
+        assert_eq!(request.runtime.source_window_memory_budget_mb, 256);
+        assert_eq!(request.runtime.source_get_concurrency, 1);
+        assert_eq!(request.runtime.max_parallel_transfers, 8);
     }
 
     #[test]
@@ -327,5 +413,47 @@ mod tests {
         assert!(request.wait_for_distribution_invalidation);
         assert!(!request.prune);
         assert!(request.output_object_keys);
+    }
+
+    #[test]
+    fn deserializes_runtime_tuning_overrides() {
+        let mut props = minimal_request();
+        props["AvailableMemoryMb"] = json!(1024);
+        props["MaxParallelTransfers"] = json!(12);
+        props["SourceBlockBytes"] = json!(4096);
+        props["SourceBlockMergeGapBytes"] = json!(128);
+        props["SourceGetConcurrency"] = json!(6);
+        props["SourceWindowBytes"] = json!(65_536);
+        props["SourceWindowMemoryBudgetMb"] = json!(512);
+        props["PutObjectMaxAttempts"] = json!(3);
+        props["PutObjectRetryBaseDelayMs"] = json!(10);
+        props["PutObjectRetryMaxDelayMs"] = json!(20);
+        props["PutObjectSlowdownRetryBaseDelayMs"] = json!(30);
+        props["PutObjectSlowdownRetryMaxDelayMs"] = json!(40);
+
+        let raw: RawDeploymentRequest = serde_json::from_value(props).unwrap();
+        let request = parse_request(&raw);
+
+        assert_eq!(request.runtime.available_memory_mb, 1024);
+        assert_eq!(request.runtime.max_parallel_transfers, 12);
+        assert_eq!(request.runtime.source_block_bytes, 4096);
+        assert_eq!(request.runtime.source_block_merge_gap_bytes, 128);
+        assert_eq!(request.runtime.source_get_concurrency, 6);
+        assert_eq!(request.runtime.source_window_bytes, Some(65_536));
+        assert_eq!(request.runtime.source_window_memory_budget_mb, 512);
+        assert_eq!(request.runtime.put_object_retry.max_attempts, 3);
+        assert_eq!(request.runtime.put_object_retry.retry_base_delay_ms, 10);
+        assert_eq!(request.runtime.put_object_retry.retry_max_delay_ms, 20);
+        assert_eq!(
+            request
+                .runtime
+                .put_object_retry
+                .slowdown_retry_base_delay_ms,
+            30
+        );
+        assert_eq!(
+            request.runtime.put_object_retry.slowdown_retry_max_delay_ms,
+            40
+        );
     }
 }

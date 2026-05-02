@@ -3,6 +3,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use anyhow::{Context, Result, anyhow};
 use async_zip::base::read::seek::ZipFileReader;
 use async_zip::{Compression, StoredZipEntry};
+use crc32fast::Hasher as Crc32Hasher;
+use tokio::io::AsyncReadExt;
 
 use crate::request::{join_s3_key, normalize_archive_key, source_basename};
 use crate::types::{
@@ -10,8 +12,15 @@ use crate::types::{
     SourceArchive,
 };
 
-use super::archive::{S3RangeReader, prepare_source_zip};
+use super::archive::{
+    S3RangeReader, SourceBlockOptions, SourceBlockStore, prepare_source_zip,
+    validate_zip_entry_output, validate_zip_entry_size_not_exceeded, zip_entry_reader,
+};
 use super::destination::{DestinationObject, destination_etag_matches, normalize_etag};
+use super::{
+    EMBEDDED_CATALOG_MAX_BYTES, EMBEDDED_CATALOG_PATH, EMBEDDED_CATALOG_VERSION,
+    source_window_bytes_for_archive,
+};
 
 const S3_SINGLE_PUT_LIMIT: u64 = 5 * 1024 * 1024 * 1024;
 
@@ -30,8 +39,22 @@ pub(crate) struct ZipEntryPlan {
     pub(super) size: u64,
     pub(super) compressed_size: u64,
     pub(super) compression_code: u16,
+    pub(super) crc32: u32,
+    pub(super) catalog_md5: Option<String>,
     pub(super) source_offset: u64,
     pub(super) source_span_end: u64,
+}
+
+#[derive(serde::Deserialize)]
+struct EmbeddedCatalog {
+    version: u32,
+    entries: Vec<EmbeddedCatalogEntry>,
+}
+
+#[derive(serde::Deserialize)]
+struct EmbeddedCatalogEntry {
+    path: String,
+    md5: String,
 }
 
 pub(super) fn validate_request_lengths(request: &DeploymentRequest) -> Result<()> {
@@ -79,6 +102,7 @@ pub(super) async fn plan_deployment(
                 archive_index,
                 source_index,
                 source,
+                request,
                 filters,
                 &mut manifest,
             )
@@ -150,22 +174,26 @@ pub(super) fn collect_zip_entry_plans(
             size,
             compressed_size,
             compression_code,
+            crc32,
+            catalog_md5,
             source_offset,
             source_span_end,
-        } = planned.action
+        } = &planned.action
         {
             grouped
-                .entry(archive_index)
+                .entry(*archive_index)
                 .or_default()
                 .push(ZipEntryPlan {
-                    source_index,
+                    source_index: *source_index,
                     relative_key: planned.relative_key.clone(),
                     destination_key: join_s3_key(destination_prefix, &planned.relative_key),
-                    size,
-                    compressed_size,
-                    compression_code,
-                    source_offset,
-                    source_span_end,
+                    size: *size,
+                    compressed_size: *compressed_size,
+                    compression_code: *compression_code,
+                    crc32: *crc32,
+                    catalog_md5: catalog_md5.clone(),
+                    source_offset: *source_offset,
+                    source_span_end: *source_span_end,
                 });
         }
     }
@@ -194,15 +222,17 @@ async fn add_archive_entries_to_manifest(
     archive_index: usize,
     source_index: usize,
     source: std::sync::Arc<super::archive::SourceClient>,
+    request: &DeploymentRequest,
     filters: &Filters,
     manifest: &mut DeploymentManifest,
 ) -> Result<()> {
-    let reader = S3RangeReader::new(source.clone());
+    let reader = S3RangeReader::new(source.clone(), request.runtime.source_block_bytes);
     let reader = ZipFileReader::with_tokio(reader)
         .await
         .context("failed to read zip archive central directory")?;
     let zip_file = reader.file().clone();
     let entries = zip_file.entries();
+    let catalog = load_embedded_catalog(source.clone(), request, entries).await;
     let mut source_offsets = entries
         .iter()
         .map(StoredZipEntry::header_offset)
@@ -214,6 +244,9 @@ async fn add_archive_entries_to_manifest(
         let Some(relative_key) = stored_zip_file_path(stored)? else {
             continue;
         };
+        if relative_key == EMBEDDED_CATALOG_PATH {
+            continue;
+        }
         if !seen.insert(relative_key.clone()) {
             return Err(anyhow!("duplicate ZIP file path `{relative_key}`"));
         }
@@ -253,7 +286,7 @@ async fn add_archive_entries_to_manifest(
         manifest.insert(
             relative_key.clone(),
             PlannedObject {
-                relative_key,
+                relative_key: relative_key.clone(),
                 expected_etag: None,
                 action: PlannedAction::ZipEntry {
                     archive_index,
@@ -261,6 +294,8 @@ async fn add_archive_entries_to_manifest(
                     size: stored.uncompressed_size(),
                     compressed_size: stored.compressed_size(),
                     compression_code: u16::from(stored.compression()),
+                    crc32: stored.crc32(),
+                    catalog_md5: catalog.get(&relative_key).cloned(),
                     source_offset,
                     source_span_end,
                 },
@@ -269,6 +304,152 @@ async fn add_archive_entries_to_manifest(
     }
 
     Ok(())
+}
+
+async fn load_embedded_catalog(
+    source: std::sync::Arc<super::archive::SourceClient>,
+    request: &DeploymentRequest,
+    entries: &[StoredZipEntry],
+) -> HashMap<String, String> {
+    let Some(stored) = entries.iter().find(|stored| {
+        stored_zip_file_path(stored).ok().flatten().as_deref() == Some(EMBEDDED_CATALOG_PATH)
+    }) else {
+        return HashMap::new();
+    };
+
+    if stored.uncompressed_size() > EMBEDDED_CATALOG_MAX_BYTES
+        || stored.compressed_size() > EMBEDDED_CATALOG_MAX_BYTES
+    {
+        tracing::debug!(
+            catalog_size = stored.uncompressed_size(),
+            catalog_compressed_size = stored.compressed_size(),
+            "embedded source catalog is too large"
+        );
+        return HashMap::new();
+    }
+
+    let Ok(plan) = zip_entry_plan(
+        source.len(),
+        0,
+        0,
+        stored,
+        EMBEDDED_CATALOG_PATH.to_string(),
+    ) else {
+        tracing::debug!("embedded source catalog could not be planned");
+        return HashMap::new();
+    };
+    let store = SourceBlockStore::new(
+        source.clone(),
+        std::slice::from_ref(&plan),
+        SourceBlockOptions {
+            block_bytes: request.runtime.source_block_bytes,
+            merge_gap_bytes: request.runtime.source_block_merge_gap_bytes,
+            get_concurrency: request.runtime.source_get_concurrency,
+            window_bytes: source_window_bytes_for_archive(&request.runtime, source.len(), 1),
+        },
+    );
+    let Ok(mut reader) = zip_entry_reader(store, plan.clone()) else {
+        tracing::debug!("embedded source catalog could not be opened");
+        return HashMap::new();
+    };
+    let mut bytes = Vec::new();
+    let mut crc32 = Crc32Hasher::new();
+    let mut total_bytes = 0_u64;
+    let mut buffer = vec![0_u8; 64 * 1024];
+    loop {
+        let read = match reader.read(&mut buffer).await {
+            Ok(read) => read,
+            Err(error) => {
+                tracing::debug!(%error, "embedded source catalog could not be read");
+                return HashMap::new();
+            }
+        };
+        if read == 0 {
+            break;
+        }
+        let next_bytes = total_bytes.saturating_add(read as u64);
+        if next_bytes > EMBEDDED_CATALOG_MAX_BYTES
+            || validate_zip_entry_size_not_exceeded(&plan, next_bytes).is_err()
+        {
+            tracing::debug!("embedded source catalog exceeded size limit while reading");
+            return HashMap::new();
+        }
+        crc32.update(&buffer[..read]);
+        bytes.extend_from_slice(&buffer[..read]);
+        total_bytes = next_bytes;
+    }
+    if let Err(error) = validate_zip_entry_output(&plan, total_bytes, crc32.finalize()) {
+        tracing::debug!(%error, "embedded source catalog failed ZIP validation");
+        return HashMap::new();
+    }
+
+    match serde_json::from_slice::<EmbeddedCatalog>(&bytes) {
+        Ok(catalog) => catalog_md5_by_path(catalog),
+        Err(error) => {
+            tracing::debug!(%error, "embedded source catalog could not be parsed");
+            HashMap::new()
+        }
+    }
+}
+
+fn catalog_md5_by_path(catalog: EmbeddedCatalog) -> HashMap<String, String> {
+    if catalog.version != EMBEDDED_CATALOG_VERSION {
+        return HashMap::new();
+    }
+
+    let mut result = HashMap::new();
+    for entry in catalog.entries {
+        let Ok(path) = normalize_archive_key(&entry.path) else {
+            continue;
+        };
+        if path == EMBEDDED_CATALOG_PATH {
+            continue;
+        }
+        let Some(md5) = normalize_etag(&entry.md5) else {
+            continue;
+        };
+        result.insert(path, md5);
+    }
+    result
+}
+
+fn zip_entry_plan(
+    source_len: u64,
+    _archive_index: usize,
+    source_index: usize,
+    stored: &StoredZipEntry,
+    relative_key: String,
+) -> Result<ZipEntryPlan> {
+    let source_offset = stored.header_offset();
+    if source_offset >= source_len {
+        return Err(anyhow!(
+            "local file header offset {source_offset} for `{relative_key}` is outside source ZIP length {source_len}"
+        ));
+    }
+    let source_span_end = source_offset
+        .checked_add(stored.header_size())
+        .and_then(|offset| offset.checked_add(stored.compressed_size()))
+        .ok_or_else(|| {
+            anyhow!("central directory entry source span overflowed for `{relative_key}`")
+        })?;
+    if source_span_end > source_len {
+        return Err(anyhow!(
+            "central directory entry `{relative_key}` source span ends at {source_span_end}, beyond source ZIP length {source_len}"
+        ));
+    }
+
+    Ok(ZipEntryPlan {
+        source_index,
+        relative_key: relative_key.clone(),
+        destination_key: relative_key,
+        size: stored.uncompressed_size(),
+        compressed_size: stored.compressed_size(),
+        compression_code: u16::from(stored.compression()),
+        crc32: stored.crc32(),
+        catalog_md5: None,
+        source_offset,
+        source_span_end,
+    })
 }
 
 fn stored_zip_file_path(stored: &StoredZipEntry) -> Result<Option<String>> {
@@ -317,7 +498,9 @@ mod tests {
 
     use zip::write::{SimpleFileOptions, ZipWriter};
 
-    use super::collect_zip_entry_plans;
+    use super::{
+        EmbeddedCatalog, EmbeddedCatalogEntry, catalog_md5_by_path, collect_zip_entry_plans,
+    };
     use crate::request::compile_filters;
     use crate::types::{DeploymentManifest, PlannedAction, PlannedObject};
 
@@ -335,6 +518,8 @@ mod tests {
                     size: 1,
                     compressed_size: 1,
                     compression_code: 0,
+                    crc32: 0,
+                    catalog_md5: None,
                     source_offset: 100,
                     source_span_end: 120,
                 },
@@ -351,6 +536,8 @@ mod tests {
                     size: 1,
                     compressed_size: 1,
                     compression_code: 0,
+                    crc32: 0,
+                    catalog_md5: None,
                     source_offset: 10,
                     source_span_end: 30,
                 },
@@ -381,6 +568,31 @@ mod tests {
         let mut zip = zip_from_entries(&[("index.html", b"index" as &[u8])]);
         assert_eq!(zip.len(), 1);
         assert_eq!(zip.by_index(0).unwrap().name(), "index.html");
+    }
+
+    #[test]
+    fn embedded_catalog_normalizes_valid_md5_entries() {
+        let catalog = EmbeddedCatalog {
+            version: 1,
+            entries: vec![
+                EmbeddedCatalogEntry {
+                    path: "index.html".to_string(),
+                    md5: "\"ABC123\"".to_string(),
+                },
+                EmbeddedCatalogEntry {
+                    path: ".s3-unspool/catalog.v1.json".to_string(),
+                    md5: "ignored".to_string(),
+                },
+            ],
+        };
+
+        let catalog = catalog_md5_by_path(catalog);
+
+        assert_eq!(
+            catalog.get("index.html").map(String::as_str),
+            Some("abc123")
+        );
+        assert!(!catalog.contains_key(".s3-unspool/catalog.v1.json"));
     }
 
     fn zip_from_entries(entries: &[(&str, &[u8])]) -> zip::ZipArchive<Cursor<Vec<u8>>> {

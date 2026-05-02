@@ -74,6 +74,28 @@ pub(crate) struct DeploymentRequest {
     pub(crate) include: Vec<String>,
     pub(crate) output_object_keys: bool,
     pub(crate) destination_bucket_arn: Option<String>,
+    pub(crate) runtime: RuntimeOptions,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct RuntimeOptions {
+    pub(crate) available_memory_mb: u64,
+    pub(crate) max_parallel_transfers: usize,
+    pub(crate) source_block_bytes: usize,
+    pub(crate) source_block_merge_gap_bytes: usize,
+    pub(crate) source_get_concurrency: usize,
+    pub(crate) source_window_bytes: Option<usize>,
+    pub(crate) source_window_memory_budget_mb: u64,
+    pub(crate) put_object_retry: PutObjectRetryOptions,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct PutObjectRetryOptions {
+    pub(crate) max_attempts: usize,
+    pub(crate) retry_base_delay_ms: u64,
+    pub(crate) retry_max_delay_ms: u64,
+    pub(crate) slowdown_retry_base_delay_ms: u64,
+    pub(crate) slowdown_retry_max_delay_ms: u64,
 }
 
 #[derive(Clone)]
@@ -113,6 +135,8 @@ pub(crate) enum PlannedAction {
         size: u64,
         compressed_size: u64,
         compression_code: u16,
+        crc32: u32,
+        catalog_md5: Option<String>,
         source_offset: u64,
         source_span_end: u64,
     },
