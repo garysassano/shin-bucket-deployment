@@ -29,6 +29,7 @@ Runtime tuning defaults:
 | `sourceGetConcurrency` | derived from Lambda memory, 1 to 8 | Maximum concurrent source ranged `GetObject` block fetches per archive. |
 | `sourceWindowBytes` | derived from Lambda memory and ZIP file count | Maximum resident source block data per ZIP archive; a single larger block can still be admitted. |
 | `sourceWindowMemoryBudgetMb` | provider Lambda `memoryLimit` | Memory budget used for adaptive source window sizing. |
+| `ephemeralStorageSize` | CDK Lambda default | Accepted for upstream API compatibility, but usually not useful because the provider avoids Lambda `/tmp`. |
 | `putObjectMaxAttempts` | 6 | Maximum application-level `PutObject` attempts. |
 | `putObjectRetryBaseDelayMs` / `putObjectRetryMaxDelayMs` | 250 / 5000 | Capped non-throttling `PutObject` retry delay. |
 | `putObjectSlowdownRetryBaseDelayMs` / `putObjectSlowdownRetryMaxDelayMs` | 1000 / 30000 | Capped throttling `PutObject` retry delay. |
