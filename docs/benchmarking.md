@@ -47,6 +47,7 @@ Environment variables:
 | `RBD_BENCH_VARIANT` | `v1` | Asset variant: `v1`, `v2`, or `pruned`. |
 | `RBD_BENCH_STACK_SUFFIX` | none | Adds a suffix to the benchmark stack name so multiple runs can coexist. |
 | `RBD_BENCH_DESTINATION_PREFIX` | `benchmark-site` | Destination prefix inside the generated bucket. |
+| `RBD_BENCH_MEMORY_LIMIT_MB` | `256` | Provider Lambda memory size in MiB. Use distinct stack suffixes when comparing memory sizes. |
 | `RBD_BENCH_PRUNE` | `true` | Set to `false` to disable prune. |
 | `RBD_BENCH_WAIT` | `true` | Present for property toggling; the benchmark stack currently has no CloudFront distribution. |
 
@@ -96,17 +97,22 @@ Cold create:
 RBD_BENCH_PROFILE=mixed \
 RBD_BENCH_VARIANT=v1 \
 RBD_BENCH_STACK_SUFFIX=BenchA \
+RBD_BENCH_MEMORY_LIMIT_MB=256 \
 pnpm example deploy benchmark-assets
 ```
 
-Unchanged redeploy:
+Unchanged redeploy with a provider invocation:
 
 ```bash
 RBD_BENCH_PROFILE=mixed \
 RBD_BENCH_VARIANT=v1 \
 RBD_BENCH_STACK_SUFFIX=BenchA \
+RBD_BENCH_MEMORY_LIMIT_MB=256 \
+RBD_BENCH_WAIT=false \
 pnpm example deploy benchmark-assets
 ```
+
+The benchmark stack has no CloudFront distribution, so toggling `RBD_BENCH_WAIT=false` forces a custom-resource property update without changing deployment behavior. If `RBD_BENCH_WAIT` is left at the default on a byte-identical redeploy, CDK reports no changes and the provider Lambda is not invoked.
 
 Sparse same-size update:
 
@@ -114,6 +120,7 @@ Sparse same-size update:
 RBD_BENCH_PROFILE=mixed \
 RBD_BENCH_VARIANT=v2 \
 RBD_BENCH_STACK_SUFFIX=BenchA \
+RBD_BENCH_MEMORY_LIMIT_MB=256 \
 pnpm example deploy benchmark-assets
 ```
 
@@ -123,14 +130,17 @@ Prune update:
 RBD_BENCH_PROFILE=mixed \
 RBD_BENCH_VARIANT=pruned \
 RBD_BENCH_STACK_SUFFIX=BenchA \
+RBD_BENCH_MEMORY_LIMIT_MB=256 \
 pnpm example deploy benchmark-assets
 ```
 
 Destroy:
 
 ```bash
-RBD_BENCH_STACK_SUFFIX=BenchA pnpm example destroy benchmark-assets
+RBD_BENCH_STACK_SUFFIX=BenchA RBD_BENCH_MEMORY_LIMIT_MB=256 pnpm example destroy benchmark-assets
 ```
+
+Memory comparison runs should repeat the standard sequence with one suffix per memory size, for example `Mem256`, `Mem512`, and `Mem1024`, and set `RBD_BENCH_MEMORY_LIMIT_MB` to `256`, `512`, and `1024` respectively.
 
 ## Data To Record
 
@@ -240,6 +250,46 @@ For branch comparisons:
 7. Compare median and p90 for repeated phases.
 8. Compare provider counters before drawing conclusions from elapsed time.
 9. Destroy all stacks after collecting evidence.
+
+## Current Results
+
+Run date: 2026-05-02. Region: `ap-southeast-2`. Profile: `mixed`. Baseline bundle: 442 files, 52,904,649 bytes. Pruned bundle: 397 files, 48,185,955 bytes. All benchmark stacks were destroyed after collection.
+
+Full create/update/prune sequence:
+
+| Memory | Phase | Variant | CDK deploy time | Local wall time | Provider duration | Billed duration | Init duration | Max memory |
+| ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 256 MiB | Cold create | `v1` | 65.91 s | 116.98 s | 4.355 s | 4.524 s | 0.168 s | 74 MB |
+| 256 MiB | No-change redeploy | `v1` | 0.00 s | 25.96 s | not invoked | not invoked | n/a | n/a |
+| 256 MiB | Sparse update | `v2` | 14.27 s | 63.44 s | 0.593 s | 0.594 s | n/a | 74 MB |
+| 256 MiB | Prune update | `pruned` | 22.14 s | 68.88 s | 4.082 s | 4.083 s | n/a | 74 MB |
+| 256 MiB | Destroy | n/a | n/a | 37.78 s | 0.052 s | 0.053 s | n/a | 74 MB |
+| 512 MiB | Cold create | `v1` | 66.04 s | 106.83 s | 2.362 s | 2.527 s | 0.165 s | 68 MB |
+| 512 MiB | No-change redeploy | `v1` | 0.00 s | 26.53 s | not invoked | not invoked | n/a | n/a |
+| 512 MiB | Sparse update | `v2` | 14.30 s | 57.86 s | 0.461 s | 0.462 s | n/a | 68 MB |
+| 512 MiB | Prune update | `pruned` | 20.26 s | 63.87 s | 2.690 s | 2.691 s | n/a | 70 MB |
+| 512 MiB | Destroy | n/a | n/a | 44.15 s | 0.046 s | 0.046 s | n/a | 72 MB |
+| 1024 MiB | Cold create | `v1` | 65.89 s | 107.88 s | 2.166 s | 2.336 s | 0.170 s | 62 MB |
+| 1024 MiB | No-change redeploy | `v1` | 0.00 s | 26.28 s | not invoked | not invoked | n/a | n/a |
+| 1024 MiB | Sparse update | `v2` | 14.28 s | 57.54 s | 0.408 s | 0.409 s | n/a | 64 MB |
+| 1024 MiB | Prune update | `pruned` | 22.14 s | 65.83 s | 2.276 s | 2.276 s | n/a | 74 MB |
+| 1024 MiB | Destroy | n/a | n/a | 43.73 s | 0.045 s | 0.046 s | n/a | 74 MB |
+
+Forced unchanged provider runs, using `RBD_BENCH_WAIT=false` on the second `v1` deploy:
+
+| Memory | Phase | Variant | CDK deploy time | Local wall time | Provider duration | Billed duration | Init duration | Max memory |
+| ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 256 MiB | Cold create | `v1` | 66.35 s | 107.48 s | 4.089 s | 4.219 s | 0.129 s | 76 MB |
+| 256 MiB | Forced unchanged | `v1` | 14.21 s | 72.88 s | 0.264 s | 0.264 s | n/a | 76 MB |
+| 256 MiB | Destroy | n/a | n/a | 44.79 s | 0.053 s | 0.054 s | n/a | 76 MB |
+| 512 MiB | Cold create | `v1` | 66.15 s | 107.63 s | 2.270 s | 2.405 s | 0.135 s | 68 MB |
+| 512 MiB | Forced unchanged | `v1` | 14.16 s | 57.72 s | 0.212 s | 0.212 s | n/a | 68 MB |
+| 512 MiB | Destroy | n/a | n/a | 43.99 s | 0.051 s | 0.051 s | n/a | 68 MB |
+| 1024 MiB | Cold create | `v1` | 65.61 s | 106.86 s | 1.946 s | 2.074 s | 0.128 s | 64 MB |
+| 1024 MiB | Forced unchanged | `v1` | 14.20 s | 57.56 s | 0.222 s | 0.223 s | n/a | 64 MB |
+| 1024 MiB | Destroy | n/a | n/a | 44.03 s | 0.048 s | 0.049 s | n/a | 64 MB |
+
+These results validate that the ranged, no-disk ZIP path stays comfortably below 256 MiB for the `mixed` profile. The highest reported memory across this matrix was 76 MB. Provider summary counters are still needed before using these numbers for detailed phase attribution.
 
 ## Historical Results
 
