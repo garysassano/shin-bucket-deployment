@@ -27,6 +27,82 @@ const DEFAULT_PUT_OBJECT_SLOWDOWN_RETRY_MAX_DELAY_MS = 30_000;
 
 export type PutObjectRetryJitter = "full" | "none";
 
+export interface RustBucketDeploymentPutObjectRetryTuning {
+  /**
+   * Maximum application-level PutObject attempts per object.
+   * @default 6
+   */
+  readonly maxAttempts?: number;
+
+  /**
+   * Base retry delay for non-throttling PutObject failures, in milliseconds.
+   * @default 250
+   */
+  readonly baseDelayMs?: number;
+
+  /**
+   * Maximum retry delay for non-throttling PutObject failures, in milliseconds.
+   * @default 5000
+   */
+  readonly maxDelayMs?: number;
+
+  /**
+   * Base retry delay for throttling PutObject failures, in milliseconds.
+   * @default 1000
+   */
+  readonly slowdownBaseDelayMs?: number;
+
+  /**
+   * Maximum retry delay for throttling PutObject failures, in milliseconds.
+   * @default 30000
+   */
+  readonly slowdownMaxDelayMs?: number;
+
+  /**
+   * Jitter mode applied to computed PutObject retry delays.
+   * @default "full"
+   */
+  readonly jitter?: PutObjectRetryJitter;
+}
+
+export interface RustBucketDeploymentAdvancedRuntimeTuning {
+  /**
+   * Source ranged-read block size in bytes.
+   * @default 8 MiB
+   */
+  readonly sourceBlockBytes?: number;
+
+  /**
+   * Maximum gap in bytes to coalesce between adjacent source ranges.
+   * @default 256 KiB
+   */
+  readonly sourceBlockMergeGapBytes?: number;
+
+  /**
+   * Maximum concurrent ranged GetObject requests per source archive.
+   * @default - derived from the provider Lambda memory size
+   */
+  readonly sourceGetConcurrency?: number;
+
+  /**
+   * Resident source block window size in bytes per source archive.
+   * @default - derived from the provider Lambda memory size and source archive shape
+   */
+  readonly sourceWindowBytes?: number;
+
+  /**
+   * Memory budget in MiB used to derive the resident source block window.
+   * @default - provider Lambda memory size
+   */
+  readonly sourceWindowMemoryBudgetMb?: number;
+
+  /**
+   * Destination PutObject retry/backoff tuning.
+   * @default - provider defaults
+   */
+  readonly putObjectRetry?: RustBucketDeploymentPutObjectRetryTuning;
+}
+
 export interface RustBucketDeploymentProps
   extends Omit<
     BucketDeploymentProps,
@@ -60,70 +136,12 @@ export interface RustBucketDeploymentProps
   readonly maxParallelTransfers?: number;
 
   /**
-   * Source ranged-read block size in bytes.
-   * @default 8 MiB
+   * Advanced provider runtime tuning. Most deployments should leave this unset
+   * and use memoryLimit plus maxParallelTransfers as the public controls.
+   *
+   * @default - provider defaults derived from memoryLimit
    */
-  readonly sourceBlockBytes?: number;
-
-  /**
-   * Maximum gap in bytes to coalesce between adjacent source ranges.
-   * @default 256 KiB
-   */
-  readonly sourceBlockMergeGapBytes?: number;
-
-  /**
-   * Maximum concurrent ranged GetObject requests per source archive.
-   * @default - derived from the provider Lambda memory size
-   */
-  readonly sourceGetConcurrency?: number;
-
-  /**
-   * Resident source block window size in bytes per source archive.
-   * @default - derived from the provider Lambda memory size and source archive shape
-   */
-  readonly sourceWindowBytes?: number;
-
-  /**
-   * Memory budget in MiB used to derive the resident source block window.
-   * @default - provider Lambda memory size
-   */
-  readonly sourceWindowMemoryBudgetMb?: number;
-
-  /**
-   * Maximum application-level PutObject attempts per object.
-   * @default 6
-   */
-  readonly putObjectMaxAttempts?: number;
-
-  /**
-   * Base retry delay for non-throttling PutObject failures, in milliseconds.
-   * @default 250
-   */
-  readonly putObjectRetryBaseDelayMs?: number;
-
-  /**
-   * Maximum retry delay for non-throttling PutObject failures, in milliseconds.
-   * @default 5000
-   */
-  readonly putObjectRetryMaxDelayMs?: number;
-
-  /**
-   * Base retry delay for throttling PutObject failures, in milliseconds.
-   * @default 1000
-   */
-  readonly putObjectSlowdownRetryBaseDelayMs?: number;
-
-  /**
-   * Maximum retry delay for throttling PutObject failures, in milliseconds.
-   * @default 30000
-   */
-  readonly putObjectSlowdownRetryMaxDelayMs?: number;
-
-  /**
-   * Jitter mode applied to computed PutObject retry delays.
-   * @default "full"
-   */
-  readonly putObjectRetryJitter?: PutObjectRetryJitter;
+  readonly advancedRuntimeTuning?: RustBucketDeploymentAdvancedRuntimeTuning;
 }
 
 /**
@@ -207,32 +225,49 @@ export class RustBucketDeployment extends Construct {
       );
     }
 
+    const advancedRuntimeTuning = props.advancedRuntimeTuning ?? {};
+    const putObjectRetryTuning = advancedRuntimeTuning.putObjectRetry ?? {};
+
     validateIntegerProps(
       this,
-      props,
-      [
-        "maxParallelTransfers",
-        "sourceBlockBytes",
-        "sourceGetConcurrency",
-        "sourceWindowBytes",
-        "sourceWindowMemoryBudgetMb",
-        "putObjectMaxAttempts",
-      ],
+      { maxParallelTransfers: props.maxParallelTransfers },
+      ["maxParallelTransfers"],
       1,
     );
     validateIntegerProps(
       this,
-      props,
+      advancedRuntimeTuning,
       [
-        "sourceBlockMergeGapBytes",
-        "putObjectRetryBaseDelayMs",
-        "putObjectRetryMaxDelayMs",
-        "putObjectSlowdownRetryBaseDelayMs",
-        "putObjectSlowdownRetryMaxDelayMs",
+        "sourceBlockBytes",
+        "sourceGetConcurrency",
+        "sourceWindowBytes",
+        "sourceWindowMemoryBudgetMb",
       ],
-      0,
+      1,
+      "advancedRuntimeTuning.",
     );
-    validatePutObjectRetryProps(this, props);
+    validateIntegerProps(
+      this,
+      putObjectRetryTuning,
+      ["maxAttempts"],
+      1,
+      "advancedRuntimeTuning.putObjectRetry.",
+    );
+    validateIntegerProps(
+      this,
+      advancedRuntimeTuning,
+      ["sourceBlockMergeGapBytes"],
+      0,
+      "advancedRuntimeTuning.",
+    );
+    validateIntegerProps(
+      this,
+      putObjectRetryTuning,
+      ["baseDelayMs", "maxDelayMs", "slowdownBaseDelayMs", "slowdownMaxDelayMs"],
+      0,
+      "advancedRuntimeTuning.putObjectRetry.",
+    );
+    validatePutObjectRetryProps(this, putObjectRetryTuning);
 
     this.destinationBucket = props.destinationBucket;
 
@@ -361,17 +396,17 @@ export class RustBucketDeployment extends Construct {
         }),
         AvailableMemoryMb: props.memoryLimit ?? DEFAULT_MEMORY_LIMIT_MB,
         MaxParallelTransfers: props.maxParallelTransfers,
-        SourceBlockBytes: props.sourceBlockBytes,
-        SourceBlockMergeGapBytes: props.sourceBlockMergeGapBytes,
-        SourceGetConcurrency: props.sourceGetConcurrency,
-        SourceWindowBytes: props.sourceWindowBytes,
-        SourceWindowMemoryBudgetMb: props.sourceWindowMemoryBudgetMb,
-        PutObjectMaxAttempts: props.putObjectMaxAttempts,
-        PutObjectRetryBaseDelayMs: props.putObjectRetryBaseDelayMs,
-        PutObjectRetryMaxDelayMs: props.putObjectRetryMaxDelayMs,
-        PutObjectSlowdownRetryBaseDelayMs: props.putObjectSlowdownRetryBaseDelayMs,
-        PutObjectSlowdownRetryMaxDelayMs: props.putObjectSlowdownRetryMaxDelayMs,
-        PutObjectRetryJitter: props.putObjectRetryJitter,
+        SourceBlockBytes: advancedRuntimeTuning.sourceBlockBytes,
+        SourceBlockMergeGapBytes: advancedRuntimeTuning.sourceBlockMergeGapBytes,
+        SourceGetConcurrency: advancedRuntimeTuning.sourceGetConcurrency,
+        SourceWindowBytes: advancedRuntimeTuning.sourceWindowBytes,
+        SourceWindowMemoryBudgetMb: advancedRuntimeTuning.sourceWindowMemoryBudgetMb,
+        PutObjectMaxAttempts: putObjectRetryTuning.maxAttempts,
+        PutObjectRetryBaseDelayMs: putObjectRetryTuning.baseDelayMs,
+        PutObjectRetryMaxDelayMs: putObjectRetryTuning.maxDelayMs,
+        PutObjectSlowdownRetryBaseDelayMs: putObjectRetryTuning.slowdownBaseDelayMs,
+        PutObjectSlowdownRetryMaxDelayMs: putObjectRetryTuning.slowdownMaxDelayMs,
+        PutObjectRetryJitter: putObjectRetryTuning.jitter,
       },
     });
 
@@ -565,57 +600,58 @@ function literalString(value: string): ReturnType<typeof lit> {
 
 function validateIntegerProps(
   scope: Construct,
-  props: RustBucketDeploymentProps,
-  propNames: Array<keyof RustBucketDeploymentProps>,
+  props: object,
+  propNames: readonly string[],
   minimum: number,
+  propPathPrefix = "",
 ): void {
+  const values = props as Record<string, unknown>;
   for (const propName of propNames) {
-    const value = props[propName];
+    const value = values[propName];
     if (value === undefined) {
       continue;
     }
     if (typeof value !== "number" || !Number.isInteger(value) || value < minimum) {
+      const propPath = `${propPathPrefix}${propName}`;
       throw new ValidationError(
-        literalString(`RustBucketDeploymentInvalid${String(propName)}`),
-        `${String(propName)} must be an integer greater than or equal to ${minimum}.`,
+        literalString(`RustBucketDeploymentInvalid${propPath}`),
+        `${propPath} must be an integer greater than or equal to ${minimum}.`,
         scope,
       );
     }
   }
 }
 
-function validatePutObjectRetryProps(scope: Construct, props: RustBucketDeploymentProps): void {
-  const retryBaseDelayMs =
-    props.putObjectRetryBaseDelayMs ?? DEFAULT_PUT_OBJECT_RETRY_BASE_DELAY_MS;
-  const retryMaxDelayMs = props.putObjectRetryMaxDelayMs ?? DEFAULT_PUT_OBJECT_RETRY_MAX_DELAY_MS;
+function validatePutObjectRetryProps(
+  scope: Construct,
+  props: RustBucketDeploymentPutObjectRetryTuning,
+): void {
+  const retryBaseDelayMs = props.baseDelayMs ?? DEFAULT_PUT_OBJECT_RETRY_BASE_DELAY_MS;
+  const retryMaxDelayMs = props.maxDelayMs ?? DEFAULT_PUT_OBJECT_RETRY_MAX_DELAY_MS;
   if (retryMaxDelayMs < retryBaseDelayMs) {
     throw new ValidationError(
       literalString("RustBucketDeploymentInvalidPutObjectRetryMaxDelayMs"),
-      "putObjectRetryMaxDelayMs must be greater than or equal to putObjectRetryBaseDelayMs.",
+      "advancedRuntimeTuning.putObjectRetry.maxDelayMs must be greater than or equal to advancedRuntimeTuning.putObjectRetry.baseDelayMs.",
       scope,
     );
   }
 
   const slowdownRetryBaseDelayMs =
-    props.putObjectSlowdownRetryBaseDelayMs ?? DEFAULT_PUT_OBJECT_SLOWDOWN_RETRY_BASE_DELAY_MS;
+    props.slowdownBaseDelayMs ?? DEFAULT_PUT_OBJECT_SLOWDOWN_RETRY_BASE_DELAY_MS;
   const slowdownRetryMaxDelayMs =
-    props.putObjectSlowdownRetryMaxDelayMs ?? DEFAULT_PUT_OBJECT_SLOWDOWN_RETRY_MAX_DELAY_MS;
+    props.slowdownMaxDelayMs ?? DEFAULT_PUT_OBJECT_SLOWDOWN_RETRY_MAX_DELAY_MS;
   if (slowdownRetryMaxDelayMs < slowdownRetryBaseDelayMs) {
     throw new ValidationError(
       literalString("RustBucketDeploymentInvalidPutObjectSlowdownRetryMaxDelayMs"),
-      "putObjectSlowdownRetryMaxDelayMs must be greater than or equal to putObjectSlowdownRetryBaseDelayMs.",
+      "advancedRuntimeTuning.putObjectRetry.slowdownMaxDelayMs must be greater than or equal to advancedRuntimeTuning.putObjectRetry.slowdownBaseDelayMs.",
       scope,
     );
   }
 
-  if (
-    props.putObjectRetryJitter !== undefined &&
-    props.putObjectRetryJitter !== "full" &&
-    props.putObjectRetryJitter !== "none"
-  ) {
+  if (props.jitter !== undefined && props.jitter !== "full" && props.jitter !== "none") {
     throw new ValidationError(
       literalString("RustBucketDeploymentInvalidPutObjectRetryJitter"),
-      'putObjectRetryJitter must be either "full" or "none".',
+      'advancedRuntimeTuning.putObjectRetry.jitter must be either "full" or "none".',
       scope,
     );
   }

@@ -15,6 +15,8 @@ The current provider is a custom AWS SDK-based deployment engine, not `s3sync` a
 
 The provider Lambda defaults to 256 MiB memory. Marker-free ZIP entry streaming uses `s3-unspool`-matched defaults: 64 KiB entry read buffers, 256 KiB S3 body chunks, and a 1 MiB body pipe. The unchanged-object optimization is intentionally narrow: existing ZIP entries are read through ranged source blocks, hashed with MD5, and compared with destination `ETag` values. Metadata-only changes, multipart objects, SSE-KMS/SSE-C ETag semantics, and arbitrary sync backends are outside that optimization.
 
+The public runtime tuning surface is intentionally small: use `memoryLimit` and, when needed, `maxParallelTransfers`. Source block/window and `PutObject` retry internals are grouped under `advancedRuntimeTuning` as escape hatches.
+
 ## Current Focus
 
 The repository docs have been consolidated into fewer source-of-truth files. The next engineering focus is benchmark and validation depth:

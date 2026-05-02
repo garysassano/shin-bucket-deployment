@@ -24,16 +24,21 @@ Runtime tuning defaults:
 | Setting | Default | Purpose |
 | --- | ---: | --- |
 | `maxParallelTransfers` | 8 | Bounds copy, hash, upload, and related transfer work. |
-| `sourceBlockBytes` | 8 MiB | Source range block size for ZIP entry reads. |
-| `sourceBlockMergeGapBytes` | 256 KiB | Maximum gap for coalescing adjacent source spans. |
-| `sourceGetConcurrency` | derived from Lambda memory, 1 to 8 | Maximum concurrent source ranged `GetObject` block fetches per archive. |
-| `sourceWindowBytes` | derived from Lambda memory and ZIP file count | Maximum resident source block data per ZIP archive; a single larger block can still be admitted. |
-| `sourceWindowMemoryBudgetMb` | provider Lambda `memoryLimit` | Memory budget used for adaptive source window sizing. |
 | `ephemeralStorageSize` | CDK Lambda default | Accepted for upstream API compatibility, but usually not useful because the provider avoids Lambda `/tmp`. |
-| `putObjectMaxAttempts` | 6 | Maximum application-level `PutObject` attempts. |
-| `putObjectRetryBaseDelayMs` / `putObjectRetryMaxDelayMs` | 250 / 5000 | Capped non-throttling `PutObject` retry delay. |
-| `putObjectSlowdownRetryBaseDelayMs` / `putObjectSlowdownRetryMaxDelayMs` | 1000 / 30000 | Capped throttling `PutObject` retry delay. |
-| `putObjectRetryJitter` | `full` | Jitter mode for computed `PutObject` retry delays; `none` is also supported. |
+
+Most deployments should tune only `memoryLimit` and, when needed, `maxParallelTransfers`. Source block/window and `PutObject` retry settings remain available under `advancedRuntimeTuning` as support and benchmark escape hatches:
+
+| Advanced setting | Default | Purpose |
+| --- | ---: | --- |
+| `advancedRuntimeTuning.sourceBlockBytes` | 8 MiB | Source range block size for ZIP entry reads. |
+| `advancedRuntimeTuning.sourceBlockMergeGapBytes` | 256 KiB | Maximum gap for coalescing adjacent source spans. |
+| `advancedRuntimeTuning.sourceGetConcurrency` | derived from Lambda memory, 1 to 8 | Maximum concurrent source ranged `GetObject` block fetches per archive. |
+| `advancedRuntimeTuning.sourceWindowBytes` | derived from Lambda memory and ZIP file count | Maximum resident source block data per ZIP archive; a single larger block can still be admitted. |
+| `advancedRuntimeTuning.sourceWindowMemoryBudgetMb` | provider Lambda `memoryLimit` | Memory budget used for adaptive source window sizing. |
+| `advancedRuntimeTuning.putObjectRetry.maxAttempts` | 6 | Maximum application-level `PutObject` attempts. |
+| `advancedRuntimeTuning.putObjectRetry.baseDelayMs` / `maxDelayMs` | 250 / 5000 | Capped non-throttling `PutObject` retry delay. |
+| `advancedRuntimeTuning.putObjectRetry.slowdownBaseDelayMs` / `slowdownMaxDelayMs` | 1000 / 30000 | Capped throttling `PutObject` retry delay. |
+| `advancedRuntimeTuning.putObjectRetry.jitter` | `full` | Jitter mode for computed `PutObject` retry delays; `none` is also supported. |
 
 Fixed ZIP entry streaming defaults intentionally match the local `s3-unspool` extraction path:
 

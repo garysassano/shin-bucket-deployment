@@ -64,7 +64,7 @@ The construct follows the upstream `BucketDeployment` API where the behavior map
 | S3 metadata | `accessControl`, `cacheControl`, `contentDisposition`, `contentEncoding`, `contentLanguage`, `contentType`, `metadata`, `serverSideEncryption`, `serverSideEncryptionAwsKmsKeyId`, `storageClass`, `websiteRedirectLocation` |
 | CloudFront | `distribution`, `distributionPaths`, `waitForDistributionInvalidation` |
 | Provider Lambda | `architecture`, `bundling`, `ephemeralStorageSize`, `logGroup`, `logRetention`, `memoryLimit`, `role`, `securityGroups`, `vpc`, `vpcSubnets` |
-| Runtime tuning | `maxParallelTransfers`, `sourceBlockBytes`, `sourceBlockMergeGapBytes`, `sourceGetConcurrency`, `sourceWindowBytes`, `sourceWindowMemoryBudgetMb`, `putObjectMaxAttempts`, `putObjectRetryBaseDelayMs`, `putObjectRetryMaxDelayMs`, `putObjectSlowdownRetryBaseDelayMs`, `putObjectSlowdownRetryMaxDelayMs`, `putObjectRetryJitter` |
+| Runtime tuning | `maxParallelTransfers`, `advancedRuntimeTuning` |
 
 Unsupported upstream props:
 
@@ -77,7 +77,7 @@ Unsupported upstream props:
 
 ## How It Works
 
-For `extract=true`, the provider reads each source zip's central directory with ranged S3 `GetObject` requests, walks the archive entries, applies filters, and builds the deployment plan from the archive contents. Directory `Source.asset` inputs are packaged with an embedded `.s3-unspool/catalog.v1.json` MD5 catalog so unchanged marker-free files can be skipped from destination metadata. Entry data is read through coalesced source blocks with a bounded resident window. Source GET concurrency and the source window are derived from `memoryLimit` by default and can be overridden with runtime tuning props. It does not download the whole archive and does not write the archive or extracted entries to Lambda `/tmp`.
+For `extract=true`, the provider reads each source zip's central directory with ranged S3 `GetObject` requests, walks the archive entries, applies filters, and builds the deployment plan from the archive contents. Directory `Source.asset` inputs are packaged with an embedded `.s3-unspool/catalog.v1.json` MD5 catalog so unchanged marker-free files can be skipped from destination metadata. Entry data is read through coalesced source blocks with a bounded resident window. Source GET concurrency and the source window are derived from `memoryLimit` by default and can be overridden through `advancedRuntimeTuning` when diagnosing unusual workloads. It does not download the whole archive and does not write the archive or extracted entries to Lambda `/tmp`.
 
 `ephemeralStorageSize` is accepted for upstream `BucketDeployment` API compatibility, but it is rarely useful for this provider because ZIP planning, extraction, hashing, and uploads avoid Lambda `/tmp`.
 
