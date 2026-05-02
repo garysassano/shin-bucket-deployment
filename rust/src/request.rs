@@ -17,7 +17,7 @@ use crate::types::{
     RuntimeOptions,
 };
 
-const DEFAULT_AVAILABLE_MEMORY_MB: u64 = 512;
+const DEFAULT_AVAILABLE_MEMORY_MB: u64 = 1024;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "PascalCase")]
@@ -439,9 +439,9 @@ mod tests {
         assert!(request.prune);
         assert!(request.output_object_keys);
         assert_eq!(request.distribution_paths, vec!["/*"]);
-        assert_eq!(request.runtime.available_memory_mb, 512);
-        assert_eq!(request.runtime.source_window_memory_budget_mb, 512);
-        assert_eq!(request.runtime.source_get_concurrency, 2);
+        assert_eq!(request.runtime.available_memory_mb, 1024);
+        assert_eq!(request.runtime.source_window_memory_budget_mb, 1024);
+        assert_eq!(request.runtime.source_get_concurrency, 4);
         assert_eq!(request.runtime.max_parallel_transfers, 8);
         assert_eq!(
             request.runtime.put_object_retry.jitter,

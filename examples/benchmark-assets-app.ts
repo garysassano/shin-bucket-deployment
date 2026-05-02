@@ -9,7 +9,7 @@ class BenchmarkAssetsRustBucketDeploymentStack extends Stack {
 
     const bundle = ensureBenchmarkAssets();
     const destinationPrefix = process.env.RBD_BENCH_DESTINATION_PREFIX ?? "benchmark-site";
-    const memoryLimitMb = parseOptionalPositiveIntegerEnv("RBD_BENCH_MEMORY_LIMIT_MB") ?? 512;
+    const memoryLimitMb = parseOptionalPositiveIntegerEnv("RBD_BENCH_MEMORY_LIMIT_MB") ?? 1024;
 
     const websiteBucket = new Bucket(this, "WebsiteBucket", {
       autoDeleteObjects: true,
