@@ -2,6 +2,14 @@
 
 This document defines the benchmark strategy for `RustBucketDeployment`. The goal is not just elapsed time; it is to explain deployment behavior at every step and produce comparable evidence across code changes.
 
+## Document Ownership
+
+This file owns benchmark methodology, benchmark harness usage, required snapshot schema, and the latest sanitized performance snapshot.
+
+`docs/benchmark-history.jsonl` owns the append-only sanitized benchmark record across runs. Before replacing the `Current Results` section here, make sure the previous and new run records are present there.
+
+`docs/validation.md` owns correctness validation status and AWS functional runbooks. Validation may reference benchmark-backed coverage, but benchmark timing and memory data belongs here or in `docs/benchmark-history.jsonl`.
+
 ## Goals
 
 Measure each deployment phase:
@@ -237,6 +245,73 @@ After provider telemetry exists, add a repository runner that automates the matr
 
 Do not commit `.benchmark-runs/` raw output. Commit only curated aggregate results that do not include sensitive resource identifiers.
 
+## Result Storage Schema
+
+Every committed benchmark result must be represented as sanitized records in `docs/benchmark-history.jsonl`. This file keeps a human-readable summary of only the latest run.
+
+`docs/benchmark-history.jsonl` is append-only JSONL with one JSON object per measured phase. Each object uses this schema:
+
+| Field | Meaning |
+| --- | --- |
+| `schemaVersion` | Schema version, currently `1`. |
+| `runId` | Stable identifier grouping related phase rows. |
+| `runDate` | ISO date, for example `2026-05-02`. |
+| `providerImplementationCommit` | Commit measured by the provider Lambda. |
+| `providerImplementationSubject` | Short commit subject, when known. |
+| `resultDocumentationCommit` | Commit that first recorded the sanitized result, or `null` until committed. |
+| `region` | AWS region only, not account information. |
+| `profile` | Benchmark asset profile. |
+| `series` | Logical run series, for example `full-create-update-prune` or `forced-unchanged`. |
+| `memoryMb` | Provider Lambda memory size in MiB. |
+| `phase` | Measured phase name. |
+| `variant` | Asset variant, or `null` when not applicable. |
+| `fileCount` | Source file count for the phase, or `null` when not applicable. |
+| `totalBytes` | Source total bytes for the phase, or `null` when not applicable. |
+| `cdkDeploySeconds` | CDK-reported deploy time, or `null` when unavailable. |
+| `localWallSeconds` | Local wall time around the command, or `null` when unavailable. |
+| `providerDurationSeconds` | Provider Lambda duration from the `REPORT` line, or `null` when not invoked. |
+| `billedDurationSeconds` | Provider Lambda billed duration, or `null` when not invoked. |
+| `initDurationSeconds` | Lambda init duration, or `null` when unavailable. |
+| `maxMemoryMb` | Lambda max memory from the `REPORT` line, or `null` when not invoked. |
+| `providerInvoked` | Whether the provider Lambda was invoked for this phase. |
+| `cleanup` | Cleanup status for the run group, when known. |
+| `notes` | Short caveats, without resource identifiers. |
+
+Use `null` for unavailable JSONL fields. Do not invent values.
+
+The latest human-readable snapshot in this file uses a metadata table and result tables derived from those JSONL records.
+
+Metadata table:
+
+| Field | Value |
+| --- | --- |
+| Run date | ISO date, for example `2026-05-02` |
+| Provider implementation commit | Commit measured by the provider Lambda |
+| Result documentation commit | Commit that first recorded the sanitized result, or blank until committed |
+| Region | AWS region only, not account information |
+| Profile | Benchmark asset profile |
+| Baseline variant | Baseline asset variant |
+| Baseline bundle | File count and total bytes |
+| Comparison variants | Variant names and file counts/bytes when measured |
+| Provider memory | Memory settings included in the run |
+| Cleanup | Stack cleanup outcome |
+| Notes | Short caveats, for example missing fields or forced update behavior |
+
+Result table columns:
+
+| Memory | Phase | Variant | CDK deploy time | Local wall time | Provider duration | Billed duration | Init duration | Max memory |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+
+Leave unavailable Markdown cells empty. Use `not invoked` only when CloudFormation/CDK intentionally did not invoke the provider for that phase. Use `n/a` only when a field does not apply to the phase.
+
+When a new benchmark run becomes the latest result:
+
+1. Append sanitized phase records for the new run to `docs/benchmark-history.jsonl`.
+2. If the previous `Current Results` were not already recorded in JSONL, add them before replacing the human-readable summary.
+3. Replace `Current Results` in this file with a human-readable summary of the new run using the metadata and result table shapes above.
+4. Confirm raw logs remain outside git and only sanitized aggregate data is committed.
+5. Record whether all benchmark stacks were destroyed.
+
 ## Comparison Method
 
 For branch comparisons:
@@ -253,7 +328,19 @@ For branch comparisons:
 
 ## Current Results
 
-Run date: 2026-05-02. Region: `ap-southeast-2`. Profile: `mixed`. Baseline bundle: 442 files, 52,904,649 bytes. Pruned bundle: 397 files, 48,185,955 bytes. All benchmark stacks were destroyed after collection.
+| Field | Value |
+| --- | --- |
+| Run date | 2026-05-02 |
+| Provider implementation commit | `345efe0` (`simplify runtime tuning props`) |
+| Result documentation commit | `f8dd502` (`document benchmark memory results`) |
+| Region | `ap-southeast-2` |
+| Profile | `mixed` |
+| Baseline variant | `v1` |
+| Baseline bundle | 442 files, 52,904,649 bytes |
+| Comparison variants | `v2`: 442 files, 52,904,649 bytes; `pruned`: 397 files, 48,185,955 bytes |
+| Provider memory | 256, 512, and 1024 MiB |
+| Cleanup | All benchmark stacks destroyed after collection |
+| Notes | The no-change redeploy rows did not invoke the provider; forced unchanged rows used `RBD_BENCH_WAIT=false` on a stack with no CloudFront distribution. |
 
 Full create/update/prune sequence:
 
@@ -290,36 +377,3 @@ Forced unchanged provider runs, using `RBD_BENCH_WAIT=false` on the second `v1` 
 | 1024 MiB | Destroy | n/a | n/a | 44.03 s | 0.048 s | 0.049 s | n/a | 64 MB |
 
 These results validate that the ranged, no-disk ZIP path stays comfortably below 256 MiB for the `mixed` profile. The highest reported memory across this matrix was 76 MB. Provider summary counters are still needed before using these numbers for detailed phase attribution.
-
-## Historical Results
-
-These results are retained only as historical context. They predate the latest ranged no-disk engine transition and should not be treated as current performance claims.
-
-Run date: 2026-04-26. Profile: `mixed`. Variant: `v1`. Bundle: 442 files, 52,904,649 bytes.
-
-| Branch | Provider cold create | Unchanged update 1 | Unchanged update 2 | Max memory |
-| --- | ---: | ---: | ---: | ---: |
-| `crc32` | 40.63 s | 3.00 s | 3.37 s | 100 MB |
-| `pre-crc32` | 55.85 s | 1.83 s | 1.81 s | 158 MB |
-
-Follow-up run date: 2026-04-26. Branch: `v2`. Commit: `f767885`. Profile: `mixed`. Variant: `v1`. Bundle: 442 files, 52,904,649 bytes.
-
-| Run | CDK deploy time | Local wall time | Provider duration | Billed duration | Max memory |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| Cold create | 60.57 s | 91.48 s | 2.636 s | 2.809 s | 113 MB |
-| Unchanged 1 | 16.17 s | 23.03 s | 0.793 s | 0.793 s | 113 MB |
-| Unchanged 2 | 21.48 s | 27.15 s | 0.740 s | 0.741 s | 113 MB |
-| Unchanged 3 | 21.89 s | 27.53 s | 0.748 s | 0.749 s | 113 MB |
-| Unchanged 4 | 22.42 s | 27.24 s | 0.743 s | 0.743 s | 113 MB |
-| Unchanged 5 | 23.10 s | 28.82 s | 0.739 s | 0.739 s | 113 MB |
-
-Unchanged redeploy summary:
-
-| Metric | Median | p90 |
-| --- | ---: | ---: |
-| CDK deploy time | 21.89 s | 23.10 s |
-| Local wall time | 27.24 s | 28.82 s |
-| Provider duration | 0.743 s | 0.793 s |
-| Billed duration | 0.743 s | 0.793 s |
-
-The key lesson from those runs was that raw elapsed time is ambiguous without provider counters. A run can look slower because it hashes local ranges, waits on CloudFormation, publishes assets, or performs destination writes. The next benchmark iteration must capture those counters directly.
