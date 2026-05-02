@@ -55,29 +55,29 @@ pub(crate) struct RawDeploymentRequest {
     pub(crate) output_object_keys: bool,
     #[serde(default)]
     pub(crate) destination_bucket_arn: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_optional_u64ish")]
     pub(crate) available_memory_mb: Option<u64>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_optional_usizeish")]
     pub(crate) max_parallel_transfers: Option<usize>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_optional_usizeish")]
     pub(crate) source_block_bytes: Option<usize>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_optional_usizeish")]
     pub(crate) source_block_merge_gap_bytes: Option<usize>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_optional_usizeish")]
     pub(crate) source_get_concurrency: Option<usize>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_optional_usizeish")]
     pub(crate) source_window_bytes: Option<usize>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_optional_u64ish")]
     pub(crate) source_window_memory_budget_mb: Option<u64>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_optional_usizeish")]
     pub(crate) put_object_max_attempts: Option<usize>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_optional_u64ish")]
     pub(crate) put_object_retry_base_delay_ms: Option<u64>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_optional_u64ish")]
     pub(crate) put_object_retry_max_delay_ms: Option<u64>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_optional_u64ish")]
     pub(crate) put_object_slowdown_retry_base_delay_ms: Option<u64>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_optional_u64ish")]
     pub(crate) put_object_slowdown_retry_max_delay_ms: Option<u64>,
     #[serde(default)]
     pub(crate) put_object_retry_jitter: Option<PutObjectRetryJitter>,
@@ -314,6 +314,95 @@ where
     deserializer.deserialize_any(BoolishVisitor)
 }
 
+fn deserialize_optional_u64ish<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<u64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    deserialize_optional_unsigned(deserializer, "u64")
+}
+
+fn deserialize_optional_usizeish<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<usize>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = deserialize_optional_unsigned(deserializer, "usize")?;
+    value
+        .map(|value| usize::try_from(value).map_err(serde::de::Error::custom))
+        .transpose()
+}
+
+fn deserialize_optional_unsigned<'de, D>(
+    deserializer: D,
+    expected: &'static str,
+) -> std::result::Result<Option<u64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct UnsignedVisitor {
+        expected: &'static str,
+    }
+
+    impl<'de> serde::de::Visitor<'de> for UnsignedVisitor {
+        type Value = Option<u64>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(
+                formatter,
+                "an unsigned {} integer or a string containing one",
+                self.expected
+            )
+        }
+
+        fn visit_none<E>(self) -> std::result::Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_unit<E>(self) -> std::result::Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_some<D>(self, deserializer: D) -> std::result::Result<Self::Value, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            deserializer.deserialize_any(self)
+        }
+
+        fn visit_u64<E>(self, value: u64) -> std::result::Result<Self::Value, E> {
+            Ok(Some(value))
+        }
+
+        fn visit_i64<E>(self, value: i64) -> std::result::Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            u64::try_from(value)
+                .map(Some)
+                .map_err(|_| E::invalid_value(serde::de::Unexpected::Signed(value), &self))
+        }
+
+        fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                return Ok(None);
+            }
+            trimmed
+                .parse::<u64>()
+                .map(Some)
+                .map_err(|_| E::invalid_value(serde::de::Unexpected::Str(value), &self))
+        }
+    }
+
+    deserializer.deserialize_option(UnsignedVisitor { expected })
+}
+
 fn compile_globs(patterns: &[String]) -> Result<Vec<GlobMatcher>> {
     patterns
         .iter()
@@ -428,18 +517,18 @@ mod tests {
     #[test]
     fn deserializes_runtime_tuning_overrides() {
         let mut props = minimal_request();
-        props["AvailableMemoryMb"] = json!(1024);
-        props["MaxParallelTransfers"] = json!(12);
-        props["SourceBlockBytes"] = json!(4096);
-        props["SourceBlockMergeGapBytes"] = json!(128);
-        props["SourceGetConcurrency"] = json!(6);
-        props["SourceWindowBytes"] = json!(65_536);
-        props["SourceWindowMemoryBudgetMb"] = json!(512);
-        props["PutObjectMaxAttempts"] = json!(3);
-        props["PutObjectRetryBaseDelayMs"] = json!(10);
-        props["PutObjectRetryMaxDelayMs"] = json!(20);
-        props["PutObjectSlowdownRetryBaseDelayMs"] = json!(30);
-        props["PutObjectSlowdownRetryMaxDelayMs"] = json!(40);
+        props["AvailableMemoryMb"] = json!("1024");
+        props["MaxParallelTransfers"] = json!("12");
+        props["SourceBlockBytes"] = json!("4096");
+        props["SourceBlockMergeGapBytes"] = json!("128");
+        props["SourceGetConcurrency"] = json!("6");
+        props["SourceWindowBytes"] = json!("65536");
+        props["SourceWindowMemoryBudgetMb"] = json!("512");
+        props["PutObjectMaxAttempts"] = json!("3");
+        props["PutObjectRetryBaseDelayMs"] = json!("10");
+        props["PutObjectRetryMaxDelayMs"] = json!("20");
+        props["PutObjectSlowdownRetryBaseDelayMs"] = json!("30");
+        props["PutObjectSlowdownRetryMaxDelayMs"] = json!("40");
         props["PutObjectRetryJitter"] = json!("none");
 
         let raw: RawDeploymentRequest = serde_json::from_value(props).unwrap();
