@@ -148,7 +148,7 @@ Destroy:
 RBD_BENCH_STACK_SUFFIX=BenchA RBD_BENCH_MEMORY_LIMIT_MB=512 pnpm example destroy benchmark-assets
 ```
 
-The 512 MiB setting is the preferred default because the current benchmark matrix showed close to 2x provider-duration improvement over 256 MiB for cold create and prune while keeping billed cost in the same range. Memory comparison runs should repeat the standard sequence with one suffix per memory size, for example `Mem256`, `Mem512`, and `Mem1024`, and set `RBD_BENCH_MEMORY_LIMIT_MB` to `256`, `512`, and `1024` respectively.
+The 512 MiB setting is the preferred default because the mixed-profile benchmark matrix showed close to 2x provider-duration improvement over 256 MiB for cold create and prune while keeping billed cost in the same range. Current memory comparison runs should use 512, 1024, and 2048 MiB to measure default behavior and higher-memory performance headroom; use suffixes such as `Mem512`, `Mem1024`, and `Mem2048`.
 
 ## Data To Record
 
@@ -276,13 +276,19 @@ The current collector can append sanitized phase records to `docs/benchmark-hist
 pnpm benchmark:collect \
   --log-file /tmp/rbd-aws-validation-20260502/benchmark-memory/mem512-create-v1.log \
   --report-file /tmp/rbd-aws-validation-20260502/benchmark-memory/report-example.json \
+  --summary-file /tmp/rbd-aws-validation-20260502/benchmark-memory/summary-example.jsonl \
   --run-id 2026-05-02-mixed-memory-matrix \
   --run-date 2026-05-02 \
   --phase cold-create \
   --series full-create-update-prune \
   --commit 345efe0 \
   --subject "simplify runtime tuning props" \
-  --region ap-southeast-2
+  --region ap-southeast-2 \
+  --profile mixed \
+  --memory-mb 512 \
+  --variant v1 \
+  --file-count 442 \
+  --total-bytes 52904649
 ```
 
 - builds the project once
@@ -327,6 +333,7 @@ Every committed benchmark result must be represented as sanitized records in `do
 | `providerInvoked` | Whether the provider Lambda was invoked for this phase. |
 | `cleanup` | Cleanup status for the run group, when known. |
 | `notes` | Short caveats, without resource identifiers. |
+| `providerSummary` | Optional sanitized `rbd_deployment_summary` object when captured. |
 
 Use `null` for unavailable JSONL fields. Do not invent values.
 
@@ -382,49 +389,46 @@ For branch comparisons:
 | Field | Value |
 | --- | --- |
 | Run date | 2026-05-02 |
-| Provider implementation commit | `345efe0` (`simplify runtime tuning props`) |
-| Result documentation commit | `f8dd502` (`document benchmark memory results`) |
+| Provider implementation commit | `856afbb` (`add provider telemetry and benchmark collector`) |
+| Result documentation commit | Pending |
 | Region | `ap-southeast-2` |
-| Profile | `mixed` |
+| Profile | `large-few` |
 | Baseline variant | `v1` |
-| Baseline bundle | 442 files, 52,904,649 bytes |
-| Comparison variants | `v2`: 442 files, 52,904,649 bytes; `pruned`: 397 files, 48,185,955 bytes |
-| Provider memory | 256, 512, and 1024 MiB |
+| Baseline bundle | 32 files, 144,167,470 bytes |
+| Comparison variants | `v2`: 32 files, 144,167,470 bytes |
+| Provider memory | 512, 1024, and 2048 MiB |
 | Cleanup | All benchmark stacks destroyed after collection |
-| Notes | The no-change redeploy rows did not invoke the provider; forced unchanged rows used `RBD_BENCH_WAIT=false` on a stack with no CloudFront distribution. |
+| Notes | Forced unchanged rows used `RBD_BENCH_WAIT=false` on a stack with no CloudFront distribution. Rows include sanitized provider summary counters in `docs/benchmark-history.jsonl`. |
 
-Full create/update/prune sequence:
-
-| Memory | Phase | Variant | CDK deploy time | Local wall time | Provider duration | Billed duration | Init duration | Max memory |
-| ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| 256 MiB | Cold create | `v1` | 65.91 s | 116.98 s | 4.355 s | 4.524 s | 0.168 s | 74 MB |
-| 256 MiB | No-change redeploy | `v1` | 0.00 s | 25.96 s | not invoked | not invoked | n/a | n/a |
-| 256 MiB | Sparse update | `v2` | 14.27 s | 63.44 s | 0.593 s | 0.594 s | n/a | 74 MB |
-| 256 MiB | Prune update | `pruned` | 22.14 s | 68.88 s | 4.082 s | 4.083 s | n/a | 74 MB |
-| 256 MiB | Destroy | n/a | n/a | 37.78 s | 0.052 s | 0.053 s | n/a | 74 MB |
-| 512 MiB | Cold create | `v1` | 66.04 s | 106.83 s | 2.362 s | 2.527 s | 0.165 s | 68 MB |
-| 512 MiB | No-change redeploy | `v1` | 0.00 s | 26.53 s | not invoked | not invoked | n/a | n/a |
-| 512 MiB | Sparse update | `v2` | 14.30 s | 57.86 s | 0.461 s | 0.462 s | n/a | 68 MB |
-| 512 MiB | Prune update | `pruned` | 20.26 s | 63.87 s | 2.690 s | 2.691 s | n/a | 70 MB |
-| 512 MiB | Destroy | n/a | n/a | 44.15 s | 0.046 s | 0.046 s | n/a | 72 MB |
-| 1024 MiB | Cold create | `v1` | 65.89 s | 107.88 s | 2.166 s | 2.336 s | 0.170 s | 62 MB |
-| 1024 MiB | No-change redeploy | `v1` | 0.00 s | 26.28 s | not invoked | not invoked | n/a | n/a |
-| 1024 MiB | Sparse update | `v2` | 14.28 s | 57.54 s | 0.408 s | 0.409 s | n/a | 64 MB |
-| 1024 MiB | Prune update | `pruned` | 22.14 s | 65.83 s | 2.276 s | 2.276 s | n/a | 74 MB |
-| 1024 MiB | Destroy | n/a | n/a | 43.73 s | 0.045 s | 0.046 s | n/a | 74 MB |
-
-Forced unchanged provider runs, using `RBD_BENCH_WAIT=false` on the second `v1` deploy:
+Large-few create/unchanged/update sequence:
 
 | Memory | Phase | Variant | CDK deploy time | Local wall time | Provider duration | Billed duration | Init duration | Max memory |
 | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| 256 MiB | Cold create | `v1` | 66.35 s | 107.48 s | 4.089 s | 4.219 s | 0.129 s | 76 MB |
-| 256 MiB | Forced unchanged | `v1` | 14.21 s | 72.88 s | 0.264 s | 0.264 s | n/a | 76 MB |
-| 256 MiB | Destroy | n/a | n/a | 44.79 s | 0.053 s | 0.054 s | n/a | 76 MB |
-| 512 MiB | Cold create | `v1` | 66.15 s | 107.63 s | 2.270 s | 2.405 s | 0.135 s | 68 MB |
-| 512 MiB | Forced unchanged | `v1` | 14.16 s | 57.72 s | 0.212 s | 0.212 s | n/a | 68 MB |
-| 512 MiB | Destroy | n/a | n/a | 43.99 s | 0.051 s | 0.051 s | n/a | 68 MB |
-| 1024 MiB | Cold create | `v1` | 65.61 s | 106.86 s | 1.946 s | 2.074 s | 0.128 s | 64 MB |
-| 1024 MiB | Forced unchanged | `v1` | 14.20 s | 57.56 s | 0.222 s | 0.223 s | n/a | 64 MB |
-| 1024 MiB | Destroy | n/a | n/a | 44.03 s | 0.048 s | 0.049 s | n/a | 64 MB |
+| 512 MiB | Cold create | `v1` | 66.03 s | 161.16 s | 1.876 s | 2.040 s | 0.163 s | 92 MB |
+| 512 MiB | Forced unchanged | `v1` | 14.34 s | 59.38 s | 0.237 s | 0.237 s | n/a | 92 MB |
+| 512 MiB | Sparse update | `v2` | 14.16 s | 60.92 s | 0.471 s | 0.471 s | n/a | 92 MB |
+| 512 MiB | Destroy | n/a | n/a | 45.31 s | 0.230 s | 0.400 s | 0.170 s | 34 MB |
+| 1024 MiB | Cold create | `v1` | 58.09 s | 99.99 s | 0.941 s | 1.071 s | 0.130 s | 86 MB |
+| 1024 MiB | Forced unchanged | `v1` | 14.26 s | 58.77 s | 0.199 s | 0.200 s | n/a | 86 MB |
+| 1024 MiB | Sparse update | `v2` | 14.18 s | 72.80 s | 0.387 s | 0.387 s | n/a | 86 MB |
+| 1024 MiB | Destroy | n/a | n/a | 44.37 s | 0.173 s | 0.311 s | 0.137 s | 34 MB |
+| 2048 MiB | Cold create | `v1` | 58.68 s | 100.68 s | 0.674 s | 0.812 s | 0.137 s | 84 MB |
+| 2048 MiB | Forced unchanged | `v1` | 14.25 s | 58.75 s | 0.200 s | 0.200 s | n/a | 84 MB |
+| 2048 MiB | Sparse update | `v2` | 14.12 s | 56.99 s | 0.327 s | 0.327 s | n/a | 84 MB |
+| 2048 MiB | Destroy | n/a | n/a | 37.91 s | 0.043 s | 0.044 s | n/a | 84 MB |
 
-These results validate that the ranged, no-disk ZIP path stays comfortably below 256 MiB for the `mixed` profile. The highest reported memory across this matrix was 76 MB. Newer provider builds emit sanitized summary counters for detailed phase attribution; these historical rows predate that summary line.
+Provider summary highlights:
+
+| Memory | Phase | Uploaded objects | Skipped objects | Uploaded bytes | Source fetched bytes |
+| ---: | --- | ---: | ---: | ---: | ---: |
+| 512 MiB | Cold create | 33 | 0 | 144,167,564 | 620,873 |
+| 512 MiB | Forced unchanged | 0 | 33 | 0 | 1,125 |
+| 512 MiB | Sparse update | 4 | 29 | 8,209,834 | 199,427 |
+| 1024 MiB | Cold create | 33 | 0 | 144,167,564 | 620,873 |
+| 1024 MiB | Forced unchanged | 0 | 33 | 0 | 1,125 |
+| 1024 MiB | Sparse update | 4 | 29 | 8,209,834 | 199,427 |
+| 2048 MiB | Cold create | 33 | 0 | 144,167,564 | 620,873 |
+| 2048 MiB | Forced unchanged | 0 | 33 | 0 | 1,125 |
+| 2048 MiB | Sparse update | 4 | 29 | 8,209,834 | 199,427 |
+
+These results validate that the ranged, no-disk ZIP path stays comfortably below the 512 MiB default for the `large-few` profile. The highest reported memory across this matrix was 92 MB. Moving from 512 to 1024 MiB roughly halved cold-create provider duration for this profile, while 2048 MiB provided a smaller additional cold-create improvement and only modest sparse-update improvement.

@@ -41,6 +41,11 @@ export type CollectBenchmarkOptions = {
   readonly subject?: string;
   readonly resultCommit?: string;
   readonly region?: string;
+  readonly profile?: string;
+  readonly memoryMb?: number;
+  readonly variant?: string;
+  readonly fileCount?: number;
+  readonly totalBytes?: number;
   readonly cleanup?: string;
   readonly notes?: string;
 };
@@ -63,13 +68,13 @@ export function collectBenchmarkResult(options: CollectBenchmarkOptions): Benchm
     providerImplementationSubject: options.subject ?? null,
     resultDocumentationCommit: options.resultCommit ?? null,
     region: options.region ?? null,
-    profile: outputString(logText, "BenchmarkProfile"),
+    profile: options.profile ?? outputString(logText, "BenchmarkProfile"),
     series: options.series ?? null,
-    memoryMb: outputNumber(logText, "BenchmarkMemoryLimitMb"),
+    memoryMb: options.memoryMb ?? outputNumber(logText, "BenchmarkMemoryLimitMb"),
     phase: options.phase,
-    variant: outputString(logText, "BenchmarkVariant"),
-    fileCount: outputNumber(logText, "BenchmarkFileCount"),
-    totalBytes: outputNumber(logText, "BenchmarkTotalBytes"),
+    variant: options.variant ?? outputString(logText, "BenchmarkVariant"),
+    fileCount: options.fileCount ?? outputNumber(logText, "BenchmarkFileCount"),
+    totalBytes: options.totalBytes ?? outputNumber(logText, "BenchmarkTotalBytes"),
     cdkDeploySeconds: parseSeconds(logText, /Deployment time: ([\d.]+)s/),
     localWallSeconds: parseSeconds(logText, /^real ([\d.]+)$/m),
     providerDurationSeconds: report?.durationSeconds ?? null,
@@ -116,6 +121,11 @@ function parseArgs(args: string[]): CollectBenchmarkOptions {
     subject: values.get("subject"),
     resultCommit: values.get("result-commit"),
     region: values.get("region"),
+    profile: values.get("profile"),
+    memoryMb: optionalNumber(values, "memory-mb"),
+    variant: values.get("variant"),
+    fileCount: optionalNumber(values, "file-count"),
+    totalBytes: optionalNumber(values, "total-bytes"),
     cleanup: values.get("cleanup"),
     notes: values.get("notes"),
   };
@@ -129,9 +139,21 @@ function required(values: Map<string, string>, name: string): string {
   return value;
 }
 
+function optionalNumber(values: Map<string, string>, name: string): number | undefined {
+  const value = values.get(name);
+  if (value === undefined) {
+    return undefined;
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    usage();
+  }
+  return parsed;
+}
+
 function usage(): never {
   console.error(
-    "Usage: node dist/scripts/collect-benchmark-results.js --log-file <path> --run-id <id> --run-date <YYYY-MM-DD> --phase <name> [--report-file <path>] [--summary-file <path>]",
+    "Usage: node dist/scripts/collect-benchmark-results.js --log-file <path> --run-id <id> --run-date <YYYY-MM-DD> --phase <name> [--report-file <path>] [--summary-file <path>] [--profile <name>] [--memory-mb <n>]",
   );
   process.exit(1);
 }

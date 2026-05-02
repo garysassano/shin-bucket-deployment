@@ -48,7 +48,7 @@ Fixed ZIP entry streaming defaults intentionally match the local `s3-unspool` ex
 | ZIP entry S3 body chunk | 256 KiB | Size of each `Bytes` frame offered to the destination `PutObject` body. |
 | ZIP entry body pipe capacity | 1 MiB | Backpressure between entry production and the SDK upload body consumer. |
 
-The default provider Lambda memory is 512 MiB. That default is sized around the adaptive memory model used for source blocks and transfer work rather than around source ZIP size. The default was raised from 256 MiB because the 2026-05-02 benchmark matrix showed close to 2x provider-duration improvement for cold create and prune while keeping billed compute cost in the same range:
+The default provider Lambda memory is 512 MiB. That default is sized around the adaptive memory model used for source blocks and transfer work rather than around source ZIP size. The default was raised from 256 MiB because the 2026-05-02 mixed-profile benchmark matrix showed close to 2x provider-duration improvement for cold create and prune while keeping billed compute cost in the same range. The active memory comparison set is now 512, 1024, and 2048 MiB; the `large-few` profile showed additional cold-create speedup at higher memory while staying well below the 512 MiB default memory ceiling.
 
 | Budget item at default settings | Approximate budget |
 | --- | ---: |
