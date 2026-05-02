@@ -35,6 +35,26 @@ Runtime tuning defaults:
 | `putObjectSlowdownRetryBaseDelayMs` / `putObjectSlowdownRetryMaxDelayMs` | 1000 / 30000 | Capped throttling `PutObject` retry delay. |
 | `putObjectRetryJitter` | `full` | Jitter mode for computed `PutObject` retry delays; `none` is also supported. |
 
+Fixed ZIP entry streaming defaults intentionally match the local `s3-unspool` extraction path:
+
+| Internal setting | Default | Purpose |
+| --- | ---: | --- |
+| ZIP entry read buffer | 64 KiB | Pulls decompressed entry bytes for size validation, CRC32, MD5, marker input, and upload production. |
+| ZIP entry S3 body chunk | 256 KiB | Size of each `Bytes` frame offered to the destination `PutObject` body. |
+| ZIP entry body pipe capacity | 1 MiB | Backpressure between entry production and the SDK upload body consumer. |
+
+The default provider Lambda memory is 256 MiB. That default is sized around the adaptive memory model used for source blocks and transfer work rather than around source ZIP size:
+
+| Budget item at default settings | Approximate budget |
+| --- | ---: |
+| Runtime/base reserve | 64 MiB |
+| Transfer worker reserve, `8 * 12 MiB` | 96 MiB |
+| Source ranged `GetObject` in-flight reserve, `1 * 8 MiB` | 8 MiB |
+| ZIP entry metadata reserve | 2 KiB per file |
+| Remaining source block window | Up to about 88 MiB minus the file reserve, clamped to the source ZIP size |
+
+The explicit streaming buffers are small enough to fit inside the transfer worker reserve: each active marker-free upload stream uses about 64 KiB read buffer, 64 KiB held-back validation buffer, 256 KiB body assembly buffer, and up to 1 MiB of queued body frames. At eight active transfers that is roughly 11 MiB of entry stream buffering. For 2,500 ZIP entries, the file reserve is about 5 MiB and the adaptive source window can grow to about 83 MiB when the source ZIP is large enough. For small archives, the source window is clamped down to the actual source ZIP size, so observed RSS is much lower than the worst-case budget.
+
 ## Supported Examples
 
 Examples are driven through the repository runner:

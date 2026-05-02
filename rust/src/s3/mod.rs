@@ -15,7 +15,11 @@ pub(crate) const DEFAULT_MAX_PARALLEL_TRANSFERS: usize = 8;
 pub(crate) const DEFAULT_SOURCE_BLOCK_BYTES: usize = 8 * 1024 * 1024;
 pub(crate) const DEFAULT_SOURCE_BLOCK_MERGE_GAP_BYTES: usize = 256 * 1024;
 pub(crate) const DEFAULT_SOURCE_WINDOW_MEMORY_BUDGET_MB: u64 = 256;
-pub(crate) const ZIP_ENTRY_READ_CHUNK_BYTES: usize = 512 * 1024;
+pub(crate) const ZIP_ENTRY_BODY_CHUNK_BYTES: usize = 256 * 1024;
+pub(crate) const ZIP_ENTRY_BODY_PIPE_BYTES: usize = 1024 * 1024;
+pub(crate) const ZIP_ENTRY_BODY_PIPE_CHUNKS: usize =
+    ZIP_ENTRY_BODY_PIPE_BYTES / ZIP_ENTRY_BODY_CHUNK_BYTES;
+pub(crate) const ZIP_ENTRY_READ_CHUNK_BYTES: usize = 64 * 1024;
 pub(crate) const PUT_OBJECT_MAX_ATTEMPTS: usize = 6;
 pub(crate) const PUT_OBJECT_RETRY_BASE_DELAY_MS: u64 = 250;
 pub(crate) const PUT_OBJECT_RETRY_MAX_DELAY_MS: u64 = 5_000;

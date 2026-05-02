@@ -87,6 +87,10 @@ Before uploading or copying, the provider lists the destination prefix. Destinat
 
 For existing marker-free zip entries with catalog MD5s, the provider compares destination size and `ETag` before reading entry bytes. Without a usable catalog match, it reads and decompresses the entry from ranged source blocks, validates size and CRC32, computes MD5, and compares it with the destination `ETag`. Missing marker-free objects stream directly to S3 without pre-hashing. Entries with deploy-time markers are materialized after decompression and replacement so the final bytes can be hashed and uploaded when changed.
 
+Marker-free ZIP entry streaming uses the same small-buffer defaults as the local `s3-unspool` extraction path: 64 KiB entry read buffers, 256 KiB S3 body chunks, and a 1 MiB body pipe between entry production and the SDK upload body. With the default 8 parallel transfers, this keeps entry stream buffering around 11 MiB, leaving the 256 MiB default provider Lambda memory for the Rust runtime, AWS SDK, source block window, and ZIP metadata.
+
+At the default 256 MiB memory limit, adaptive source scheduling reserves about 64 MiB for runtime/base overhead, 96 MiB for eight transfer workers, 8 MiB for one in-flight source range request, and 2 KiB per ZIP entry for metadata. The remaining source block window is therefore up to about 88 MiB minus the file reserve, clamped to the actual source ZIP size. For 2,500 ZIP entries this file reserve is about 5 MiB, leaving an approximately 83 MiB source window when the archive is large enough.
+
 CloudFront invalidation is created after S3 changes when `distribution` is provided. If `distributionPaths` is omitted, the default path is the destination prefix plus `*`, for example `/site/*`.
 
 The provider logs structured source scheduler and destination `PutObject` diagnostics to CloudWatch Logs, including ranged GET attempts/retries/errors, fetched bytes and amplification, block hits/waits/releases/refetches, active source GET high-water, and PUT retry/failure counters.
