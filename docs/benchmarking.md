@@ -55,7 +55,7 @@ Environment variables:
 | `RBD_BENCH_VARIANT` | `v1` | Asset variant: `v1`, `v2`, or `pruned`. |
 | `RBD_BENCH_STACK_SUFFIX` | none | Adds a suffix to the benchmark stack name so multiple runs can coexist. |
 | `RBD_BENCH_DESTINATION_PREFIX` | `benchmark-site` | Destination prefix inside the generated bucket. |
-| `RBD_BENCH_MEMORY_LIMIT_MB` | `512` | Provider Lambda memory size in MiB. Use distinct stack suffixes when comparing memory sizes. |
+| `RBD_BENCH_MEMORY_LIMIT_MB` | `1024` | Provider Lambda memory size in MiB. Use distinct stack suffixes when comparing memory sizes. |
 | `RBD_BENCH_PRUNE` | `true` | Set to `false` to disable prune. |
 | `RBD_BENCH_WAIT` | `true` | Present for property toggling; the benchmark stack currently has no CloudFront distribution. |
 
@@ -105,7 +105,7 @@ Cold create:
 RBD_BENCH_PROFILE=mixed \
 RBD_BENCH_VARIANT=v1 \
 RBD_BENCH_STACK_SUFFIX=BenchA \
-RBD_BENCH_MEMORY_LIMIT_MB=512 \
+RBD_BENCH_MEMORY_LIMIT_MB=1024 \
 pnpm example deploy benchmark-assets
 ```
 
@@ -115,7 +115,7 @@ Unchanged redeploy with a provider invocation:
 RBD_BENCH_PROFILE=mixed \
 RBD_BENCH_VARIANT=v1 \
 RBD_BENCH_STACK_SUFFIX=BenchA \
-RBD_BENCH_MEMORY_LIMIT_MB=512 \
+RBD_BENCH_MEMORY_LIMIT_MB=1024 \
 RBD_BENCH_WAIT=false \
 pnpm example deploy benchmark-assets
 ```
@@ -128,7 +128,7 @@ Sparse same-size update:
 RBD_BENCH_PROFILE=mixed \
 RBD_BENCH_VARIANT=v2 \
 RBD_BENCH_STACK_SUFFIX=BenchA \
-RBD_BENCH_MEMORY_LIMIT_MB=512 \
+RBD_BENCH_MEMORY_LIMIT_MB=1024 \
 pnpm example deploy benchmark-assets
 ```
 
@@ -138,17 +138,17 @@ Prune update:
 RBD_BENCH_PROFILE=mixed \
 RBD_BENCH_VARIANT=pruned \
 RBD_BENCH_STACK_SUFFIX=BenchA \
-RBD_BENCH_MEMORY_LIMIT_MB=512 \
+RBD_BENCH_MEMORY_LIMIT_MB=1024 \
 pnpm example deploy benchmark-assets
 ```
 
 Destroy:
 
 ```bash
-RBD_BENCH_STACK_SUFFIX=BenchA RBD_BENCH_MEMORY_LIMIT_MB=512 pnpm example destroy benchmark-assets
+RBD_BENCH_STACK_SUFFIX=BenchA RBD_BENCH_MEMORY_LIMIT_MB=1024 pnpm example destroy benchmark-assets
 ```
 
-The 512 MiB setting is the preferred default because the mixed-profile benchmark matrix showed close to 2x provider-duration improvement over 256 MiB for cold create and prune while keeping billed cost in the same range. Current memory comparison runs should use 512, 1024, and 2048 MiB to measure default behavior and higher-memory performance headroom; use suffixes such as `Mem512`, `Mem1024`, and `Mem2048`.
+The 1024 MiB setting is the preferred default because the `large-few` benchmark made cold-create provider duration roughly 2x faster than 512 MiB while keeping billed compute cost in the same range. Current memory comparison runs should use 512, 1024, and 2048 MiB to measure lower-memory behavior, default behavior, and higher-memory performance headroom; use suffixes such as `Mem512`, `Mem1024`, and `Mem2048`.
 
 ## Data To Record
 
@@ -431,4 +431,4 @@ Provider summary highlights:
 | 2048 MiB | Forced unchanged | 0 | 33 | 0 | 1,125 |
 | 2048 MiB | Sparse update | 4 | 29 | 8,209,834 | 199,427 |
 
-These results validate that the ranged, no-disk ZIP path stays comfortably below the 512 MiB default for the `large-few` profile. The highest reported memory across this matrix was 92 MB. Moving from 512 to 1024 MiB roughly halved cold-create provider duration for this profile, while 2048 MiB provided a smaller additional cold-create improvement and only modest sparse-update improvement.
+These results validate that the ranged, no-disk ZIP path stays comfortably below the 1024 MiB default for the `large-few` profile. The highest reported memory across this matrix was 92 MB. Moving from 512 to 1024 MiB roughly halved cold-create provider duration for this profile, while 2048 MiB provided a smaller additional cold-create improvement and only modest sparse-update improvement.

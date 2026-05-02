@@ -48,17 +48,17 @@ Fixed ZIP entry streaming defaults intentionally match the local `s3-unspool` ex
 | ZIP entry S3 body chunk | 256 KiB | Size of each `Bytes` frame offered to the destination `PutObject` body. |
 | ZIP entry body pipe capacity | 1 MiB | Backpressure between entry production and the SDK upload body consumer. |
 
-The default provider Lambda memory is 512 MiB. That default is sized around the adaptive memory model used for source blocks and transfer work rather than around source ZIP size. The default was raised from 256 MiB because the 2026-05-02 mixed-profile benchmark matrix showed close to 2x provider-duration improvement for cold create and prune while keeping billed compute cost in the same range. The active memory comparison set is now 512, 1024, and 2048 MiB; the `large-few` profile showed additional cold-create speedup at higher memory while staying well below the 512 MiB default memory ceiling.
+The default provider Lambda memory is 1024 MiB. That default is sized around the adaptive memory model used for source blocks and transfer work rather than around source ZIP size. The default was raised from 512 MiB because the 2026-05-02 `large-few` benchmark made cold-create provider duration roughly 2x faster while keeping billed compute cost in the same range. The active memory comparison set is 512, 1024, and 2048 MiB.
 
 | Budget item at default settings | Approximate budget |
 | --- | ---: |
 | Runtime/base reserve | 64 MiB |
 | Transfer worker reserve, `8 * 12 MiB` | 96 MiB |
-| Source ranged `GetObject` in-flight reserve, `2 * 8 MiB` | 16 MiB |
+| Source ranged `GetObject` in-flight reserve, `4 * 8 MiB` | 32 MiB |
 | ZIP entry metadata reserve | 2 KiB per file |
-| Remaining source block window | Up to about 336 MiB minus the file reserve, clamped to the source ZIP size |
+| Remaining source block window | About 448 MiB minus the file reserve for large enough archives, clamped to the source ZIP size |
 
-The explicit streaming buffers are small enough to fit inside the transfer worker reserve: each active marker-free upload stream uses about 64 KiB read buffer, 64 KiB held-back validation buffer, 256 KiB body assembly buffer, and up to 1 MiB of queued body frames. At eight active transfers that is roughly 11 MiB of entry stream buffering. For 2,500 ZIP entries, the file reserve is about 5 MiB and the adaptive source window can grow to about 331 MiB when the source ZIP is large enough. For small archives, the source window is clamped down to the actual source ZIP size, so observed RSS is much lower than the worst-case budget.
+The explicit streaming buffers are small enough to fit inside the transfer worker reserve: each active marker-free upload stream uses about 64 KiB read buffer, 64 KiB held-back validation buffer, 256 KiB body assembly buffer, and up to 1 MiB of queued body frames. At eight active transfers that is roughly 11 MiB of entry stream buffering. For 2,500 ZIP entries, the file reserve is about 5 MiB and the adaptive source window can grow to about 443 MiB when the source ZIP is large enough. For small archives, the source window is clamped down to the actual source ZIP size, so observed RSS is much lower than the worst-case budget.
 
 ## Supported Examples
 

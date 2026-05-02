@@ -30,7 +30,7 @@ test("renders a Rust-backed custom resource", () => {
     Runtime: "provided.al2023",
     Handler: "bootstrap",
     Architectures: ["arm64"],
-    MemorySize: 512,
+    MemorySize: 1024,
   });
 
   template.hasResourceProperties("Custom::RustBucketDeployment", {
@@ -39,7 +39,7 @@ test("renders a Rust-backed custom resource", () => {
     },
     Extract: true,
     Prune: true,
-    AvailableMemoryMb: 512,
+    AvailableMemoryMb: 1024,
   });
 }, 120_000);
 
@@ -106,7 +106,7 @@ test("creates separate handlers when the provider configuration differs", () => 
   const second = new RustBucketDeployment(stack, "SecondDeploy", {
     sources: [Source.asset(join(__dirname, "fixtures", "my-website"))],
     destinationBucket: secondBucket,
-    memoryLimit: 1024,
+    memoryLimit: 2048,
     bundling: testBundling(),
   });
 

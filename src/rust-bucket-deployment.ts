@@ -19,7 +19,7 @@ import { Construct } from "constructs";
 const CUSTOM_RESOURCE_OWNER_TAG = "aws-cdk:cr-owned";
 const HANDLER_BINARY_NAME = "rust-bucket-deployment-handler";
 const SHARED_HANDLER_ID_PREFIX = "RustBucketDeploymentHandler";
-const DEFAULT_MEMORY_LIMIT_MB = 512;
+const DEFAULT_MEMORY_LIMIT_MB = 1024;
 const DEFAULT_PUT_OBJECT_RETRY_BASE_DELAY_MS = 250;
 const DEFAULT_PUT_OBJECT_RETRY_MAX_DELAY_MS = 5_000;
 const DEFAULT_PUT_OBJECT_SLOWDOWN_RETRY_BASE_DELAY_MS = 1_000;
