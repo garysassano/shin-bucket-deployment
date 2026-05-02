@@ -57,13 +57,14 @@ The construct follows the upstream `BucketDeployment` API where the behavior map
 
 | Area | Supported |
 | --- | --- |
-| Sources | `sources`, `Source.asset`, `Source.data`, `Source.jsonData`, `Source.yamlData`, deploy-time markers |
+| Sources | `sources`, cataloged `Source.asset`, `Source.data`, `Source.jsonData`, `Source.yamlData`, deploy-time markers |
 | Destination | `destinationBucket`, `destinationKeyPrefix`, `deployedBucket`, `objectKeys` |
 | Filtering | `include`, `exclude` |
 | Update behavior | `extract`, `prune`, `retainOnDelete`, `outputObjectKeys` |
 | S3 metadata | `accessControl`, `cacheControl`, `contentDisposition`, `contentEncoding`, `contentLanguage`, `contentType`, `metadata`, `serverSideEncryption`, `serverSideEncryptionAwsKmsKeyId`, `storageClass`, `websiteRedirectLocation` |
 | CloudFront | `distribution`, `distributionPaths`, `waitForDistributionInvalidation` |
 | Provider Lambda | `architecture`, `bundling`, `ephemeralStorageSize`, `logGroup`, `logRetention`, `memoryLimit`, `role`, `securityGroups`, `vpc`, `vpcSubnets` |
+| Runtime tuning | `maxParallelTransfers`, `sourceBlockBytes`, `sourceBlockMergeGapBytes`, `sourceGetConcurrency`, `sourceWindowBytes`, `sourceWindowMemoryBudgetMb`, `putObjectMaxAttempts`, `putObjectRetryBaseDelayMs`, `putObjectRetryMaxDelayMs`, `putObjectSlowdownRetryBaseDelayMs`, `putObjectSlowdownRetryMaxDelayMs` |
 
 Unsupported upstream props:
 
@@ -76,15 +77,17 @@ Unsupported upstream props:
 
 ## How It Works
 
-For `extract=true`, the provider reads each source zip's central directory with ranged S3 `GetObject` requests, walks the archive entries, applies filters, and builds the deployment plan from the archive contents. It does not download the whole archive and does not write the archive or extracted entries to Lambda `/tmp`.
+For `extract=true`, the provider reads each source zip's central directory with ranged S3 `GetObject` requests, walks the archive entries, applies filters, and builds the deployment plan from the archive contents. Directory `Source.asset` inputs are packaged with an embedded `.s3-unspool/catalog.v1.json` MD5 catalog so unchanged marker-free files can be skipped from destination metadata. Entry data is read through coalesced source blocks with a bounded resident window. Source GET concurrency and the source window are derived from `memoryLimit` by default and can be overridden with runtime tuning props. It does not download the whole archive and does not write the archive or extracted entries to Lambda `/tmp`.
 
 For `extract=false`, each source object is copied directly with S3 `CopyObject`.
 
 Before uploading or copying, the provider lists the destination prefix. Destination keys are used for `prune=true`, and destination `ETag` values are used to skip unchanged objects.
 
-For existing marker-free zip entries, the provider reads and decompresses the entry from ranged source blocks, computes MD5, and compares it with the destination `ETag`. Missing marker-free objects stream directly to S3 without pre-hashing. Entries with deploy-time markers are materialized after replacement so the final bytes can be hashed and uploaded when changed.
+For existing marker-free zip entries with catalog MD5s, the provider compares destination size and `ETag` before reading entry bytes. Without a usable catalog match, it reads and decompresses the entry from ranged source blocks, validates size and CRC32, computes MD5, and compares it with the destination `ETag`. Missing marker-free objects stream directly to S3 without pre-hashing. Entries with deploy-time markers are materialized after decompression and replacement so the final bytes can be hashed and uploaded when changed.
 
 CloudFront invalidation is created after S3 changes when `distribution` is provided. If `distributionPaths` is omitted, the default path is the destination prefix plus `*`, for example `/site/*`.
+
+The provider logs structured source scheduler and destination `PutObject` diagnostics to CloudWatch Logs, including ranged GET attempts/retries/errors, fetched bytes and amplification, block hits/waits/releases/refetches, active source GET high-water, and PUT retry/failure counters.
 
 ## Limits
 
@@ -92,7 +95,16 @@ The unchanged-object optimization depends on S3 `ETag` values behaving like MD5 
 
 Uploads or copies may not be skipped correctly for metadata-only changes, multipart objects, SSE-KMS or SSE-C objects, or any case where MD5-like `ETag` metadata is unavailable.
 
-Zip entries with deploy-time marker replacements are fully materialized in memory after replacement so the final bytes can be hashed and uploaded. Plain zip entries are read and uploaded in chunks.
+Zip entries with deploy-time marker replacements are fully materialized in memory after replacement so the final bytes can be hashed and uploaded. Plain zip entries are read and uploaded in chunks. Cataloged directory assets currently do not support CDK asset `bundling` or symlink-following options; pass `embeddedCatalog: false` to `Source.asset` to use the upstream CDK asset path for those cases.
+
+Cataloged `Source.asset` packaging limitations:
+
+- It applies to local directory assets only. Local `.zip` files and `Source.bucket` archives are consumed as provided and only benefit from a catalog if they already contain one.
+- It does not run CDK asset `bundling`. Use your own pre-bundled directory, or pass `embeddedCatalog: false` to delegate packaging to CDK.
+- It currently rejects symlinks instead of following or materializing them.
+- It creates a temporary ZIP during synth/package time on the local machine, not inside the provider Lambda.
+- It changes the staged ZIP bytes compared with upstream CDK packaging because the catalog entry is added.
+- Catalog MD5s are only valid for marker-free files. Deploy-time marker replacement still requires reading and materializing final bytes.
 
 Large replacement-expanded entries must fit in Lambda memory. Source archives are read with S3 ranges and do not need to fit in memory or ephemeral storage.
 
@@ -109,6 +121,6 @@ pnpm example deploy cloudfront-sync
 pnpm example destroy retain-on-delete
 ```
 
-See [docs/architecture.md](./docs/architecture.md) for the full example list and runtime design, [docs/validation.md](./docs/validation.md) for validation status, and [docs/benchmarking.md](./docs/benchmarking.md) for benchmark strategy.
+See [docs/architecture.md](./docs/architecture.md) for the full example list and runtime design, [docs/s3-unspool-parity.md](./docs/s3-unspool-parity.md) for optimization parity, [docs/validation.md](./docs/validation.md) for validation status, and [docs/benchmarking.md](./docs/benchmarking.md) for benchmark strategy.
 
 The Rust provider lives under [rust](./rust), the construct code under [src](./src), and provider workflow diagrams are in [docs/architecture.md](./docs/architecture.md).

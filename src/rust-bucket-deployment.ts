@@ -46,6 +46,72 @@ export interface RustBucketDeploymentProps
    * @default - local cargo-lambda bundling with the current process environment
    */
   readonly bundling?: CargoLambdaBundlingOptions;
+
+  /**
+   * Maximum concurrent object transfers run by the provider.
+   * @default 8
+   */
+  readonly maxParallelTransfers?: number;
+
+  /**
+   * Source ranged-read block size in bytes.
+   * @default 8 MiB
+   */
+  readonly sourceBlockBytes?: number;
+
+  /**
+   * Maximum gap in bytes to coalesce between adjacent source ranges.
+   * @default 256 KiB
+   */
+  readonly sourceBlockMergeGapBytes?: number;
+
+  /**
+   * Maximum concurrent ranged GetObject requests per source archive.
+   * @default - derived from the provider Lambda memory size
+   */
+  readonly sourceGetConcurrency?: number;
+
+  /**
+   * Resident source block window size in bytes per source archive.
+   * @default - derived from the provider Lambda memory size and source archive shape
+   */
+  readonly sourceWindowBytes?: number;
+
+  /**
+   * Memory budget in MiB used to derive the resident source block window.
+   * @default - provider Lambda memory size
+   */
+  readonly sourceWindowMemoryBudgetMb?: number;
+
+  /**
+   * Maximum application-level PutObject attempts per object.
+   * @default 6
+   */
+  readonly putObjectMaxAttempts?: number;
+
+  /**
+   * Base retry delay for non-throttling PutObject failures, in milliseconds.
+   * @default 250
+   */
+  readonly putObjectRetryBaseDelayMs?: number;
+
+  /**
+   * Maximum retry delay for non-throttling PutObject failures, in milliseconds.
+   * @default 5000
+   */
+  readonly putObjectRetryMaxDelayMs?: number;
+
+  /**
+   * Base retry delay for throttling PutObject failures, in milliseconds.
+   * @default 1000
+   */
+  readonly putObjectSlowdownRetryBaseDelayMs?: number;
+
+  /**
+   * Maximum retry delay for throttling PutObject failures, in milliseconds.
+   * @default 30000
+   */
+  readonly putObjectSlowdownRetryMaxDelayMs?: number;
 }
 
 /**
@@ -128,6 +194,32 @@ export class RustBucketDeployment extends Construct {
         this,
       );
     }
+
+    validateIntegerProps(
+      this,
+      props,
+      [
+        "maxParallelTransfers",
+        "sourceBlockBytes",
+        "sourceGetConcurrency",
+        "sourceWindowBytes",
+        "sourceWindowMemoryBudgetMb",
+        "putObjectMaxAttempts",
+      ],
+      1,
+    );
+    validateIntegerProps(
+      this,
+      props,
+      [
+        "sourceBlockMergeGapBytes",
+        "putObjectRetryBaseDelayMs",
+        "putObjectRetryMaxDelayMs",
+        "putObjectSlowdownRetryBaseDelayMs",
+        "putObjectSlowdownRetryMaxDelayMs",
+      ],
+      0,
+    );
 
     this.destinationBucket = props.destinationBucket;
 
@@ -254,6 +346,18 @@ export class RustBucketDeployment extends Construct {
           produce: () =>
             this.requestDestinationArn ? this.destinationBucket.bucketArn : undefined,
         }),
+        AvailableMemoryMb: props.memoryLimit ?? DEFAULT_MEMORY_LIMIT_MB,
+        MaxParallelTransfers: props.maxParallelTransfers,
+        SourceBlockBytes: props.sourceBlockBytes,
+        SourceBlockMergeGapBytes: props.sourceBlockMergeGapBytes,
+        SourceGetConcurrency: props.sourceGetConcurrency,
+        SourceWindowBytes: props.sourceWindowBytes,
+        SourceWindowMemoryBudgetMb: props.sourceWindowMemoryBudgetMb,
+        PutObjectMaxAttempts: props.putObjectMaxAttempts,
+        PutObjectRetryBaseDelayMs: props.putObjectRetryBaseDelayMs,
+        PutObjectRetryMaxDelayMs: props.putObjectRetryMaxDelayMs,
+        PutObjectSlowdownRetryBaseDelayMs: props.putObjectSlowdownRetryBaseDelayMs,
+        PutObjectSlowdownRetryMaxDelayMs: props.putObjectSlowdownRetryMaxDelayMs,
       },
     });
 
@@ -443,6 +547,27 @@ function cloudFrontDistributionArn(scope: Construct, distributionId: string): st
 
 function literalString(value: string): ReturnType<typeof lit> {
   return value as ReturnType<typeof lit>;
+}
+
+function validateIntegerProps(
+  scope: Construct,
+  props: RustBucketDeploymentProps,
+  propNames: Array<keyof RustBucketDeploymentProps>,
+  minimum: number,
+): void {
+  for (const propName of propNames) {
+    const value = props[propName];
+    if (value === undefined) {
+      continue;
+    }
+    if (typeof value !== "number" || !Number.isInteger(value) || value < minimum) {
+      throw new ValidationError(
+        literalString(`RustBucketDeploymentInvalid${String(propName)}`),
+        `${String(propName)} must be an integer greater than or equal to ${minimum}.`,
+        scope,
+      );
+    }
+  }
 }
 
 function sourceConfigEqual(stack: Stack, a: SourceConfig, b: SourceConfig) {

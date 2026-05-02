@@ -154,6 +154,57 @@ describe("RustBucketDeployment validation and option coverage", () => {
     expect(customResourceProperties(stack).OutputObjectKeys).toBe(false);
   });
 
+  test("renders runtime tuning properties", () => {
+    const stack = new Stack();
+    const destinationBucket = new Bucket(stack, "Dest");
+
+    new RustBucketDeployment(stack, "Deploy", {
+      sources: [Source.asset(join(__dirname, "fixtures", "my-website"))],
+      destinationBucket,
+      memoryLimit: 1024,
+      maxParallelTransfers: 7,
+      sourceBlockBytes: 4 * 1024 * 1024,
+      sourceBlockMergeGapBytes: 64 * 1024,
+      sourceGetConcurrency: 3,
+      sourceWindowBytes: 32 * 1024 * 1024,
+      sourceWindowMemoryBudgetMb: 768,
+      putObjectMaxAttempts: 4,
+      putObjectRetryBaseDelayMs: 100,
+      putObjectRetryMaxDelayMs: 1_000,
+      putObjectSlowdownRetryBaseDelayMs: 2_000,
+      putObjectSlowdownRetryMaxDelayMs: 20_000,
+      bundling: testBundling(),
+    });
+
+    expect(customResourceProperties(stack)).toMatchObject({
+      AvailableMemoryMb: 1024,
+      MaxParallelTransfers: 7,
+      SourceBlockBytes: 4 * 1024 * 1024,
+      SourceBlockMergeGapBytes: 64 * 1024,
+      SourceGetConcurrency: 3,
+      SourceWindowBytes: 32 * 1024 * 1024,
+      SourceWindowMemoryBudgetMb: 768,
+      PutObjectMaxAttempts: 4,
+      PutObjectRetryBaseDelayMs: 100,
+      PutObjectRetryMaxDelayMs: 1_000,
+      PutObjectSlowdownRetryBaseDelayMs: 2_000,
+      PutObjectSlowdownRetryMaxDelayMs: 20_000,
+    });
+  });
+
+  test("rejects invalid runtime tuning values", () => {
+    const stack = new Stack();
+    const destinationBucket = new Bucket(stack, "Dest");
+
+    expect(() => {
+      new RustBucketDeployment(stack, "Deploy", {
+        sources: [Source.asset(join(__dirname, "fixtures", "my-website"))],
+        destinationBucket,
+        sourceGetConcurrency: 0,
+      });
+    }).toThrow(/sourceGetConcurrency/);
+  });
+
   test("requests DestinationBucketArn when deployedBucket is accessed", () => {
     const stack = new Stack();
     const destinationBucket = new Bucket(stack, "Dest");

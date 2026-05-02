@@ -16,6 +16,8 @@ pub(super) struct DestinationPlan {
 #[derive(Clone)]
 pub(super) struct DestinationObject {
     pub(super) etag: Option<String>,
+    pub(super) if_match: Option<String>,
+    pub(super) size: Option<u64>,
 }
 
 struct DestinationRecordContext<'a> {
@@ -128,6 +130,7 @@ pub(super) async fn plan_destination(
             record_destination_object(
                 key,
                 object.e_tag(),
+                object.size().and_then(|size| u64::try_from(size).ok()),
                 DestinationRecordContext {
                     strip_prefix,
                     filters,
@@ -214,6 +217,14 @@ pub(super) fn destination_etag_matches(
         == Some(expected_etag)
 }
 
+pub(super) fn destination_md5_and_size_match(
+    object: &DestinationObject,
+    expected_md5: &str,
+    expected_size: u64,
+) -> bool {
+    object.size == Some(expected_size) && object.etag.as_deref() == Some(expected_md5)
+}
+
 pub(super) fn normalize_etag(etag: &str) -> Option<String> {
     let normalized = etag.trim().trim_matches('"').to_ascii_lowercase();
     if normalized.is_empty() {
@@ -238,6 +249,7 @@ fn namespace_list_prefix(prefix: &str) -> Option<String> {
 fn record_destination_object(
     key: &str,
     etag: Option<&str>,
+    size: Option<u64>,
     context: DestinationRecordContext<'_>,
     objects: &mut HashMap<String, DestinationObject>,
     keys_to_delete: &mut Vec<String>,
@@ -247,10 +259,17 @@ fn record_destination_object(
         return;
     }
 
+    let normalized_etag = etag.and_then(normalize_etag);
+    let if_match = normalized_etag
+        .as_ref()
+        .and_then(|_| etag.map(ToOwned::to_owned));
+
     objects.insert(
         relative_key.clone(),
         DestinationObject {
-            etag: etag.and_then(normalize_etag),
+            etag: normalized_etag,
+            if_match,
+            size,
         },
     );
     if !context.filters.should_include(&relative_key) {
@@ -302,6 +321,7 @@ mod tests {
         record_destination_object(
             "site/old.txt",
             Some("\"ABC123\""),
+            Some(10),
             DestinationRecordContext {
                 strip_prefix: "site/",
                 filters: &filters,
@@ -313,6 +333,8 @@ mod tests {
         );
 
         assert_eq!(objects["old.txt"].etag.as_deref(), Some("abc123"));
+        assert_eq!(objects["old.txt"].if_match.as_deref(), Some("\"ABC123\""));
+        assert_eq!(objects["old.txt"].size, Some(10));
         assert_eq!(keys_to_delete, vec!["site/old.txt".to_string()]);
     }
 
@@ -334,6 +356,7 @@ mod tests {
         record_destination_object(
             "site/keep.txt",
             None,
+            Some(1),
             DestinationRecordContext {
                 strip_prefix: "site/",
                 filters: &filters,
@@ -346,6 +369,7 @@ mod tests {
         record_destination_object(
             "site/debug.map",
             None,
+            Some(1),
             DestinationRecordContext {
                 strip_prefix: "site/",
                 filters: &filters,
@@ -370,6 +394,7 @@ mod tests {
 
         record_destination_object(
             "site/",
+            None,
             None,
             DestinationRecordContext {
                 strip_prefix: "site/",

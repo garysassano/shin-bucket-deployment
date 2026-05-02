@@ -2236,6 +2236,7 @@ dependencies = [
  "aws-sdk-s3",
  "aws_lambda_events",
  "bytes",
+ "crc32fast",
  "futures-util",
  "globset",
  "http-body 1.0.1",

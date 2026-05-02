@@ -1,6 +1,6 @@
 # Architecture
 
-This document is the source of truth for the current `RustBucketDeployment` provider architecture. It replaces the older split notes for checksum strategy, Lambda workflow, engine transition, `s3-unspool` comparison, and examples.
+This document is the source of truth for the current `RustBucketDeployment` provider architecture. See [s3-unspool parity](./s3-unspool-parity.md) for the optimization comparison matrix.
 
 ## Runtime Shape
 
@@ -19,13 +19,19 @@ The provider Lambda:
 - deletes destination keys not present in the plan when `prune=true`
 - creates optional CloudFront invalidations after S3 changes
 
-Current fixed runtime constants:
+Runtime tuning defaults:
 
-| Setting | Value | Purpose |
+| Setting | Default | Purpose |
 | --- | ---: | --- |
-| `MAX_PARALLEL_TRANSFERS` | 8 | Bounds copy, hash, upload, and delete-adjacent work. |
-| `SOURCE_BLOCK_BYTES` | 8 MiB | Source range block size for ZIP entry reads. |
-| `SOURCE_BLOCK_MERGE_GAP_BYTES` | 256 KiB | Maximum gap for coalescing adjacent source spans. |
+| `maxParallelTransfers` | 8 | Bounds copy, hash, upload, and related transfer work. |
+| `sourceBlockBytes` | 8 MiB | Source range block size for ZIP entry reads. |
+| `sourceBlockMergeGapBytes` | 256 KiB | Maximum gap for coalescing adjacent source spans. |
+| `sourceGetConcurrency` | derived from Lambda memory, 1 to 8 | Maximum concurrent source ranged `GetObject` block fetches per archive. |
+| `sourceWindowBytes` | derived from Lambda memory and ZIP file count | Maximum resident source block data per ZIP archive; a single larger block can still be admitted. |
+| `sourceWindowMemoryBudgetMb` | provider Lambda `memoryLimit` | Memory budget used for adaptive source window sizing. |
+| `putObjectMaxAttempts` | 6 | Maximum application-level `PutObject` attempts. |
+| `putObjectRetryBaseDelayMs` / `putObjectRetryMaxDelayMs` | 250 / 5000 | Capped non-throttling `PutObject` retry delay. |
+| `putObjectSlowdownRetryBaseDelayMs` / `putObjectSlowdownRetryMaxDelayMs` | 1000 / 30000 | Capped throttling `PutObject` retry delay. |
 
 ## Supported Examples
 
@@ -91,12 +97,14 @@ For `extract=true`:
 2. Read ZIP central directory metadata with ranged `GetObject`.
 3. Walk central-directory entries.
 4. Apply include and exclude filters.
-5. Build a manifest of planned ZIP entries with normalized destination keys, source archive index, entry offsets, compressed size, and uncompressed size.
-6. Coalesce planned source spans into shared source blocks.
-7. List the destination prefix once.
-8. For missing marker-free destination objects, stream the source entry directly into `PutObject`.
-9. For existing marker-free destination objects, read/decompress the entry through ranged source blocks, compute MD5, and compare it with the destination `ETag` from the list response.
-10. Materialize marker entries in memory, apply replacements, compute MD5 over final bytes, and upload when changed.
+5. Load the embedded `.s3-unspool/catalog.v1.json` catalog when present.
+6. Build a manifest of planned ZIP entries with normalized destination keys, source archive index, entry offsets, compressed size, uncompressed size, CRC32, and optional catalog MD5.
+7. Coalesce planned source spans into shared source blocks, prefetch them with bounded source GET concurrency, and release blocks after all active readers consume their claims.
+8. List the destination prefix once.
+9. Skip existing marker-free cataloged entries when destination size and `ETag` match the catalog.
+10. For missing marker-free destination objects, stream the source entry directly into `PutObject`.
+11. For existing marker-free destination objects without a catalog match, read/decompress the entry through ranged source blocks, validate uncompressed size and CRC32, compute MD5, and compare it with the destination `ETag` from the list response.
+12. Materialize marker entries in memory after decompression and CRC validation, apply replacements, compute MD5 over final bytes, and upload when changed.
 
 For `extract=false`:
 
@@ -117,10 +125,12 @@ flowchart LR
   C -->|No| D["Upload without pre-hashing"]
   C -->|Yes| E{"Planned object type"}
   E -->|"extract=false"| F["Expected ETag from source HeadObject"]
-  E -->|"ZIP entry without markers"| G["Read/decompress entry and compute MD5"]
+  E -->|"Cataloged ZIP entry without markers"| G["Compare catalog MD5 and size"]
+  E -->|"Uncataloged ZIP entry without markers"| L["Read/decompress entry and compute MD5"]
   E -->|"ZIP entry with markers"| H["Apply replacements and compute final MD5"]
   F --> I{"Expected MD5/ETag equals destination ETag?"}
   G --> I
+  L --> I
   H --> I
   I -->|Yes| J["Skip upload or copy"]
   I -->|No| K["Conditional upload or copy"]
@@ -128,7 +138,7 @@ flowchart LR
 
 The provider intentionally uses destination `ETag` as the only unchanged-object skip identity. `ListObjectsV2` exposes the destination `ETag`, but it does not expose the actual checksum value needed to compare S3 `ChecksumCRC32`. Using CRC32 for skip decisions would require one checksum-mode `HeadObject` per destination object, which is not worth the request volume for this deployment model.
 
-Without an embedded source MD5 catalog, marker-free ZIP entries that already exist at the destination must be read and decompressed to compute MD5 on every deployment. Missing marker-free objects skip this pre-hash and stream straight to upload. Entries with deploy-time markers are fully materialized in memory, replacements are applied, and MD5 is computed over the final replaced bytes.
+Directory `Source.asset` inputs are packaged with an embedded source MD5 catalog. Marker-free ZIP entries with catalog MD5s and matching destination size can be skipped without reading ZIP entry bytes. Without an embedded catalog match, marker-free ZIP entries that already exist at the destination must be read and decompressed to compute MD5. Missing marker-free objects skip this pre-hash and stream straight to upload. ZIP entry reads validate declared uncompressed size and CRC32 before the final upload chunk is released. Entries with deploy-time markers are fully materialized in memory, replacements are applied, and MD5 is computed over the final replaced bytes.
 
 `extract=false` copies use source and destination `ETag` comparison for skipping. Source object `ETag` comes from a source `HeadObject`; destination `ETag` comes from the single destination list.
 
@@ -147,7 +157,7 @@ This avoids silently overwriting destination objects that changed after the prov
 
 The older extract path downloaded each source ZIP from S3, wrote the full archive to Lambda `/tmp`, opened it with `ZipArchive`, and reread the temporary file for planning, fallback hashing, and upload streaming.
 
-The current path reads the ZIP central directory and entry bodies through S3 ranges. This removes the full-archive ephemeral-storage dependency and makes source ZIP size independent of Lambda `/tmp`. Replacement-expanded entries still must fit in memory because their final bytes are only known after marker substitution.
+The current path reads the ZIP central directory and entry bodies through S3 ranges. Directory assets are packaged with the same embedded catalog shape used by `s3-unspool`. Entry source spans are planned into coalesced blocks, prefetched with bounded source GET concurrency, shared by concurrent readers, retained while claimed, and reopened for retryable upload bodies. This removes the full-archive ephemeral-storage dependency and makes source ZIP size independent of Lambda `/tmp`. Replacement-expanded entries still must fit in memory because their final bytes are only known after marker substitution.
 
 The current implementation intentionally adopted these `s3-unspool` ideas:
 
@@ -157,13 +167,33 @@ The current implementation intentionally adopted these `s3-unspool` ideas:
 - read central-directory metadata through ranges
 - reopen entry streams from ranges so upload bodies are retryable
 - use separate S3 clients for source reads and destination writes
+- use embedded source MD5 catalogs for sparse unchanged skips
 - coalesce adjacent source spans into shared source blocks
+- prefetch source blocks with bounded source GET concurrency
+- bound resident source block data and release blocks by reader claims
+- validate ZIP entry uncompressed size and CRC32 during hashing and upload
 - keep destination listing as the central comparison input
 - use conditional writes for extracted uploads
+- retry failed `PutObject` attempts with capped backoff and throttle-aware delays
+- derive source GET concurrency and source block window from Lambda memory unless explicitly configured
+- emit structured source scheduler and destination `PutObject` diagnostics as provider logs
 
-The main `s3-unspool` behavior not implemented yet is an embedded `.s3-unspool/catalog.v1.json` MD5 catalog. That catalog lets unchanged files be skipped from destination `ETag` metadata without reading and hashing ZIP entry bodies during deployment.
+The remaining catalog caveat is packaging compatibility. Cataloged directory assets are produced by this construct's `Source.asset` wrapper. If callers need CDK asset bundling or symlink-following behavior that the wrapper does not currently implement, they can pass `embeddedCatalog: false` and use the upstream CDK asset path without catalog sparse skips.
 
-The catalog cannot be created cheaply inside the provider Lambda after CDK has already produced a normal ZIP. It has to be produced during asset packaging, while original file bytes are being streamed into the ZIP. Deploy-time marker replacement also means catalog entries are only straightforward for marker-free files, because marker replacement changes the uploaded bytes after packaging.
+Cataloged asset packaging limitations:
+
+- Local directory assets are cataloged by default; local `.zip` files and `Source.bucket` archives are not rewritten.
+- Existing catalogs in caller-provided ZIPs are consumed by the provider if present, but this construct does not inject catalogs into those ZIPs.
+- CDK asset `bundling` is not run by the cataloged wrapper. Use a pre-bundled directory or `embeddedCatalog: false`.
+- Symlinks are rejected by cataloged packaging until follow/materialization semantics are implemented.
+- The cataloged wrapper creates a temporary ZIP during synth/package time and changes the staged ZIP content hash compared with upstream CDK packaging.
+- Catalog MD5 entries are only used for marker-free files; deploy-time marker replacement invalidates package-time MD5s.
+
+## Diagnostics
+
+Each extracted deployment logs the effective source schedule and a final source diagnostics record per source archive. These records include planned entries and blocks, planned and fetched source bytes, source amplification, ranged `GetObject` attempts/retries/errors, block hits/waits/releases/refetches, and active source GET high-water. The upload path also logs destination `PutObject` retry settings plus failed attempts, retry attempts, throttled attempts, retry wait milliseconds, and failures grouped by error code.
+
+Diagnostics are emitted to CloudWatch Logs through structured `tracing` fields. They are not returned in the CloudFormation custom-resource response because that response has a small practical size limit and is already used for `objectKeys` and `deployedBucket` outputs.
 
 ## Compatibility Tradeoffs
 
@@ -176,22 +206,24 @@ The catalog cannot be created cheaply inside the provider Lambda after CDK has a
 | `extract=false` | Copy mode stays separate from ZIP extraction. |
 | `prune` and `retainOnDelete` | Destination listing and delete planning remain provider-owned. |
 | CloudFront invalidation | Runs after S3 deployment and is outside the extraction engine. |
-| CDK asset packaging | Existing source binding is preserved, which delays catalog-based sparse-update optimization. |
+| CDK asset packaging | Directory assets are packaged by this construct to embed the catalog. Bundled assets and symlink-following options should use `embeddedCatalog: false` until cataloged packaging supports them. |
 
 ## Limits
 
 - Skip decisions assume simple single-part static objects where S3 `ETag` is the MD5 of object bytes.
-- Without a source MD5 catalog, unchanged existing ZIP entries must be read and hashed during deployment.
+- Without a source MD5 catalog match, unchanged existing ZIP entries must be read and hashed during deployment.
 - Metadata-only changes may be skipped when content identity is unchanged.
 - Multipart objects, SSE-KMS/SSE-C objects, and objects written by other tools may not expose usable content identity.
 - Large marker-replaced entries must fit in Lambda memory.
+- Very small Lambda memory settings reduce source GET concurrency and source window capacity unless explicitly overridden.
+- Cataloged asset packaging currently rejects bundled directory assets and symlinks.
 - The provider is a static asset deployment engine, not a general-purpose sync engine with byte-range diffs or persistent manifests.
 
 ## Next Architecture Targets
 
 The highest-value architecture work is now:
 
-1. Add structured provider telemetry for every planning, skip, read, write, prune, and invalidation step.
-2. Build a benchmark runner that captures local wall time, CloudFormation timing, provider logs, S3 request counts, bytes read/written, and destination object state.
-3. Add optional cataloged asset packaging for marker-free sources to unlock metadata-only sparse-update skips.
-4. Make concurrency and block-store settings configurable for benchmark experiments before deciding whether they should be user-facing.
+1. Build a benchmark runner that captures local wall time, CloudFormation timing, provider logs, S3 request counts, bytes read/written, and destination object state.
+2. Expand structured provider telemetry to include planning, skip, prune, and invalidation counters.
+3. Add cataloged packaging support for CDK asset bundling or keep the current explicit fallback if the compatibility surface is too large.
+4. Decide whether retry jitter or shared destination PUT throttling is worth adding after live throttling data exists.
