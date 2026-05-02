@@ -167,7 +167,7 @@ Provider summary counters should include:
 - MD5 hash attempts/skips/uploads
 - marker replacement skips/uploads
 - `extract=false` copy skips/copies
-- conditional put attempts/successes/conflicts
+- put attempts/retries/throttles/failures
 - uploaded object count and bytes
 - copied object count and bytes
 - prune delete count and batches

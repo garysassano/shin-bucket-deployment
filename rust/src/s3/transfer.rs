@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
 use aws_sdk_s3::error::ProvideErrorMetadata;
@@ -11,6 +11,7 @@ use aws_sdk_s3::operation::put_object::PutObjectError;
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::MetadataDirective;
 use crc32fast::Hasher as Crc32Hasher;
+use fastrand::Rng;
 use md5::{Digest as Md5Digest, Md5};
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::sync::Semaphore;
@@ -18,7 +19,8 @@ use tokio::task::JoinSet;
 
 use crate::replace::replace_markers;
 use crate::types::{
-    AppState, DeploymentRequest, MarkerConfig, ObjectMetadata, PutObjectRetryOptions, SourceArchive,
+    AppState, DeploymentRequest, MarkerConfig, ObjectMetadata, PutObjectRetryJitter,
+    PutObjectRetryOptions, SourceArchive,
 };
 
 use super::archive::{
@@ -41,11 +43,6 @@ enum UploadPayload {
     },
 }
 
-enum PutCondition {
-    IfNoneMatch,
-    IfMatch(String),
-}
-
 struct PreparedUploadPayload {
     payload: UploadPayload,
     etag: String,
@@ -57,6 +54,8 @@ struct PutDiagnostics {
     retry_attempts: AtomicU64,
     throttled_attempts: AtomicU64,
     retry_wait_millis: AtomicU64,
+    throttle_cooldown_waits: AtomicU64,
+    throttle_cooldown_wait_millis: AtomicU64,
     failures_by_error_code: Mutex<BTreeMap<String, u64>>,
 }
 
@@ -66,7 +65,23 @@ struct PutDiagnosticsSnapshot {
     retry_attempts: u64,
     throttled_attempts: u64,
     retry_wait_millis: u64,
+    throttle_cooldown_waits: u64,
+    throttle_cooldown_wait_millis: u64,
     failures_by_error_code: BTreeMap<String, u64>,
+}
+
+struct PutRetryCoordinator {
+    throttle_until: Mutex<Option<Instant>>,
+    jitter: Mutex<Rng>,
+}
+
+struct PutContext<'a> {
+    state: &'a AppState,
+    destination_bucket: &'a str,
+    metadata: &'a ObjectMetadata,
+    retry: &'a PutObjectRetryOptions,
+    retry_coordinator: &'a PutRetryCoordinator,
+    diagnostics: &'a PutDiagnostics,
 }
 
 pub(super) async fn execute_copy_plans(
@@ -118,6 +133,7 @@ pub(super) async fn upload_zip_entries(
         request.runtime.max_parallel_transfers.max(1),
     ));
     let put_diagnostics = Arc::new(PutDiagnostics::default());
+    let put_retry_coordinator = Arc::new(PutRetryCoordinator::new());
     let mut archive_diagnostics_sources = Vec::new();
     let mut tasks = JoinSet::new();
 
@@ -175,6 +191,7 @@ pub(super) async fn upload_zip_entries(
             let source_marker_config = request.source_markers_config[plan.source_index].clone();
             let destination_object = destination_objects.get(&plan.relative_key).cloned();
             let put_diagnostics = put_diagnostics.clone();
+            let put_retry_coordinator = put_retry_coordinator.clone();
             let put_retry = request.runtime.put_object_retry.clone();
 
             tasks.spawn(async move {
@@ -192,14 +209,16 @@ pub(super) async fn upload_zip_entries(
                 };
 
                 upload_payload(
-                    &state,
-                    &destination_bucket,
+                    PutContext {
+                        state: &state,
+                        destination_bucket: &destination_bucket,
+                        metadata: &metadata,
+                        retry: &put_retry,
+                        retry_coordinator: &put_retry_coordinator,
+                        diagnostics: &put_diagnostics,
+                    },
                     &plan.destination_key,
-                    &metadata,
-                    put_condition(destination_object.as_ref())?,
                     payload,
-                    &put_retry,
-                    &put_diagnostics,
                 )
                 .await
             });
@@ -350,55 +369,43 @@ async fn prepare_zip_entry_for_comparison(
 }
 
 async fn upload_payload(
-    state: &AppState,
-    destination_bucket: &str,
+    context: PutContext<'_>,
     destination_key: &str,
-    metadata: &ObjectMetadata,
-    condition: PutCondition,
     payload: UploadPayload,
-    retry: &PutObjectRetryOptions,
-    diagnostics: &PutDiagnostics,
 ) -> Result<()> {
     let mut last_error = None;
 
-    let max_attempts = retry.max_attempts.max(1);
+    let max_attempts = context.retry.max_attempts.max(1);
     for attempt in 1..=max_attempts {
         if attempt > 1 {
             retain_payload_for_replay(&payload);
         }
+        context
+            .retry_coordinator
+            .wait_for_throttle_cooldown(context.diagnostics)
+            .await;
         let body = payload_body(&payload);
-        let mut request = state
+        let request = context
+            .state
             .destination_s3
             .put_object()
-            .bucket(destination_bucket)
+            .bucket(context.destination_bucket)
             .key(destination_key);
 
-        request = match &condition {
-            PutCondition::IfNoneMatch => request.if_none_match("*"),
-            PutCondition::IfMatch(etag) => request.if_match(etag),
-        };
-
-        match apply_put_metadata(request, metadata, destination_key)
+        match apply_put_metadata(request, context.metadata, destination_key)
             .body(body)
             .send()
             .await
         {
             Ok(_) => return Ok(()),
-            Err(error) if is_conditional_put_conflict(&error) => {
-                let throttled = put_error_code(&error)
-                    .as_deref()
-                    .is_some_and(is_put_throttle_error_code);
-                diagnostics.record_failure(&error, throttled);
-                return Err(anyhow!(
-                    "conditional upload conflict for {destination_key}: {}",
-                    put_error_message(&error)
-                ));
-            }
             Err(error) if attempt < max_attempts => {
                 let code = put_error_code(&error);
                 let throttled = code.as_deref().is_some_and(is_put_throttle_error_code);
-                diagnostics.record_failure(&error, throttled);
-                diagnostics.retry_attempts.fetch_add(1, Ordering::Relaxed);
+                context.diagnostics.record_failure(&error, throttled);
+                context
+                    .diagnostics
+                    .retry_attempts
+                    .fetch_add(1, Ordering::Relaxed);
                 tracing::warn!(
                     destination_key,
                     attempt,
@@ -407,19 +414,26 @@ async fn upload_payload(
                     error = %put_error_message(&error),
                     "destination PutObject attempt failed; retrying"
                 );
-                let delay = put_retry_delay(attempt, throttled, retry);
-                diagnostics.retry_wait_millis.fetch_add(
-                    u64::try_from(delay.as_millis()).unwrap_or(u64::MAX),
-                    Ordering::Relaxed,
-                );
-                tokio::time::sleep(delay).await;
+                let delay =
+                    context
+                        .retry_coordinator
+                        .retry_delay(attempt, throttled, context.retry);
+                if throttled {
+                    context.retry_coordinator.extend_throttle_cooldown(delay);
+                } else {
+                    context
+                        .diagnostics
+                        .retry_wait_millis
+                        .fetch_add(duration_millis_u64(delay), Ordering::Relaxed);
+                    tokio::time::sleep(delay).await;
+                }
                 last_error = Some(error);
             }
             Err(error) => {
                 let throttled = put_error_code(&error)
                     .as_deref()
                     .is_some_and(is_put_throttle_error_code);
-                diagnostics.record_failure(&error, throttled);
+                context.diagnostics.record_failure(&error, throttled);
                 return Err(error).with_context(|| format!("failed to upload {destination_key}"));
             }
         }
@@ -452,17 +466,6 @@ fn destination_object_etag_matches(
     expected_etag: &str,
 ) -> bool {
     destination_object.and_then(|object| object.etag.as_deref()) == Some(expected_etag)
-}
-
-fn put_condition(destination_object: Option<&DestinationObject>) -> Result<PutCondition> {
-    match destination_object {
-        None => Ok(PutCondition::IfNoneMatch),
-        Some(object) => object
-            .if_match
-            .clone()
-            .map(PutCondition::IfMatch)
-            .ok_or_else(|| anyhow!("destination object exists but was listed without an ETag")),
-    }
 }
 
 async fn hash_zip_entry_reader(store: Arc<SourceBlockStore>, plan: ZipEntryPlan) -> Result<String> {
@@ -559,32 +562,33 @@ async fn join_transfer_tasks(mut tasks: JoinSet<Result<()>>) -> Result<()> {
     Ok(())
 }
 
-fn is_conditional_put_conflict(error: &SdkError<PutObjectError>) -> bool {
-    if let SdkError::ServiceError(service) = error {
-        let status = service.raw().status().as_u16();
-        if status == 409 || status == 412 {
-            return true;
-        }
-    }
-
-    matches!(
-        put_error_code(error).as_deref(),
-        Some("ConditionalRequestConflict" | "PreconditionFailed")
-    )
+fn put_retry_cap_millis(attempt: usize, throttled: bool, retry: &PutObjectRetryOptions) -> u64 {
+    let (base, max) = put_retry_delay_bounds(throttled, retry);
+    let shift = u32::try_from(attempt.saturating_sub(1)).unwrap_or(u32::MAX);
+    let multiplier = 1_u64.checked_shl(shift).unwrap_or(u64::MAX);
+    base.saturating_mul(multiplier).min(max)
 }
 
-fn put_retry_delay(attempt: usize, throttled: bool, retry: &PutObjectRetryOptions) -> Duration {
-    let (base, max) = if throttled {
+fn put_retry_delay_bounds(throttled: bool, retry: &PutObjectRetryOptions) -> (u64, u64) {
+    if throttled {
         (
             retry.slowdown_retry_base_delay_ms,
             retry.slowdown_retry_max_delay_ms,
         )
     } else {
         (retry.retry_base_delay_ms, retry.retry_max_delay_ms)
-    };
-    let shift = u32::try_from(attempt.saturating_sub(1)).unwrap_or(u32::MAX);
-    let multiplier = 1_u64.checked_shl(shift).unwrap_or(u64::MAX);
-    Duration::from_millis(base.saturating_mul(multiplier).min(max))
+    }
+}
+
+fn full_jitter_delay(cap_millis: u64, jitter: u64) -> Duration {
+    if cap_millis == 0 {
+        return Duration::ZERO;
+    }
+    Duration::from_millis(jitter % cap_millis.saturating_add(1))
+}
+
+fn duration_millis_u64(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
 impl PutDiagnostics {
@@ -607,12 +611,87 @@ impl PutDiagnostics {
             retry_attempts: self.retry_attempts.load(Ordering::Relaxed),
             throttled_attempts: self.throttled_attempts.load(Ordering::Relaxed),
             retry_wait_millis: self.retry_wait_millis.load(Ordering::Relaxed),
+            throttle_cooldown_waits: self.throttle_cooldown_waits.load(Ordering::Relaxed),
+            throttle_cooldown_wait_millis: self
+                .throttle_cooldown_wait_millis
+                .load(Ordering::Relaxed),
             failures_by_error_code: self
                 .failures_by_error_code
                 .lock()
                 .expect("put diagnostics mutex should not be poisoned")
                 .clone(),
         }
+    }
+}
+
+impl PutRetryCoordinator {
+    fn new() -> Self {
+        Self {
+            throttle_until: Mutex::new(None),
+            jitter: Mutex::new(Rng::new()),
+        }
+    }
+
+    async fn wait_for_throttle_cooldown(&self, diagnostics: &PutDiagnostics) {
+        loop {
+            let delay = {
+                let throttle_until = self
+                    .throttle_until
+                    .lock()
+                    .expect("put retry coordinator mutex should not be poisoned");
+                throttle_until.and_then(|deadline| deadline.checked_duration_since(Instant::now()))
+            };
+            let Some(delay) = delay else {
+                return;
+            };
+            if delay.is_zero() {
+                return;
+            }
+
+            diagnostics
+                .throttle_cooldown_waits
+                .fetch_add(1, Ordering::Relaxed);
+            diagnostics
+                .throttle_cooldown_wait_millis
+                .fetch_add(duration_millis_u64(delay), Ordering::Relaxed);
+            tokio::time::sleep(delay).await;
+        }
+    }
+
+    fn retry_delay(
+        &self,
+        attempt: usize,
+        throttled: bool,
+        retry: &PutObjectRetryOptions,
+    ) -> Duration {
+        let delay_millis = put_retry_cap_millis(attempt, throttled, retry);
+        match retry.jitter {
+            PutObjectRetryJitter::Full => full_jitter_delay(delay_millis, self.next_jitter()),
+            PutObjectRetryJitter::None => Duration::from_millis(delay_millis),
+        }
+    }
+
+    fn extend_throttle_cooldown(&self, delay: Duration) {
+        if delay.is_zero() {
+            return;
+        }
+
+        let now = Instant::now();
+        let deadline = now.checked_add(delay).unwrap_or(now);
+        let mut throttle_until = self
+            .throttle_until
+            .lock()
+            .expect("put retry coordinator mutex should not be poisoned");
+        if throttle_until.is_none_or(|current| deadline > current) {
+            *throttle_until = Some(deadline);
+        }
+    }
+
+    fn next_jitter(&self) -> u64 {
+        self.jitter
+            .lock()
+            .expect("put retry jitter mutex should not be poisoned")
+            .u64(..)
     }
 }
 
@@ -666,10 +745,13 @@ fn log_put_diagnostics(retry: &PutObjectRetryOptions, diagnostics: &PutDiagnosti
         retry_max_delay_ms = retry.retry_max_delay_ms,
         slowdown_retry_base_delay_ms = retry.slowdown_retry_base_delay_ms,
         slowdown_retry_max_delay_ms = retry.slowdown_retry_max_delay_ms,
+        retry_jitter = ?retry.jitter,
         failed_attempts = diagnostics.failed_attempts,
         retry_attempts = diagnostics.retry_attempts,
         throttled_attempts = diagnostics.throttled_attempts,
         retry_wait_millis = diagnostics.retry_wait_millis,
+        throttle_cooldown_waits = diagnostics.throttle_cooldown_waits,
+        throttle_cooldown_wait_millis = diagnostics.throttle_cooldown_wait_millis,
         failures_by_error_code = ?diagnostics.failures_by_error_code,
         "destination PutObject diagnostics"
     );
@@ -714,7 +796,9 @@ fn put_error_message(error: &SdkError<PutObjectError>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::md5_hex;
+    use crate::types::{PutObjectRetryJitter, PutObjectRetryOptions};
+
+    use super::{PutRetryCoordinator, duration_millis_u64, md5_hex, put_retry_cap_millis};
 
     #[test]
     fn md5_hex_matches_known_digest() {
@@ -722,5 +806,44 @@ mod tests {
             md5_hex(b"hello"),
             "5d41402abc4b2a76b9719d911017c592".to_string()
         );
+    }
+
+    #[test]
+    fn put_retry_cap_uses_capped_exponential_delays() {
+        let retry = PutObjectRetryOptions {
+            max_attempts: 6,
+            retry_base_delay_ms: 250,
+            retry_max_delay_ms: 1_000,
+            slowdown_retry_base_delay_ms: 1_000,
+            slowdown_retry_max_delay_ms: 30_000,
+            jitter: PutObjectRetryJitter::None,
+        };
+
+        assert_eq!(put_retry_cap_millis(1, false, &retry), 250);
+        assert_eq!(put_retry_cap_millis(2, false, &retry), 500);
+        assert_eq!(put_retry_cap_millis(3, false, &retry), 1_000);
+        assert_eq!(put_retry_cap_millis(4, false, &retry), 1_000);
+        assert_eq!(put_retry_cap_millis(2, true, &retry), 2_000);
+    }
+
+    #[test]
+    fn put_retry_delay_supports_full_jitter_and_no_jitter() {
+        let coordinator = PutRetryCoordinator::new();
+        let mut retry = PutObjectRetryOptions {
+            max_attempts: 6,
+            retry_base_delay_ms: 250,
+            retry_max_delay_ms: 1_000,
+            slowdown_retry_base_delay_ms: 1_000,
+            slowdown_retry_max_delay_ms: 30_000,
+            jitter: PutObjectRetryJitter::None,
+        };
+
+        assert_eq!(
+            duration_millis_u64(coordinator.retry_delay(3, false, &retry)),
+            1_000
+        );
+
+        retry.jitter = PutObjectRetryJitter::Full;
+        assert!(duration_millis_u64(coordinator.retry_delay(3, false, &retry)) <= 1_000);
     }
 }

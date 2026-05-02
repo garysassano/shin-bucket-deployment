@@ -14,7 +14,7 @@ The provider Lambda:
 - does not write the source ZIP or extracted entries to Lambda `/tmp`
 - lists the destination prefix once with `ListObjectsV2`
 - skips unchanged objects when destination metadata is sufficient
-- uploads changed extracted objects with conditional `PutObject`
+- uploads changed extracted objects with `PutObject`
 - copies `extract=false` sources with `CopyObject`
 - deletes destination keys not present in the plan when `prune=true`
 - creates optional CloudFront invalidations after S3 changes
@@ -32,6 +32,7 @@ Runtime tuning defaults:
 | `putObjectMaxAttempts` | 6 | Maximum application-level `PutObject` attempts. |
 | `putObjectRetryBaseDelayMs` / `putObjectRetryMaxDelayMs` | 250 / 5000 | Capped non-throttling `PutObject` retry delay. |
 | `putObjectSlowdownRetryBaseDelayMs` / `putObjectSlowdownRetryMaxDelayMs` | 1000 / 30000 | Capped throttling `PutObject` retry delay. |
+| `putObjectRetryJitter` | `full` | Jitter mode for computed `PutObject` retry delays; `none` is also supported. |
 
 ## Supported Examples
 
@@ -133,7 +134,7 @@ flowchart LR
   L --> I
   H --> I
   I -->|Yes| J["Skip upload or copy"]
-  I -->|No| K["Conditional upload or copy"]
+  I -->|No| K["Upload or copy"]
 ```
 
 The provider intentionally uses destination `ETag` as the only unchanged-object skip identity. `ListObjectsV2` exposes the destination `ETag`, but it does not expose the actual checksum value needed to compare S3 `ChecksumCRC32`. Using CRC32 for skip decisions would require one checksum-mode `HeadObject` per destination object, which is not worth the request volume for this deployment model.
@@ -144,14 +145,11 @@ Directory `Source.asset` inputs are packaged with an embedded source MD5 catalog
 
 ## Write Safety
 
-Extracted uploads use conditional writes:
+Extracted uploads intentionally use plain `PutObject` without destination precondition headers. CloudFormation owns the custom-resource lifecycle for the deployed files, so the provider converges the declared asset state and overwrites changed destination objects. Destination `ETag` values are still used for skip decisions before upload.
 
-- missing destination objects use `If-None-Match: *`
-- changed existing objects use `If-Match` with the `ETag` observed during destination listing
+The source ZIP ranged-read path still uses source `If-Match` when the source object has an `ETag`; that protects a single deployment from reading a source archive that changes while it is being streamed.
 
-This avoids silently overwriting destination objects that changed after the provider listed the prefix. A conditional-write conflict fails the deployment rather than hiding concurrent mutation.
-
-`extract=false` remains on the `CopyObject` path. Its skip decision uses `ETag`, but the copy itself is not the same conditional extracted upload path.
+`extract=false` remains on the `CopyObject` path. Its skip decision uses `ETag`, and changed copies overwrite the destination object.
 
 ## Engine Transition
 
@@ -173,7 +171,7 @@ The current implementation intentionally adopted these `s3-unspool` ideas:
 - bound resident source block data and release blocks by reader claims
 - validate ZIP entry uncompressed size and CRC32 during hashing and upload
 - keep destination listing as the central comparison input
-- use conditional writes for extracted uploads
+- use source-object `If-Match` guards for ranged archive reads
 - retry failed `PutObject` attempts with capped backoff and throttle-aware delays
 - derive source GET concurrency and source block window from Lambda memory unless explicitly configured
 - emit structured source scheduler and destination `PutObject` diagnostics as provider logs
@@ -214,7 +212,9 @@ Diagnostics are emitted to CloudWatch Logs through structured `tracing` fields. 
 - Without a source MD5 catalog match, unchanged existing ZIP entries must be read and hashed during deployment.
 - Metadata-only changes may be skipped when content identity is unchanged.
 - Multipart objects, SSE-KMS/SSE-C objects, and objects written by other tools may not expose usable content identity.
-- Large marker-replaced entries must fit in Lambda memory.
+- Source ZIP archives do not need to fit in Lambda memory or ephemeral storage; marker-free ZIP entries stream in chunks.
+- Marker-replaced entries must fit in Lambda memory after replacement.
+- Each extracted ZIP entry must fit S3's single-request `PutObject` limit.
 - Very small Lambda memory settings reduce source GET concurrency and source window capacity unless explicitly overridden.
 - Cataloged asset packaging currently rejects bundled directory assets and symlinks.
 - The provider is a static asset deployment engine, not a general-purpose sync engine with byte-range diffs or persistent manifests.
@@ -226,4 +226,3 @@ The highest-value architecture work is now:
 1. Build a benchmark runner that captures local wall time, CloudFormation timing, provider logs, S3 request counts, bytes read/written, and destination object state.
 2. Expand structured provider telemetry to include planning, skip, prune, and invalidation counters.
 3. Add cataloged packaging support for CDK asset bundling or keep the current explicit fallback if the compatibility surface is too large.
-4. Decide whether retry jitter or shared destination PUT throttling is worth adding after live throttling data exists.

@@ -2237,6 +2237,7 @@ dependencies = [
  "aws_lambda_events",
  "bytes",
  "crc32fast",
+ "fastrand",
  "futures-util",
  "globset",
  "http-body 1.0.1",

@@ -64,7 +64,7 @@ The construct follows the upstream `BucketDeployment` API where the behavior map
 | S3 metadata | `accessControl`, `cacheControl`, `contentDisposition`, `contentEncoding`, `contentLanguage`, `contentType`, `metadata`, `serverSideEncryption`, `serverSideEncryptionAwsKmsKeyId`, `storageClass`, `websiteRedirectLocation` |
 | CloudFront | `distribution`, `distributionPaths`, `waitForDistributionInvalidation` |
 | Provider Lambda | `architecture`, `bundling`, `ephemeralStorageSize`, `logGroup`, `logRetention`, `memoryLimit`, `role`, `securityGroups`, `vpc`, `vpcSubnets` |
-| Runtime tuning | `maxParallelTransfers`, `sourceBlockBytes`, `sourceBlockMergeGapBytes`, `sourceGetConcurrency`, `sourceWindowBytes`, `sourceWindowMemoryBudgetMb`, `putObjectMaxAttempts`, `putObjectRetryBaseDelayMs`, `putObjectRetryMaxDelayMs`, `putObjectSlowdownRetryBaseDelayMs`, `putObjectSlowdownRetryMaxDelayMs` |
+| Runtime tuning | `maxParallelTransfers`, `sourceBlockBytes`, `sourceBlockMergeGapBytes`, `sourceGetConcurrency`, `sourceWindowBytes`, `sourceWindowMemoryBudgetMb`, `putObjectMaxAttempts`, `putObjectRetryBaseDelayMs`, `putObjectRetryMaxDelayMs`, `putObjectSlowdownRetryBaseDelayMs`, `putObjectSlowdownRetryMaxDelayMs`, `putObjectRetryJitter` |
 
 Unsupported upstream props:
 
@@ -106,7 +106,7 @@ Cataloged `Source.asset` packaging limitations:
 - It changes the staged ZIP bytes compared with upstream CDK packaging because the catalog entry is added.
 - Catalog MD5s are only valid for marker-free files. Deploy-time marker replacement still requires reading and materializing final bytes.
 
-Large replacement-expanded entries must fit in Lambda memory. Source archives are read with S3 ranges and do not need to fit in memory or ephemeral storage.
+Source archives are read with S3 ranges and do not need to fit in Lambda memory or ephemeral storage. Individual files inside the asset ZIP must be <= 5 GiB because extracted uploads currently use S3 `PutObject`, not multipart upload.
 
 This construct targets static asset deployment to S3. It is not a general-purpose sync engine and does not provide byte-range diffing, persistent manifests, or non-S3 backend behavior.
 

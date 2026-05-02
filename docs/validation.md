@@ -40,10 +40,10 @@ Run synth commands sequentially, or use separate CDK output directories, to avoi
 
 | Priority | Area | Coverage | Command or scenario | Last checked | Status |
 | --- | --- | --- | --- | --- | --- |
-| P0 | Rust provider tests | CloudFormation parsing, marker replacement, archive planning, destination prune planning, chunked hashing, MD5/ETag helpers, retryable body helpers. | `cargo test --manifest-path rust/Cargo.toml` | 2026-05-01 | Pass, 23 tests |
-| P0 | TypeScript tests | CDK synthesis, custom resource properties, unsupported prop validation, provider singleton behavior. | `pnpm test` | 2026-05-01 | Pass, 19 tests |
-| P0 | Build and lint | Distributable construct build, type checking, repository lint rules. | `pnpm build`, `pnpm typecheck`, `pnpm lint` | 2026-05-01 | Pass |
-| P0 | Example synthesis | All example stacks synthesize from the public runner. | `pnpm example synth <example>` for each example above | 2026-05-01 | Pass |
+| P0 | Rust provider tests | CloudFormation parsing, marker replacement, archive planning, destination prune planning, chunked hashing, MD5/ETag helpers, retryable body helpers, `PutObject` retry policy helpers. | `cargo test --manifest-path rust/Cargo.toml` | 2026-05-02 | Pass, 30 tests |
+| P0 | TypeScript tests | CDK synthesis, custom resource properties, unsupported prop validation, provider singleton behavior. | `pnpm test` | 2026-05-02 | Pass, 22 tests |
+| P0 | Build and lint | Distributable construct build, type checking, repository lint rules, strict Clippy. | `pnpm build`, `pnpm typecheck`, `pnpm lint`, `cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings` | 2026-05-02 | Pass |
+| P0 | Example synthesis | All example stacks synthesize from the public runner. | `pnpm example synth <example>` for each example above | 2026-05-02 | Pass |
 | P0 | Simple AWS deployment | Create, unchanged redeploy skip, update, and destroy for a plain static site. | `simple` | 2026-04-25 | Pass |
 | P0 | Metadata and filters AWS deployment | Include/exclude filters, S3 metadata mapping, SSE-S3 metadata, prune, and ETag skip behavior. | `metadata-filters` | 2026-04-25 | Pass |
 | P1 | Replacement AWS deployment | Deploy-time marker replacement, JSON/YAML/data sources, MD5-after-replacement comparison, and unchanged marker redeploy skip. | `replacement` | 2026-04-25 | Pass |
@@ -58,7 +58,7 @@ Run synth commands sequentially, or use separate CDK output directories, to avoi
 | P2 | CloudFront invalidation, async | Invalidation is created without blocking stack completion. | `cloudfront-async` | 2026-04-25 | Pass |
 | P1 | Ranged ZIP extraction AWS rerun | Confirms the current no-disk ranged extraction path after the engine transition. | `simple`, `benchmark-assets`, logs | Not checked after engine transition | Needed |
 | P1 | ETag skip path AWS rerun | Confirms marker-free unchanged files are read through ranged ZIP entry streams, hashed with MD5, and skipped through destination `ETag` comparison without checksum `HeadObject` calls. | `benchmark-assets`, provider logs, destination inspection | Not checked after engine transition | Needed |
-| P1 | Conditional write conflict | Confirms `If-None-Match` and `If-Match` failures are surfaced instead of overwriting concurrent destination mutations. | Purpose-built validation stack or test harness | Not checked | Needed |
+| P1 | Changed-object overwrite AWS rerun | Confirms changed extracted files overwrite destination keys with plain `PutObject` under the CloudFormation custom-resource lifecycle. | `simple` or `benchmark-assets` update, provider logs, destination inspection | Not checked after conditional-write removal | Needed |
 
 ## AWS Deployment Runbook
 

@@ -13,7 +13,8 @@ use crate::s3::{
     default_source_window_memory_budget_mb,
 };
 use crate::types::{
-    DeploymentRequest, Filters, MarkerConfig, PutObjectRetryOptions, RuntimeOptions,
+    DeploymentRequest, Filters, MarkerConfig, PutObjectRetryJitter, PutObjectRetryOptions,
+    RuntimeOptions,
 };
 
 const DEFAULT_AVAILABLE_MEMORY_MB: u64 = 256;
@@ -78,6 +79,8 @@ pub(crate) struct RawDeploymentRequest {
     pub(crate) put_object_slowdown_retry_base_delay_ms: Option<u64>,
     #[serde(default)]
     pub(crate) put_object_slowdown_retry_max_delay_ms: Option<u64>,
+    #[serde(default)]
+    pub(crate) put_object_retry_jitter: Option<PutObjectRetryJitter>,
 }
 
 impl Filters {
@@ -181,6 +184,9 @@ fn runtime_options(raw: &RawDeploymentRequest) -> RuntimeOptions {
             slowdown_retry_max_delay_ms: raw
                 .put_object_slowdown_retry_max_delay_ms
                 .unwrap_or(PUT_OBJECT_SLOWDOWN_RETRY_MAX_DELAY_MS),
+            jitter: raw
+                .put_object_retry_jitter
+                .unwrap_or(PutObjectRetryJitter::Full),
         },
     }
 }
@@ -348,6 +354,10 @@ mod tests {
         assert_eq!(request.runtime.source_window_memory_budget_mb, 256);
         assert_eq!(request.runtime.source_get_concurrency, 1);
         assert_eq!(request.runtime.max_parallel_transfers, 8);
+        assert_eq!(
+            request.runtime.put_object_retry.jitter,
+            PutObjectRetryJitter::Full
+        );
     }
 
     #[test]
@@ -430,6 +440,7 @@ mod tests {
         props["PutObjectRetryMaxDelayMs"] = json!(20);
         props["PutObjectSlowdownRetryBaseDelayMs"] = json!(30);
         props["PutObjectSlowdownRetryMaxDelayMs"] = json!(40);
+        props["PutObjectRetryJitter"] = json!("none");
 
         let raw: RawDeploymentRequest = serde_json::from_value(props).unwrap();
         let request = parse_request(&raw);
@@ -454,6 +465,10 @@ mod tests {
         assert_eq!(
             request.runtime.put_object_retry.slowdown_retry_max_delay_ms,
             40
+        );
+        assert_eq!(
+            request.runtime.put_object_retry.jitter,
+            PutObjectRetryJitter::None
         );
     }
 }

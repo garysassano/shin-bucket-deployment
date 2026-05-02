@@ -16,7 +16,6 @@ pub(super) struct DestinationPlan {
 #[derive(Clone)]
 pub(super) struct DestinationObject {
     pub(super) etag: Option<String>,
-    pub(super) if_match: Option<String>,
     pub(super) size: Option<u64>,
 }
 
@@ -259,16 +258,10 @@ fn record_destination_object(
         return;
     }
 
-    let normalized_etag = etag.and_then(normalize_etag);
-    let if_match = normalized_etag
-        .as_ref()
-        .and_then(|_| etag.map(ToOwned::to_owned));
-
     objects.insert(
         relative_key.clone(),
         DestinationObject {
-            etag: normalized_etag,
-            if_match,
+            etag: etag.and_then(normalize_etag),
             size,
         },
     );
@@ -333,7 +326,6 @@ mod tests {
         );
 
         assert_eq!(objects["old.txt"].etag.as_deref(), Some("abc123"));
-        assert_eq!(objects["old.txt"].if_match.as_deref(), Some("\"ABC123\""));
         assert_eq!(objects["old.txt"].size, Some(10));
         assert_eq!(keys_to_delete, vec!["site/old.txt".to_string()]);
     }

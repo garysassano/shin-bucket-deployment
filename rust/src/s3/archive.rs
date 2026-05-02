@@ -1403,10 +1403,8 @@ async fn send_zip_entry_chunks(
     }
 
     validate_zip_entry_output(&plan, bytes, crc32.finalize()).map_err(boxed_body_error)?;
-    if !pending.is_empty() {
-        if sender.send(Ok(pending)).await.is_err() {
-            return Ok(());
-        }
+    if !pending.is_empty() && sender.send(Ok(pending)).await.is_err() {
+        return Ok(());
     }
 
     Ok(())
