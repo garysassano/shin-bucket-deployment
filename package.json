@@ -15,7 +15,8 @@
     "rust:fmt": "cargo fmt --manifest-path rust/Cargo.toml --all",
     "rust:check": "cargo check --manifest-path rust/Cargo.toml",
     "test": "vitest run",
-    "example": "pnpm build && node dist/scripts/example-runner.js"
+    "example": "pnpm build && node dist/scripts/example-runner.js",
+    "benchmark:collect": "pnpm build && node dist/scripts/collect-benchmark-results.js"
   },
   "dependencies": {
     "aws-cdk-lib": "2.252.0",

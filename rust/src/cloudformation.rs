@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::{Context, Result, anyhow};
 use aws_lambda_events::event::cloudformation::CloudFormationCustomResourceRequest;
@@ -10,7 +11,7 @@ use uuid::Uuid;
 use crate::cloudfront::invalidate as invalidate_cloudfront;
 use crate::request::{RawDeploymentRequest, parse_old_destination, parse_request};
 use crate::s3::{bucket_owned, delete_prefix, deploy};
-use crate::types::{AppState, ResponsePayload};
+use crate::types::{AppState, DeploymentStats, ResponsePayload, duration_ms};
 
 pub(crate) async fn handle_event(
     state: Arc<AppState>,
@@ -119,7 +120,33 @@ async fn process_request(
     old_resource_properties: Option<&RawDeploymentRequest>,
 ) -> Result<ResponsePayload> {
     let request = parse_request(resource_properties);
+    let stats = Arc::new(DeploymentStats::default());
+    let mut status = "success";
+    let result = process_request_inner(
+        state,
+        request_type,
+        physical_resource_id,
+        old_resource_properties,
+        &request,
+        Arc::clone(&stats),
+    )
+    .await;
 
+    if result.is_err() {
+        status = "failure";
+    }
+    log_deployment_summary(&stats, request_type, status, &request);
+    result
+}
+
+async fn process_request_inner(
+    state: &AppState,
+    request_type: &str,
+    physical_resource_id: Option<&str>,
+    old_resource_properties: Option<&RawDeploymentRequest>,
+    request: &crate::types::DeploymentRequest,
+    stats: Arc<DeploymentStats>,
+) -> Result<ResponsePayload> {
     let physical_resource_id = match request_type {
         "Create" => format!("aws.cdk.cargobucketdeployment.{}", Uuid::new_v4()),
         "Update" | "Delete" => physical_resource_id
@@ -137,21 +164,25 @@ async fn process_request(
         )
         .await?
     {
+        let started = Instant::now();
         delete_prefix(
             state,
             &request.dest_bucket_name,
             &request.dest_bucket_prefix,
+            Some(&stats),
         )
         .await?;
+        stats.add_delete_millis(duration_ms(started.elapsed()));
     }
 
     if matches!(request_type, "Create" | "Update") {
-        deploy(state, &request).await?;
+        deploy(state, request, Arc::clone(&stats)).await?;
     }
 
     if let Some(distribution_id) = request.distribution_id.as_deref()
         && !distribution_id.is_empty()
     {
+        let started = Instant::now();
         invalidate_cloudfront(
             state,
             distribution_id,
@@ -159,6 +190,7 @@ async fn process_request(
             request.wait_for_distribution_invalidation,
         )
         .await?;
+        stats.add_cloudfront_millis(duration_ms(started.elapsed()));
     }
 
     if request_type == "Update"
@@ -168,7 +200,9 @@ async fn process_request(
         let (old_bucket, old_prefix) = parse_old_destination(old_props);
 
         if old_bucket != request.dest_bucket_name || old_prefix != request.dest_bucket_prefix {
-            delete_prefix(state, &old_bucket, &old_prefix).await?;
+            let started = Instant::now();
+            delete_prefix(state, &old_bucket, &old_prefix, Some(&stats)).await?;
+            stats.add_old_prefix_delete_millis(duration_ms(started.elapsed()));
         }
     }
 
@@ -193,6 +227,18 @@ async fn process_request(
         reason: None,
         data,
     })
+}
+
+fn log_deployment_summary(
+    stats: &DeploymentStats,
+    request_type: &str,
+    status: &str,
+    request: &crate::types::DeploymentRequest,
+) {
+    match serde_json::to_string(&stats.snapshot(request_type, status, request)) {
+        Ok(summary) => tracing::info!(summary, "rbd deployment summary"),
+        Err(error) => tracing::warn!(error = %error, "failed to serialize rbd deployment summary"),
+    }
 }
 
 fn response_target(
