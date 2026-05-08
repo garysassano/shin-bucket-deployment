@@ -1,7 +1,13 @@
 import { App, CfnOutput, RemovalPolicy, Stack, type StackProps } from "aws-cdk-lib";
 import { Bucket } from "aws-cdk-lib/aws-s3";
+import {
+  BucketDeployment as AwsBucketDeployment,
+  Source as AwsSource,
+} from "aws-cdk-lib/aws-s3-deployment";
 import { ensureBenchmarkAssets } from "../scripts/benchmark-assets";
-import { RustBucketDeployment, Source } from "../src";
+import { RustBucketDeployment, Source as RustSource } from "../src";
+
+type BenchmarkImplementation = "rust" | "aws";
 
 class BenchmarkAssetsRustBucketDeploymentStack extends Stack {
   constructor(scope: App, id: string, props?: StackProps) {
@@ -10,20 +16,32 @@ class BenchmarkAssetsRustBucketDeploymentStack extends Stack {
     const bundle = ensureBenchmarkAssets();
     const destinationPrefix = process.env.RBD_BENCH_DESTINATION_PREFIX ?? "benchmark-site";
     const memoryLimitMb = parseOptionalPositiveIntegerEnv("RBD_BENCH_MEMORY_LIMIT_MB") ?? 1024;
+    const implementation = parseImplementation(process.env.RBD_BENCH_IMPLEMENTATION);
 
     const websiteBucket = new Bucket(this, "WebsiteBucket", {
       autoDeleteObjects: true,
       removalPolicy: RemovalPolicy.DESTROY,
     });
 
-    new RustBucketDeployment(this, "DeployBenchmarkAssets", {
-      sources: [Source.asset(bundle.root)],
+    const deploymentProps = {
       destinationBucket: websiteBucket,
       destinationKeyPrefix: destinationPrefix,
       memoryLimit: memoryLimitMb,
       prune: process.env.RBD_BENCH_PRUNE !== "false",
       waitForDistributionInvalidation: process.env.RBD_BENCH_WAIT !== "false",
-    });
+    };
+
+    if (implementation === "rust") {
+      new RustBucketDeployment(this, "DeployBenchmarkAssets", {
+        ...deploymentProps,
+        sources: [RustSource.asset(bundle.root)],
+      });
+    } else {
+      new AwsBucketDeployment(this, "DeployBenchmarkAssets", {
+        ...deploymentProps,
+        sources: [AwsSource.asset(bundle.root)],
+      });
+    }
 
     new CfnOutput(this, "BucketName", {
       value: websiteBucket.bucketName,
@@ -52,7 +70,21 @@ class BenchmarkAssetsRustBucketDeploymentStack extends Stack {
     new CfnOutput(this, "BenchmarkMemoryLimitMb", {
       value: String(memoryLimitMb),
     });
+
+    new CfnOutput(this, "BenchmarkImplementation", {
+      value: implementation,
+    });
   }
+}
+
+function parseImplementation(value: string | undefined): BenchmarkImplementation {
+  if (value === undefined || value === "" || value === "rust") {
+    return "rust";
+  }
+  if (value === "aws") {
+    return "aws";
+  }
+  throw new Error('RBD_BENCH_IMPLEMENTATION must be either "rust" or "aws".');
 }
 
 function parseOptionalPositiveIntegerEnv(name: string): number | undefined {
@@ -78,8 +110,15 @@ const env =
     : undefined;
 
 const suffix = process.env.RBD_BENCH_STACK_SUFFIX;
+const implementation = parseImplementation(process.env.RBD_BENCH_IMPLEMENTATION);
 const stackName = suffix
-  ? `RustBucketDeploymentBenchmarkAssetsDemo${suffix}`
-  : "RustBucketDeploymentBenchmarkAssetsDemo";
+  ? `${benchmarkStackNamePrefix(implementation)}${suffix}`
+  : benchmarkStackNamePrefix(implementation);
+
+function benchmarkStackNamePrefix(implementation: BenchmarkImplementation): string {
+  return implementation === "rust"
+    ? "RustBucketDeploymentBenchmarkAssetsDemo"
+    : "AwsBucketDeploymentBenchmarkAssetsDemo";
+}
 
 new BenchmarkAssetsRustBucketDeploymentStack(app, stackName, { env });

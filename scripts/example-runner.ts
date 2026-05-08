@@ -1,5 +1,5 @@
-import { existsSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 type ExampleAction = "list" | "synth" | "deploy" | "destroy";
@@ -7,6 +7,7 @@ type ExampleAction = "list" | "synth" | "deploy" | "destroy";
 type ExampleDefinition = {
   readonly file: string;
   readonly stackHint?: string;
+  readonly env?: Record<string, string>;
 };
 
 const EXAMPLES = {
@@ -30,6 +31,13 @@ const EXAMPLES = {
   "benchmark-assets": {
     file: "benchmark-assets-app.js",
     stackHint: "RustBucketDeploymentBenchmarkAssetsDemo",
+  },
+  "benchmark-assets-aws": {
+    file: "benchmark-assets-app.js",
+    stackHint: "AwsBucketDeploymentBenchmarkAssetsDemo",
+    env: {
+      RBD_BENCH_IMPLEMENTATION: "aws",
+    },
   },
   "prune-update": {
     file: "prune-update-v2-app.js",
@@ -65,7 +73,9 @@ function printUsage(): void {
   console.error("  pnpm example list");
   console.error("  pnpm example synth simple");
   console.error("  pnpm example deploy cloudfront-sync");
-  console.error("  pnpm example deploy cloudfront-sync -- --parameters RustBucketDeploymentCloudFrontInvalidationSyncDemo:CacheProbeToken=v2");
+  console.error(
+    "  pnpm example deploy cloudfront-sync -- --parameters RustBucketDeploymentCloudFrontInvalidationSyncDemo:CacheProbeToken=v2",
+  );
   console.error("  pnpm example destroy retain-on-delete");
   console.error("");
   console.error(`Known names: ${names.join(", ")}`);
@@ -73,9 +83,7 @@ function printUsage(): void {
 
 function listExamples(): void {
   console.log("Available examples:");
-  for (const [name, example] of Object.entries(EXAMPLES).sort(([a], [b]) =>
-    a.localeCompare(b),
-  )) {
+  for (const [name, example] of Object.entries(EXAMPLES).sort(([a], [b]) => a.localeCompare(b))) {
     console.log(`- ${name}: ${example.file}`);
   }
 }
@@ -143,6 +151,7 @@ function main(): void {
 
   const result = spawnSync("pnpm", args, {
     cwd: process.cwd(),
+    env: { ...process.env, ...example.env },
     stdio: "inherit",
   });
 
