@@ -133,6 +133,18 @@ test("scopes destination object permissions to the destination prefix", () => {
     PolicyDocument: {
       Statement: Match.arrayWith([
         Match.objectLike({
+          Action: "s3:GetObject",
+          Resource: {
+            "Fn::Join": [
+              "",
+              Match.arrayWith([
+                Match.objectLike({ "Fn::GetAtt": Match.arrayWith(["DestC383B82A", "Arn"]) }),
+                "/site/*",
+              ]),
+            ],
+          },
+        }),
+        Match.objectLike({
           Action: Match.arrayWith(["s3:PutObject"]),
           Resource: {
             "Fn::Join": [

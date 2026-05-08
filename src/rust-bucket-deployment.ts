@@ -294,6 +294,13 @@ export class RustBucketDeployment extends Construct {
     );
 
     const destinationObjectKeyPattern = destinationObjectGrantPattern(props.destinationKeyPrefix);
+    this.handlerFunction.addToRolePolicy(
+      new PolicyStatement({
+        effect: Effect.ALLOW,
+        actions: ["s3:GetObject"],
+        resources: [this.destinationBucket.arnForObjects(destinationObjectKeyPattern)],
+      }),
+    );
     this.destinationBucket.grantPut(this.handlerFunction, destinationObjectKeyPattern);
     this.destinationBucket.grantDelete(
       this.handlerFunction,
