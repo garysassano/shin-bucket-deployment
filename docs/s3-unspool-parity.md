@@ -2,6 +2,17 @@
 
 This document tracks how `RustBucketDeployment` maps `s3-unspool` ideas into the CDK custom-resource deployment model.
 
+## Comparison Baseline
+
+| Field | Value |
+| --- | --- |
+| `s3-unspool` version | `0.1.0-beta.6` |
+| `s3-unspool` commit | `a699d18` (`refactor: improve Rust interface API (#24)`) |
+| Local checkout | `/Users/sassanog/git/s3-unspool` |
+| Last parity review | 2026-05-08 |
+
+This matrix is point-in-time documentation. Re-check it when `s3-unspool` changes options, reports, scheduler behavior, or conditional-write semantics.
+
 ## Implemented
 
 | `s3-unspool` behavior | `RustBucketDeployment` status |
@@ -27,7 +38,12 @@ This document tracks how `RustBucketDeployment` maps `s3-unspool` ideas into the
 | `PutObject` retry/backoff | Implemented with capped retry delays, full/no jitter, and a shared throttle cooldown. |
 | Runtime tuning surface | Implemented for transfer concurrency, source block/window settings, source GET concurrency, and PUT retry policy. |
 | Adaptive source tuning | Implemented. Source GET concurrency and source block window default from the provider Lambda memory size. |
-| Structured diagnostics counters | Implemented as provider logs for source GET attempts/retries/errors, bytes/amplification, block hits/waits/releases/refetches, active GET high-water, and PUT retry/failure counters. |
+| Structured diagnostics counters | Implemented as provider logs for source GET attempts/retries/errors, bytes/amplification, block hits/waits/releases/refetches, active GET high-water, conditional write conflicts, and PUT retry/failure counters. |
+| `DestinationCleanup` policy | Mapped to CDK `prune`: `prune=true` behaves like `DeleteExtra`; `prune=false` behaves like `KeepExtra`. |
+| `ComparisonMode` policy | Mapped to fixed `CatalogThenHash` behavior for marker-free ZIP entries. There is no public force-hash mode. |
+| `ConflictPolicy` policy | Mapped to CloudFormation fail-fast behavior. Conditional destination write conflicts are counted in the sanitized provider summary and fail the custom-resource request instead of being reported and continued. |
+| `AdaptiveSourceWindow` | Implemented as equivalent internal memory-derived source-window sizing. Public CDK users set `memoryLimit`; low-level overrides remain under `advancedRuntimeTuning`. |
+| Read-only option accessors | Not applicable. This construct exposes synthesized CloudFormation properties instead of a public Rust `SyncOptions` value. |
 
 ## CDK-Specific Behavior Preserved
 

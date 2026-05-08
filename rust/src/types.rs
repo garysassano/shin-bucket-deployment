@@ -179,6 +179,7 @@ pub(crate) struct DeploymentStats {
     uploaded_objects: AtomicU64,
     uploaded_bytes: AtomicU64,
     skipped_objects: AtomicU64,
+    conditional_conflicts: AtomicU64,
     copied_objects: AtomicU64,
     copied_bytes: AtomicU64,
     md5_hash_attempts: AtomicU64,
@@ -246,6 +247,7 @@ pub(crate) struct DeploymentCounts {
     pub(crate) delete_batches: u64,
     pub(crate) uploaded_objects: u64,
     pub(crate) skipped_objects: u64,
+    pub(crate) conditional_conflicts: u64,
     pub(crate) copied_objects: u64,
     pub(crate) md5_hash_attempts: u64,
     pub(crate) md5_skips: u64,
@@ -358,6 +360,10 @@ impl DeploymentStats {
         self.skipped_objects.fetch_add(1, Ordering::Relaxed);
     }
 
+    pub(crate) fn add_conditional_conflict(&self) {
+        self.conditional_conflicts.fetch_add(1, Ordering::Relaxed);
+    }
+
     pub(crate) fn add_copied_object(&self, bytes: u64) {
         self.copied_objects.fetch_add(1, Ordering::Relaxed);
         self.copied_bytes.fetch_add(bytes, Ordering::Relaxed);
@@ -457,6 +463,7 @@ impl DeploymentStats {
                 delete_batches: self.delete_batches.load(Ordering::Relaxed),
                 uploaded_objects: self.uploaded_objects.load(Ordering::Relaxed),
                 skipped_objects: self.skipped_objects.load(Ordering::Relaxed),
+                conditional_conflicts: self.conditional_conflicts.load(Ordering::Relaxed),
                 copied_objects: self.copied_objects.load(Ordering::Relaxed),
                 md5_hash_attempts: self.md5_hash_attempts.load(Ordering::Relaxed),
                 md5_skips: self.md5_skips.load(Ordering::Relaxed),
