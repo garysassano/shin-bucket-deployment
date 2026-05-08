@@ -67,7 +67,7 @@ Run synth commands sequentially, or use separate CDK output directories, to avoi
 | P2 | CloudFront invalidation, async | Invalidation is created without blocking stack completion. | `cloudfront-async` | 2026-04-25 | Pass |
 | P1 | Ranged ZIP extraction AWS rerun | Confirms the current no-disk ranged extraction path after the engine transition at 512, 1024, and 2048 MiB provider memory. | `benchmark-assets` `large-few` profile: `v1` create, forced unchanged update, `v2` sparse update, destroy | 2026-05-02 | Pass; see `docs/benchmarking.md` for the latest timing, memory, and provider summary snapshot |
 | P1 | ETag skip path AWS rerun | Confirms marker-free unchanged files are read through ranged ZIP entry streams, hashed with MD5, and skipped through destination `ETag` comparison without checksum `HeadObject` calls. | `benchmark-assets` forced unchanged `v1` update via `RBD_BENCH_WAIT=false`; see `docs/benchmarking.md` | 2026-05-02 | Pass at 512, 1024, and 2048 MiB; provider Lambda invoked successfully |
-| P1 | Changed-object overwrite AWS rerun | Confirms changed extracted files overwrite destination keys with plain `PutObject` under the CloudFormation custom-resource lifecycle. | `benchmark-assets` `large-few` `v1` -> `v2` sparse update at 512, 1024, and 2048 MiB | 2026-05-02 | Pass |
+| P1 | Changed-object overwrite AWS rerun | Confirms changed extracted files overwrite destination keys with `PutObject` under the CloudFormation custom-resource lifecycle. | `benchmark-assets` `large-few` `v1` -> `v2` sparse update at 512, 1024, and 2048 MiB | 2026-05-02 | Pass; rerun after destination write preconditions are reintroduced |
 
 ## AWS Deployment Runbook
 
