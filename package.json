@@ -16,7 +16,8 @@
     "rust:check": "cargo check --manifest-path rust/Cargo.toml",
     "test": "vitest run",
     "example": "pnpm build && node dist/scripts/example-runner.js",
-    "benchmark:collect": "pnpm build && node dist/scripts/collect-benchmark-results.js"
+    "benchmark:collect": "pnpm build && node dist/scripts/collect-benchmark-results.js",
+    "benchmark:report": "pnpm build && node dist/scripts/render-benchmark-report.js"
   },
   "dependencies": {
     "aws-cdk-lib": "2.252.0",

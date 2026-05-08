@@ -18,6 +18,7 @@
       "src/**/*.ts",
       "test/**/*.ts",
       "examples/**/*.ts",
+      "scripts/**/*.ts",
       "package.json",
       "tsconfig.json",
       "vitest.config.ts",
