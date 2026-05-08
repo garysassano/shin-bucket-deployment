@@ -94,6 +94,12 @@ struct PutContext<'a> {
     stats: &'a DeploymentStats,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum PutPrecondition {
+    IfMatch(String),
+    IfNoneMatch,
+}
+
 pub(super) async fn execute_copy_plans(
     state: &AppState,
     destination_bucket: &str,
@@ -227,6 +233,7 @@ pub(super) async fn upload_zip_entries(
                     return Ok(());
                 };
 
+                let precondition = put_precondition_for_destination(destination_object.as_ref());
                 upload_payload(
                     PutContext {
                         state: &state,
@@ -239,6 +246,7 @@ pub(super) async fn upload_zip_entries(
                     },
                     &plan.destination_key,
                     payload,
+                    precondition,
                 )
                 .await
             });
@@ -401,6 +409,7 @@ async fn upload_payload(
     context: PutContext<'_>,
     destination_key: &str,
     payload: UploadPayload,
+    precondition: Option<PutPrecondition>,
 ) -> Result<()> {
     let mut last_error = None;
 
@@ -420,6 +429,7 @@ async fn upload_payload(
             .put_object()
             .bucket(context.destination_bucket)
             .key(destination_key);
+        let request = apply_put_precondition(request, precondition.as_ref());
 
         match apply_put_metadata(request, context.metadata, destination_key)
             .body(body)
@@ -430,7 +440,7 @@ async fn upload_payload(
                 context.stats.add_uploaded_object(payload.content_length());
                 return Ok(());
             }
-            Err(error) if attempt < max_attempts => {
+            Err(error) if !is_put_precondition_failed(&error) && attempt < max_attempts => {
                 let code = put_error_code(&error);
                 let throttled = code.as_deref().is_some_and(is_put_throttle_error_code);
                 context.diagnostics.record_failure(&error, throttled);
@@ -474,6 +484,37 @@ async fn upload_payload(
     Err(last_error
         .map(|error| anyhow!(error))
         .unwrap_or_else(|| anyhow!("failed to upload {destination_key}")))
+}
+
+fn put_precondition_for_destination(
+    destination_object: Option<&DestinationObject>,
+) -> Option<PutPrecondition> {
+    match destination_object {
+        None => Some(PutPrecondition::IfNoneMatch),
+        Some(object) => object
+            .etag
+            .as_deref()
+            .map(|etag| PutPrecondition::IfMatch(quote_etag(etag))),
+    }
+}
+
+fn quote_etag(etag: &str) -> String {
+    format!("\"{}\"", etag.trim_matches('"'))
+}
+
+fn apply_put_precondition(
+    request: aws_sdk_s3::operation::put_object::builders::PutObjectFluentBuilder,
+    precondition: Option<&PutPrecondition>,
+) -> aws_sdk_s3::operation::put_object::builders::PutObjectFluentBuilder {
+    match precondition {
+        Some(PutPrecondition::IfMatch(etag)) => request.if_match(etag.as_str()),
+        Some(PutPrecondition::IfNoneMatch) => request.if_none_match("*"),
+        None => request,
+    }
+}
+
+fn is_put_precondition_failed(error: &SdkError<PutObjectError>) -> bool {
+    put_error_code(error).as_deref() == Some("PreconditionFailed")
 }
 
 fn payload_body(payload: &UploadPayload) -> ByteStream {
@@ -845,9 +886,13 @@ fn put_error_message(error: &SdkError<PutObjectError>) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::super::destination::DestinationObject;
     use crate::types::{PutObjectRetryJitter, PutObjectRetryOptions};
 
-    use super::{PutRetryCoordinator, duration_millis_u64, md5_hex, put_retry_cap_millis};
+    use super::{
+        PutPrecondition, PutRetryCoordinator, duration_millis_u64, md5_hex,
+        put_precondition_for_destination, put_retry_cap_millis,
+    };
 
     #[test]
     fn md5_hex_matches_known_digest() {
@@ -855,6 +900,37 @@ mod tests {
             md5_hex(b"hello"),
             "5d41402abc4b2a76b9719d911017c592".to_string()
         );
+    }
+
+    #[test]
+    fn put_precondition_uses_if_none_match_for_missing_destination() {
+        assert_eq!(
+            put_precondition_for_destination(None),
+            Some(PutPrecondition::IfNoneMatch)
+        );
+    }
+
+    #[test]
+    fn put_precondition_uses_if_match_for_known_destination_etag() {
+        let object = DestinationObject {
+            etag: Some("abc123".to_string()),
+            size: Some(10),
+        };
+
+        assert_eq!(
+            put_precondition_for_destination(Some(&object)),
+            Some(PutPrecondition::IfMatch("\"abc123\"".to_string()))
+        );
+    }
+
+    #[test]
+    fn put_precondition_falls_back_without_destination_etag() {
+        let object = DestinationObject {
+            etag: None,
+            size: Some(10),
+        };
+
+        assert_eq!(put_precondition_for_destination(Some(&object)), None);
     }
 
     #[test]

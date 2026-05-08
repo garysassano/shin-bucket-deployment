@@ -171,7 +171,7 @@ Directory `Source.asset` inputs are packaged with an embedded source MD5 catalog
 
 ## Write Safety
 
-Extracted uploads intentionally use plain `PutObject` without destination precondition headers. CloudFormation owns the custom-resource lifecycle for the deployed files, so the provider converges the declared asset state and overwrites changed destination objects. Destination `ETag` values are still used for skip decisions before upload.
+Extracted uploads use destination preconditions derived from the destination listing. Missing destination keys are uploaded with `If-None-Match: *`; existing destination keys with a listed `ETag` are uploaded with `If-Match` for that `ETag`; existing keys without a usable `ETag` fall back to plain `PutObject`. This keeps the deployment optimistic-concurrency-safe without adding extra destination requests. A `PreconditionFailed` response means the destination changed after planning and the deployment should fail rather than overwrite a concurrent writer.
 
 The source ZIP ranged-read path still uses source `If-Match` when the source object has an `ETag`; that protects a single deployment from reading a source archive that changes while it is being streamed.
 
@@ -198,6 +198,7 @@ The current implementation intentionally adopted these `s3-unspool` ideas:
 - validate ZIP entry uncompressed size and CRC32 during hashing and upload
 - keep destination listing as the central comparison input
 - use source-object `If-Match` guards for ranged archive reads
+- use destination `If-None-Match`/`If-Match` guards for extracted `PutObject` writes when listing data supports them
 - retry failed `PutObject` attempts with capped backoff and throttle-aware delays
 - derive source GET concurrency and source block window from Lambda memory unless explicitly configured
 - emit structured source scheduler and destination `PutObject` diagnostics as provider logs
