@@ -40,11 +40,13 @@ Benchmark runs should answer these questions:
 
 ## Current Harness
 
-The `benchmark-assets` example generates deterministic static-site bundles under `.benchmark-assets/`, which is ignored by git.
+The `benchmark-assets` example generates deterministic static-site bundles under `.benchmark-assets/`, which is ignored by git. The same stack definition can instantiate either this construct or the upstream AWS CDK `BucketDeployment`; the benchmark implementation is the only intended comparison dimension. Rust uses its normal `Source.asset` path, including the embedded catalog optimization, while AWS uses upstream `Source.asset`.
 
 ```bash
 RBD_BENCH_PROFILE=mixed RBD_BENCH_VARIANT=v1 RBD_BENCH_STACK_SUFFIX=RunA pnpm example deploy benchmark-assets
 RBD_BENCH_STACK_SUFFIX=RunA pnpm example destroy benchmark-assets
+RBD_BENCH_PROFILE=mixed RBD_BENCH_VARIANT=v1 RBD_BENCH_STACK_SUFFIX=RunA pnpm example deploy benchmark-assets-aws
+RBD_BENCH_STACK_SUFFIX=RunA pnpm example destroy benchmark-assets-aws
 ```
 
 Environment variables:
@@ -53,6 +55,7 @@ Environment variables:
 | --- | --- | --- |
 | `RBD_BENCH_PROFILE` | `mixed` | Asset shape: `tiny-many`, `mixed`, or `large-few`. |
 | `RBD_BENCH_VARIANT` | `v1` | Asset variant: `v1`, `v2`, or `pruned`. |
+| `RBD_BENCH_IMPLEMENTATION` | `rust` | Deployment implementation: `rust` or `aws`. The `benchmark-assets-aws` example sets this to `aws`. |
 | `RBD_BENCH_STACK_SUFFIX` | none | Adds a suffix to the benchmark stack name so multiple runs can coexist. |
 | `RBD_BENCH_DESTINATION_PREFIX` | `benchmark-site` | Destination prefix inside the generated bucket. |
 | `RBD_BENCH_MEMORY_LIMIT_MB` | `1024` | Provider Lambda memory size in MiB. Use distinct stack suffixes when comparing memory sizes. |
@@ -91,6 +94,8 @@ Run this matrix for every performance-significant provider change:
 
 Use a unique `RBD_BENCH_STACK_SUFFIX` per comparison branch or run group.
 
+For release comparison runs, run the same profile, variant sequence, prune setting, destination prefix, memory setting, region, and repetition count for both `benchmark-assets` and `benchmark-assets-aws`. Do not compare a Rust run from one matrix against an AWS run from a different matrix.
+
 ## Standard Command Sequence
 
 Build first:
@@ -108,6 +113,18 @@ RBD_BENCH_STACK_SUFFIX=BenchA \
 RBD_BENCH_MEMORY_LIMIT_MB=1024 \
 pnpm example deploy benchmark-assets
 ```
+
+AWS comparison create uses the same environment shape and swaps only the example name:
+
+```bash
+RBD_BENCH_PROFILE=mixed \
+RBD_BENCH_VARIANT=v1 \
+RBD_BENCH_STACK_SUFFIX=BenchA \
+RBD_BENCH_MEMORY_LIMIT_MB=1024 \
+pnpm example deploy benchmark-assets-aws
+```
+
+The AWS comparison stack name starts with `AwsBucketDeploymentBenchmarkAssetsDemo`; the Rust stack name starts with `RustBucketDeploymentBenchmarkAssetsDemo`. Use the same suffix for paired runs so records remain easy to join by implementation.
 
 Unchanged redeploy with a provider invocation:
 
@@ -156,6 +173,7 @@ For every run:
 
 - branch name
 - commit SHA
+- implementation: `rust` or `aws`
 - provider binary build mode and target architecture
 - AWS region
 - stack suffix
@@ -285,6 +303,7 @@ pnpm benchmark:collect \
   --commit 345efe0 \
   --subject "simplify runtime tuning props" \
   --region ap-southeast-2 \
+  --implementation rust \
   --profile mixed \
   --memory-mb 512 \
   --variant v1 \
@@ -301,6 +320,14 @@ pnpm benchmark:collect \
 - writes sanitized JSONL under an ignored output directory such as `.benchmark-runs/`
 - prints a Markdown summary table for commit-to-commit comparison
 
+Generate Markdown tables and text bar charts from committed or scratch JSONL records:
+
+```bash
+pnpm benchmark:report -- --run-id 2026-05-02-large-few-memory-matrix
+```
+
+The report groups records by profile, phase, implementation, and memory size. It includes medians, p90, min/max, and an AWS/Rust ratio table when paired implementation records exist.
+
 Do not commit `.benchmark-runs/` raw output. Commit only curated aggregate results that do not include sensitive resource identifiers.
 
 ## Result Storage Schema
@@ -311,13 +338,14 @@ Every committed benchmark result must be represented as sanitized records in `do
 
 | Field | Meaning |
 | --- | --- |
-| `schemaVersion` | Schema version, currently `1`. |
+| `schemaVersion` | Schema version, currently `2`; schema `1` records are accepted as historical Rust-only records. |
 | `runId` | Stable identifier grouping related phase rows. |
 | `runDate` | ISO date, for example `2026-05-02`. |
 | `providerImplementationCommit` | Commit measured by the provider Lambda. |
 | `providerImplementationSubject` | Short commit subject, when known. |
 | `resultDocumentationCommit` | Commit that first recorded the sanitized result, or `null` until committed. |
 | `region` | AWS region only, not account information. |
+| `implementation` | Deployment implementation: `rust`, `aws`, or `null` for historical schema `1` records. |
 | `profile` | Benchmark asset profile. |
 | `series` | Logical run series, for example `full-create-update-prune` or `forced-unchanged`. |
 | `memoryMb` | Provider Lambda memory size in MiB. |
@@ -348,6 +376,7 @@ Metadata table:
 | Provider implementation commit | Commit measured by the provider Lambda |
 | Result documentation commit | Commit that first recorded the sanitized result, or blank until committed |
 | Region | AWS region only, not account information |
+| Implementations | Deployment implementations included in the run |
 | Profile | Benchmark asset profile |
 | Baseline variant | Baseline asset variant |
 | Baseline bundle | File count and total bytes |

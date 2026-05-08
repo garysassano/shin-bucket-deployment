@@ -2,13 +2,14 @@ import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { basename } from "node:path";
 
 export type BenchmarkHistoryRecord = {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly runId: string;
   readonly runDate: string;
   readonly providerImplementationCommit: string | null;
   readonly providerImplementationSubject: string | null;
   readonly resultDocumentationCommit: string | null;
   readonly region: string | null;
+  readonly implementation: string | null;
   readonly profile: string | null;
   readonly series: string | null;
   readonly memoryMb: number | null;
@@ -41,6 +42,7 @@ export type CollectBenchmarkOptions = {
   readonly subject?: string;
   readonly resultCommit?: string;
   readonly region?: string;
+  readonly implementation?: string;
   readonly profile?: string;
   readonly memoryMb?: number;
   readonly variant?: string;
@@ -53,7 +55,9 @@ export type CollectBenchmarkOptions = {
 function main(): void {
   const options = parseArgs(process.argv.slice(2));
   collectBenchmarkResult(options);
-  console.log(`appended ${options.phase} from ${basename(options.logFile)} to ${options.outputFile}`);
+  console.log(
+    `appended ${options.phase} from ${basename(options.logFile)} to ${options.outputFile}`,
+  );
 }
 
 export function collectBenchmarkResult(options: CollectBenchmarkOptions): BenchmarkHistoryRecord {
@@ -61,13 +65,14 @@ export function collectBenchmarkResult(options: CollectBenchmarkOptions): Benchm
   const report = options.reportFile ? readReportFile(options.reportFile) : undefined;
   const providerSummary = options.summaryFile ? readSummaryFile(options.summaryFile) : undefined;
   const record: BenchmarkHistoryRecord = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     runId: options.runId,
     runDate: options.runDate,
     providerImplementationCommit: options.commit ?? null,
     providerImplementationSubject: options.subject ?? null,
     resultDocumentationCommit: options.resultCommit ?? null,
     region: options.region ?? null,
+    implementation: options.implementation ?? outputString(logText, "BenchmarkImplementation"),
     profile: options.profile ?? outputString(logText, "BenchmarkProfile"),
     series: options.series ?? null,
     memoryMb: options.memoryMb ?? outputNumber(logText, "BenchmarkMemoryLimitMb"),
@@ -93,9 +98,10 @@ export function collectBenchmarkResult(options: CollectBenchmarkOptions): Benchm
 
 function parseArgs(args: string[]): CollectBenchmarkOptions {
   const values = new Map<string, string>();
-  for (let index = 0; index < args.length; index += 2) {
-    const key = args[index];
-    const value = args[index + 1];
+  const normalizedArgs = args.filter((arg) => arg !== "--");
+  for (let index = 0; index < normalizedArgs.length; index += 2) {
+    const key = normalizedArgs[index];
+    const value = normalizedArgs[index + 1];
     if (!key?.startsWith("--") || value === undefined) {
       usage();
     }
@@ -121,6 +127,7 @@ function parseArgs(args: string[]): CollectBenchmarkOptions {
     subject: values.get("subject"),
     resultCommit: values.get("result-commit"),
     region: values.get("region"),
+    implementation: values.get("implementation"),
     profile: values.get("profile"),
     memoryMb: optionalNumber(values, "memory-mb"),
     variant: values.get("variant"),
@@ -153,17 +160,19 @@ function optionalNumber(values: Map<string, string>, name: string): number | und
 
 function usage(): never {
   console.error(
-    "Usage: node dist/scripts/collect-benchmark-results.js --log-file <path> --run-id <id> --run-date <YYYY-MM-DD> --phase <name> [--report-file <path>] [--summary-file <path>] [--profile <name>] [--memory-mb <n>]",
+    "Usage: node dist/scripts/collect-benchmark-results.js --log-file <path> --run-id <id> --run-date <YYYY-MM-DD> --phase <name> [--report-file <path>] [--summary-file <path>] [--implementation <rust|aws>] [--profile <name>] [--memory-mb <n>]",
   );
   process.exit(1);
 }
 
-function readReportFile(path: string): {
-  durationSeconds: number;
-  billedDurationSeconds: number;
-  initDurationSeconds: number | null;
-  maxMemoryMb: number;
-} | undefined {
+function readReportFile(path: string):
+  | {
+      durationSeconds: number;
+      billedDurationSeconds: number;
+      initDurationSeconds: number | null;
+      maxMemoryMb: number;
+    }
+  | undefined {
   if (!existsSync(path)) {
     return undefined;
   }
@@ -231,7 +240,9 @@ function parseReportNumber(message: string, pattern: RegExp): number | null {
 }
 
 function noChangeNote(logText: string): string | null {
-  return logText.includes("(no changes)") ? "CDK reported no changes; provider was not invoked." : null;
+  return logText.includes("(no changes)")
+    ? "CDK reported no changes; provider was not invoked."
+    : null;
 }
 
 function roundSeconds(value: number): number {

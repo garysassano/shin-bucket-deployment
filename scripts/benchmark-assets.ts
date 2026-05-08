@@ -184,7 +184,7 @@ function sized(index: number, minSize: number, maxSize: number): number {
     return minSize;
   }
   const span = maxSize - minSize;
-  return minSize + ((index * 1103515245 + 12345) >>> 0) % span;
+  return minSize + (((index * 1103515245 + 12345) >>> 0) % span);
 }
 
 function seedFor(
@@ -242,7 +242,5 @@ function parseVariant(value: string | undefined): BenchmarkAssetVariant {
 
 if (require.main === module) {
   const bundle = ensureBenchmarkAssets();
-  console.log(
-    `Generated ${bundle.fileCount} files (${bundle.totalBytes} bytes) at ${bundle.root}`,
-  );
+  console.log(`Generated ${bundle.fileCount} files (${bundle.totalBytes} bytes) at ${bundle.root}`);
 }
