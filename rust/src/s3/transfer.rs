@@ -259,12 +259,12 @@ pub(super) async fn upload_zip_entries(
         });
     }
 
-    join_transfer_tasks(tasks).await?;
+    let transfer_result = join_transfer_tasks(tasks).await;
     for (archive_index, source) in archive_diagnostics_sources {
         log_source_diagnostics(archive_index, &source, &stats);
     }
     log_put_diagnostics(&request.runtime.put_object_retry, &put_diagnostics, &stats);
-    Ok(())
+    transfer_result
 }
 
 fn catalog_skips_zip_entry(
@@ -440,7 +440,7 @@ async fn upload_payload(
                 context.stats.add_uploaded_object(payload.content_length());
                 return Ok(());
             }
-            Err(error) if !is_put_precondition_failed(&error) && attempt < max_attempts => {
+            Err(error) if !is_conditional_put_conflict(&error) && attempt < max_attempts => {
                 let code = put_error_code(&error);
                 let throttled = code.as_deref().is_some_and(is_put_throttle_error_code);
                 context.diagnostics.record_failure(&error, throttled);
@@ -476,6 +476,9 @@ async fn upload_payload(
                     .as_deref()
                     .is_some_and(is_put_throttle_error_code);
                 context.diagnostics.record_failure(&error, throttled);
+                if is_conditional_put_conflict(&error) {
+                    context.stats.add_conditional_conflict();
+                }
                 return Err(error).with_context(|| format!("failed to upload {destination_key}"));
             }
         }
@@ -513,8 +516,18 @@ fn apply_put_precondition(
     }
 }
 
-fn is_put_precondition_failed(error: &SdkError<PutObjectError>) -> bool {
-    put_error_code(error).as_deref() == Some("PreconditionFailed")
+fn is_conditional_put_conflict(error: &SdkError<PutObjectError>) -> bool {
+    if let SdkError::ServiceError(service) = error {
+        let status = service.raw().status().as_u16();
+        if status == 409 || status == 412 {
+            return true;
+        }
+    }
+
+    matches!(
+        put_error_code(error).as_deref(),
+        Some("ConditionalRequestConflict" | "PreconditionFailed")
+    )
 }
 
 fn payload_body(payload: &UploadPayload) -> ByteStream {
