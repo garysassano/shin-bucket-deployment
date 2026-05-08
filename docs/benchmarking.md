@@ -232,6 +232,7 @@ The provider emits this as a single sanitized `rbd_deployment_summary` JSON obje
     "deleteBatches": 0,
     "uploadedObjects": 12,
     "skippedObjects": 430,
+    "conditionalConflicts": 0,
     "copiedObjects": 0,
     "md5HashAttempts": 442,
     "md5Skips": 430,
