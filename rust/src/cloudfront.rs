@@ -3,7 +3,6 @@ use std::time::Duration;
 use anyhow::{Result, anyhow};
 use aws_sdk_cloudfront::types::{InvalidationBatch, Paths};
 use tokio::time::sleep;
-use uuid::Uuid;
 
 use crate::types::AppState;
 
@@ -16,9 +15,10 @@ pub(crate) async fn invalidate(
     distribution_id: &str,
     distribution_paths: &[String],
     wait_for_completion: bool,
+    caller_reference: &str,
 ) -> Result<()> {
     let batch = InvalidationBatch::builder()
-        .caller_reference(Uuid::new_v4().to_string())
+        .caller_reference(caller_reference)
         .paths(
             Paths::builder()
                 .quantity(distribution_paths.len() as i32)

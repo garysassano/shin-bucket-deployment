@@ -4,6 +4,7 @@ use std::time::Instant;
 use anyhow::{Context, Result, anyhow};
 use aws_lambda_events::event::cloudformation::CloudFormationCustomResourceRequest;
 use lambda_runtime::Error;
+use md5::{Digest, Md5};
 use serde_json::{Map, Value, json};
 use tracing::error;
 use uuid::Uuid;
@@ -12,6 +13,15 @@ use crate::cloudfront::invalidate as invalidate_cloudfront;
 use crate::request::{RawDeploymentRequest, parse_old_destination, parse_request};
 use crate::s3::{bucket_owned, delete_prefix, deploy};
 use crate::types::{AppState, DeploymentStats, ResponsePayload, duration_ms};
+
+const MAX_FAILURE_REASON_BYTES: usize = 1024;
+
+#[derive(Clone, Copy)]
+struct RequestIdentity<'a> {
+    stack_id: &'a str,
+    request_id: &'a str,
+    logical_resource_id: &'a str,
+}
 
 pub(crate) async fn handle_event(
     state: Arc<AppState>,
@@ -28,7 +38,19 @@ pub(crate) async fn handle_event(
                 logical_resource_id = request.logical_resource_id,
                 "processing request"
             );
-            process_request(&state, "Create", None, &request.resource_properties, None).await
+            process_request(
+                &state,
+                "Create",
+                RequestIdentity {
+                    stack_id: &request.stack_id,
+                    request_id: &request.request_id,
+                    logical_resource_id: &request.logical_resource_id,
+                },
+                None,
+                &request.resource_properties,
+                None,
+            )
+            .await
         }
         CloudFormationCustomResourceRequest::Update(request) => {
             tracing::info!(
@@ -39,6 +61,11 @@ pub(crate) async fn handle_event(
             process_request(
                 &state,
                 "Update",
+                RequestIdentity {
+                    stack_id: &request.stack_id,
+                    request_id: &request.request_id,
+                    logical_resource_id: &request.logical_resource_id,
+                },
                 Some(&request.physical_resource_id),
                 &request.resource_properties,
                 Some(&request.old_resource_properties),
@@ -54,6 +81,11 @@ pub(crate) async fn handle_event(
             process_request(
                 &state,
                 "Delete",
+                RequestIdentity {
+                    stack_id: &request.stack_id,
+                    request_id: &request.request_id,
+                    logical_resource_id: &request.logical_resource_id,
+                },
                 Some(&request.physical_resource_id),
                 &request.resource_properties,
                 None,
@@ -85,8 +117,9 @@ pub(crate) async fn handle_event(
             .context("failed to send success response")?;
         }
         Err(err) => {
-            let reason = format!("{err:#}");
-            error!(error = %reason, "request failed");
+            let full_reason = format!("{err:#}");
+            let reason = truncate_failure_reason(&full_reason);
+            error!(error = %full_reason, "request failed");
             let failure = ResponsePayload {
                 physical_resource_id: physical_resource_id(&request)
                     .map(ToOwned::to_owned)
@@ -115,6 +148,7 @@ pub(crate) async fn handle_event(
 async fn process_request(
     state: &AppState,
     request_type: &str,
+    identity: RequestIdentity<'_>,
     physical_resource_id: Option<&str>,
     resource_properties: &RawDeploymentRequest,
     old_resource_properties: Option<&RawDeploymentRequest>,
@@ -125,6 +159,7 @@ async fn process_request(
     let result = process_request_inner(
         state,
         request_type,
+        identity,
         physical_resource_id,
         old_resource_properties,
         &request,
@@ -142,6 +177,7 @@ async fn process_request(
 async fn process_request_inner(
     state: &AppState,
     request_type: &str,
+    identity: RequestIdentity<'_>,
     physical_resource_id: Option<&str>,
     old_resource_properties: Option<&RawDeploymentRequest>,
     request: &crate::types::DeploymentRequest,
@@ -188,6 +224,13 @@ async fn process_request_inner(
             distribution_id,
             &request.distribution_paths,
             request.wait_for_distribution_invalidation,
+            &cloudfront_caller_reference(
+                identity.stack_id,
+                identity.request_id,
+                identity.logical_resource_id,
+                distribution_id,
+                &request.distribution_paths,
+            ),
         )
         .await?;
         stats.add_cloudfront_millis(duration_ms(started.elapsed()));
@@ -227,6 +270,60 @@ async fn process_request_inner(
         reason: None,
         data,
     })
+}
+
+fn cloudfront_caller_reference(
+    stack_id: &str,
+    request_id: &str,
+    logical_resource_id: &str,
+    distribution_id: &str,
+    distribution_paths: &[String],
+) -> String {
+    let mut hasher = Md5::new();
+    hash_caller_reference_field(&mut hasher, stack_id);
+    hash_caller_reference_field(&mut hasher, request_id);
+    hash_caller_reference_field(&mut hasher, logical_resource_id);
+    hash_caller_reference_field(&mut hasher, distribution_id);
+    for path in distribution_paths {
+        hash_caller_reference_field(&mut hasher, path);
+    }
+
+    format!("rust-bucket-deployment-{}", finalize_md5(hasher))
+}
+
+fn hash_caller_reference_field(hasher: &mut Md5, value: &str) {
+    hasher.update((value.len() as u64).to_be_bytes());
+    hasher.update(value.as_bytes());
+}
+
+fn finalize_md5(hasher: Md5) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+
+    let digest = hasher.finalize();
+    let bytes: &[u8] = digest.as_ref();
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push(HEX[(byte >> 4) as usize] as char);
+        output.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    output
+}
+
+fn truncate_failure_reason(reason: &str) -> String {
+    if reason.len() <= MAX_FAILURE_REASON_BYTES {
+        return reason.to_string();
+    }
+
+    const SUFFIX: &str = " ... [truncated]";
+    let mut end = MAX_FAILURE_REASON_BYTES.saturating_sub(SUFFIX.len());
+    while end > 0 && !reason.is_char_boundary(end) {
+        end -= 1;
+    }
+
+    let mut truncated = String::with_capacity(end + SUFFIX.len());
+    truncated.push_str(&reason[..end]);
+    truncated.push_str(SUFFIX);
+    truncated
 }
 
 fn log_deployment_summary(
@@ -307,4 +404,71 @@ async fn send_response(
         .error_for_status()?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MAX_FAILURE_REASON_BYTES, cloudfront_caller_reference, truncate_failure_reason};
+
+    #[test]
+    fn cloudfront_caller_reference_is_stable_and_bounded() {
+        let paths = vec!["/site/*".to_string()];
+        let reference =
+            cloudfront_caller_reference("stack-a", "request-123", "Deploy", "distribution", &paths);
+
+        assert_eq!(reference.len(), "rust-bucket-deployment-".len() + 32);
+        assert_eq!(
+            reference,
+            cloudfront_caller_reference("stack-a", "request-123", "Deploy", "distribution", &paths)
+        );
+    }
+
+    #[test]
+    fn cloudfront_caller_reference_includes_request_identity_and_invalidation_inputs() {
+        let paths = vec!["/site/*".to_string()];
+        let reference =
+            cloudfront_caller_reference("stack-a", "request-123", "Deploy", "distribution", &paths);
+
+        assert_ne!(
+            reference,
+            cloudfront_caller_reference("stack-b", "request-123", "Deploy", "distribution", &paths)
+        );
+        assert_ne!(
+            reference,
+            cloudfront_caller_reference("stack-a", "request-456", "Deploy", "distribution", &paths)
+        );
+        assert_ne!(
+            reference,
+            cloudfront_caller_reference(
+                "stack-a",
+                "request-123",
+                "Deploy",
+                "distribution",
+                &["/other/*".to_string()],
+            )
+        );
+    }
+
+    #[test]
+    fn truncate_failure_reason_leaves_short_reasons_unchanged() {
+        assert_eq!(truncate_failure_reason("short failure"), "short failure");
+    }
+
+    #[test]
+    fn truncate_failure_reason_caps_long_reasons() {
+        let reason = "x".repeat(MAX_FAILURE_REASON_BYTES + 100);
+        let truncated = truncate_failure_reason(&reason);
+
+        assert_eq!(truncated.len(), MAX_FAILURE_REASON_BYTES);
+        assert!(truncated.ends_with(" ... [truncated]"));
+    }
+
+    #[test]
+    fn truncate_failure_reason_preserves_utf8_boundaries() {
+        let reason = "é".repeat(MAX_FAILURE_REASON_BYTES);
+        let truncated = truncate_failure_reason(&reason);
+
+        assert!(truncated.len() <= MAX_FAILURE_REASON_BYTES);
+        assert!(truncated.ends_with(" ... [truncated]"));
+    }
 }
