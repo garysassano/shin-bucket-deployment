@@ -23,6 +23,7 @@ This document tracks how `RustBucketDeployment` maps `s3-unspool` ideas into the
 | Embedded MD5 catalog runtime support | Implemented. Existing `.s3-unspool/catalog.v1.json` entries are consumed. |
 | Cataloged asset production | Implemented for local directory `Source.asset` inputs through this construct's `Source` wrapper. |
 | Catalog sparse skip | Implemented. Marker-free files with catalog MD5 and matching destination size/ETag are skipped without reading entry data. |
+| Destination write preconditions | Implemented for extracted uploads. Missing destination keys use `If-None-Match: *`; existing keys with listed `ETag`s use `If-Match`; existing keys without usable `ETag`s fall back to plain `PutObject`. |
 | `PutObject` retry/backoff | Implemented with capped retry delays, full/no jitter, and a shared throttle cooldown. |
 | Runtime tuning surface | Implemented for transfer concurrency, source block/window settings, source GET concurrency, and PUT retry policy. |
 | Adaptive source tuning | Implemented. Source GET concurrency and source block window default from the provider Lambda memory size. |
@@ -51,7 +52,6 @@ This document tracks how `RustBucketDeployment` maps `s3-unspool` ideas into the
 | Tuning surface | Normal runtime tuning is intentionally small: `memoryLimit` plus `maxParallelTransfers`. Source block/window and retry internals are grouped under `advancedRuntimeTuning` as escape hatches, not as prominent top-level props. |
 | Asset production | Cataloged ZIPs are produced by this construct's `Source.asset` wrapper for local directories. `s3-unspool` can produce catalogs through its own upload/build tooling. |
 | Marker replacement | Catalog MD5s are ignored for marker sources because final bytes are only known at deploy time. |
-| Destination write preconditions | Extracted uploads use plain `PutObject` instead of `If-None-Match` or `If-Match` destination guards because CloudFormation owns the custom-resource lifecycle and should converge changed files by overwriting them. |
 
 ## Partial Or Missing
 
