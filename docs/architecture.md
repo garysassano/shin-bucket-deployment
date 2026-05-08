@@ -177,6 +177,16 @@ The source ZIP ranged-read path still uses source `If-Match` when the source obj
 
 `extract=false` remains on the `CopyObject` path. Its skip decision uses `ETag`, and changed copies overwrite the destination object.
 
+CloudFront invalidations use a bounded caller reference hash derived from the CloudFormation request identity (`StackId`, `RequestId`, and logical resource id) plus the distribution id and invalidation paths. CloudFormation documents `StackId` plus `RequestId` as a way to uniquely identify a request on a custom resource, and CloudFront documents `CallerReference` as the idempotency value that prevents accidentally resubmitting an identical invalidation request. If Lambda retries the same custom-resource event after creating the invalidation but before sending the CloudFormation response, CloudFront returns the existing invalidation instead of creating a duplicate. The upstream CDK `BucketDeployment` provider currently uses a fresh `uuid4()` caller reference for each invocation; this provider intentionally uses the request-derived caller reference to make same-event retries idempotent at the CloudFront API boundary.
+
+CloudFormation failure responses use a truncated `Reason` string. CloudFormation documents a 4096-byte maximum custom-resource response body, and `Reason` is part of that body. The provider keeps the full error in CloudWatch Logs but caps the response reason so a long Rust/AWS SDK error chain does not turn a useful deployment failure into an oversized or missing custom-resource response.
+
+## IAM Shape
+
+The provider role uses source grants from each bound CDK source and destination grants from the target bucket. Destination object write/delete permissions are scoped to `destinationKeyPrefix` when the prefix is concrete. Destination `ListBucket` is also scoped with `s3:prefix` when the current prefix is concrete and `retainOnDelete` is not `false`.
+
+When `retainOnDelete=false`, delete/list permissions remain broader because update and delete events may need to clean up an old destination prefix from previous resource properties. Tokenized prefixes also fall back to broader grants because their final prefix cannot be represented as a static IAM resource or condition at synthesis time.
+
 ## Engine Transition
 
 The older extract path downloaded each source ZIP from S3, wrote the full archive to Lambda `/tmp`, opened it with `ZipArchive`, and reread the temporary file for planning, fallback hashing, and upload streaming.

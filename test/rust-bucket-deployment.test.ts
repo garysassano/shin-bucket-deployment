@@ -115,3 +115,82 @@ test("creates separate handlers when the provider configuration differs", () => 
   const lambdaFunctions = Template.fromStack(stack).findResources("AWS::Lambda::Function");
   expect(Object.keys(lambdaFunctions)).toHaveLength(2);
 });
+
+test("scopes destination object permissions to the destination prefix", () => {
+  const stack = new Stack();
+  const destinationBucket = new Bucket(stack, "Dest");
+
+  new RustBucketDeployment(stack, "Deploy", {
+    sources: [Source.asset(join(__dirname, "fixtures", "my-website"))],
+    destinationBucket,
+    destinationKeyPrefix: "site",
+    bundling: testBundling(),
+  });
+
+  const template = Template.fromStack(stack);
+
+  template.hasResourceProperties("AWS::IAM::Policy", {
+    PolicyDocument: {
+      Statement: Match.arrayWith([
+        Match.objectLike({
+          Action: Match.arrayWith(["s3:PutObject"]),
+          Resource: {
+            "Fn::Join": [
+              "",
+              Match.arrayWith([
+                Match.objectLike({ "Fn::GetAtt": Match.arrayWith(["DestC383B82A", "Arn"]) }),
+                "/site/*",
+              ]),
+            ],
+          },
+        }),
+        Match.objectLike({
+          Action: "s3:ListBucket",
+          Condition: {
+            StringEquals: {
+              "s3:prefix": "site/",
+            },
+          },
+        }),
+      ]),
+    },
+  });
+});
+
+test("keeps delete and list permissions broad when retainOnDelete is false", () => {
+  const stack = new Stack();
+  const destinationBucket = new Bucket(stack, "Dest");
+
+  new RustBucketDeployment(stack, "Deploy", {
+    sources: [Source.asset(join(__dirname, "fixtures", "my-website"))],
+    destinationBucket,
+    destinationKeyPrefix: "site",
+    retainOnDelete: false,
+    bundling: testBundling(),
+  });
+
+  const template = Template.fromStack(stack);
+
+  template.hasResourceProperties("AWS::IAM::Policy", {
+    PolicyDocument: {
+      Statement: Match.arrayWith([
+        Match.objectLike({
+          Action: "s3:DeleteObject*",
+          Resource: {
+            "Fn::Join": [
+              "",
+              Match.arrayWith([
+                Match.objectLike({ "Fn::GetAtt": Match.arrayWith(["DestC383B82A", "Arn"]) }),
+                "/*",
+              ]),
+            ],
+          },
+        }),
+        Match.objectLike({
+          Action: "s3:ListBucket",
+          Condition: Match.absent(),
+        }),
+      ]),
+    },
+  });
+});

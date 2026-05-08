@@ -293,9 +293,19 @@ export class RustBucketDeployment extends Construct {
       source.bind(this, { handlerRole: this.handlerRole }),
     );
 
-    this.destinationBucket.grantRead(this.handlerFunction);
-    this.destinationBucket.grantPut(this.handlerFunction);
-    this.destinationBucket.grantDelete(this.handlerFunction);
+    const destinationObjectKeyPattern = destinationObjectGrantPattern(props.destinationKeyPrefix);
+    this.destinationBucket.grantPut(this.handlerFunction, destinationObjectKeyPattern);
+    this.destinationBucket.grantDelete(
+      this.handlerFunction,
+      props.retainOnDelete === false ? "*" : destinationObjectKeyPattern,
+    );
+    this.handlerFunction.addToRolePolicy(
+      destinationListPolicyStatement(
+        this.destinationBucket.bucketArn,
+        props.destinationKeyPrefix,
+        props.retainOnDelete,
+      ),
+    );
     this.handlerFunction.addToRolePolicy(
       new PolicyStatement({
         effect: Effect.ALLOW,
@@ -305,7 +315,7 @@ export class RustBucketDeployment extends Construct {
     );
 
     if (props.accessControl) {
-      this.destinationBucket.grantPutAcl(this.handlerFunction);
+      this.destinationBucket.grantPutAcl(this.handlerFunction, destinationObjectKeyPattern);
     }
 
     if (props.distribution) {
@@ -592,6 +602,36 @@ function cloudFrontDistributionArn(scope: Construct, distributionId: string): st
     resource: "distribution",
     resourceName: distributionId,
   });
+}
+
+function destinationObjectGrantPattern(prefix: string | undefined): string {
+  if (!prefix || prefix === "/" || Token.isUnresolved(prefix)) {
+    return "*";
+  }
+
+  return prefix.endsWith("/") ? `${prefix}*` : `${prefix}/*`;
+}
+
+function destinationListPolicyStatement(
+  bucketArn: string,
+  destinationKeyPrefix: string | undefined,
+  retainOnDelete: boolean | undefined,
+): PolicyStatement {
+  const prefix = destinationListPrefix(destinationKeyPrefix, retainOnDelete);
+  return new PolicyStatement({
+    effect: Effect.ALLOW,
+    actions: ["s3:ListBucket"],
+    resources: [bucketArn],
+    conditions: prefix ? { StringEquals: { "s3:prefix": prefix } } : undefined,
+  });
+}
+
+function destinationListPrefix(prefix: string | undefined, retainOnDelete: boolean | undefined) {
+  if (!prefix || prefix === "/" || Token.isUnresolved(prefix) || retainOnDelete === false) {
+    return undefined;
+  }
+
+  return prefix.endsWith("/") ? prefix : `${prefix}/`;
 }
 
 function literalString(value: string): ReturnType<typeof lit> {
