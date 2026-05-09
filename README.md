@@ -127,6 +127,6 @@ pnpm example deploy cloudfront-sync
 pnpm example destroy retain-on-delete
 ```
 
-See [docs/architecture.md](./docs/architecture.md) for the full example list and runtime design, [docs/s3-unspool-parity.md](./docs/s3-unspool-parity.md) for optimization parity, [docs/validation.md](./docs/validation.md) for validation status, and [docs/benchmarking.md](./docs/benchmarking.md) for benchmark strategy.
+See [docs/architecture.md](./docs/architecture.md) for the full example list and runtime design, [docs/s3-unspool-parity.md](./docs/s3-unspool-parity.md) for optimization parity, [docs/verification.md](./docs/verification.md) for validation status, and [docs/benchmarking.md](./docs/benchmarking.md) for benchmark results.
 
 The Rust provider lives under [rust](./rust), the construct code under [src](./src), and provider workflow diagrams are in [docs/architecture.md](./docs/architecture.md).

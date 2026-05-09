@@ -179,10 +179,18 @@ describe("benchmark result collector", () => {
     expect(report).toContain("Benchmark Report: comparison");
     expect(report).toContain("| mixed | cold-create | 1024 | rust | 1 | 2 | 2 | 2 | 2 |");
     expect(report).toContain("## Rust vs AWS Comparison");
-    expect(report).toContain("| mixed | cold-create | 1024 | 2 | 8 | 4x | 80 | 180 | 2.25x |");
-    expect(report).toContain("### Provider Duration By Phase");
-    expect(report).toContain("mixed cold-create 1024");
-    expect(report).toContain("  rust | ########");
-    expect(report).toContain("  aws  | ############################## 8 s");
+    expect(report).toContain(
+      "| mixed | cold-create | 1024 | Provider duration | 2 s | 8 s | +6 s | 4x | +300% |",
+    );
+    expect(report).toContain(
+      "| mixed | cold-create | 1024 | Init duration | 0.1 s | 0.2 s | +0.1 s | 2x | +100% |",
+    );
+    expect(report).toContain(
+      "| mixed | cold-create | 1024 | Max memory | 80 MiB | 180 MiB | +100 MiB | 2.25x | +125% |",
+    );
+    expect(report).toContain("## Charts");
+    expect(report).toContain("xychart-beta");
+    expect(report).toContain('bar "Rust" [2]');
+    expect(report).toContain('bar "AWS" [8]');
   });
 });

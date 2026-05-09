@@ -1,14 +1,16 @@
 # Benchmarking
 
-This document defines the benchmark strategy for `RustBucketDeployment`. The goal is not just elapsed time; it is to explain deployment behavior at every step and produce comparable evidence across code changes.
+This page is the human-readable benchmark snapshot for `RustBucketDeployment`. Full sanitized benchmark history is append-only JSONL in `docs/benchmark-history.jsonl`.
+
+Runbooks, evidence collection rules, schema guidance, and sanitization rules live in the repo-local agent skill at `.agents/skills/rbd-benchmark-verification/SKILL.md`.
 
 ## Document Ownership
 
-This file owns benchmark methodology, benchmark harness usage, required snapshot schema, and the latest sanitized performance snapshot.
+This file owns benchmark context and the latest sanitized human-readable performance snapshot.
 
 `docs/benchmark-history.jsonl` owns the append-only sanitized benchmark record across runs. Before replacing the `Current Results` section here, make sure the previous and new run records are present there.
 
-`docs/validation.md` owns correctness validation status and AWS functional runbooks. Validation may reference benchmark-backed coverage, but benchmark timing and memory data belongs here or in `docs/benchmark-history.jsonl`.
+`docs/verification.md` owns correctness validation status. Validation may reference benchmark-backed coverage, but benchmark timing and memory data belongs here or in `docs/benchmark-history.jsonl`.
 
 ## Goals
 
@@ -78,247 +80,15 @@ Variants:
 | `v2` | Same file set and sizes, with a few changed files. | Sparse same-size update behavior. |
 | `pruned` | Removes about ten percent of files. | Delete planning and prune behavior. |
 
-## Minimum Run Matrix
+## Methodology Summary
 
-Run this matrix for every performance-significant provider change:
+The benchmark harness measures deterministic static-site bundles across create, unchanged, sparse-update, and prune-update phases. Paired Rust-vs-AWS comparison runs must use the same region, profile, variants, destination prefix, memory setting, and repetition count. The latest full workflow is maintained in `.agents/skills/rbd-benchmark-verification/SKILL.md`.
 
-| Phase | Profile | Variant sequence | Repetitions | Required evidence |
-| --- | --- | --- | ---: | --- |
-| Cold create | `tiny-many`, `mixed`, `large-few` | `v1` | 3 | Provider duration, memory, request counts, bytes written. |
-| Unchanged redeploy | `tiny-many`, `mixed`, `large-few` | `v1` -> `v1` | 5 | Skip counters, destination writes near zero, median/p90. |
-| Sparse update | `mixed`, `large-few` | `v1` -> `v2` | 3 | Changed count, skipped count, source bytes read, destination bytes written. |
-| Prune update | `tiny-many`, `mixed` | `v1` -> `pruned` | 3 | Deleted count, delete request batches, retained object validation. |
-| No-prune update | `mixed` | `v1` -> `pruned` with `RBD_BENCH_PRUNE=false` | 1 | Removed source keys remain in destination. |
-| Prefix update | `mixed` | `v1` to new prefix | 1 | Old prefix cleanup behavior when `retainOnDelete=false`. |
-| Delete cleanup | `mixed` | destroy after deploy | 1 | Destination cleanup and stack destroy success. |
-
-Use a unique `RBD_BENCH_STACK_SUFFIX` per comparison branch or run group.
-
-For release comparison runs, run the same profile, variant sequence, prune setting, destination prefix, memory setting, region, and repetition count for both `benchmark-assets` and `benchmark-assets-aws`. Do not compare a Rust run from one matrix against an AWS run from a different matrix.
-
-## Standard Command Sequence
-
-Build first:
-
-```bash
-pnpm build
-```
-
-Cold create:
-
-```bash
-RBD_BENCH_PROFILE=mixed \
-RBD_BENCH_VARIANT=v1 \
-RBD_BENCH_STACK_SUFFIX=BenchA \
-RBD_BENCH_MEMORY_LIMIT_MB=1024 \
-pnpm example deploy benchmark-assets
-```
-
-AWS comparison create uses the same environment shape and swaps only the example name:
-
-```bash
-RBD_BENCH_PROFILE=mixed \
-RBD_BENCH_VARIANT=v1 \
-RBD_BENCH_STACK_SUFFIX=BenchA \
-RBD_BENCH_MEMORY_LIMIT_MB=1024 \
-pnpm example deploy benchmark-assets-aws
-```
-
-The AWS comparison stack name starts with `AwsBucketDeploymentBenchmarkAssetsDemo`; the Rust stack name starts with `RustBucketDeploymentBenchmarkAssetsDemo`. Use the same suffix for paired runs so records remain easy to join by implementation.
-
-Unchanged redeploy with a provider invocation:
-
-```bash
-RBD_BENCH_PROFILE=mixed \
-RBD_BENCH_VARIANT=v1 \
-RBD_BENCH_STACK_SUFFIX=BenchA \
-RBD_BENCH_MEMORY_LIMIT_MB=1024 \
-RBD_BENCH_WAIT=false \
-pnpm example deploy benchmark-assets
-```
-
-The benchmark stack has no CloudFront distribution, so toggling `RBD_BENCH_WAIT=false` forces a custom-resource property update without changing deployment behavior. If `RBD_BENCH_WAIT` is left at the default on a byte-identical redeploy, CDK reports no changes and the provider Lambda is not invoked.
-
-Sparse same-size update:
-
-```bash
-RBD_BENCH_PROFILE=mixed \
-RBD_BENCH_VARIANT=v2 \
-RBD_BENCH_STACK_SUFFIX=BenchA \
-RBD_BENCH_MEMORY_LIMIT_MB=1024 \
-pnpm example deploy benchmark-assets
-```
-
-Prune update:
-
-```bash
-RBD_BENCH_PROFILE=mixed \
-RBD_BENCH_VARIANT=pruned \
-RBD_BENCH_STACK_SUFFIX=BenchA \
-RBD_BENCH_MEMORY_LIMIT_MB=1024 \
-pnpm example deploy benchmark-assets
-```
-
-Destroy:
-
-```bash
-RBD_BENCH_STACK_SUFFIX=BenchA RBD_BENCH_MEMORY_LIMIT_MB=1024 pnpm example destroy benchmark-assets
-```
-
-The 1024 MiB setting is the preferred default because the `large-few` benchmark made cold-create provider duration roughly 2x faster than 512 MiB while keeping billed compute cost in the same range. Current memory comparison runs should use 512, 1024, and 2048 MiB to measure lower-memory behavior, default behavior, and higher-memory performance headroom; use suffixes such as `Mem512`, `Mem1024`, and `Mem2048`.
-
-## Data To Record
-
-For every run:
-
-- branch name
-- commit SHA
-- implementation: `rust` or `aws`
-- provider binary build mode and target architecture
-- AWS region
-- stack suffix
-- profile and variant
-- generated file count and total bytes
-- phase: cold create, unchanged redeploy, sparse update, prune update, destroy
-- local wall time around the `pnpm example deploy` command
-- CDK reported deploy time
-- CloudFormation custom resource elapsed time
-- Lambda duration, billed duration, init duration if present, and max memory
-- provider summary counters from the sanitized `rbd_deployment_summary` log line
-- destination object inspection summary
-- cleanup status
-
-Provider summary counters should include:
-
-- source archives planned
-- source ZIP bytes and central-directory bytes read
-- source range request count
-- coalesced source block count
-- source block cache hits/misses/evictions
-- planned entries
-- filtered entries
-- marker entries
-- destination objects listed
-- missing marker-free direct uploads
-- MD5 hash attempts/skips/uploads
-- marker replacement skips/uploads
-- `extract=false` copy skips/copies
-- put attempts/retries/throttles/failures
-- uploaded object count and bytes
-- copied object count and bytes
-- prune delete count and batches
-- CloudFront invalidation id and wait duration when applicable
+The 1024 MiB setting is the preferred default because earlier `large-few` runs showed much faster cold-create provider duration than 512 MiB while keeping billed compute cost in the same range. Memory comparison runs should still include 512, 1024, and 2048 MiB when measuring runtime tuning changes.
 
 ## Provider Telemetry
 
-The provider maintains a per-invocation deployment stats object:
-
-- initialize it when the handler starts processing a request
-- pass it through planning, destination listing, transfer, delete, and invalidation paths
-- increment counters close to the AWS SDK call or CPU work being measured
-- record phase durations with `Instant`
-- emit one sanitized JSON summary line at the end of each successful or failed request
-- include no bucket names, object keys, account IDs, distribution IDs, URLs, or ETags in the summary line
-
-The provider emits this as a single sanitized `rbd_deployment_summary` JSON object per custom-resource request. Shape:
-
-```json
-{
-  "event": "rbd_deployment_summary",
-  "requestType": "Update",
-  "status": "success",
-  "extract": true,
-  "prune": true,
-  "availableMemoryMb": 512,
-  "maxParallelTransfers": 8,
-  "durationMs": 812,
-  "phaseMs": {
-    "plan": 120,
-    "destinationList": 180,
-    "transfer": 470,
-    "delete": 42,
-    "cloudfront": 0,
-    "oldPrefixDelete": 0
-  },
-  "counts": {
-    "sourceArchives": 1,
-    "plannedEntries": 442,
-    "filteredEntries": 0,
-    "markerEntries": 0,
-    "destinationObjects": 442,
-    "deleteObjects": 0,
-    "deleteBatches": 0,
-    "uploadedObjects": 12,
-    "skippedObjects": 430,
-    "conditionalConflicts": 0,
-    "copiedObjects": 0,
-    "md5HashAttempts": 442,
-    "md5Skips": 430,
-    "catalogSkips": 0
-  },
-  "bytes": {
-    "sourceZip": 1063997,
-    "uploaded": 10485760,
-    "copied": 0
-  },
-  "source": {
-    "plannedBlocks": 38,
-    "plannedBytes": 12582912,
-    "fetchedBlocks": 38,
-    "fetchedBytes": 12582912,
-    "getAttempts": 38,
-    "getRetries": 0,
-    "getErrors": 0,
-    "blockHits": 442,
-    "blockMisses": 0,
-    "blockRefetches": 0,
-    "blockWaits": 12
-  },
-  "putObject": {
-    "failedAttempts": 0,
-    "retryAttempts": 0,
-    "throttledAttempts": 0,
-    "retryWaitMs": 0,
-    "throttleCooldownWaits": 0,
-    "throttleCooldownWaitMs": 0
-  }
-}
-```
-
-The summary intentionally omits bucket names, object keys, account IDs, distribution IDs, URLs, and ETags.
-
-## Benchmark Runner Plan
-
-The current collector can append sanitized phase records to `docs/benchmark-history.jsonl` from command logs, CloudWatch `REPORT` files, and optional provider summary JSONL. A future runner should automate the full matrix end-to-end:
-
-```bash
-pnpm benchmark:collect \
-  --log-file /tmp/rbd-aws-validation-20260502/benchmark-memory/mem512-create-v1.log \
-  --report-file /tmp/rbd-aws-validation-20260502/benchmark-memory/report-example.json \
-  --summary-file /tmp/rbd-aws-validation-20260502/benchmark-memory/summary-example.jsonl \
-  --run-id 2026-05-02-mixed-memory-matrix \
-  --run-date 2026-05-02 \
-  --phase cold-create \
-  --series full-create-update-prune \
-  --commit 345efe0 \
-  --subject "simplify runtime tuning props" \
-  --region ap-southeast-2 \
-  --implementation rust \
-  --profile mixed \
-  --memory-mb 512 \
-  --variant v1 \
-  --file-count 442 \
-  --total-bytes 52904649
-```
-
-- builds the project once
-- deploys each profile/variant sequence with unique stack suffixes
-- captures local wall time
-- collects CloudFormation stack events for the custom resource timing
-- queries CloudWatch Logs for provider summary lines and Lambda REPORT lines
-- optionally queries S3 object state for key-count and spot content validation
-- writes sanitized JSONL under an ignored output directory such as `.benchmark-runs/`
-- prints a Markdown summary table for commit-to-commit comparison
+Rust benchmark rows may include the sanitized `rbd_deployment_summary` object emitted by the provider. The summary contains aggregate timings, counters, bytes, source range-read stats, and `PutObject` diagnostics, and intentionally omits bucket names, object keys, account IDs, distribution IDs, URLs, and ETags.
 
 Generate Markdown tables and text bar charts from committed or scratch JSONL records:
 
@@ -326,93 +96,13 @@ Generate Markdown tables and text bar charts from committed or scratch JSONL rec
 pnpm benchmark:report -- --run-id 2026-05-02-large-few-memory-matrix
 ```
 
-The report groups records by profile, phase, implementation, and memory size. It includes medians, p90, min/max, and an AWS/Rust ratio table when paired implementation records exist.
+The report groups records by profile, phase, implementation, and memory size. It includes medians, p90, min/max, detailed Rust-vs-AWS metric comparisons, and generated Mermaid charts when paired implementation records exist.
 
 Do not commit `.benchmark-runs/` raw output. Commit only curated aggregate results that do not include sensitive resource identifiers.
 
-## Result Storage Schema
+## History
 
-Every committed benchmark result must be represented as sanitized records in `docs/benchmark-history.jsonl`. This file keeps a human-readable summary of only the latest run.
-
-`docs/benchmark-history.jsonl` is append-only JSONL with one JSON object per measured phase. Each object uses this schema:
-
-| Field | Meaning |
-| --- | --- |
-| `schemaVersion` | Schema version, currently `2`; schema `1` records are accepted as historical Rust-only records. |
-| `runId` | Stable identifier grouping related phase rows. |
-| `runDate` | ISO date, for example `2026-05-02`. |
-| `providerImplementationCommit` | Commit measured by the provider Lambda. |
-| `providerImplementationSubject` | Short commit subject, when known. |
-| `resultDocumentationCommit` | Commit that first recorded the sanitized result, or `null` until committed. |
-| `region` | AWS region only, not account information. |
-| `implementation` | Deployment implementation: `rust`, `aws`, or `null` for historical schema `1` records. |
-| `profile` | Benchmark asset profile. |
-| `series` | Logical run series, for example `full-create-update-prune` or `forced-unchanged`. |
-| `memoryMb` | Provider Lambda memory size in MiB. |
-| `phase` | Measured phase name. |
-| `variant` | Asset variant, or `null` when not applicable. |
-| `fileCount` | Source file count for the phase, or `null` when not applicable. |
-| `totalBytes` | Source total bytes for the phase, or `null` when not applicable. |
-| `cdkDeploySeconds` | CDK-reported deploy time, or `null` when unavailable. |
-| `localWallSeconds` | Local wall time around the command, or `null` when unavailable. |
-| `providerDurationSeconds` | Provider Lambda duration from the `REPORT` line, or `null` when not invoked. |
-| `billedDurationSeconds` | Provider Lambda billed duration, or `null` when not invoked. |
-| `initDurationSeconds` | Lambda init duration, or `null` when unavailable. |
-| `maxMemoryMb` | Lambda max memory from the `REPORT` line, or `null` when not invoked. |
-| `providerInvoked` | Whether the provider Lambda was invoked for this phase. |
-| `cleanup` | Cleanup status for the run group, when known. |
-| `notes` | Short caveats, without resource identifiers. |
-| `providerSummary` | Optional sanitized `rbd_deployment_summary` object when captured. |
-
-Use `null` for unavailable JSONL fields. Do not invent values.
-
-The latest human-readable snapshot in this file uses a metadata table and result tables derived from those JSONL records.
-
-Metadata table:
-
-| Field | Value |
-| --- | --- |
-| Run date | ISO date, for example `2026-05-02` |
-| Provider implementation commit | Commit measured by the provider Lambda |
-| Result documentation commit | Commit that first recorded the sanitized result, or blank until committed |
-| Region | AWS region only, not account information |
-| Implementations | Deployment implementations included in the run |
-| Profile | Benchmark asset profile |
-| Baseline variant | Baseline asset variant |
-| Baseline bundle | File count and total bytes |
-| Comparison variants | Variant names and file counts/bytes when measured |
-| Provider memory | Memory settings included in the run |
-| Cleanup | Stack cleanup outcome |
-| Notes | Short caveats, for example missing fields or forced update behavior |
-
-Result table columns:
-
-| Memory | Phase | Variant | CDK deploy time | Local wall time | Provider duration | Billed duration | Init duration | Max memory |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-
-Leave unavailable Markdown cells empty. Use `not invoked` only when CloudFormation/CDK intentionally did not invoke the provider for that phase. Use `n/a` only when a field does not apply to the phase.
-
-When a new benchmark run becomes the latest result:
-
-1. Append sanitized phase records for the new run to `docs/benchmark-history.jsonl`.
-2. If the previous `Current Results` were not already recorded in JSONL, add them before replacing the human-readable summary.
-3. Replace `Current Results` in this file with a human-readable summary of the new run using the metadata and result table shapes above.
-4. Confirm raw logs remain outside git and only sanitized aggregate data is committed.
-5. Record whether all benchmark stacks were destroyed.
-
-## Comparison Method
-
-For branch comparisons:
-
-1. Use the same benchmark harness commit on both branches.
-2. Use the same AWS region and account.
-3. Build from a clean working tree when possible.
-4. Use separate stack suffixes, for example `MainA` and `ExperimentA`.
-5. Run cold creates before unchanged updates for each branch.
-6. Run unchanged redeploys at least five times.
-7. Compare median and p90 for repeated phases.
-8. Compare provider counters before drawing conclusions from elapsed time.
-9. Destroy all stacks after collecting evidence.
+Every committed benchmark result is represented as sanitized records in `docs/benchmark-history.jsonl`. Use `null` for unavailable JSONL fields and do not invent values. The latest collection and documentation workflow is maintained in `.agents/skills/rbd-benchmark-verification/SKILL.md`.
 
 ## Current Results
 
@@ -431,30 +121,41 @@ For branch comparisons:
 | Cleanup | All benchmark stacks destroyed after collection |
 | Notes | Paired Rust/AWS comparison. Forced unchanged rows used `RBD_BENCH_WAIT=false` on a stack with no CloudFront distribution. Rust rows include sanitized provider summary counters in `docs/benchmark-history.jsonl`. The first attempted Rust update exposed the destination `s3:GetObject` IAM gap; this snapshot records the rerun after the fix. |
 
-Mixed Rust/AWS comparison:
+Mixed Rust/AWS comparison by metric:
 
-| Phase | Rust duration | AWS duration | AWS/Rust duration | Rust max memory | AWS max memory | AWS/Rust memory |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Cold create | 2.049 s | 9.988 s | 4.875x | 66 MB | 251 MB | 3.803x |
-| Forced unchanged | 0.203 s | 9.594 s | 47.261x | 66 MB | 251 MB | 3.803x |
-| Sparse update | 0.376 s | 9.612 s | 25.564x | 66 MB | 251 MB | 3.803x |
-| Prune update | 3.296 s | 9.204 s | 2.792x | 68 MB | 251 MB | 3.691x |
+| Phase | Metric | Rust | AWS | AWS - Rust | AWS/Rust | AWS delta % |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Cold create | Provider duration | 2.049 s | 9.988 s | +7.939 s | 4.875x | +387.457% |
+| Cold create | Billed duration | 2.188 s | 10.535 s | +8.347 s | 4.815x | +381.49% |
+| Cold create | Init duration | 0.139 s | 0.547 s | +0.408 s | 3.935x | +293.525% |
+| Cold create | Local wall time | 111.89 s | 107.91 s | -3.98 s | 0.964x | -3.557% |
+| Cold create | CDK deploy time | 66.3 s | 70.7 s | +4.4 s | 1.066x | +6.637% |
+| Cold create | Max memory | 66 MiB | 251 MiB | +185 MiB | 3.803x | +280.303% |
+| Forced unchanged | Provider duration | 0.203 s | 9.594 s | +9.391 s | 47.261x | +4626.108% |
+| Forced unchanged | Billed duration | 0.203 s | 9.594 s | +9.391 s | 47.261x | +4626.108% |
+| Forced unchanged | Local wall time | 57.56 s | 73.05 s | +15.49 s | 1.269x | +26.911% |
+| Forced unchanged | CDK deploy time | 14.24 s | 26.5 s | +12.26 s | 1.861x | +86.096% |
+| Forced unchanged | Max memory | 66 MiB | 251 MiB | +185 MiB | 3.803x | +280.303% |
+| Sparse update | Provider duration | 0.376 s | 9.612 s | +9.236 s | 25.564x | +2456.383% |
+| Sparse update | Billed duration | 0.377 s | 9.612 s | +9.235 s | 25.496x | +2449.602% |
+| Sparse update | Local wall time | 57.38 s | 70.47 s | +13.09 s | 1.228x | +22.813% |
+| Sparse update | CDK deploy time | 14.02 s | 26.41 s | +12.39 s | 1.884x | +88.374% |
+| Sparse update | Max memory | 66 MiB | 251 MiB | +185 MiB | 3.803x | +280.303% |
+| Prune update | Provider duration | 3.296 s | 9.204 s | +5.908 s | 2.792x | +179.248% |
+| Prune update | Billed duration | 3.296 s | 9.204 s | +5.908 s | 2.792x | +179.248% |
+| Prune update | Local wall time | 65.15 s | 70.18 s | +5.03 s | 1.077x | +7.721% |
+| Prune update | CDK deploy time | 21.98 s | 26.53 s | +4.55 s | 1.207x | +20.701% |
+| Prune update | Max memory | 68 MiB | 251 MiB | +183 MiB | 3.691x | +269.118% |
 
-Provider duration by phase:
+Metric charts are generated from `docs/benchmark-history.jsonl` using `pnpm benchmark:report`. Example provider-duration chart:
 
-```text
-mixed cold-create 1024
-  rust | ######                         2.049 s
-  aws  | ############################## 9.988 s
-mixed forced-unchanged 1024
-  rust | #                              0.203 s
-  aws  | #############################  9.594 s
-mixed sparse-update 1024
-  rust | #                              0.376 s
-  aws  | #############################  9.612 s
-mixed prune-update 1024
-  rust | ##########                     3.296 s
-  aws  | ############################   9.204 s
+```mermaid
+xychart-beta
+  title "Provider duration by Phase"
+  x-axis ["cold-create", "forced-unchanged", "sparse-update", "prune-update"]
+  y-axis "s" 0 --> 20
+  bar "Rust" [2.049, 0.203, 0.376, 3.296]
+  bar "AWS" [9.988, 9.594, 9.612, 9.204]
 ```
 
 Provider summary highlights:
