@@ -1,8 +1,8 @@
 # Benchmark
 
-This page is the human-readable benchmark snapshot for `RustBucketDeployment`. Benchmarks measure efficiency and compare with upstream AWS CDK `BucketDeployment`; correctness verification lives in `docs/verification.md`. Full sanitized benchmark history is append-only JSONL in `docs/benchmark-history.jsonl`.
+This page is the human-readable benchmark snapshot for `ShinBucketDeployment`. Benchmarks measure efficiency and compare with upstream AWS CDK `BucketDeployment`; correctness verification lives in `docs/verification.md`. Full sanitized benchmark history is append-only JSONL in `docs/benchmark-history.jsonl`.
 
-Runbooks, evidence collection rules, schema guidance, and sanitization rules live in the repo-local agent skill at `.agents/skills/rbd-benchmark/SKILL.md`.
+Runbooks, evidence collection rules, schema guidance, and sanitization rules live in the repo-local agent skill at `.agents/skills/sbd-benchmark/SKILL.md`.
 
 ## Document Ownership
 
@@ -45,24 +45,24 @@ Benchmark runs should answer these questions:
 The `benchmark-assets` example generates deterministic static-site bundles under `.benchmark-assets/`, which is ignored by git. The same stack definition can instantiate either this construct or the upstream AWS CDK `BucketDeployment`; the benchmark implementation is the only intended comparison dimension. Rust uses its normal `Source.asset` path, including the embedded catalog optimization, while AWS uses upstream `Source.asset`.
 
 ```bash
-RBD_BENCH_PROFILE=mixed RBD_BENCH_VARIANT=v1 RBD_BENCH_STACK_SUFFIX=RunA pnpm example deploy benchmark-assets
-RBD_BENCH_STACK_SUFFIX=RunA pnpm example destroy benchmark-assets
-RBD_BENCH_PROFILE=mixed RBD_BENCH_VARIANT=v1 RBD_BENCH_STACK_SUFFIX=RunA pnpm example deploy benchmark-assets-aws
-RBD_BENCH_STACK_SUFFIX=RunA pnpm example destroy benchmark-assets-aws
+SBD_BENCH_PROFILE=mixed SBD_BENCH_VARIANT=v1 SBD_BENCH_STACK_SUFFIX=RunA pnpm example deploy benchmark-assets
+SBD_BENCH_STACK_SUFFIX=RunA pnpm example destroy benchmark-assets
+SBD_BENCH_PROFILE=mixed SBD_BENCH_VARIANT=v1 SBD_BENCH_STACK_SUFFIX=RunA pnpm example deploy benchmark-assets-aws
+SBD_BENCH_STACK_SUFFIX=RunA pnpm example destroy benchmark-assets-aws
 ```
 
 Environment variables:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `RBD_BENCH_PROFILE` | `mixed` | Asset shape: `tiny-many`, `mixed`, or `large-few`. |
-| `RBD_BENCH_VARIANT` | `v1` | Asset variant: `v1`, `v2`, or `pruned`. |
-| `RBD_BENCH_IMPLEMENTATION` | `rust` | Deployment implementation: `rust` or `aws`. The `benchmark-assets-aws` example sets this to `aws`. |
-| `RBD_BENCH_STACK_SUFFIX` | none | Adds a suffix to the benchmark stack name so multiple runs can coexist. |
-| `RBD_BENCH_DESTINATION_PREFIX` | `benchmark-site` | Destination prefix inside the generated bucket. |
-| `RBD_BENCH_MEMORY_LIMIT_MB` | `1024` | Provider Lambda memory size in MiB. Use distinct stack suffixes when comparing memory sizes. |
-| `RBD_BENCH_PRUNE` | `true` | Set to `false` to disable prune. |
-| `RBD_BENCH_WAIT` | `true` | Present for property toggling; the benchmark stack currently has no CloudFront distribution. |
+| `SBD_BENCH_PROFILE` | `mixed` | Asset shape: `tiny-many`, `mixed`, or `large-few`. |
+| `SBD_BENCH_VARIANT` | `v1` | Asset variant: `v1`, `v2`, or `pruned`. |
+| `SBD_BENCH_IMPLEMENTATION` | `rust` | Deployment implementation: `rust` or `aws`. The `benchmark-assets-aws` example sets this to `aws`. |
+| `SBD_BENCH_STACK_SUFFIX` | none | Adds a suffix to the benchmark stack name so multiple runs can coexist. |
+| `SBD_BENCH_DESTINATION_PREFIX` | `benchmark-site` | Destination prefix inside the generated bucket. |
+| `SBD_BENCH_MEMORY_LIMIT_MB` | `1024` | Provider Lambda memory size in MiB. Use distinct stack suffixes when comparing memory sizes. |
+| `SBD_BENCH_PRUNE` | `true` | Set to `false` to disable prune. |
+| `SBD_BENCH_WAIT` | `true` | Present for property toggling; the benchmark stack currently has no CloudFront distribution. |
 
 Asset profiles:
 
@@ -82,13 +82,13 @@ Variants:
 
 ## Methodology Summary
 
-The benchmark harness measures deterministic static-site bundles across create, unchanged, sparse-update, and prune-update phases. Paired Rust-vs-AWS comparison runs must use the same region, profile, variants, destination prefix, memory setting, and repetition count. The latest full workflow is maintained in `.agents/skills/rbd-benchmark/SKILL.md`.
+The benchmark harness measures deterministic static-site bundles across create, unchanged, sparse-update, and prune-update phases. Paired Rust-vs-AWS comparison runs must use the same region, profile, variants, destination prefix, memory setting, and repetition count. The latest full workflow is maintained in `.agents/skills/sbd-benchmark/SKILL.md`.
 
 The 1024 MiB setting is the preferred default because earlier `large-few` runs showed much faster cold-create provider duration than 512 MiB while keeping billed compute cost in the same range. Memory comparison runs should still include 512, 1024, and 2048 MiB when measuring runtime tuning changes.
 
 ## Provider Telemetry
 
-Rust benchmark rows may include the sanitized `rbd_deployment_summary` object emitted by the provider. The summary contains aggregate timings, counters, bytes, source range-read stats, and `PutObject` diagnostics, and intentionally omits bucket names, object keys, account IDs, distribution IDs, URLs, and ETags.
+Rust benchmark rows may include the sanitized `sbd_deployment_summary` object emitted by the provider. The summary contains aggregate timings, counters, bytes, source range-read stats, and `PutObject` diagnostics, and intentionally omits bucket names, object keys, account IDs, distribution IDs, URLs, and ETags.
 
 Generate Markdown tables and text bar charts from committed or scratch JSONL records:
 
@@ -102,7 +102,7 @@ Do not commit `.benchmark-runs/` raw output. Commit only curated aggregate resul
 
 ## History
 
-Every committed benchmark result is represented as sanitized records in `docs/benchmark-history.jsonl`. Use `null` for unavailable JSONL fields and do not invent values. The latest collection and documentation workflow is maintained in `.agents/skills/rbd-benchmark/SKILL.md`.
+Every committed benchmark result is represented as sanitized records in `docs/benchmark-history.jsonl`. Use `null` for unavailable JSONL fields and do not invent values. The latest collection and documentation workflow is maintained in `.agents/skills/sbd-benchmark/SKILL.md`.
 
 ## Current Results
 
@@ -119,9 +119,9 @@ Every committed benchmark result is represented as sanitized records in `docs/be
 | Comparison variants | `v2`: 2,584 files, 8,178,618 bytes; `pruned`: 2,325 files, 7,332,858 bytes |
 | Provider memory | 1024 MiB |
 | Cleanup | All benchmark stacks destroyed after collection |
-| Notes | Paired Rust/AWS comparison for the many-small-files profile. Forced unchanged rows used `RBD_BENCH_WAIT=false` on a stack with no CloudFront distribution. Rust rows include sanitized provider summary counters in `docs/benchmark-history.jsonl`. |
+| Notes | Paired Rust/AWS comparison for the many-small-files profile. Forced unchanged rows used `SBD_BENCH_WAIT=false` on a stack with no CloudFront distribution. Rust rows include sanitized provider summary counters in `docs/benchmark-history.jsonl`. |
 
-RustBucketDeployment vs AWS BucketDeployment insight table:
+ShinBucketDeployment vs AWS BucketDeployment insight table:
 
 | Phase | Provider duration | Local wall time | CDK deploy time | Max memory |
 | --- | ---: | ---: | ---: | ---: |
@@ -130,9 +130,9 @@ RustBucketDeployment vs AWS BucketDeployment insight table:
 | Sparse update | 0.622 s vs 28.76 s (46.238x faster) | 66.53 s vs 108.05 s (1.624x faster) | 14.14 s vs 46.23 s (3.269x faster) | 89 MiB vs 214 MiB (58.411% lower) |
 | Prune update | 15.758 s vs 28.356 s (1.799x faster) | 88.43 s vs 107.79 s (1.219x faster) | 34.14 s vs 46.08 s (1.35x faster) | 95 MiB vs 214 MiB (55.607% lower) |
 
-Detailed per-phase metric comparisons are generated from `docs/benchmark-history.jsonl` using `pnpm benchmark:report`. The visual summaries below show the actual amount saved by RustBucketDeployment instead of plotting two overlapping construct series.
+Detailed per-phase metric comparisons are generated from `docs/benchmark-history.jsonl` using `pnpm benchmark:report`. The visual summaries below show the actual amount saved by ShinBucketDeployment instead of plotting two overlapping construct series.
 
-Provider duration saved by RustBucketDeployment:
+Provider duration saved by ShinBucketDeployment:
 
 ```text
 cold-create 1024           | ##############                 13.057 s faster (1.916x AWS/Rust)
@@ -141,7 +141,7 @@ sparse-update 1024         | ############################## 28.138 s faster (46.
 prune-update 1024          | #############                  12.598 s faster (1.799x AWS/Rust)
 ```
 
-Local wall time saved by RustBucketDeployment:
+Local wall time saved by ShinBucketDeployment:
 
 ```text
 cold-create 1024           | ################               22.54 s faster (1.163x AWS/Rust)
@@ -150,7 +150,7 @@ sparse-update 1024         | ############################## 41.52 s faster (1.62
 prune-update 1024          | ##############                 19.36 s faster (1.219x AWS/Rust)
 ```
 
-CDK deploy time saved by RustBucketDeployment:
+CDK deploy time saved by ShinBucketDeployment:
 
 ```text
 cold-create 1024           | ###################            19.93 s faster (1.281x AWS/Rust)
@@ -159,7 +159,7 @@ sparse-update 1024         | ############################## 32.09 s faster (3.26
 prune-update 1024          | ###########                    11.94 s faster (1.35x AWS/Rust)
 ```
 
-Max memory saved by RustBucketDeployment:
+Max memory saved by ShinBucketDeployment:
 
 ```text
 cold-create 1024           | ############################## 133 MiB lower (2.684x AWS/Rust)

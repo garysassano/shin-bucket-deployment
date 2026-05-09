@@ -3,13 +3,13 @@ import { App, Aws, CfnOutput, Duration, RemovalPolicy, Stack, type StackProps } 
 import { Bucket } from "aws-cdk-lib/aws-s3";
 import {
   CacheControl,
-  RustBucketDeployment,
   ServerSideEncryption,
+  ShinBucketDeployment,
   Source,
   StorageClass,
 } from "../src";
 
-class MetadataFiltersRustBucketDeploymentStack extends Stack {
+class MetadataFiltersShinBucketDeploymentStack extends Stack {
   constructor(scope: App, id: string, props?: StackProps) {
     super(scope, id, props);
 
@@ -18,7 +18,7 @@ class MetadataFiltersRustBucketDeploymentStack extends Stack {
       removalPolicy: RemovalPolicy.DESTROY,
     });
 
-    new RustBucketDeployment(this, "FilteredDeployment", {
+    new ShinBucketDeployment(this, "FilteredDeployment", {
       sources: [
         Source.asset(join(__dirname, "..", "..", "test", "fixtures", "my-website")),
         Source.data(
@@ -32,7 +32,7 @@ class MetadataFiltersRustBucketDeploymentStack extends Stack {
       include: ["**/*.html", "runtime/**"],
     });
 
-    new RustBucketDeployment(this, "MetadataDeployment", {
+    new ShinBucketDeployment(this, "MetadataDeployment", {
       sources: [
         Source.asset(join(__dirname, "..", "..", "test", "fixtures", "my-website")),
         Source.data(
@@ -104,6 +104,6 @@ const env =
       }
     : undefined;
 
-new MetadataFiltersRustBucketDeploymentStack(app, "RustBucketDeploymentMetadataFiltersDemo", {
+new MetadataFiltersShinBucketDeploymentStack(app, "ShinBucketDeploymentMetadataFiltersDemo", {
   env,
 });

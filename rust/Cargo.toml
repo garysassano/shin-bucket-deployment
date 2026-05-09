@@ -1,10 +1,10 @@
 [package]
-name = "rust-bucket-deployment-handler"
+name = "shin-bucket-deployment-handler"
 version = "0.1.0"
 edition = "2024"
 
 [[bin]]
-name = "rust-bucket-deployment-handler"
+name = "shin-bucket-deployment-handler"
 path = "src/main.rs"
 
 [dependencies]

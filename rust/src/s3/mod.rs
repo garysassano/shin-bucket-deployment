@@ -234,8 +234,8 @@ mod aws_integration_tests {
         };
 
         let suffix = Uuid::new_v4().simple().to_string();
-        let source_bucket = format!("rbd-it-src-{}", &suffix[..24]);
-        let destination_bucket = format!("rbd-it-dst-{}", &suffix[..24]);
+        let source_bucket = format!("sbd-it-src-{}", &suffix[..24]);
+        let destination_bucket = format!("sbd-it-dst-{}", &suffix[..24]);
         let prefix = format!("integration/{suffix}");
 
         create_bucket(&source_s3, &source_bucket, &region).await?;
@@ -243,7 +243,7 @@ mod aws_integration_tests {
 
         let result: Result<()> = async {
             let file_count = env_usize(
-                "RBD_AWS_INTEGRATION_FILE_COUNT",
+                "SBD_AWS_INTEGRATION_FILE_COUNT",
                 DEFAULT_AWS_INTEGRATION_FILE_COUNT,
             )?;
             let plain_zip_key = "plain.zip";

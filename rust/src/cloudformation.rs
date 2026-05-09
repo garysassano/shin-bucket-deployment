@@ -288,7 +288,7 @@ fn cloudfront_caller_reference(
         hash_caller_reference_field(&mut hasher, path);
     }
 
-    format!("rust-bucket-deployment-{}", finalize_md5(hasher))
+    format!("shin-bucket-deployment-{}", finalize_md5(hasher))
 }
 
 fn hash_caller_reference_field(hasher: &mut Md5, value: &str) {
@@ -333,8 +333,8 @@ fn log_deployment_summary(
     request: &crate::types::DeploymentRequest,
 ) {
     match serde_json::to_string(&stats.snapshot(request_type, status, request)) {
-        Ok(summary) => tracing::info!(summary, "rbd deployment summary"),
-        Err(error) => tracing::warn!(error = %error, "failed to serialize rbd deployment summary"),
+        Ok(summary) => tracing::info!(summary, "sbd deployment summary"),
+        Err(error) => tracing::warn!(error = %error, "failed to serialize sbd deployment summary"),
     }
 }
 
@@ -416,7 +416,7 @@ mod tests {
         let reference =
             cloudfront_caller_reference("stack-a", "request-123", "Deploy", "distribution", &paths);
 
-        assert_eq!(reference.len(), "rust-bucket-deployment-".len() + 32);
+        assert_eq!(reference.len(), "shin-bucket-deployment-".len() + 32);
         assert_eq!(
             reference,
             cloudfront_caller_reference("stack-a", "request-123", "Deploy", "distribution", &paths)

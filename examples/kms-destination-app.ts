@@ -1,9 +1,9 @@
 import { App, CfnOutput, RemovalPolicy, Stack, type StackProps } from "aws-cdk-lib";
 import { Key } from "aws-cdk-lib/aws-kms";
 import { Bucket, BucketEncryption } from "aws-cdk-lib/aws-s3";
-import { RustBucketDeployment, Source } from "../src";
+import { ShinBucketDeployment, Source } from "../src";
 
-class KmsDestinationRustBucketDeploymentStack extends Stack {
+class KmsDestinationShinBucketDeploymentStack extends Stack {
   constructor(scope: App, id: string, props?: StackProps) {
     super(scope, id, props);
 
@@ -19,7 +19,7 @@ class KmsDestinationRustBucketDeploymentStack extends Stack {
       removalPolicy: RemovalPolicy.DESTROY,
     });
 
-    new RustBucketDeployment(this, "DeployWebsite", {
+    new ShinBucketDeployment(this, "DeployWebsite", {
       sources: [
         Source.asset("test/fixtures/my-website"),
         Source.data("runtime/kms.txt", "encrypted-by-bucket-default-kms-key\n"),
@@ -51,6 +51,6 @@ const env =
       }
     : undefined;
 
-new KmsDestinationRustBucketDeploymentStack(app, "RustBucketDeploymentKmsDestinationDemo", {
+new KmsDestinationShinBucketDeploymentStack(app, "ShinBucketDeploymentKmsDestinationDemo", {
   env,
 });

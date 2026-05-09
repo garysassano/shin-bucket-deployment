@@ -1,8 +1,8 @@
 import { App, CfnOutput, Fn, RemovalPolicy, Stack, type StackProps } from "aws-cdk-lib";
 import { Bucket } from "aws-cdk-lib/aws-s3";
-import { RustBucketDeployment, Source } from "../src";
+import { ShinBucketDeployment, Source } from "../src";
 
-class ExtractFalseRustBucketDeploymentStack extends Stack {
+class ExtractFalseShinBucketDeploymentStack extends Stack {
   constructor(scope: App, id: string, props?: StackProps) {
     super(scope, id, props);
 
@@ -11,12 +11,12 @@ class ExtractFalseRustBucketDeploymentStack extends Stack {
       removalPolicy: RemovalPolicy.DESTROY,
     });
 
-    const deployment = new RustBucketDeployment(this, "DeployArchive", {
+    const deployment = new ShinBucketDeployment(this, "DeployArchive", {
       sources: [Source.asset("test/fixtures/my-website")],
       destinationBucket: websiteBucket,
       destinationKeyPrefix: "archive",
       extract: false,
-      waitForDistributionInvalidation: process.env.RBD_EXTRACT_FALSE_WAIT !== "false",
+      waitForDistributionInvalidation: process.env.SBD_EXTRACT_FALSE_WAIT !== "false",
     });
 
     new CfnOutput(this, "BucketName", {
@@ -46,4 +46,4 @@ const env =
       }
     : undefined;
 
-new ExtractFalseRustBucketDeploymentStack(app, "RustBucketDeploymentExtractFalseDemo", { env });
+new ExtractFalseShinBucketDeploymentStack(app, "ShinBucketDeploymentExtractFalseDemo", { env });
