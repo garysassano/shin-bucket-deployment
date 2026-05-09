@@ -133,7 +133,7 @@ test("scopes destination object permissions to the destination prefix", () => {
     PolicyDocument: {
       Statement: Match.arrayWith([
         Match.objectLike({
-          Action: "s3:GetObject",
+          Action: Match.arrayWith(["s3:GetObject", "s3:PutObject", "s3:Abort*"]),
           Resource: {
             "Fn::Join": [
               "",
@@ -145,7 +145,7 @@ test("scopes destination object permissions to the destination prefix", () => {
           },
         }),
         Match.objectLike({
-          Action: Match.arrayWith(["s3:PutObject"]),
+          Action: "s3:DeleteObject*",
           Resource: {
             "Fn::Join": [
               "",
