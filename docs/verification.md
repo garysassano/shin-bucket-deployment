@@ -9,7 +9,7 @@ Runbooks, evidence collection rules, and sanitization rules live in the repo-loc
 | Field | Value |
 | --- | --- |
 | Latest verification date | 2026-05-09 |
-| Latest verification commit | Pending commit; verified working tree after `64491c1` (`record tiny-many benchmark comparison`) |
+| Latest verification commit | `614277d` (`add aws verification examples`) |
 | Region | Local/unit suite plus AWS end-to-end suite in `ap-southeast-2` |
 | Latest verification history | `2026-05-09-aws-end-to-end-verification` and `2026-05-09-local-unit-synth-verification` |
 | Cleanup | All AWS end-to-end verification stacks destroyed and confirmed absent |
