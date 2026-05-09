@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { CustomResource, Duration, Lazy, Stack, Tags, Token } from "aws-cdk-lib";
 import { Effect, type IRole, PolicyStatement } from "aws-cdk-lib/aws-iam";
 import { Architecture, type Function as LambdaFunction } from "aws-cdk-lib/aws-lambda";
-import { Bucket, type IBucket } from "aws-cdk-lib/aws-s3";
+import { Bucket, BucketGrants, type IBucket } from "aws-cdk-lib/aws-s3";
 import type {
   BucketDeploymentProps,
   ISource,
@@ -294,15 +294,27 @@ export class RustBucketDeployment extends Construct {
     );
 
     const destinationObjectKeyPattern = destinationObjectGrantPattern(props.destinationKeyPrefix);
-    this.handlerFunction.addToRolePolicy(
-      new PolicyStatement({
-        effect: Effect.ALLOW,
-        actions: ["s3:GetObject"],
-        resources: [this.destinationBucket.arnForObjects(destinationObjectKeyPattern)],
-      }),
+    const destinationGrants = BucketGrants.fromBucket(this.destinationBucket);
+    // `BucketGrants` splits mixed actions by service: `s3:*` actions are granted on
+    // object keys, while `kms:*` actions are granted on the bucket encryption key
+    // only when one exists. This keeps KMS behavior aligned with CDK grants.
+    destinationGrants.actionsOnObjectKeys(
+      this.handlerFunction,
+      destinationObjectKeyPattern,
+      "s3:GetObject",
+      "s3:PutObject",
+      "s3:PutObjectLegalHold",
+      "s3:PutObjectRetention",
+      "s3:PutObjectTagging",
+      "s3:PutObjectVersionTagging",
+      "s3:Abort*",
+      "kms:Decrypt",
+      "kms:DescribeKey",
+      "kms:Encrypt",
+      "kms:ReEncrypt*",
+      "kms:GenerateDataKey*",
     );
-    this.destinationBucket.grantPut(this.handlerFunction, destinationObjectKeyPattern);
-    this.destinationBucket.grantDelete(
+    destinationGrants.delete(
       this.handlerFunction,
       props.retainOnDelete === false ? "*" : destinationObjectKeyPattern,
     );
