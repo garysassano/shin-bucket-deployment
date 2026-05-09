@@ -24,9 +24,25 @@ const EXAMPLES = {
     file: "cloudfront-invalidation-async-app.js",
     stackHint: "RustBucketDeploymentCloudFrontInvalidationAsyncDemo",
   },
+  "extract-false": {
+    file: "extract-false-app.js",
+    stackHint: "RustBucketDeploymentExtractFalseDemo",
+  },
+  "kms-destination": {
+    file: "kms-destination-app.js",
+    stackHint: "RustBucketDeploymentKmsDestinationDemo",
+  },
+  "large-archive": {
+    file: "large-archive-app.js",
+    stackHint: "RustBucketDeploymentLargeArchiveDemo",
+  },
   "metadata-filters": {
     file: "metadata-filters-app.js",
     stackHint: "RustBucketDeploymentMetadataFiltersDemo",
+  },
+  "multi-source-overwrite": {
+    file: "multi-source-overwrite-app.js",
+    stackHint: "RustBucketDeploymentMultiSourceOverwriteDemo",
   },
   "benchmark-assets": {
     file: "benchmark-assets-app.js",
@@ -62,6 +78,22 @@ const EXAMPLES = {
   "retain-on-delete-v2": {
     file: "retain-on-delete-v2-app.js",
     stackHint: "RustBucketDeploymentRetainOnDeleteDemo",
+  },
+  "retain-on-delete-false": {
+    file: "retain-on-delete-false-v2-app.js",
+    stackHint: "RustBucketDeploymentRetainOnDeleteFalseDemo",
+  },
+  "retain-on-delete-false-bucket-only": {
+    file: "retain-on-delete-false-bucket-only-app.js",
+    stackHint: "RustBucketDeploymentRetainOnDeleteFalseDemo",
+  },
+  "retain-on-delete-false-v1": {
+    file: "retain-on-delete-false-v1-app.js",
+    stackHint: "RustBucketDeploymentRetainOnDeleteFalseDemo",
+  },
+  "retain-on-delete-false-v2": {
+    file: "retain-on-delete-false-v2-app.js",
+    stackHint: "RustBucketDeploymentRetainOnDeleteFalseDemo",
   },
 } as const satisfies Record<string, ExampleDefinition>;
 
