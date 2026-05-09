@@ -28,6 +28,7 @@ Runbooks, evidence collection rules, and sanitization rules live in the repo-loc
 | P0 | Benchmark-backed Rust deployment | Mixed profile create, forced unchanged, sparse update, prune update, and destroy at 1024 MiB. | Pass as of 2026-05-09 |
 | P0 | Benchmark-backed AWS comparison deployment | Matching upstream AWS CDK `BucketDeployment` phases for the mixed profile at 1024 MiB. | Pass as of 2026-05-09 |
 | P0 | Destination replacement IAM | Sparse/prune update can read existing destination objects before conditional replacement writes. | Pass after `4f5f0ca` |
+| P1 | Destination KMS grant synthesis | KMS-encrypted destination buckets synthesize provider-role decrypt/describe/encrypt/re-encrypt/data-key permissions through CDK bucket grants. | Pass as of 2026-05-09 local synthesis test |
 | P1 | Simple AWS deployment | Plain static site create, unchanged redeploy skip, update, and destroy. | Pass as of 2026-04-25 |
 | P1 | Metadata and filters AWS deployment | Include/exclude filters, S3 metadata mapping, SSE-S3 metadata, prune, and ETag skip behavior. | Pass as of 2026-04-25 |
 | P1 | Replacement AWS deployment | Deploy-time marker replacement, JSON/YAML/data sources, MD5-after-replacement comparison, and unchanged marker redeploy skip. | Pass as of 2026-04-25 |
@@ -47,6 +48,7 @@ Runbooks, evidence collection rules, and sanitization rules live in the repo-loc
 | --- | --- | --- | --- | --- |
 | `2026-05-09-rust-aws-mixed-1024-fixed` | benchmark-backed | Rust mixed profile create/forced-unchanged/sparse/prune/destroy | Pass | Sanitized benchmark counters show expected upload, skip, and prune behavior after the destination read IAM fix. |
 | `2026-05-09-rust-aws-mixed-1024-fixed` | benchmark-backed | AWS BucketDeployment paired comparison | Pass | Matching upstream comparison stack completed the same phases and was destroyed. |
+| `2026-05-09-local-kms-grants` | local | Destination KMS grant synthesis | Pass | TypeScript synthesis test verifies provider-role KMS permissions are emitted for KMS-encrypted destination buckets. |
 
 Historical sanitized verification rows for 2026-04-25 and 2026-05-02 were migrated into `docs/verification-history.jsonl` so the human page can stay concise while preserving full verification history.
 
