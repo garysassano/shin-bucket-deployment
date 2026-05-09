@@ -1,5 +1,5 @@
 ---
-name: sbd-benchmark
+name: shin-benchmark
 description: |
   Run, collect, sanitize, document, and commit ShinBucketDeployment benchmark evidence.
 
@@ -10,7 +10,7 @@ description: |
   4. Reviewing whether benchmark evidence is safe to commit
 ---
 
-# SBD Benchmark Workflow
+# Shin Benchmark Workflow
 
 This skill is for performance and efficiency evidence only. It does not establish correctness verification status for `ShinBucketDeployment`.
 
@@ -63,19 +63,19 @@ Standard focused Rust sequence:
 
 ```bash
 AWS_PROFILE=<profile> AWS_REGION=ap-southeast-2 AWS_DEFAULT_REGION=ap-southeast-2 \
-SBD_BENCH_PROFILE=mixed SBD_BENCH_VARIANT=v1 SBD_BENCH_STACK_SUFFIX=<suffix> SBD_BENCH_MEMORY_LIMIT_MB=1024 \
+SHIN_BENCH_PROFILE=mixed SHIN_BENCH_VARIANT=v1 SHIN_BENCH_STACK_SUFFIX=<suffix> SHIN_BENCH_MEMORY_LIMIT_MB=1024 \
 pnpm example deploy benchmark-assets -- --profile <profile>
 
 AWS_PROFILE=<profile> AWS_REGION=ap-southeast-2 AWS_DEFAULT_REGION=ap-southeast-2 \
-SBD_BENCH_PROFILE=mixed SBD_BENCH_VARIANT=v1 SBD_BENCH_STACK_SUFFIX=<suffix> SBD_BENCH_MEMORY_LIMIT_MB=1024 SBD_BENCH_WAIT=false \
+SHIN_BENCH_PROFILE=mixed SHIN_BENCH_VARIANT=v1 SHIN_BENCH_STACK_SUFFIX=<suffix> SHIN_BENCH_MEMORY_LIMIT_MB=1024 SHIN_BENCH_WAIT=false \
 pnpm example deploy benchmark-assets -- --profile <profile>
 
 AWS_PROFILE=<profile> AWS_REGION=ap-southeast-2 AWS_DEFAULT_REGION=ap-southeast-2 \
-SBD_BENCH_PROFILE=mixed SBD_BENCH_VARIANT=v2 SBD_BENCH_STACK_SUFFIX=<suffix> SBD_BENCH_MEMORY_LIMIT_MB=1024 \
+SHIN_BENCH_PROFILE=mixed SHIN_BENCH_VARIANT=v2 SHIN_BENCH_STACK_SUFFIX=<suffix> SHIN_BENCH_MEMORY_LIMIT_MB=1024 \
 pnpm example deploy benchmark-assets -- --profile <profile>
 
 AWS_PROFILE=<profile> AWS_REGION=ap-southeast-2 AWS_DEFAULT_REGION=ap-southeast-2 \
-SBD_BENCH_PROFILE=mixed SBD_BENCH_VARIANT=pruned SBD_BENCH_STACK_SUFFIX=<suffix> SBD_BENCH_MEMORY_LIMIT_MB=1024 \
+SHIN_BENCH_PROFILE=mixed SHIN_BENCH_VARIANT=pruned SHIN_BENCH_STACK_SUFFIX=<suffix> SHIN_BENCH_MEMORY_LIMIT_MB=1024 \
 pnpm example deploy benchmark-assets -- --profile <profile>
 ```
 

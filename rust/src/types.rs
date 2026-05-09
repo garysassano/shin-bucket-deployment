@@ -437,7 +437,7 @@ impl DeploymentStats {
         request: &DeploymentRequest,
     ) -> DeploymentStatsSnapshot<'a> {
         DeploymentStatsSnapshot {
-            event: "sbd_deployment_summary",
+            event: "shin_deployment_summary",
             request_type,
             status,
             extract: request.extract,

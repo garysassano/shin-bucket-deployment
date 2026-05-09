@@ -27,7 +27,7 @@ import { ValidationError } from "aws-cdk-lib/core/lib/errors";
 import type { lit } from "aws-cdk-lib/core/lib/private/literal-string";
 import type { Construct } from "constructs";
 
-const CATALOG_PATH = ".sbd/catalog.v1.json";
+const CATALOG_PATH = ".shin/catalog.v1.json";
 const CATALOG_VERSION = 1;
 const ZIP_LOCAL_FILE_HEADER_SIGNATURE = 0x04034b50;
 const ZIP_CENTRAL_DIRECTORY_SIGNATURE = 0x02014b50;
@@ -37,7 +37,7 @@ const ZIP_COMPRESSION_DEFLATE = 8;
 
 export interface CatalogedAssetOptions extends AssetOptions {
   /**
-   * Include the embedded `.sbd/catalog.v1.json` optimization catalog.
+   * Include the embedded `.shin/catalog.v1.json` optimization catalog.
    * @default true
    */
   readonly embeddedCatalog?: boolean;

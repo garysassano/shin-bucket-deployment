@@ -67,7 +67,7 @@ test("Source.asset emits an embedded catalog for directory assets", () => {
   const sourcePath = fileAsset?.source?.path;
   expect(sourcePath).toBeDefined();
   const zip = readFileSync(join(assembly.directory, sourcePath as string));
-  expect(zip.includes(Buffer.from(".sbd/catalog.v1.json"))).toBe(true);
+  expect(zip.includes(Buffer.from(".shin/catalog.v1.json"))).toBe(true);
 });
 
 test("reuses a shared handler for compatible deployments in the same stack", () => {

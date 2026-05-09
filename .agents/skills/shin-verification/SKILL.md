@@ -1,5 +1,5 @@
 ---
-name: sbd-verification
+name: shin-verification
 description: |
   Run, collect, sanitize, document, and commit ShinBucketDeployment correctness verification evidence.
 
@@ -10,7 +10,7 @@ description: |
   4. Reviewing whether verification evidence is safe to commit
 ---
 
-# SBD Verification Workflow
+# Shin Verification Workflow
 
 This skill is for correctness evidence only. Benchmarks and AWS CDK `BucketDeployment` comparisons are tracked separately in `docs/benchmark.md` and `docs/benchmark-history.jsonl`.
 

@@ -27,8 +27,8 @@ export function ensureBenchmarkAssets(options?: {
   readonly variant?: string;
   readonly outputRoot?: string;
 }): GeneratedBundle {
-  const profile = parseProfile(options?.profile ?? process.env.SBD_BENCH_PROFILE);
-  const variant = parseVariant(options?.variant ?? process.env.SBD_BENCH_VARIANT);
+  const profile = parseProfile(options?.profile ?? process.env.SHIN_BENCH_PROFILE);
+  const variant = parseVariant(options?.variant ?? process.env.SHIN_BENCH_VARIANT);
   const outputRoot = options?.outputRoot ?? join(process.cwd(), ".benchmark-assets");
   const root = join(outputRoot, profile, variant);
   const markerPath = join(root, ".generated.json");

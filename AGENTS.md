@@ -2,8 +2,8 @@
 
 Use the repo-local skill files before benchmark or verification work:
 
-- Benchmark and AWS CDK `BucketDeployment` comparison tasks: read `.agents/skills/sbd-benchmark/SKILL.md`.
-- Correctness verification tasks: read `.agents/skills/sbd-verification/SKILL.md`.
+- Benchmark and AWS CDK `BucketDeployment` comparison tasks: read `.agents/skills/shin-benchmark/SKILL.md`.
+- Correctness verification tasks: read `.agents/skills/shin-verification/SKILL.md`.
 
 Keep benchmark evidence and verification evidence separate:
 

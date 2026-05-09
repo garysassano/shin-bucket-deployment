@@ -2,7 +2,7 @@
 
 This page is the human-readable benchmark snapshot for `ShinBucketDeployment`. Benchmarks measure efficiency and compare with upstream AWS CDK `BucketDeployment`; correctness verification lives in `docs/verification.md`. Full sanitized benchmark history is append-only JSONL in `docs/benchmark-history.jsonl`.
 
-Runbooks, evidence collection rules, schema guidance, and sanitization rules live in the repo-local agent skill at `.agents/skills/sbd-benchmark/SKILL.md`.
+Runbooks, evidence collection rules, schema guidance, and sanitization rules live in the repo-local agent skill at `.agents/skills/shin-benchmark/SKILL.md`.
 
 ## Document Ownership
 
@@ -45,24 +45,24 @@ Benchmark runs should answer these questions:
 The `benchmark-assets` example generates deterministic static-site bundles under `.benchmark-assets/`, which is ignored by git. The same stack definition can instantiate either this construct or the upstream AWS CDK `BucketDeployment`; the benchmark implementation is the only intended comparison dimension. Rust uses its normal `Source.asset` path, including the embedded catalog optimization, while AWS uses upstream `Source.asset`.
 
 ```bash
-SBD_BENCH_PROFILE=mixed SBD_BENCH_VARIANT=v1 SBD_BENCH_STACK_SUFFIX=RunA pnpm example deploy benchmark-assets
-SBD_BENCH_STACK_SUFFIX=RunA pnpm example destroy benchmark-assets
-SBD_BENCH_PROFILE=mixed SBD_BENCH_VARIANT=v1 SBD_BENCH_STACK_SUFFIX=RunA pnpm example deploy benchmark-assets-aws
-SBD_BENCH_STACK_SUFFIX=RunA pnpm example destroy benchmark-assets-aws
+SHIN_BENCH_PROFILE=mixed SHIN_BENCH_VARIANT=v1 SHIN_BENCH_STACK_SUFFIX=RunA pnpm example deploy benchmark-assets
+SHIN_BENCH_STACK_SUFFIX=RunA pnpm example destroy benchmark-assets
+SHIN_BENCH_PROFILE=mixed SHIN_BENCH_VARIANT=v1 SHIN_BENCH_STACK_SUFFIX=RunA pnpm example deploy benchmark-assets-aws
+SHIN_BENCH_STACK_SUFFIX=RunA pnpm example destroy benchmark-assets-aws
 ```
 
 Environment variables:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `SBD_BENCH_PROFILE` | `mixed` | Asset shape: `tiny-many`, `mixed`, or `large-few`. |
-| `SBD_BENCH_VARIANT` | `v1` | Asset variant: `v1`, `v2`, or `pruned`. |
-| `SBD_BENCH_IMPLEMENTATION` | `rust` | Deployment implementation: `rust` or `aws`. The `benchmark-assets-aws` example sets this to `aws`. |
-| `SBD_BENCH_STACK_SUFFIX` | none | Adds a suffix to the benchmark stack name so multiple runs can coexist. |
-| `SBD_BENCH_DESTINATION_PREFIX` | `benchmark-site` | Destination prefix inside the generated bucket. |
-| `SBD_BENCH_MEMORY_LIMIT_MB` | `1024` | Provider Lambda memory size in MiB. Use distinct stack suffixes when comparing memory sizes. |
-| `SBD_BENCH_PRUNE` | `true` | Set to `false` to disable prune. |
-| `SBD_BENCH_WAIT` | `true` | Present for property toggling; the benchmark stack currently has no CloudFront distribution. |
+| `SHIN_BENCH_PROFILE` | `mixed` | Asset shape: `tiny-many`, `mixed`, or `large-few`. |
+| `SHIN_BENCH_VARIANT` | `v1` | Asset variant: `v1`, `v2`, or `pruned`. |
+| `SHIN_BENCH_IMPLEMENTATION` | `rust` | Deployment implementation: `rust` or `aws`. The `benchmark-assets-aws` example sets this to `aws`. |
+| `SHIN_BENCH_STACK_SUFFIX` | none | Adds a suffix to the benchmark stack name so multiple runs can coexist. |
+| `SHIN_BENCH_DESTINATION_PREFIX` | `benchmark-site` | Destination prefix inside the generated bucket. |
+| `SHIN_BENCH_MEMORY_LIMIT_MB` | `1024` | Provider Lambda memory size in MiB. Use distinct stack suffixes when comparing memory sizes. |
+| `SHIN_BENCH_PRUNE` | `true` | Set to `false` to disable prune. |
+| `SHIN_BENCH_WAIT` | `true` | Present for property toggling; the benchmark stack currently has no CloudFront distribution. |
 
 Asset profiles:
 
@@ -82,13 +82,13 @@ Variants:
 
 ## Methodology Summary
 
-The benchmark harness measures deterministic static-site bundles across create, unchanged, sparse-update, and prune-update phases. Paired Rust-vs-AWS comparison runs must use the same region, profile, variants, destination prefix, memory setting, and repetition count. The latest full workflow is maintained in `.agents/skills/sbd-benchmark/SKILL.md`.
+The benchmark harness measures deterministic static-site bundles across create, unchanged, sparse-update, and prune-update phases. Paired Rust-vs-AWS comparison runs must use the same region, profile, variants, destination prefix, memory setting, and repetition count. The latest full workflow is maintained in `.agents/skills/shin-benchmark/SKILL.md`.
 
 The 1024 MiB setting is the preferred default because earlier `large-few` runs showed much faster cold-create provider duration than 512 MiB while keeping billed compute cost in the same range. Memory comparison runs should still include 512, 1024, and 2048 MiB when measuring runtime tuning changes.
 
 ## Provider Telemetry
 
-Rust benchmark rows may include the sanitized `sbd_deployment_summary` object emitted by the provider. The summary contains aggregate timings, counters, bytes, source range-read stats, and `PutObject` diagnostics, and intentionally omits bucket names, object keys, account IDs, distribution IDs, URLs, and ETags.
+Rust benchmark rows may include the sanitized `shin_deployment_summary` object emitted by the provider. The summary contains aggregate timings, counters, bytes, source range-read stats, and `PutObject` diagnostics, and intentionally omits bucket names, object keys, account IDs, distribution IDs, URLs, and ETags.
 
 Generate Markdown tables and text bar charts from committed or scratch JSONL records:
 
@@ -102,7 +102,7 @@ Do not commit `.benchmark-runs/` raw output. Commit only curated aggregate resul
 
 ## History
 
-Every committed benchmark result is represented as sanitized records in `docs/benchmark-history.jsonl`. Use `null` for unavailable JSONL fields and do not invent values. The latest collection and documentation workflow is maintained in `.agents/skills/sbd-benchmark/SKILL.md`.
+Every committed benchmark result is represented as sanitized records in `docs/benchmark-history.jsonl`. Use `null` for unavailable JSONL fields and do not invent values. The latest collection and documentation workflow is maintained in `.agents/skills/shin-benchmark/SKILL.md`.
 
 ## Current Results
 
@@ -119,7 +119,7 @@ Every committed benchmark result is represented as sanitized records in `docs/be
 | Comparison variants | `v2`: 2,584 files, 8,178,618 bytes; `pruned`: 2,325 files, 7,332,858 bytes |
 | Provider memory | 1024 MiB |
 | Cleanup | All benchmark stacks destroyed after collection |
-| Notes | Paired Rust/AWS comparison for the many-small-files profile. Forced unchanged rows used `SBD_BENCH_WAIT=false` on a stack with no CloudFront distribution. Rust rows include sanitized provider summary counters in `docs/benchmark-history.jsonl`. |
+| Notes | Paired Rust/AWS comparison for the many-small-files profile. Forced unchanged rows used `SHIN_BENCH_WAIT=false` on a stack with no CloudFront distribution. Rust rows include sanitized provider summary counters in `docs/benchmark-history.jsonl`. |
 
 ShinBucketDeployment vs AWS BucketDeployment insight table:
 

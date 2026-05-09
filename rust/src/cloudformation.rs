@@ -333,8 +333,8 @@ fn log_deployment_summary(
     request: &crate::types::DeploymentRequest,
 ) {
     match serde_json::to_string(&stats.snapshot(request_type, status, request)) {
-        Ok(summary) => tracing::info!(summary, "sbd deployment summary"),
-        Err(error) => tracing::warn!(error = %error, "failed to serialize sbd deployment summary"),
+        Ok(summary) => tracing::info!(summary, "shin deployment summary"),
+        Err(error) => tracing::warn!(error = %error, "failed to serialize shin deployment summary"),
     }
 }
 

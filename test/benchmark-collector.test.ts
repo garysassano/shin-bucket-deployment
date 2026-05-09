@@ -7,7 +7,7 @@ import { renderBenchmarkReport } from "../scripts/render-benchmark-report";
 
 describe("benchmark result collector", () => {
   test("appends sanitized benchmark history records", () => {
-    const dir = mkdtempSync(join(tmpdir(), "sbd-bench-collector-"));
+    const dir = mkdtempSync(join(tmpdir(), "shin-bench-collector-"));
     const logFile = join(dir, "deploy.log");
     const reportFile = join(dir, "report.json");
     const outputFile = join(dir, "history.jsonl");
@@ -79,7 +79,7 @@ describe("benchmark result collector", () => {
   });
 
   test("uses explicit metadata when command logs omit outputs", () => {
-    const dir = mkdtempSync(join(tmpdir(), "sbd-bench-collector-"));
+    const dir = mkdtempSync(join(tmpdir(), "shin-bench-collector-"));
     const logFile = join(dir, "destroy.log");
     const outputFile = join(dir, "history.jsonl");
 
@@ -110,7 +110,7 @@ describe("benchmark result collector", () => {
   });
 
   test("renders markdown benchmark comparison reports", () => {
-    const dir = mkdtempSync(join(tmpdir(), "sbd-bench-report-"));
+    const dir = mkdtempSync(join(tmpdir(), "shin-bench-report-"));
     const inputFile = join(dir, "history.jsonl");
     const outputFile = join(dir, "report.md");
     writeFileSync(

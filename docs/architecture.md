@@ -124,7 +124,7 @@ For `extract=true`:
 2. Read ZIP central directory metadata with ranged `GetObject`.
 3. Walk central-directory entries.
 4. Apply include and exclude filters.
-5. Load the embedded `.sbd/catalog.v1.json` catalog when present.
+5. Load the embedded `.shin/catalog.v1.json` catalog when present.
 6. Build a manifest of planned ZIP entries with normalized destination keys, source archive index, entry offsets, compressed size, uncompressed size, CRC32, and optional catalog MD5.
 7. Coalesce planned source spans into shared source blocks, prefetch them with bounded source GET concurrency, and release blocks after all active readers consume their claims.
 8. List the destination prefix once.
