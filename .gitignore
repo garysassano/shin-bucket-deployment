@@ -4,3 +4,4 @@ cdk.out
 cdk.out.*
 target
 .benchmark-assets/
+.verification-assets/

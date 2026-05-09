@@ -147,7 +147,16 @@ pnpm benchmark:report -- --input-file docs/benchmark-history.jsonl --run-id <run
 
 ## Verification Workflow
 
-Verification covers correctness, not performance. Run local gates first:
+Verification covers correctness of `RustBucketDeployment`, not benchmark efficiency and not comparison with upstream AWS CDK `BucketDeployment`.
+
+Use these categories:
+
+- `local`: unit tests, static checks, build/typecheck/lint, and local synthesis.
+- `aws`: deployed AWS end-to-end checks where the custom resource Lambda runs in AWS.
+
+Benchmark records and AWS `BucketDeployment` comparison records belong in `docs/benchmark-history.jsonl`, not verification history.
+
+Run local unit/static gates first:
 
 ```bash
 pnpm rust:fmt
@@ -159,7 +168,7 @@ pnpm lint
 pnpm test
 ```
 
-Example synthesis should cover public examples:
+Local synthesis should cover public RustBucketDeployment examples:
 
 ```bash
 pnpm example list
@@ -170,13 +179,19 @@ pnpm example synth prune-update-v1
 pnpm example synth prune-update-v2
 pnpm example synth retain-on-delete-v1
 pnpm example synth retain-on-delete-v2
+pnpm example synth extract-false
+pnpm example synth retain-on-delete-false-v1
+pnpm example synth retain-on-delete-false-v2
+pnpm example synth retain-on-delete-false-bucket-only
+pnpm example synth multi-source-overwrite
+pnpm example synth large-archive
+pnpm example synth kms-destination
 pnpm example synth cloudfront-sync
 pnpm example synth cloudfront-async
 pnpm example synth benchmark-assets
-pnpm example synth benchmark-assets-aws
 ```
 
-AWS functional scenarios include:
+AWS end-to-end scenarios deploy real stacks and must verify S3, KMS, CloudFormation, and CloudFront state where applicable. They include:
 
 - simple create/update/destroy
 - metadata and include/exclude filters
@@ -187,8 +202,10 @@ AWS functional scenarios include:
 - `retainOnDelete=false` cleanup
 - duplicate multi-source overwrite order
 - larger archive ranged-read path
+- KMS-encrypted destination bucket
 - CloudFront sync and async invalidation
-- benchmark-backed create/unchanged/sparse/prune correctness
+
+Always destroy AWS verification stacks and verify they are absent before finalizing records. Raw AWS logs and resource identifiers stay in scratch only.
 
 ## Verification Records
 
@@ -202,7 +219,7 @@ Recommended fields:
 - `commit`
 - `subject`
 - `region`
-- `category`: `local`, `synth`, `aws`, or `benchmark-backed`
+- `category`: `local` or `aws`
 - `scenario`
 - `command`
 - `status`: `pass`, `fail`, `known-limitation`, or `not-run`

@@ -1,6 +1,6 @@
 # Benchmark
 
-This page is the human-readable benchmark snapshot for `RustBucketDeployment`. Full sanitized benchmark history is append-only JSONL in `docs/benchmark-history.jsonl`.
+This page is the human-readable benchmark snapshot for `RustBucketDeployment`. Benchmarks measure efficiency and compare with upstream AWS CDK `BucketDeployment`; correctness verification lives in `docs/verification.md`. Full sanitized benchmark history is append-only JSONL in `docs/benchmark-history.jsonl`.
 
 Runbooks, evidence collection rules, schema guidance, and sanitization rules live in the repo-local agent skill at `.agents/skills/rbd-benchmark-verification/SKILL.md`.
 
@@ -28,7 +28,7 @@ Measure each deployment phase:
 - destination `PutObject`, `CopyObject`, `DeleteObjects`, and CloudFront calls
 - destination bytes uploaded/copied/deleted
 - memory high-water mark and billed duration
-- correctness of final destination state
+- basic deploy/update/destroy sanity needed to trust timing data; detailed correctness coverage lives in `docs/verification.md`
 
 Benchmark runs should answer these questions:
 
