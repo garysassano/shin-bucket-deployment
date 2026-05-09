@@ -1,18 +1,18 @@
 ---
-name: rbd-benchmark
+name: sbd-benchmark
 description: |
-  Run, collect, sanitize, document, and commit RustBucketDeployment benchmark evidence.
+  Run, collect, sanitize, document, and commit ShinBucketDeployment benchmark evidence.
 
   Use this skill when:
   1. Running AWS benchmark scenarios for this repository
-  2. Comparing RustBucketDeployment with AWS CDK BucketDeployment
+  2. Comparing ShinBucketDeployment with AWS CDK BucketDeployment
   3. Updating docs/benchmark.md or docs/benchmark-history.jsonl
   4. Reviewing whether benchmark evidence is safe to commit
 ---
 
-# RBD Benchmark Workflow
+# SBD Benchmark Workflow
 
-This skill is for performance and efficiency evidence only. It does not establish correctness verification status for `RustBucketDeployment`.
+This skill is for performance and efficiency evidence only. It does not establish correctness verification status for `ShinBucketDeployment`.
 
 ## Source Of Truth
 
@@ -63,19 +63,19 @@ Standard focused Rust sequence:
 
 ```bash
 AWS_PROFILE=<profile> AWS_REGION=ap-southeast-2 AWS_DEFAULT_REGION=ap-southeast-2 \
-RBD_BENCH_PROFILE=mixed RBD_BENCH_VARIANT=v1 RBD_BENCH_STACK_SUFFIX=<suffix> RBD_BENCH_MEMORY_LIMIT_MB=1024 \
+SBD_BENCH_PROFILE=mixed SBD_BENCH_VARIANT=v1 SBD_BENCH_STACK_SUFFIX=<suffix> SBD_BENCH_MEMORY_LIMIT_MB=1024 \
 pnpm example deploy benchmark-assets -- --profile <profile>
 
 AWS_PROFILE=<profile> AWS_REGION=ap-southeast-2 AWS_DEFAULT_REGION=ap-southeast-2 \
-RBD_BENCH_PROFILE=mixed RBD_BENCH_VARIANT=v1 RBD_BENCH_STACK_SUFFIX=<suffix> RBD_BENCH_MEMORY_LIMIT_MB=1024 RBD_BENCH_WAIT=false \
+SBD_BENCH_PROFILE=mixed SBD_BENCH_VARIANT=v1 SBD_BENCH_STACK_SUFFIX=<suffix> SBD_BENCH_MEMORY_LIMIT_MB=1024 SBD_BENCH_WAIT=false \
 pnpm example deploy benchmark-assets -- --profile <profile>
 
 AWS_PROFILE=<profile> AWS_REGION=ap-southeast-2 AWS_DEFAULT_REGION=ap-southeast-2 \
-RBD_BENCH_PROFILE=mixed RBD_BENCH_VARIANT=v2 RBD_BENCH_STACK_SUFFIX=<suffix> RBD_BENCH_MEMORY_LIMIT_MB=1024 \
+SBD_BENCH_PROFILE=mixed SBD_BENCH_VARIANT=v2 SBD_BENCH_STACK_SUFFIX=<suffix> SBD_BENCH_MEMORY_LIMIT_MB=1024 \
 pnpm example deploy benchmark-assets -- --profile <profile>
 
 AWS_PROFILE=<profile> AWS_REGION=ap-southeast-2 AWS_DEFAULT_REGION=ap-southeast-2 \
-RBD_BENCH_PROFILE=mixed RBD_BENCH_VARIANT=pruned RBD_BENCH_STACK_SUFFIX=<suffix> RBD_BENCH_MEMORY_LIMIT_MB=1024 \
+SBD_BENCH_PROFILE=mixed SBD_BENCH_VARIANT=pruned SBD_BENCH_STACK_SUFFIX=<suffix> SBD_BENCH_MEMORY_LIMIT_MB=1024 \
 pnpm example deploy benchmark-assets -- --profile <profile>
 ```
 

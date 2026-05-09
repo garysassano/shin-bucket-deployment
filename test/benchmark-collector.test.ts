@@ -7,7 +7,7 @@ import { renderBenchmarkReport } from "../scripts/render-benchmark-report";
 
 describe("benchmark result collector", () => {
   test("appends sanitized benchmark history records", () => {
-    const dir = mkdtempSync(join(tmpdir(), "rbd-bench-collector-"));
+    const dir = mkdtempSync(join(tmpdir(), "sbd-bench-collector-"));
     const logFile = join(dir, "deploy.log");
     const reportFile = join(dir, "report.json");
     const outputFile = join(dir, "history.jsonl");
@@ -79,7 +79,7 @@ describe("benchmark result collector", () => {
   });
 
   test("uses explicit metadata when command logs omit outputs", () => {
-    const dir = mkdtempSync(join(tmpdir(), "rbd-bench-collector-"));
+    const dir = mkdtempSync(join(tmpdir(), "sbd-bench-collector-"));
     const logFile = join(dir, "destroy.log");
     const outputFile = join(dir, "history.jsonl");
 
@@ -110,7 +110,7 @@ describe("benchmark result collector", () => {
   });
 
   test("renders markdown benchmark comparison reports", () => {
-    const dir = mkdtempSync(join(tmpdir(), "rbd-bench-report-"));
+    const dir = mkdtempSync(join(tmpdir(), "sbd-bench-report-"));
     const inputFile = join(dir, "history.jsonl");
     const outputFile = join(dir, "report.md");
     writeFileSync(
@@ -178,7 +178,7 @@ describe("benchmark result collector", () => {
     expect(readFileSync(outputFile, "utf8")).toEqual(report);
     expect(report).toContain("Benchmark Report: comparison");
     expect(report).toContain("| mixed | cold-create | 1024 | rust | 1 | 2 | 2 | 2 | 2 |");
-    expect(report).toContain("## RustBucketDeployment vs AWS BucketDeployment");
+    expect(report).toContain("## ShinBucketDeployment vs AWS BucketDeployment");
     expect(report).toContain(
       "| mixed | cold-create | 1024 | 2 s vs 8 s (4x faster) | 90 s vs 120 s (1.333x faster) | 60 s vs 90 s (1.5x faster) | 80 MiB vs 180 MiB (55.556% lower) |",
     );
@@ -187,11 +187,11 @@ describe("benchmark result collector", () => {
     expect(report).toContain("| Init duration | 0.1 s | 0.2 s | +0.1 s | 2x | +100% |");
     expect(report).toContain("| Max memory | 80 MiB | 180 MiB | +100 MiB | 2.25x | +125% |");
     expect(report).toContain("## Visual Summary");
-    expect(report).toContain("### Provider Duration Saved By RustBucketDeployment");
+    expect(report).toContain("### Provider Duration Saved By ShinBucketDeployment");
     expect(report).toContain(
       "cold-create 1024           | ############################## 6 s faster (4x AWS/Rust)",
     );
-    expect(report).toContain("### Max Memory Saved By RustBucketDeployment");
+    expect(report).toContain("### Max Memory Saved By ShinBucketDeployment");
     expect(report).not.toContain("xychart-beta");
   });
 });

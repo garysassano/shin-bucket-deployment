@@ -5,7 +5,7 @@ import { Match, Template } from "aws-cdk-lib/assertions";
 import { Key } from "aws-cdk-lib/aws-kms";
 import { Bucket, BucketEncryption } from "aws-cdk-lib/aws-s3";
 import { expect, test } from "vitest";
-import { RustBucketDeployment, Source } from "../src";
+import { ShinBucketDeployment, Source } from "../src";
 import { testBundling } from "./test-bundling";
 
 interface FileAssetManifestEntry {
@@ -19,7 +19,7 @@ test("renders a Rust-backed custom resource", () => {
   const stack = new Stack();
   const destinationBucket = new Bucket(stack, "Dest");
 
-  new RustBucketDeployment(stack, "Deploy", {
+  new ShinBucketDeployment(stack, "Deploy", {
     sources: [Source.asset(join(__dirname, "fixtures", "my-website"))],
     destinationBucket,
     bundling: testBundling(),
@@ -34,7 +34,7 @@ test("renders a Rust-backed custom resource", () => {
     MemorySize: 1024,
   });
 
-  template.hasResourceProperties("Custom::RustBucketDeployment", {
+  template.hasResourceProperties("Custom::ShinBucketDeployment", {
     DestinationBucketName: {
       Ref: Match.anyValue(),
     },
@@ -49,7 +49,7 @@ test("Source.asset emits an embedded catalog for directory assets", () => {
   const stack = new Stack(app, "CatalogStack");
   const destinationBucket = new Bucket(stack, "Dest");
 
-  new RustBucketDeployment(stack, "Deploy", {
+  new ShinBucketDeployment(stack, "Deploy", {
     sources: [Source.asset(join(__dirname, "fixtures", "my-website"))],
     destinationBucket,
     bundling: testBundling(),
@@ -75,13 +75,13 @@ test("reuses a shared handler for compatible deployments in the same stack", () 
   const firstBucket = new Bucket(stack, "FirstDest");
   const secondBucket = new Bucket(stack, "SecondDest");
 
-  const first = new RustBucketDeployment(stack, "FirstDeploy", {
+  const first = new ShinBucketDeployment(stack, "FirstDeploy", {
     sources: [Source.asset(join(__dirname, "fixtures", "my-website"))],
     destinationBucket: firstBucket,
     bundling: testBundling(),
   });
 
-  const second = new RustBucketDeployment(stack, "SecondDeploy", {
+  const second = new ShinBucketDeployment(stack, "SecondDeploy", {
     sources: [Source.asset(join(__dirname, "fixtures", "my-website"))],
     destinationBucket: secondBucket,
     bundling: testBundling(),
@@ -98,13 +98,13 @@ test("creates separate handlers when the provider configuration differs", () => 
   const firstBucket = new Bucket(stack, "FirstDest");
   const secondBucket = new Bucket(stack, "SecondDest");
 
-  const first = new RustBucketDeployment(stack, "FirstDeploy", {
+  const first = new ShinBucketDeployment(stack, "FirstDeploy", {
     sources: [Source.asset(join(__dirname, "fixtures", "my-website"))],
     destinationBucket: firstBucket,
     bundling: testBundling(),
   });
 
-  const second = new RustBucketDeployment(stack, "SecondDeploy", {
+  const second = new ShinBucketDeployment(stack, "SecondDeploy", {
     sources: [Source.asset(join(__dirname, "fixtures", "my-website"))],
     destinationBucket: secondBucket,
     memoryLimit: 2048,
@@ -121,7 +121,7 @@ test("scopes destination object permissions to the destination prefix", () => {
   const stack = new Stack();
   const destinationBucket = new Bucket(stack, "Dest");
 
-  new RustBucketDeployment(stack, "Deploy", {
+  new ShinBucketDeployment(stack, "Deploy", {
     sources: [Source.asset(join(__dirname, "fixtures", "my-website"))],
     destinationBucket,
     destinationKeyPrefix: "site",
@@ -174,7 +174,7 @@ test("keeps delete and list permissions broad when retainOnDelete is false", () 
   const stack = new Stack();
   const destinationBucket = new Bucket(stack, "Dest");
 
-  new RustBucketDeployment(stack, "Deploy", {
+  new ShinBucketDeployment(stack, "Deploy", {
     sources: [Source.asset(join(__dirname, "fixtures", "my-website"))],
     destinationBucket,
     destinationKeyPrefix: "site",
@@ -216,7 +216,7 @@ test("grants destination KMS permissions when the destination bucket is encrypte
     encryptionKey: key,
   });
 
-  new RustBucketDeployment(stack, "Deploy", {
+  new ShinBucketDeployment(stack, "Deploy", {
     sources: [Source.asset(join(__dirname, "fixtures", "my-website"))],
     destinationBucket,
     destinationKeyPrefix: "site",

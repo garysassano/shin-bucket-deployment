@@ -1,9 +1,9 @@
 import { join } from "node:path";
 import { App, CfnOutput, Fn, RemovalPolicy, Stack, type StackProps } from "aws-cdk-lib";
 import { Bucket } from "aws-cdk-lib/aws-s3";
-import { RustBucketDeployment, Source } from "../src";
+import { ShinBucketDeployment, Source } from "../src";
 
-class SimpleRustBucketDeploymentStack extends Stack {
+class SimpleShinBucketDeploymentStack extends Stack {
   constructor(scope: App, id: string, props?: StackProps) {
     super(scope, id, props);
 
@@ -12,7 +12,7 @@ class SimpleRustBucketDeploymentStack extends Stack {
       removalPolicy: RemovalPolicy.DESTROY,
     });
 
-    const deployment = new RustBucketDeployment(this, "DeployWebsite", {
+    const deployment = new ShinBucketDeployment(this, "DeployWebsite", {
       sources: [Source.asset(join(__dirname, "..", "..", "test", "fixtures", "my-website"))],
       destinationBucket: websiteBucket,
       destinationKeyPrefix: "site",
@@ -37,4 +37,4 @@ const env =
       }
     : undefined;
 
-new SimpleRustBucketDeploymentStack(app, "RustBucketDeploymentSimpleDemo", { env });
+new SimpleShinBucketDeploymentStack(app, "ShinBucketDeploymentSimpleDemo", { env });

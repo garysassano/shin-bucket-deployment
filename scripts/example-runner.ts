@@ -11,89 +11,89 @@ type ExampleDefinition = {
 };
 
 const EXAMPLES = {
-  simple: { file: "simple-app.js", stackHint: "RustBucketDeploymentSimpleDemo" },
+  simple: { file: "simple-app.js", stackHint: "ShinBucketDeploymentSimpleDemo" },
   replacement: {
     file: "replacement-behavior-app.js",
-    stackHint: "RustBucketDeploymentReplacementBehaviorDemo",
+    stackHint: "ShinBucketDeploymentReplacementBehaviorDemo",
   },
   "cloudfront-sync": {
     file: "cloudfront-invalidation-sync-app.js",
-    stackHint: "RustBucketDeploymentCloudFrontInvalidationSyncDemo",
+    stackHint: "ShinBucketDeploymentCloudFrontInvalidationSyncDemo",
   },
   "cloudfront-async": {
     file: "cloudfront-invalidation-async-app.js",
-    stackHint: "RustBucketDeploymentCloudFrontInvalidationAsyncDemo",
+    stackHint: "ShinBucketDeploymentCloudFrontInvalidationAsyncDemo",
   },
   "extract-false": {
     file: "extract-false-app.js",
-    stackHint: "RustBucketDeploymentExtractFalseDemo",
+    stackHint: "ShinBucketDeploymentExtractFalseDemo",
   },
   "kms-destination": {
     file: "kms-destination-app.js",
-    stackHint: "RustBucketDeploymentKmsDestinationDemo",
+    stackHint: "ShinBucketDeploymentKmsDestinationDemo",
   },
   "large-archive": {
     file: "large-archive-app.js",
-    stackHint: "RustBucketDeploymentLargeArchiveDemo",
+    stackHint: "ShinBucketDeploymentLargeArchiveDemo",
   },
   "metadata-filters": {
     file: "metadata-filters-app.js",
-    stackHint: "RustBucketDeploymentMetadataFiltersDemo",
+    stackHint: "ShinBucketDeploymentMetadataFiltersDemo",
   },
   "multi-source-overwrite": {
     file: "multi-source-overwrite-app.js",
-    stackHint: "RustBucketDeploymentMultiSourceOverwriteDemo",
+    stackHint: "ShinBucketDeploymentMultiSourceOverwriteDemo",
   },
   "benchmark-assets": {
     file: "benchmark-assets-app.js",
-    stackHint: "RustBucketDeploymentBenchmarkAssetsDemo",
+    stackHint: "ShinBucketDeploymentBenchmarkAssetsDemo",
   },
   "benchmark-assets-aws": {
     file: "benchmark-assets-app.js",
     stackHint: "AwsBucketDeploymentBenchmarkAssetsDemo",
     env: {
-      RBD_BENCH_IMPLEMENTATION: "aws",
+      SBD_BENCH_IMPLEMENTATION: "aws",
     },
   },
   "prune-update": {
     file: "prune-update-v2-app.js",
-    stackHint: "RustBucketDeploymentPruneUpdateDemo",
+    stackHint: "ShinBucketDeploymentPruneUpdateDemo",
   },
   "prune-update-v1": {
     file: "prune-update-v1-app.js",
-    stackHint: "RustBucketDeploymentPruneUpdateDemo",
+    stackHint: "ShinBucketDeploymentPruneUpdateDemo",
   },
   "prune-update-v2": {
     file: "prune-update-v2-app.js",
-    stackHint: "RustBucketDeploymentPruneUpdateDemo",
+    stackHint: "ShinBucketDeploymentPruneUpdateDemo",
   },
   "retain-on-delete": {
     file: "retain-on-delete-v2-app.js",
-    stackHint: "RustBucketDeploymentRetainOnDeleteDemo",
+    stackHint: "ShinBucketDeploymentRetainOnDeleteDemo",
   },
   "retain-on-delete-v1": {
     file: "retain-on-delete-v1-app.js",
-    stackHint: "RustBucketDeploymentRetainOnDeleteDemo",
+    stackHint: "ShinBucketDeploymentRetainOnDeleteDemo",
   },
   "retain-on-delete-v2": {
     file: "retain-on-delete-v2-app.js",
-    stackHint: "RustBucketDeploymentRetainOnDeleteDemo",
+    stackHint: "ShinBucketDeploymentRetainOnDeleteDemo",
   },
   "retain-on-delete-false": {
     file: "retain-on-delete-false-v2-app.js",
-    stackHint: "RustBucketDeploymentRetainOnDeleteFalseDemo",
+    stackHint: "ShinBucketDeploymentRetainOnDeleteFalseDemo",
   },
   "retain-on-delete-false-bucket-only": {
     file: "retain-on-delete-false-bucket-only-app.js",
-    stackHint: "RustBucketDeploymentRetainOnDeleteFalseDemo",
+    stackHint: "ShinBucketDeploymentRetainOnDeleteFalseDemo",
   },
   "retain-on-delete-false-v1": {
     file: "retain-on-delete-false-v1-app.js",
-    stackHint: "RustBucketDeploymentRetainOnDeleteFalseDemo",
+    stackHint: "ShinBucketDeploymentRetainOnDeleteFalseDemo",
   },
   "retain-on-delete-false-v2": {
     file: "retain-on-delete-false-v2-app.js",
-    stackHint: "RustBucketDeploymentRetainOnDeleteFalseDemo",
+    stackHint: "ShinBucketDeploymentRetainOnDeleteFalseDemo",
   },
 } as const satisfies Record<string, ExampleDefinition>;
 
@@ -106,7 +106,7 @@ function printUsage(): void {
   console.error("  pnpm example synth simple");
   console.error("  pnpm example deploy cloudfront-sync");
   console.error(
-    "  pnpm example deploy cloudfront-sync -- --parameters RustBucketDeploymentCloudFrontInvalidationSyncDemo:CacheProbeToken=v2",
+    "  pnpm example deploy cloudfront-sync -- --parameters ShinBucketDeploymentCloudFrontInvalidationSyncDemo:CacheProbeToken=v2",
   );
   console.error("  pnpm example destroy retain-on-delete");
   console.error("");

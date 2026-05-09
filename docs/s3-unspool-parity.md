@@ -1,6 +1,6 @@
 # s3-unspool Parity
 
-This document tracks how `RustBucketDeployment` maps `s3-unspool` ideas into the CDK custom-resource deployment model.
+This document tracks how `ShinBucketDeployment` maps `s3-unspool` ideas into the CDK custom-resource deployment model.
 
 ## Comparison Baseline
 
@@ -15,7 +15,7 @@ This matrix is point-in-time documentation. Re-check it when `s3-unspool` change
 
 ## Implemented
 
-| `s3-unspool` behavior | `RustBucketDeployment` status |
+| `s3-unspool` behavior | `ShinBucketDeployment` status |
 | --- | --- |
 | Read source ZIPs with S3 ranged `GetObject` requests | Implemented for `extract=true`. |
 | Avoid full ZIP download | Implemented. The provider reads central-directory and entry ranges instead of loading the whole archive. |

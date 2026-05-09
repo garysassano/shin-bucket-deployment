@@ -5,7 +5,7 @@ import { AllowedMethods, Distribution, ViewerProtocolPolicy } from "aws-cdk-lib/
 import { S3BucketOrigin } from "aws-cdk-lib/aws-cloudfront-origins";
 import { Bucket } from "aws-cdk-lib/aws-s3";
 import { describe, expect, test } from "vitest";
-import { RustBucketDeployment, Source } from "../src";
+import { ShinBucketDeployment, Source } from "../src";
 import { testBundling } from "./test-bundling";
 
 function customResourceProperties(stack: Stack) {
@@ -14,23 +14,23 @@ function customResourceProperties(stack: Stack) {
   };
 
   const resource = Object.values(template.Resources).find(
-    (candidate) => candidate.Type === "Custom::RustBucketDeployment",
+    (candidate) => candidate.Type === "Custom::ShinBucketDeployment",
   );
 
   if (!resource) {
-    throw new Error("Custom::RustBucketDeployment resource not found");
+    throw new Error("Custom::ShinBucketDeployment resource not found");
   }
 
   return resource.Properties;
 }
 
-describe("RustBucketDeployment validation and option coverage", () => {
+describe("ShinBucketDeployment validation and option coverage", () => {
   test("throws when distributionPaths are provided without a distribution", () => {
     const stack = new Stack();
     const destinationBucket = new Bucket(stack, "Dest");
 
     expect(() => {
-      new RustBucketDeployment(stack, "Deploy", {
+      new ShinBucketDeployment(stack, "Deploy", {
         sources: [Source.asset(join(__dirname, "fixtures", "my-website"))],
         destinationBucket,
         distributionPaths: ["/index.html"],
@@ -50,7 +50,7 @@ describe("RustBucketDeployment validation and option coverage", () => {
     });
 
     expect(() => {
-      new RustBucketDeployment(stack, "Deploy", {
+      new ShinBucketDeployment(stack, "Deploy", {
         sources: [Source.asset(join(__dirname, "fixtures", "my-website"))],
         destinationBucket,
         distribution,
@@ -73,7 +73,7 @@ describe("RustBucketDeployment validation and option coverage", () => {
     const destinationBucket = new Bucket(stack, "Dest");
 
     expect(() => {
-      new RustBucketDeployment(stack, "Deploy", {
+      new ShinBucketDeployment(stack, "Deploy", {
         sources: [Source.asset(join(__dirname, "fixtures", "my-website"))],
         destinationBucket,
         [propName]: value,
@@ -86,7 +86,7 @@ describe("RustBucketDeployment validation and option coverage", () => {
     const stack = new Stack(app, "ValidationStack");
     const destinationBucket = new Bucket(stack, "Dest");
 
-    new RustBucketDeployment(stack, "Deploy", {
+    new ShinBucketDeployment(stack, "Deploy", {
       sources: [Source.data("runtime/plain.txt", `region=${Aws.REGION}`)],
       destinationBucket,
       extract: false,
@@ -107,7 +107,7 @@ describe("RustBucketDeployment validation and option coverage", () => {
       },
     });
 
-    new RustBucketDeployment(stack, "Deploy", {
+    new ShinBucketDeployment(stack, "Deploy", {
       sources: [Source.asset(join(__dirname, "fixtures", "my-website"))],
       destinationBucket,
       distribution,
@@ -118,7 +118,7 @@ describe("RustBucketDeployment validation and option coverage", () => {
 
     const template = Template.fromStack(stack);
 
-    template.hasResourceProperties("Custom::RustBucketDeployment", {
+    template.hasResourceProperties("Custom::ShinBucketDeployment", {
       DistributionId: {
         Ref: Match.anyValue(),
       },
@@ -144,7 +144,7 @@ describe("RustBucketDeployment validation and option coverage", () => {
     const stack = new Stack();
     const destinationBucket = new Bucket(stack, "Dest");
 
-    new RustBucketDeployment(stack, "Deploy", {
+    new ShinBucketDeployment(stack, "Deploy", {
       sources: [Source.asset(join(__dirname, "fixtures", "my-website"))],
       destinationBucket,
       outputObjectKeys: false,
@@ -158,7 +158,7 @@ describe("RustBucketDeployment validation and option coverage", () => {
     const stack = new Stack();
     const destinationBucket = new Bucket(stack, "Dest");
 
-    new RustBucketDeployment(stack, "Deploy", {
+    new ShinBucketDeployment(stack, "Deploy", {
       sources: [Source.asset(join(__dirname, "fixtures", "my-website"))],
       destinationBucket,
       memoryLimit: 1024,
@@ -203,7 +203,7 @@ describe("RustBucketDeployment validation and option coverage", () => {
     const destinationBucket = new Bucket(stack, "Dest");
 
     expect(() => {
-      new RustBucketDeployment(stack, "Deploy", {
+      new ShinBucketDeployment(stack, "Deploy", {
         sources: [Source.asset(join(__dirname, "fixtures", "my-website"))],
         destinationBucket,
         advancedRuntimeTuning: {
@@ -213,7 +213,7 @@ describe("RustBucketDeployment validation and option coverage", () => {
     }).toThrow(/sourceGetConcurrency/);
 
     expect(() => {
-      new RustBucketDeployment(stack, "BadRetryDelay", {
+      new ShinBucketDeployment(stack, "BadRetryDelay", {
         sources: [Source.asset(join(__dirname, "fixtures", "my-website"))],
         destinationBucket,
         advancedRuntimeTuning: {
@@ -226,7 +226,7 @@ describe("RustBucketDeployment validation and option coverage", () => {
     }).toThrow(/maxDelayMs/);
 
     expect(() => {
-      new RustBucketDeployment(stack, "BadSlowdownRetryDelay", {
+      new ShinBucketDeployment(stack, "BadSlowdownRetryDelay", {
         sources: [Source.asset(join(__dirname, "fixtures", "my-website"))],
         destinationBucket,
         advancedRuntimeTuning: {
@@ -239,7 +239,7 @@ describe("RustBucketDeployment validation and option coverage", () => {
     }).toThrow(/slowdownMaxDelayMs/);
 
     expect(() => {
-      new RustBucketDeployment(stack, "BadRetryJitter", {
+      new ShinBucketDeployment(stack, "BadRetryJitter", {
         sources: [Source.asset(join(__dirname, "fixtures", "my-website"))],
         destinationBucket,
         advancedRuntimeTuning: {
@@ -254,7 +254,7 @@ describe("RustBucketDeployment validation and option coverage", () => {
   test("requests DestinationBucketArn when deployedBucket is accessed", () => {
     const stack = new Stack();
     const destinationBucket = new Bucket(stack, "Dest");
-    const deployment = new RustBucketDeployment(stack, "Deploy", {
+    const deployment = new ShinBucketDeployment(stack, "Deploy", {
       sources: [Source.asset(join(__dirname, "fixtures", "my-website"))],
       destinationBucket,
       bundling: testBundling(),

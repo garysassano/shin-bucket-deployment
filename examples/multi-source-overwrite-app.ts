@@ -1,8 +1,8 @@
 import { App, CfnOutput, RemovalPolicy, Stack, type StackProps } from "aws-cdk-lib";
 import { Bucket } from "aws-cdk-lib/aws-s3";
-import { RustBucketDeployment, Source } from "../src";
+import { ShinBucketDeployment, Source } from "../src";
 
-class MultiSourceOverwriteRustBucketDeploymentStack extends Stack {
+class MultiSourceOverwriteShinBucketDeploymentStack extends Stack {
   constructor(scope: App, id: string, props?: StackProps) {
     super(scope, id, props);
 
@@ -11,7 +11,7 @@ class MultiSourceOverwriteRustBucketDeploymentStack extends Stack {
       removalPolicy: RemovalPolicy.DESTROY,
     });
 
-    new RustBucketDeployment(this, "DeployWebsite", {
+    new ShinBucketDeployment(this, "DeployWebsite", {
       sources: [
         Source.data("runtime/overlap.txt", "first-source\n"),
         Source.data("runtime/overlap.txt", "second-source\n"),
@@ -39,8 +39,8 @@ const env =
       }
     : undefined;
 
-new MultiSourceOverwriteRustBucketDeploymentStack(
+new MultiSourceOverwriteShinBucketDeploymentStack(
   app,
-  "RustBucketDeploymentMultiSourceOverwriteDemo",
+  "ShinBucketDeploymentMultiSourceOverwriteDemo",
   { env },
 );

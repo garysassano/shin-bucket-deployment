@@ -2,13 +2,13 @@
 
 Use the repo-local skill files before benchmark or verification work:
 
-- Benchmark and AWS CDK `BucketDeployment` comparison tasks: read `.agents/skills/rbd-benchmark/SKILL.md`.
-- Correctness verification tasks: read `.agents/skills/rbd-verification/SKILL.md`.
+- Benchmark and AWS CDK `BucketDeployment` comparison tasks: read `.agents/skills/sbd-benchmark/SKILL.md`.
+- Correctness verification tasks: read `.agents/skills/sbd-verification/SKILL.md`.
 
 Keep benchmark evidence and verification evidence separate:
 
 - `docs/benchmark.md` and `docs/benchmark-history.jsonl` are for performance, efficiency, and upstream AWS CDK `BucketDeployment` comparisons.
-- `docs/verification.md` and `docs/verification-history.jsonl` are for `RustBucketDeployment` correctness only.
+- `docs/verification.md` and `docs/verification-history.jsonl` are for `ShinBucketDeployment` correctness only.
 - Do not use benchmark rows or upstream AWS `BucketDeployment` comparison rows as verification evidence.
 
 Never commit raw AWS evidence or identifiers:

@@ -84,7 +84,7 @@ function renderReport(records: BenchmarkRecord[], options: RenderOptions): strin
     "",
     renderScope(comparable),
     "",
-    "## RustBucketDeployment vs AWS BucketDeployment",
+    "## ShinBucketDeployment vs AWS BucketDeployment",
     "",
     renderComparisonSummaryTable(comparable),
     "",
@@ -196,7 +196,7 @@ function renderPhaseComparisonTable(phaseRow: PhaseComparisonRow): string {
     (row) => row !== undefined,
   );
   return [
-    "| Metric | RustBucketDeployment | AWS BucketDeployment | Difference | AWS/Rust | AWS delta % |",
+    "| Metric | ShinBucketDeployment | AWS BucketDeployment | Difference | AWS/Rust | AWS delta % |",
     "| --- | ---: | ---: | ---: | ---: | ---: |",
     ...rows.map(
       (row) =>
@@ -212,19 +212,19 @@ function renderComparisonCharts(records: BenchmarkRecord[]): string[] {
   }
 
   return [
-    "### Provider Duration Saved By RustBucketDeployment",
+    "### Provider Duration Saved By ShinBucketDeployment",
     "",
     renderDeltaChart(rows, "providerDurationSeconds", "faster", "slower"),
     "",
-    "### Local Wall Time Saved By RustBucketDeployment",
+    "### Local Wall Time Saved By ShinBucketDeployment",
     "",
     renderDeltaChart(rows, "localWallSeconds", "faster", "slower"),
     "",
-    "### CDK Deploy Time Saved By RustBucketDeployment",
+    "### CDK Deploy Time Saved By ShinBucketDeployment",
     "",
     renderDeltaChart(rows, "cdkDeploySeconds", "faster", "slower"),
     "",
-    "### Max Memory Saved By RustBucketDeployment",
+    "### Max Memory Saved By ShinBucketDeployment",
     "",
     renderDeltaChart(rows, "maxMemoryMb", "lower", "higher"),
     "",
