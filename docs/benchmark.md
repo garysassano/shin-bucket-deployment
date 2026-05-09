@@ -10,7 +10,7 @@ This file owns benchmark context and the latest sanitized human-readable perform
 
 `docs/benchmark-history.jsonl` owns the append-only sanitized benchmark record across runs. Before replacing the `Current Results` section here, make sure the previous and new run records are present there.
 
-`docs/verification.md` owns correctness verification status. Verification may reference benchmark-backed coverage, but benchmark timing and memory data belongs here or in `docs/benchmark-history.jsonl`.
+`docs/verification.md` owns correctness verification status. Benchmark records may inform investigation, but they are not correctness verification evidence; benchmark timing and memory data belongs here or in `docs/benchmark-history.jsonl`.
 
 ## Goals
 
