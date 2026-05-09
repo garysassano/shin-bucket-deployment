@@ -17,9 +17,9 @@ import {
 } from "aws-cdk-lib/aws-cloudfront";
 import { S3BucketOrigin } from "aws-cdk-lib/aws-cloudfront-origins";
 import { Bucket } from "aws-cdk-lib/aws-s3";
-import { CacheControl, RustBucketDeployment, Source } from "../src";
+import { CacheControl, ShinBucketDeployment, Source } from "../src";
 
-class CloudFrontInvalidationAsyncRustBucketDeploymentStack extends Stack {
+class CloudFrontInvalidationAsyncShinBucketDeploymentStack extends Stack {
   constructor(scope: App, id: string, props?: StackProps) {
     super(scope, id, props);
 
@@ -29,7 +29,7 @@ class CloudFrontInvalidationAsyncRustBucketDeploymentStack extends Stack {
     });
 
     const distribution = new Distribution(this, "WebsiteDistribution", {
-      comment: "Manual validation target for async RustBucketDeployment CloudFront invalidations.",
+      comment: "Manual validation target for async ShinBucketDeployment CloudFront invalidations.",
       defaultRootObject: "site/index.html",
       defaultBehavior: {
         origin: S3BucketOrigin.withOriginAccessControl(websiteBucket),
@@ -52,7 +52,7 @@ class CloudFrontInvalidationAsyncRustBucketDeploymentStack extends Stack {
         "Change this value between deploys to prove CloudFront invalidation runs asynchronously.",
     });
 
-    new RustBucketDeployment(this, "DeployWebsite", {
+    new ShinBucketDeployment(this, "DeployWebsite", {
       sources: [
         Source.asset(join(__dirname, "..", "..", "test", "fixtures", "my-website")),
         Source.jsonData(
@@ -110,7 +110,7 @@ class CloudFrontInvalidationAsyncRustBucketDeploymentStack extends Stack {
 
     new CfnOutput(this, "RedeployWithNewTokenCommand", {
       value:
-        "pnpm example deploy cloudfront-async -- --parameters RustBucketDeploymentCloudFrontInvalidationAsyncDemo:CacheProbeToken=<new-token-value>",
+        "pnpm example deploy cloudfront-async -- --parameters ShinBucketDeploymentCloudFrontInvalidationAsyncDemo:CacheProbeToken=<new-token-value>",
     });
   }
 }
@@ -124,8 +124,8 @@ const env =
       }
     : undefined;
 
-new CloudFrontInvalidationAsyncRustBucketDeploymentStack(
+new CloudFrontInvalidationAsyncShinBucketDeploymentStack(
   app,
-  "RustBucketDeploymentCloudFrontInvalidationAsyncDemo",
+  "ShinBucketDeploymentCloudFrontInvalidationAsyncDemo",
   { env },
 );

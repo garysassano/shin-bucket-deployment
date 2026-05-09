@@ -9,9 +9,9 @@ import {
   type StackProps,
 } from "aws-cdk-lib";
 import { Bucket } from "aws-cdk-lib/aws-s3";
-import { RustBucketDeployment, Source } from "../src";
+import { ShinBucketDeployment, Source } from "../src";
 
-class ReplacementBehaviorRustBucketDeploymentStack extends Stack {
+class ReplacementBehaviorShinBucketDeploymentStack extends Stack {
   constructor(scope: App, id: string, props?: StackProps) {
     super(scope, id, props);
 
@@ -27,7 +27,7 @@ class ReplacementBehaviorRustBucketDeploymentStack extends Stack {
         "Deploy-time string used to verify JSON escaping when token values contain quotes and backslashes.",
     });
 
-    new RustBucketDeployment(this, "DeployWebsite", {
+    new ShinBucketDeployment(this, "DeployWebsite", {
       sources: [
         Source.asset(join(__dirname, "..", "..", "test", "fixtures", "my-website")),
         Source.data(
@@ -135,8 +135,8 @@ const env =
       }
     : undefined;
 
-new ReplacementBehaviorRustBucketDeploymentStack(
+new ReplacementBehaviorShinBucketDeploymentStack(
   app,
-  "RustBucketDeploymentReplacementBehaviorDemo",
+  "ShinBucketDeploymentReplacementBehaviorDemo",
   { env },
 );

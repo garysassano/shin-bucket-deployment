@@ -17,8 +17,8 @@ import { type BundlingOptions as CargoLambdaBundlingOptions, RustFunction } from
 import { Construct } from "constructs";
 
 const CUSTOM_RESOURCE_OWNER_TAG = "aws-cdk:cr-owned";
-const HANDLER_BINARY_NAME = "rust-bucket-deployment-handler";
-const SHARED_HANDLER_ID_PREFIX = "RustBucketDeploymentHandler";
+const HANDLER_BINARY_NAME = "shin-bucket-deployment-handler";
+const SHARED_HANDLER_ID_PREFIX = "ShinBucketDeploymentHandler";
 const DEFAULT_MEMORY_LIMIT_MB = 1024;
 const DEFAULT_PUT_OBJECT_RETRY_BASE_DELAY_MS = 250;
 const DEFAULT_PUT_OBJECT_RETRY_MAX_DELAY_MS = 5_000;
@@ -27,7 +27,7 @@ const DEFAULT_PUT_OBJECT_SLOWDOWN_RETRY_MAX_DELAY_MS = 30_000;
 
 export type PutObjectRetryJitter = "full" | "none";
 
-export interface RustBucketDeploymentPutObjectRetryTuning {
+export interface ShinBucketDeploymentPutObjectRetryTuning {
   /**
    * Maximum application-level PutObject attempts per object.
    * @default 6
@@ -65,7 +65,7 @@ export interface RustBucketDeploymentPutObjectRetryTuning {
   readonly jitter?: PutObjectRetryJitter;
 }
 
-export interface RustBucketDeploymentAdvancedRuntimeTuning {
+export interface ShinBucketDeploymentAdvancedRuntimeTuning {
   /**
    * Source ranged-read block size in bytes.
    * @default 8 MiB
@@ -100,10 +100,10 @@ export interface RustBucketDeploymentAdvancedRuntimeTuning {
    * Destination PutObject retry/backoff tuning.
    * @default - provider defaults
    */
-  readonly putObjectRetry?: RustBucketDeploymentPutObjectRetryTuning;
+  readonly putObjectRetry?: ShinBucketDeploymentPutObjectRetryTuning;
 }
 
-export interface RustBucketDeploymentProps
+export interface ShinBucketDeploymentProps
   extends Omit<
     BucketDeploymentProps,
     "expires" | "signContent" | "serverSideEncryptionCustomerAlgorithm" | "useEfs"
@@ -141,13 +141,13 @@ export interface RustBucketDeploymentProps
    *
    * @default - provider defaults derived from memoryLimit
    */
-  readonly advancedRuntimeTuning?: RustBucketDeploymentAdvancedRuntimeTuning;
+  readonly advancedRuntimeTuning?: ShinBucketDeploymentAdvancedRuntimeTuning;
 }
 
 /**
  * Prototype Rust-backed alternative to `BucketDeployment`.
  */
-export class RustBucketDeployment extends Construct {
+export class ShinBucketDeployment extends Construct {
   private readonly cr: CustomResource;
   private readonly destinationBucket: IBucket;
   private readonly sources: SourceConfig[];
@@ -164,7 +164,7 @@ export class RustBucketDeployment extends Construct {
    */
   public readonly handlerFunction: LambdaFunction;
 
-  constructor(scope: Construct, id: string, props: RustBucketDeploymentProps) {
+  constructor(scope: Construct, id: string, props: ShinBucketDeploymentProps) {
     super(scope, id);
 
     const maybeUnsupported = props as BucketDeploymentProps;
@@ -195,32 +195,32 @@ export class RustBucketDeployment extends Construct {
 
     if (maybeUnsupported.useEfs) {
       throw new ValidationError(
-        literalString("RustBucketDeploymentUseEfsUnsupported"),
-        "RustBucketDeployment does not support useEfs; the provider keeps source archives in Lambda memory.",
+        literalString("ShinBucketDeploymentUseEfsUnsupported"),
+        "ShinBucketDeployment does not support useEfs; the provider keeps source archives in Lambda memory.",
         this,
       );
     }
 
     if (maybeUnsupported.signContent) {
       throw new ValidationError(
-        literalString("RustBucketDeploymentSignContentUnsupported"),
-        "RustBucketDeployment does not support signContent in this prototype.",
+        literalString("ShinBucketDeploymentSignContentUnsupported"),
+        "ShinBucketDeployment does not support signContent in this prototype.",
         this,
       );
     }
 
     if (maybeUnsupported.serverSideEncryptionCustomerAlgorithm) {
       throw new ValidationError(
-        literalString("RustBucketDeploymentSseCustomerAlgorithmUnsupported"),
-        "RustBucketDeployment does not support serverSideEncryptionCustomerAlgorithm in this prototype.",
+        literalString("ShinBucketDeploymentSseCustomerAlgorithmUnsupported"),
+        "ShinBucketDeployment does not support serverSideEncryptionCustomerAlgorithm in this prototype.",
         this,
       );
     }
 
     if (maybeUnsupported.expires) {
       throw new ValidationError(
-        literalString("RustBucketDeploymentExpiresUnsupported"),
-        "RustBucketDeployment does not support expires in this prototype.",
+        literalString("ShinBucketDeploymentExpiresUnsupported"),
+        "ShinBucketDeployment does not support expires in this prototype.",
         this,
       );
     }
@@ -282,7 +282,7 @@ export class RustBucketDeployment extends Construct {
     const handlerRole = this.handlerFunction.role;
     if (!handlerRole) {
       throw new ValidationError(
-        literalString("RustBucketDeploymentHandlerRole"),
+        literalString("ShinBucketDeploymentHandlerRole"),
         "lambda.Function should have created a Role",
         this,
       );
@@ -362,7 +362,7 @@ export class RustBucketDeployment extends Construct {
 
     this.cr = new CustomResource(this, "CustomResource", {
       serviceToken: this.handlerFunction.functionArn,
-      resourceType: "Custom::RustBucketDeployment",
+      resourceType: "Custom::ShinBucketDeployment",
       properties: {
         SourceBucketNames: Lazy.uncachedList({
           produce: () => this.sources.map((source) => source.bucket.bucketName),
@@ -445,7 +445,7 @@ export class RustBucketDeployment extends Construct {
 
     if (!Token.isUnresolved(tagKey) && tagKey.length > 128) {
       throw new ValidationError(
-        literalString("RustBucketDeploymentConstructRequiresDestination"),
+        literalString("ShinBucketDeploymentConstructRequiresDestination"),
         "The destinationKeyPrefix must be <=104 characters.",
         this,
       );
@@ -489,7 +489,7 @@ function resolveDefaultRustProjectPath(scope: Construct): string {
   }
 
   throw new ValidationError(
-    literalString("RustBucketDeploymentRustProjectPath"),
+    literalString("ShinBucketDeploymentRustProjectPath"),
     "Unable to locate rust/Cargo.toml. Pass rustProjectPath explicitly.",
     scope,
   );
@@ -497,7 +497,7 @@ function resolveDefaultRustProjectPath(scope: Construct): string {
 
 function getOrCreateHandler(
   scope: Construct,
-  props: RustBucketDeploymentProps,
+  props: ShinBucketDeploymentProps,
   architecture: Architecture,
   rustProjectPath: string,
 ): RustFunction {
@@ -514,7 +514,7 @@ function getOrCreateHandler(
   if (existing) {
     if (!(existing instanceof RustFunction)) {
       throw new ValidationError(
-        literalString("RustBucketDeploymentHandlerCollision"),
+        literalString("ShinBucketDeploymentHandlerCollision"),
         `Found non-RustFunction child for shared handler id ${handlerId}.`,
         scope,
       );
@@ -546,7 +546,7 @@ function getOrCreateHandler(
 
 function renderHandlerConfigHash(
   stack: Stack,
-  props: RustBucketDeploymentProps,
+  props: ShinBucketDeploymentProps,
   architecture: Architecture,
   manifestPath: string,
 ): string {
@@ -673,7 +673,7 @@ function validateIntegerProps(
     if (typeof value !== "number" || !Number.isInteger(value) || value < minimum) {
       const propPath = `${propPathPrefix}${propName}`;
       throw new ValidationError(
-        literalString(`RustBucketDeploymentInvalid${propPath}`),
+        literalString(`ShinBucketDeploymentInvalid${propPath}`),
         `${propPath} must be an integer greater than or equal to ${minimum}.`,
         scope,
       );
@@ -683,13 +683,13 @@ function validateIntegerProps(
 
 function validatePutObjectRetryProps(
   scope: Construct,
-  props: RustBucketDeploymentPutObjectRetryTuning,
+  props: ShinBucketDeploymentPutObjectRetryTuning,
 ): void {
   const retryBaseDelayMs = props.baseDelayMs ?? DEFAULT_PUT_OBJECT_RETRY_BASE_DELAY_MS;
   const retryMaxDelayMs = props.maxDelayMs ?? DEFAULT_PUT_OBJECT_RETRY_MAX_DELAY_MS;
   if (retryMaxDelayMs < retryBaseDelayMs) {
     throw new ValidationError(
-      literalString("RustBucketDeploymentInvalidPutObjectRetryMaxDelayMs"),
+      literalString("ShinBucketDeploymentInvalidPutObjectRetryMaxDelayMs"),
       "advancedRuntimeTuning.putObjectRetry.maxDelayMs must be greater than or equal to advancedRuntimeTuning.putObjectRetry.baseDelayMs.",
       scope,
     );
@@ -701,7 +701,7 @@ function validatePutObjectRetryProps(
     props.slowdownMaxDelayMs ?? DEFAULT_PUT_OBJECT_SLOWDOWN_RETRY_MAX_DELAY_MS;
   if (slowdownRetryMaxDelayMs < slowdownRetryBaseDelayMs) {
     throw new ValidationError(
-      literalString("RustBucketDeploymentInvalidPutObjectSlowdownRetryMaxDelayMs"),
+      literalString("ShinBucketDeploymentInvalidPutObjectSlowdownRetryMaxDelayMs"),
       "advancedRuntimeTuning.putObjectRetry.slowdownMaxDelayMs must be greater than or equal to advancedRuntimeTuning.putObjectRetry.slowdownBaseDelayMs.",
       scope,
     );
@@ -709,7 +709,7 @@ function validatePutObjectRetryProps(
 
   if (props.jitter !== undefined && props.jitter !== "full" && props.jitter !== "none") {
     throw new ValidationError(
-      literalString("RustBucketDeploymentInvalidPutObjectRetryJitter"),
+      literalString("ShinBucketDeploymentInvalidPutObjectRetryJitter"),
       'advancedRuntimeTuning.putObjectRetry.jitter must be either "full" or "none".',
       scope,
     );
@@ -737,7 +737,7 @@ function mapUserMetadata(metadata: { [key: string]: string }) {
   return normalized;
 }
 
-function mapSystemMetadata(metadata: RustBucketDeploymentProps) {
+function mapSystemMetadata(metadata: ShinBucketDeploymentProps) {
   const res: { [key: string]: string } = {};
 
   if (metadata.cacheControl) {

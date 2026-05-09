@@ -1,7 +1,7 @@
 ---
-name: rbd-verification
+name: sbd-verification
 description: |
-  Run, collect, sanitize, document, and commit RustBucketDeployment correctness verification evidence.
+  Run, collect, sanitize, document, and commit ShinBucketDeployment correctness verification evidence.
 
   Use this skill when:
   1. Running local correctness gates for this repository
@@ -10,7 +10,7 @@ description: |
   4. Reviewing whether verification evidence is safe to commit
 ---
 
-# RBD Verification Workflow
+# SBD Verification Workflow
 
 This skill is for correctness evidence only. Benchmarks and AWS CDK `BucketDeployment` comparisons are tracked separately in `docs/benchmark.md` and `docs/benchmark-history.jsonl`.
 
@@ -49,7 +49,7 @@ Committed verification records may include:
 
 ## Verification Categories
 
-Verification covers correctness of `RustBucketDeployment`, not benchmark efficiency and not comparison with upstream AWS CDK `BucketDeployment`.
+Verification covers correctness of `ShinBucketDeployment`, not benchmark efficiency and not comparison with upstream AWS CDK `BucketDeployment`.
 
 Use these categories:
 
@@ -72,7 +72,7 @@ pnpm lint
 pnpm test
 ```
 
-Local synthesis should cover public RustBucketDeployment examples:
+Local synthesis should cover public ShinBucketDeployment examples:
 
 ```bash
 pnpm example list

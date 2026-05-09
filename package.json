@@ -1,5 +1,5 @@
 {
-  "name": "rust-bucket-deployment-prototype",
+  "name": "shin-bucket-deployment-prototype",
   "private": true,
   "version": "0.0.0",
   "description": "Local prototype of a Rust-backed CDK bucket deployment construct",

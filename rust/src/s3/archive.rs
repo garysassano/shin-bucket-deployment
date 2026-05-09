@@ -1696,7 +1696,7 @@ mod tests {
                 "test-secret-key",
                 None,
                 None,
-                "rust-bucket-deployment-test",
+                "shin-bucket-deployment-test",
             ))
             .build();
         aws_sdk_s3::Client::from_conf(config)

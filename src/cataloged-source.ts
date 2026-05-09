@@ -57,7 +57,7 @@ export class Source {
       bind(scope: Construct, context?: DeploymentSourceContext): SourceConfig {
         if (!context) {
           throw new ValidationError(
-            literalString("RustBucketDeploymentCatalogedSourceContext"),
+            literalString("ShinBucketDeploymentCatalogedSourceContext"),
             "To use Source.asset(), context must be provided",
             scope,
           );
@@ -66,7 +66,7 @@ export class Source {
         const sourcePath = resolve(path);
         if (!existsSync(sourcePath)) {
           throw new ValidationError(
-            literalString("RustBucketDeploymentCatalogedSourceMissing"),
+            literalString("ShinBucketDeploymentCatalogedSourceMissing"),
             `Asset path does not exist: ${sourcePath}`,
             scope,
           );
@@ -128,7 +128,7 @@ interface ZipEntryRecord {
 }
 
 function buildCatalogedAssetZip(sourcePath: string, options?: CatalogedAssetOptions): string {
-  const tempDir = mkdtempSync(join(tmpdir(), "rust-bucket-deployment-catalog-"));
+  const tempDir = mkdtempSync(join(tmpdir(), "shin-bucket-deployment-catalog-"));
   const zipPath = join(tempDir, `${basename(sourcePath)}.zip`);
 
   try {

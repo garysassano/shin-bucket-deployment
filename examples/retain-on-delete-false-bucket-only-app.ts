@@ -1,7 +1,7 @@
 import { App, CfnOutput, RemovalPolicy, Stack, type StackProps } from "aws-cdk-lib";
 import { Bucket } from "aws-cdk-lib/aws-s3";
 
-class RetainOnDeleteFalseRustBucketDeploymentStack extends Stack {
+class RetainOnDeleteFalseShinBucketDeploymentStack extends Stack {
   constructor(scope: App, id: string, props?: StackProps) {
     super(scope, id, props);
 
@@ -25,8 +25,8 @@ const env =
       }
     : undefined;
 
-new RetainOnDeleteFalseRustBucketDeploymentStack(
+new RetainOnDeleteFalseShinBucketDeploymentStack(
   app,
-  "RustBucketDeploymentRetainOnDeleteFalseDemo",
+  "ShinBucketDeploymentRetainOnDeleteFalseDemo",
   { env },
 );

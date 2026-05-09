@@ -1,9 +1,9 @@
 import { join } from "node:path";
 import { App, Aws, CfnOutput, RemovalPolicy, Stack, type StackProps } from "aws-cdk-lib";
 import { Bucket } from "aws-cdk-lib/aws-s3";
-import { RustBucketDeployment, Source } from "../src";
+import { ShinBucketDeployment, Source } from "../src";
 
-class PruneUpdateRustBucketDeploymentStack extends Stack {
+class PruneUpdateShinBucketDeploymentStack extends Stack {
   constructor(scope: App, id: string, props?: StackProps) {
     super(scope, id, props);
 
@@ -12,7 +12,7 @@ class PruneUpdateRustBucketDeploymentStack extends Stack {
       removalPolicy: RemovalPolicy.DESTROY,
     });
 
-    new RustBucketDeployment(this, "DeployWebsite", {
+    new ShinBucketDeployment(this, "DeployWebsite", {
       sources: [
         Source.asset(join(__dirname, "..", "..", "test", "fixtures", "my-website")),
         Source.data(
@@ -56,4 +56,4 @@ const env =
       }
     : undefined;
 
-new PruneUpdateRustBucketDeploymentStack(app, "RustBucketDeploymentPruneUpdateDemo", { env });
+new PruneUpdateShinBucketDeploymentStack(app, "ShinBucketDeploymentPruneUpdateDemo", { env });

@@ -1,10 +1,10 @@
-# RustBucketDeployment
+# ShinBucketDeployment
 
 Rust-backed alternative to AWS CDK's official [`BucketDeployment`](https://docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.aws_s3_deployment.BucketDeployment.html) construct.
 
 This repository is currently a local prototype, not a published construct library. The construct API and Rust provider Lambda are working and tracked through AWS validation runs.
 
-`RustBucketDeployment` is intended for S3 static asset deployment when you want a lower-overhead provider than the upstream Python Lambda and a deployment path that avoids extracting whole archives before syncing them.
+`ShinBucketDeployment` is intended for S3 static asset deployment when you want a lower-overhead provider than the upstream Python Lambda and a deployment path that avoids extracting whole archives before syncing them.
 
 ## Why Build This
 
@@ -26,7 +26,7 @@ import * as origins from "aws-cdk-lib/aws-cloudfront-origins";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import { Stack } from "aws-cdk-lib";
 import { Construct } from "constructs";
-import { RustBucketDeployment, Source } from "./src";
+import { ShinBucketDeployment, Source } from "./src";
 
 export class DemoStack extends Stack {
   constructor(scope: Construct, id: string) {
@@ -39,7 +39,7 @@ export class DemoStack extends Stack {
       },
     });
 
-    new RustBucketDeployment(this, "DeployWebsite", {
+    new ShinBucketDeployment(this, "DeployWebsite", {
       sources: [Source.asset("site")],
       destinationBucket: bucket,
       destinationKeyPrefix: "site",
@@ -93,7 +93,7 @@ At the default 1024 MiB memory limit, adaptive source scheduling reserves about 
 
 CloudFront invalidation is created after S3 changes when `distribution` is provided. If `distributionPaths` is omitted, the default path is the destination prefix plus `*`, for example `/site/*`.
 
-The provider logs one sanitized `rbd_deployment_summary` JSON line per custom-resource request plus structured source scheduler and destination `PutObject` diagnostics to CloudWatch Logs. The summary includes phase timings and aggregate counters, but excludes bucket names, object keys, account IDs, distribution IDs, URLs, and ETags.
+The provider logs one sanitized `sbd_deployment_summary` JSON line per custom-resource request plus structured source scheduler and destination `PutObject` diagnostics to CloudWatch Logs. The summary includes phase timings and aggregate counters, but excludes bucket names, object keys, account IDs, distribution IDs, URLs, and ETags.
 
 ## Limits
 

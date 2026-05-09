@@ -1,8 +1,8 @@
 import { App, CfnOutput, RemovalPolicy, Stack, type StackProps } from "aws-cdk-lib";
 import { Bucket } from "aws-cdk-lib/aws-s3";
-import { RustBucketDeployment, Source } from "../src";
+import { ShinBucketDeployment, Source } from "../src";
 
-class RetainOnDeleteFalseRustBucketDeploymentStack extends Stack {
+class RetainOnDeleteFalseShinBucketDeploymentStack extends Stack {
   constructor(scope: App, id: string, props?: StackProps) {
     super(scope, id, props);
 
@@ -11,7 +11,7 @@ class RetainOnDeleteFalseRustBucketDeploymentStack extends Stack {
       removalPolicy: RemovalPolicy.DESTROY,
     });
 
-    new RustBucketDeployment(this, "DeployWebsite", {
+    new ShinBucketDeployment(this, "DeployWebsite", {
       sources: [Source.data("runtime/current.txt", "version=v2\n")],
       destinationBucket: websiteBucket,
       destinationKeyPrefix: "cleanup-v2",
@@ -41,8 +41,8 @@ const env =
       }
     : undefined;
 
-new RetainOnDeleteFalseRustBucketDeploymentStack(
+new RetainOnDeleteFalseShinBucketDeploymentStack(
   app,
-  "RustBucketDeploymentRetainOnDeleteFalseDemo",
+  "ShinBucketDeploymentRetainOnDeleteFalseDemo",
   { env },
 );

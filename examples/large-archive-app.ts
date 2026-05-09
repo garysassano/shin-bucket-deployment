@@ -2,11 +2,11 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { App, CfnOutput, RemovalPolicy, Stack, type StackProps } from "aws-cdk-lib";
 import { Bucket } from "aws-cdk-lib/aws-s3";
-import { RustBucketDeployment, Source } from "../src";
+import { ShinBucketDeployment, Source } from "../src";
 
 const LARGE_FILE_BYTES = 24 * 1024 * 1024;
 
-class LargeArchiveRustBucketDeploymentStack extends Stack {
+class LargeArchiveShinBucketDeploymentStack extends Stack {
   constructor(scope: App, id: string, props?: StackProps) {
     super(scope, id, props);
 
@@ -16,7 +16,7 @@ class LargeArchiveRustBucketDeploymentStack extends Stack {
       removalPolicy: RemovalPolicy.DESTROY,
     });
 
-    new RustBucketDeployment(this, "DeployLargeArchive", {
+    new ShinBucketDeployment(this, "DeployLargeArchive", {
       sources: [Source.asset(assetRoot)],
       destinationBucket: websiteBucket,
       destinationKeyPrefix: "large-archive",
@@ -76,4 +76,4 @@ const env =
       }
     : undefined;
 
-new LargeArchiveRustBucketDeploymentStack(app, "RustBucketDeploymentLargeArchiveDemo", { env });
+new LargeArchiveShinBucketDeploymentStack(app, "ShinBucketDeploymentLargeArchiveDemo", { env });

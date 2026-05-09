@@ -1,8 +1,8 @@
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { RustBucketDeploymentProps } from "../src";
+import type { ShinBucketDeploymentProps } from "../src";
 
-export function testBundling(): RustBucketDeploymentProps["bundling"] {
+export function testBundling(): ShinBucketDeploymentProps["bundling"] {
   return {
     forcedDockerBundling: false,
     dockerOptions: {
