@@ -1,27 +1,25 @@
 ---
-name: rbd-benchmark-verification
+name: rbd-benchmark
 description: |
-  Run, collect, sanitize, document, and commit RustBucketDeployment benchmark and verification evidence.
+  Run, collect, sanitize, document, and commit RustBucketDeployment benchmark evidence.
 
   Use this skill when:
-  1. Running AWS benchmark or validation scenarios for this repository
-  2. Updating benchmark or verification documentation
-  3. Appending sanitized records to benchmark or verification JSONL history
-  4. Comparing RustBucketDeployment with AWS CDK BucketDeployment
-  5. Reviewing whether benchmark/verification evidence is safe to commit
+  1. Running AWS benchmark scenarios for this repository
+  2. Comparing RustBucketDeployment with AWS CDK BucketDeployment
+  3. Updating docs/benchmark.md or docs/benchmark-history.jsonl
+  4. Reviewing whether benchmark evidence is safe to commit
 ---
 
-# RBD Benchmark And Verification Workflow
+# RBD Benchmark Workflow
 
-This repository keeps human-readable summaries and full append-only machine records separate.
+This skill is for performance and efficiency evidence only. It does not establish correctness verification status for `RustBucketDeployment`.
 
 ## Source Of Truth
 
 - `docs/benchmark.md` is the human benchmark page.
 - `docs/benchmark-history.jsonl` is the append-only full benchmark history.
-- `docs/verification.md` is the human verification page.
-- `docs/verification-history.jsonl` is the append-only full verification history.
-- Raw AWS logs and CloudWatch extracts must stay outside git in scratch directories.
+- `docs/verification.md` and `docs/verification-history.jsonl` own correctness verification and must not use benchmark rows as verification evidence.
+- Raw AWS logs, CloudWatch extracts, and scratch outputs must stay outside git.
 
 ## Sanitization Rules
 
@@ -39,11 +37,11 @@ Never commit:
 - raw CloudWatch log exports
 - profile names
 
-Committed benchmark and verification records may include:
+Committed benchmark records may include:
 
 - region
 - commit SHA and subject
-- scenario/profile/variant/phase names
+- scenario, profile, variant, and phase names
 - sanitized durations and memory
 - sanitized aggregate counters
 - cleanup status
@@ -61,7 +59,7 @@ Use paired inputs for Rust vs AWS comparisons:
 - same repetition count
 - same stack suffix family
 
-Standard focused comparison:
+Standard focused Rust sequence:
 
 ```bash
 AWS_PROFILE=<profile> AWS_REGION=ap-southeast-2 AWS_DEFAULT_REGION=ap-southeast-2 \
@@ -145,104 +143,9 @@ Generate reports with:
 pnpm benchmark:report -- --input-file docs/benchmark-history.jsonl --run-id <run-id>
 ```
 
-## Verification Workflow
-
-Verification covers correctness of `RustBucketDeployment`, not benchmark efficiency and not comparison with upstream AWS CDK `BucketDeployment`.
-
-Use these categories:
-
-- `local`: unit tests, static checks, build/typecheck/lint, and local synthesis.
-- `aws`: deployed AWS end-to-end checks where the custom resource Lambda runs in AWS.
-
-Benchmark records and AWS `BucketDeployment` comparison records belong in `docs/benchmark-history.jsonl`, not verification history.
-
-Run local unit/static gates first:
-
-```bash
-pnpm rust:fmt
-pnpm rust:check
-cargo test --manifest-path rust/Cargo.toml
-pnpm build
-pnpm typecheck
-pnpm lint
-pnpm test
-```
-
-Local synthesis should cover public RustBucketDeployment examples:
-
-```bash
-pnpm example list
-pnpm example synth simple
-pnpm example synth replacement
-pnpm example synth metadata-filters
-pnpm example synth prune-update-v1
-pnpm example synth prune-update-v2
-pnpm example synth retain-on-delete-v1
-pnpm example synth retain-on-delete-v2
-pnpm example synth extract-false
-pnpm example synth retain-on-delete-false-v1
-pnpm example synth retain-on-delete-false-v2
-pnpm example synth retain-on-delete-false-bucket-only
-pnpm example synth multi-source-overwrite
-pnpm example synth large-archive
-pnpm example synth kms-destination
-pnpm example synth cloudfront-sync
-pnpm example synth cloudfront-async
-pnpm example synth benchmark-assets
-```
-
-AWS end-to-end scenarios deploy real stacks and must verify S3, KMS, CloudFormation, and CloudFront state where applicable. They include:
-
-- simple create/update/destroy
-- metadata and include/exclude filters
-- marker replacement
-- prune update
-- retain-on-delete update/delete
-- `extract=false`
-- `retainOnDelete=false` cleanup
-- duplicate multi-source overwrite order
-- larger archive ranged-read path
-- KMS-encrypted destination bucket
-- CloudFront sync and async invalidation
-
-Always destroy AWS verification stacks and verify they are absent before finalizing records. Raw AWS logs and resource identifiers stay in scratch only.
-
-## Verification Records
-
-Append one JSON object per verification scenario to `docs/verification-history.jsonl`.
-
-Recommended fields:
-
-- `schemaVersion`: current value `1`
-- `runId`
-- `runDate`
-- `commit`
-- `subject`
-- `region`
-- `category`: `local` or `aws`
-- `scenario`
-- `command`
-- `status`: `pass`, `fail`, `known-limitation`, or `not-run`
-- `evidence`
-- `cleanup`
-- `notes`
-
-Keep verification records sanitized. Do not include raw output or identifiers.
-
-## Verification Human Page
-
-Update `docs/verification.md` for humans after meaningful validation changes.
-
-The human page should include:
-
-- current coverage table
-- latest verification run summary
-- known limitations
-- pointers to `docs/verification-history.jsonl` for full history
-
 ## Final Checks
 
-Before committing benchmark or verification updates:
+Before committing benchmark updates:
 
 ```bash
 pnpm benchmark:report -- --input-file docs/benchmark-history.jsonl --run-id <run-id> --output-file /tmp/benchmark-report-check.md
