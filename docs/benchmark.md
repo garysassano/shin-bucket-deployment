@@ -90,13 +90,13 @@ The 1024 MiB setting is the preferred default because earlier `large-few` runs s
 
 Rust benchmark rows may include the sanitized `shin_deployment_summary` object emitted by the provider. The summary contains aggregate timings, counters, bytes, source range-read stats, and `PutObject` diagnostics, and intentionally omits bucket names, object keys, account IDs, distribution IDs, URLs, and ETags.
 
-Generate Markdown tables and text bar charts from committed or scratch JSONL records:
+Generate Markdown tables and SVG charts from committed or scratch JSONL records:
 
 ```bash
 pnpm benchmark:report -- --run-id 2026-05-02-large-few-memory-matrix
 ```
 
-The report groups records by profile, phase, implementation, and memory size. It includes medians, p90, min/max, compact Rust-vs-AWS insight tables, grouped per-phase metric details, and text visual summaries when paired implementation records exist.
+The report groups records by profile, phase, implementation, and memory size. It includes medians, p90, min/max, compact Rust-vs-AWS insight tables, grouped per-phase metric details, and generated SVG visual summaries when paired implementation records exist.
 
 Do not commit `.benchmark-runs/` raw output. Commit only curated aggregate results that do not include sensitive resource identifiers.
 
@@ -130,43 +130,9 @@ ShinBucketDeployment vs AWS BucketDeployment insight table:
 | Sparse update | 0.622 s vs 28.76 s (46.238x faster) | 66.53 s vs 108.05 s (1.624x faster) | 14.14 s vs 46.23 s (3.269x faster) | 89 MiB vs 214 MiB (58.411% lower) |
 | Prune update | 15.758 s vs 28.356 s (1.799x faster) | 88.43 s vs 107.79 s (1.219x faster) | 34.14 s vs 46.08 s (1.35x faster) | 95 MiB vs 214 MiB (55.607% lower) |
 
-Detailed per-phase metric comparisons are generated from `docs/benchmark-history.jsonl` using `pnpm benchmark:report`. The visual summaries below show the actual amount saved by ShinBucketDeployment instead of plotting two overlapping construct series.
+Detailed per-phase metric comparisons are generated from `docs/benchmark-history.jsonl` using `pnpm benchmark:report`. The visual summary below uses the same paired medians as the table and shows Lambda handler duration plus max memory in a hardware-benchmark style chart.
 
-Provider duration saved by ShinBucketDeployment:
-
-```text
-cold-create 1024           | ##############                 13.057 s faster (1.916x AWS/Rust)
-forced-unchanged 1024      | ############################## 27.804 s faster (61.443x AWS/Rust)
-sparse-update 1024         | ############################## 28.138 s faster (46.238x AWS/Rust)
-prune-update 1024          | #############                  12.598 s faster (1.799x AWS/Rust)
-```
-
-Local wall time saved by ShinBucketDeployment:
-
-```text
-cold-create 1024           | ################               22.54 s faster (1.163x AWS/Rust)
-forced-unchanged 1024      | #####################          28.47 s faster (1.491x AWS/Rust)
-sparse-update 1024         | ############################## 41.52 s faster (1.624x AWS/Rust)
-prune-update 1024          | ##############                 19.36 s faster (1.219x AWS/Rust)
-```
-
-CDK deploy time saved by ShinBucketDeployment:
-
-```text
-cold-create 1024           | ###################            19.93 s faster (1.281x AWS/Rust)
-forced-unchanged 1024      | ############################## 31.87 s faster (3.246x AWS/Rust)
-sparse-update 1024         | ############################## 32.09 s faster (3.269x AWS/Rust)
-prune-update 1024          | ###########                    11.94 s faster (1.35x AWS/Rust)
-```
-
-Max memory saved by ShinBucketDeployment:
-
-```text
-cold-create 1024           | ############################## 133 MiB lower (2.684x AWS/Rust)
-forced-unchanged 1024      | ############################   125 MiB lower (2.404x AWS/Rust)
-sparse-update 1024         | ############################   125 MiB lower (2.404x AWS/Rust)
-prune-update 1024          | ###########################    119 MiB lower (2.253x AWS/Rust)
-```
+![ShinBucketDeployment vs AWS BucketDeployment Lambda handler duration and max memory](benchmark-assets/shin-vs-aws-duration-memory.svg)
 
 Provider summary highlights:
 
