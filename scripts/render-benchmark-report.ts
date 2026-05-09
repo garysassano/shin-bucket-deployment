@@ -86,16 +86,18 @@ function renderReport(records: BenchmarkRecord[], options: RenderOptions): strin
     "",
     renderScope(comparable),
     "",
-    "## Metric Tables",
+    "## RustBucketDeployment vs AWS BucketDeployment",
     "",
-    ...METRICS.flatMap((metric) => renderMetricSection(comparable, metric)),
-    "## Rust vs AWS Comparison",
+    renderComparisonSummaryTable(comparable),
     "",
-    renderDetailedComparisonTable(comparable),
+    ...renderPhaseComparisonTables(comparable),
     "",
     "## Charts",
     "",
-    ...renderMetricComparisonCharts(comparable),
+    ...renderComparisonCharts(comparable),
+    "## Metric Tables",
+    "",
+    ...METRICS.flatMap((metric) => renderMetricSection(comparable, metric)),
     "",
   ].join("\n");
 }
@@ -162,47 +164,119 @@ function renderBarChart(rows: AggregatedRow[], unit: string): string {
   return ["```text", ...lines, "```"].join("\n");
 }
 
-function renderDetailedComparisonTable(records: BenchmarkRecord[]): string {
-  const rows = buildMetricComparisonRows(records);
+function renderComparisonSummaryTable(records: BenchmarkRecord[]): string {
+  const rows = buildPhaseComparisonRows(records);
   if (rows.length === 0) {
     return "No rust/aws pairs were available for comparison.";
   }
 
   return [
-    "| Profile | Phase | Memory MiB | Metric | Rust | AWS | AWS - Rust | AWS/Rust | AWS delta % |",
-    "| --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: |",
+    "| Profile | Phase | Memory MiB | Provider duration | Local wall time | CDK deploy time | Max memory |",
+    "| --- | --- | ---: | ---: | ---: | ---: | ---: |",
+    ...rows.map((row) => {
+      return `| ${row.profile} | ${row.phase} | ${row.memoryMb ?? ""} | ${formatOptionalComparisonCell(row.metrics.providerDurationSeconds)} | ${formatOptionalComparisonCell(row.metrics.localWallSeconds)} | ${formatOptionalComparisonCell(row.metrics.cdkDeploySeconds)} | ${formatOptionalMemoryCell(row.metrics.maxMemoryMb)} |`;
+    }),
+  ].join("\n");
+}
+
+function renderPhaseComparisonTables(records: BenchmarkRecord[]): string[] {
+  const rows = buildPhaseComparisonRows(records);
+  if (rows.length === 0) {
+    return [];
+  }
+
+  return rows.flatMap((phaseRow) => [
+    `### ${phaseTitle(phaseRow)}`,
+    "",
+    renderPhaseComparisonTable(phaseRow),
+    "",
+  ]);
+}
+
+function renderPhaseComparisonTable(phaseRow: PhaseComparisonRow): string {
+  const rows = METRICS.map((metric) => phaseRow.metrics[metric.name]).filter(
+    (row) => row !== undefined,
+  );
+  return [
+    "| Metric | RustBucketDeployment | AWS BucketDeployment | Difference | AWS/Rust | AWS delta % |",
+    "| --- | ---: | ---: | ---: | ---: | ---: |",
     ...rows.map(
       (row) =>
-        `| ${row.profile} | ${row.phase} | ${row.memoryMb ?? ""} | ${row.metricLabel} | ${formatValue(row.rust, row.unit)} | ${formatValue(row.aws, row.unit)} | ${formatSignedValue(row.diff, row.unit)} | ${formatRatio(row.ratio)} | ${formatSignedPercent(row.percentDelta)} |`,
+        `| ${row.metricLabel} | ${formatValue(row.rust, row.unit)} | ${formatValue(row.aws, row.unit)} | ${formatSignedValue(row.diff, row.unit)} | ${formatRatio(row.ratio)} | ${formatSignedPercent(row.percentDelta)} |`,
     ),
   ].join("\n");
 }
 
-function renderMetricComparisonCharts(records: BenchmarkRecord[]): string[] {
-  const sections: string[] = [];
-  for (const metric of METRICS) {
-    const pairs = metricPairs(records, metric.name);
-    if (pairs.length === 0) {
-      continue;
-    }
-    sections.push(`### ${metric.label}`, "", renderMermaidBarChart(metric, pairs), "");
+function renderComparisonCharts(records: BenchmarkRecord[]): string[] {
+  const rows = buildPhaseComparisonRows(records);
+  if (rows.length === 0) {
+    return ["No rust/aws pairs were available for charts.", ""];
   }
-  return sections.length === 0 ? ["No rust/aws pairs were available for charts.", ""] : sections;
+
+  return [
+    "### Provider Duration By Construct",
+    "",
+    renderConstructMetricChart(
+      { name: "providerDurationSeconds", label: "Provider duration", unit: "s" },
+      rows,
+    ),
+    "",
+    "### Local Wall Time By Construct",
+    "",
+    renderConstructMetricChart(
+      { name: "localWallSeconds", label: "Local wall time", unit: "s" },
+      rows,
+    ),
+    "",
+    "### Max Memory By Construct",
+    "",
+    renderConstructMetricChart({ name: "maxMemoryMb", label: "Max memory", unit: "MiB" }, rows),
+    "",
+    "### AWS/Rust Ratio By Phase",
+    "",
+    renderRatioChart(rows),
+    "",
+  ];
 }
 
-function renderMermaidBarChart(metric: MetricDefinition, rows: MetricPair[]): string {
-  const axisLabels = chartLabels(rows);
-  const max = Math.max(...rows.flatMap((row) => [row.rust, row.aws]), 0);
-  const axisMax = niceAxisMax(max);
+function renderRatioChart(rows: PhaseComparisonRow[]): string {
+  const axisLabels = phaseChartLabels(rows);
+  const providerRatios = rows.map((row) => row.metrics.providerDurationSeconds?.ratio ?? 0);
+  const wallRatios = rows.map((row) => row.metrics.localWallSeconds?.ratio ?? 0);
+  const deployRatios = rows.map((row) => row.metrics.cdkDeploySeconds?.ratio ?? 0);
+  const memoryRatios = rows.map((row) => row.metrics.maxMemoryMb?.ratio ?? 0);
+  const max = Math.max(...providerRatios, ...wallRatios, ...deployRatios, ...memoryRatios, 0);
 
   return [
     "```mermaid",
     "xychart-beta",
-    `  title "${escapeMermaidString(metric.label)} by Phase"`,
+    '  title "AWS BucketDeployment / RustBucketDeployment ratio"',
     `  x-axis [${axisLabels.map((label) => `"${escapeMermaidString(label)}"`).join(", ")}]`,
-    `  y-axis "${metric.unit}" 0 --> ${formatNumber(axisMax)}`,
-    `  bar "Rust" [${rows.map((row) => formatNumber(row.rust)).join(", ")}]`,
-    `  bar "AWS" [${rows.map((row) => formatNumber(row.aws)).join(", ")}]`,
+    `  y-axis "x" 0 --> ${formatNumber(niceAxisMax(max))}`,
+    `  bar "Provider duration" [${providerRatios.map(formatNumber).join(", ")}]`,
+    `  bar "Local wall time" [${wallRatios.map(formatNumber).join(", ")}]`,
+    `  bar "CDK deploy time" [${deployRatios.map(formatNumber).join(", ")}]`,
+    `  bar "Max memory" [${memoryRatios.map(formatNumber).join(", ")}]`,
+    "```",
+  ].join("\n");
+}
+
+function renderConstructMetricChart(metric: MetricDefinition, rows: PhaseComparisonRow[]): string {
+  const metricRows = rows.map((row) => row.metrics[metric.name]);
+  const rustValues = metricRows.map((row) => row?.rust ?? 0);
+  const awsValues = metricRows.map((row) => row?.aws ?? 0);
+  const max = Math.max(...rustValues, ...awsValues, 0);
+
+  return [
+    "```mermaid",
+    "xychart-beta",
+    `  title "${escapeMermaidString(metric.label)}: RustBucketDeployment vs AWS BucketDeployment"`,
+    `  x-axis [${phaseChartLabels(rows)
+      .map((label) => `"${escapeMermaidString(label)}"`)
+      .join(", ")}]`,
+    `  y-axis "${metric.unit}" 0 --> ${formatNumber(niceAxisMax(max))}`,
+    `  bar "RustBucketDeployment" [${rustValues.map(formatNumber).join(", ")}]`,
+    `  bar "AWS BucketDeployment" [${awsValues.map(formatNumber).join(", ")}]`,
     "```",
   ].join("\n");
 }
@@ -213,6 +287,7 @@ function buildMetricComparisonRows(records: BenchmarkRecord[]): MetricComparison
       profile: pair.profile,
       phase: pair.phase,
       memoryMb: pair.memoryMb,
+      metricName: metric.name,
       metricLabel: metric.label,
       metricIndex,
       unit: metric.unit,
@@ -225,11 +300,30 @@ function buildMetricComparisonRows(records: BenchmarkRecord[]): MetricComparison
   }).sort(compareMetricComparisonRows);
 }
 
-function chartLabels(rows: MetricPair[]): string[] {
+function buildPhaseComparisonRows(records: BenchmarkRecord[]): PhaseComparisonRow[] {
+  const rows = new Map<string, PhaseComparisonRow>();
+  for (const metricRow of buildMetricComparisonRows(records)) {
+    const key = comparisonKey(metricRow);
+    const row = rows.get(key) ?? {
+      profile: metricRow.profile,
+      phase: metricRow.phase,
+      memoryMb: metricRow.memoryMb,
+      metrics: {},
+    };
+    row.metrics[metricRow.metricName] = metricRow;
+    rows.set(key, row);
+  }
+  return [...rows.values()].sort(comparePhaseGroups);
+}
+
+function phaseTitle(row: PhaseComparisonRow): string {
+  const memory = row.memoryMb === null ? "" : ` at ${row.memoryMb} MiB`;
+  return `${row.profile} ${row.phase}${memory}`;
+}
+
+function phaseChartLabels(rows: PhaseComparisonRow[]): string[] {
   const profiles = unique(rows.map((row) => row.profile));
-  const memoryValues = unique(
-    rows.map((row) => (row.memoryMb === null ? null : String(row.memoryMb))),
-  );
+  const memoryValues = unique(rows.map((row) => row.memoryMb));
   return rows.map((row) => {
     const profile = profiles.length === 1 ? "" : `${row.profile} `;
     const memory = memoryValues.length === 1 ? "" : ` ${row.memoryMb ?? ""}`;
@@ -272,6 +366,7 @@ type MetricComparisonRow = {
   readonly profile: string;
   readonly phase: string;
   readonly memoryMb: number | null;
+  readonly metricName: MetricName;
   readonly metricLabel: string;
   readonly metricIndex: number;
   readonly unit: string;
@@ -280,6 +375,13 @@ type MetricComparisonRow = {
   readonly diff: number;
   readonly ratio: number;
   readonly percentDelta: number;
+};
+
+type PhaseComparisonRow = {
+  readonly profile: string;
+  readonly phase: string;
+  readonly memoryMb: number | null;
+  readonly metrics: Partial<Record<MetricName, MetricComparisonRow>>;
 };
 
 type MetricPair = {
@@ -398,8 +500,8 @@ function readRecords(path: string): BenchmarkRecord[] {
     .map((line) => JSON.parse(line) as BenchmarkRecord);
 }
 
-function unique(values: Array<string | null | undefined>): string[] {
-  return [...new Set(values.filter((value): value is string => !!value))];
+function unique<T>(values: Array<T | null | undefined>): T[] {
+  return [...new Set(values.filter((value): value is T => value !== null && value !== undefined))];
 }
 
 function formatNumber(value: number): string {
@@ -412,6 +514,22 @@ function formatValue(value: number, unit: string): string {
   return `${formatNumber(value)} ${unit}`;
 }
 
+function formatComparisonCell(row: MetricComparisonRow): string {
+  return `${formatValue(row.rust, row.unit)} vs ${formatValue(row.aws, row.unit)} (${formatRustAdvantage(row.ratio)})`;
+}
+
+function formatOptionalComparisonCell(row: MetricComparisonRow | undefined): string {
+  return row === undefined ? "" : formatComparisonCell(row);
+}
+
+function formatMemoryCell(row: MetricComparisonRow): string {
+  return `${formatValue(row.rust, row.unit)} vs ${formatValue(row.aws, row.unit)} (${formatMemoryAdvantage(row)})`;
+}
+
+function formatOptionalMemoryCell(row: MetricComparisonRow | undefined): string {
+  return row === undefined ? "" : formatMemoryCell(row);
+}
+
 function formatSignedValue(value: number, unit: string): string {
   const sign = value > 0 ? "+" : value < 0 ? "-" : "";
   return `${sign}${formatNumber(Math.abs(value))} ${unit}`;
@@ -419,6 +537,17 @@ function formatSignedValue(value: number, unit: string): string {
 
 function formatRatio(value: number): string {
   return `${formatNumber(value)}x`;
+}
+
+function formatRustAdvantage(value: number): string {
+  return value >= 1 ? `${formatRatio(value)} faster` : `${formatRatio(1 / value)} slower`;
+}
+
+function formatMemoryAdvantage(row: MetricComparisonRow): string {
+  const reduction = ((row.aws - row.rust) / row.aws) * 100;
+  return reduction >= 0
+    ? `${formatNumber(reduction)}% lower`
+    : `${formatNumber(Math.abs(reduction))}% higher`;
 }
 
 function formatSignedPercent(value: number): string {
