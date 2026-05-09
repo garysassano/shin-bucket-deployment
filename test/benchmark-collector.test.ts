@@ -187,11 +187,18 @@ describe("benchmark result collector", () => {
     expect(report).toContain("| Init duration | 0.1 s | 0.2 s | +0.1 s | 2x | +100% |");
     expect(report).toContain("| Max memory | 80 MiB | 180 MiB | +100 MiB | 2.25x | +125% |");
     expect(report).toContain("## Visual Summary");
-    expect(report).toContain("### Provider Duration Saved By ShinBucketDeployment");
+    expect(report).toContain("Lower is better for both Lambda handler duration and max memory.");
     expect(report).toContain(
-      "cold-create 1024           | ############################## 6 s faster (4x AWS/Rust)",
+      "![ShinBucketDeployment vs AWS BucketDeployment Lambda handler duration and max memory](report-assets/shin-vs-aws-duration-memory.svg)",
     );
-    expect(report).toContain("### Max Memory Saved By ShinBucketDeployment");
+    const svg = readFileSync(join(dir, "report-assets", "shin-vs-aws-duration-memory.svg"), "utf8");
+    expect(svg).toContain("<svg");
+    expect(svg).toContain("Profile");
+    expect(svg).toContain("mixed");
+    expect(svg).toContain("Lambda Handler Duration");
+    expect(svg).toContain("Max Memory Used");
+    expect(svg).toContain("4x faster");
+    expect(svg).toContain("55.556% lower");
     expect(report).not.toContain("xychart-beta");
   });
 });
