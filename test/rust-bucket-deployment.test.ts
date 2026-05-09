@@ -2,7 +2,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { App, Stack } from "aws-cdk-lib";
 import { Match, Template } from "aws-cdk-lib/assertions";
-import { Bucket } from "aws-cdk-lib/aws-s3";
+import { Key } from "aws-cdk-lib/aws-kms";
+import { Bucket, BucketEncryption } from "aws-cdk-lib/aws-s3";
 import { expect, test } from "vitest";
 import { RustBucketDeployment, Source } from "../src";
 import { testBundling } from "./test-bundling";
@@ -201,6 +202,43 @@ test("keeps delete and list permissions broad when retainOnDelete is false", () 
         Match.objectLike({
           Action: "s3:ListBucket",
           Condition: Match.absent(),
+        }),
+      ]),
+    },
+  });
+});
+
+test("grants destination KMS permissions when the destination bucket is encrypted", () => {
+  const stack = new Stack();
+  const key = new Key(stack, "Key");
+  const destinationBucket = new Bucket(stack, "Dest", {
+    encryption: BucketEncryption.KMS,
+    encryptionKey: key,
+  });
+
+  new RustBucketDeployment(stack, "Deploy", {
+    sources: [Source.asset(join(__dirname, "fixtures", "my-website"))],
+    destinationBucket,
+    destinationKeyPrefix: "site",
+    bundling: testBundling(),
+  });
+
+  const template = Template.fromStack(stack);
+
+  template.hasResourceProperties("AWS::IAM::Policy", {
+    PolicyDocument: {
+      Statement: Match.arrayWith([
+        Match.objectLike({
+          Action: Match.arrayWith([
+            "kms:Decrypt",
+            "kms:DescribeKey",
+            "kms:Encrypt",
+            "kms:ReEncrypt*",
+            "kms:GenerateDataKey*",
+          ]),
+          Resource: {
+            "Fn::GetAtt": ["Key961B73FD", "Arn"],
+          },
         }),
       ]),
     },
