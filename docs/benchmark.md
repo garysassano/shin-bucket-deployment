@@ -130,39 +130,33 @@ RustBucketDeployment vs AWS BucketDeployment insight table:
 | Sparse update | 0.376 s vs 9.612 s (25.564x faster) | 57.38 s vs 70.47 s (1.228x faster) | 14.02 s vs 26.41 s (1.884x faster) | 66 MiB vs 251 MiB (73.705% lower) |
 | Prune update | 3.296 s vs 9.204 s (2.792x faster) | 65.15 s vs 70.18 s (1.077x faster) | 21.98 s vs 26.53 s (1.207x faster) | 68 MiB vs 251 MiB (72.908% lower) |
 
-Detailed per-phase metric comparisons are generated from `docs/benchmark-history.jsonl` using `pnpm benchmark:report`. The human-facing charts below compare the two constructs directly.
+Detailed per-phase metric comparisons are generated from `docs/benchmark-history.jsonl` using `pnpm benchmark:report`. The visual summaries below show the actual amount saved by RustBucketDeployment instead of plotting two overlapping construct series.
 
-Provider duration by construct:
+Provider duration saved by RustBucketDeployment:
 
-```mermaid
-xychart-beta
-  title "Provider duration: RustBucketDeployment vs AWS BucketDeployment"
-  x-axis ["cold-create", "forced-unchanged", "sparse-update", "prune-update"]
-  y-axis "s" 0 --> 20
-  bar "RustBucketDeployment" [2.049, 0.203, 0.376, 3.296]
-  bar "AWS BucketDeployment" [9.988, 9.594, 9.612, 9.204]
+```text
+cold-create 1024           | ##########################     7.939 s faster (4.875x AWS/Rust)
+forced-unchanged 1024      | ############################## 9.391 s faster (47.261x AWS/Rust)
+sparse-update 1024         | #############################  9.236 s faster (25.564x AWS/Rust)
+prune-update 1024          | ###################            5.908 s faster (2.792x AWS/Rust)
 ```
 
-Local wall time by construct:
+Local wall time saved by RustBucketDeployment:
 
-```mermaid
-xychart-beta
-  title "Local wall time: RustBucketDeployment vs AWS BucketDeployment"
-  x-axis ["cold-create", "forced-unchanged", "sparse-update", "prune-update"]
-  y-axis "s" 0 --> 130
-  bar "RustBucketDeployment" [111.89, 57.56, 57.38, 65.15]
-  bar "AWS BucketDeployment" [107.91, 73.05, 70.47, 70.18]
+```text
+cold-create 1024           | <<<<<<<<                       3.98 s slower (0.964x AWS/Rust)
+forced-unchanged 1024      | ############################## 15.49 s faster (1.269x AWS/Rust)
+sparse-update 1024         | #########################      13.09 s faster (1.228x AWS/Rust)
+prune-update 1024          | ##########                     5.03 s faster (1.077x AWS/Rust)
 ```
 
-Max memory by construct:
+Max memory saved by RustBucketDeployment:
 
-```mermaid
-xychart-beta
-  title "Max memory: RustBucketDeployment vs AWS BucketDeployment"
-  x-axis ["cold-create", "forced-unchanged", "sparse-update", "prune-update"]
-  y-axis "MiB" 0 --> 280
-  bar "RustBucketDeployment" [66, 66, 66, 68]
-  bar "AWS BucketDeployment" [251, 251, 251, 251]
+```text
+cold-create 1024           | ############################## 185 MiB lower (3.803x AWS/Rust)
+forced-unchanged 1024      | ############################## 185 MiB lower (3.803x AWS/Rust)
+sparse-update 1024         | ############################## 185 MiB lower (3.803x AWS/Rust)
+prune-update 1024          | ############################## 183 MiB lower (3.691x AWS/Rust)
 ```
 
 Provider summary highlights:
