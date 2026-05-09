@@ -186,11 +186,12 @@ describe("benchmark result collector", () => {
     expect(report).toContain("| Provider duration | 2 s | 8 s | +6 s | 4x | +300% |");
     expect(report).toContain("| Init duration | 0.1 s | 0.2 s | +0.1 s | 2x | +100% |");
     expect(report).toContain("| Max memory | 80 MiB | 180 MiB | +100 MiB | 2.25x | +125% |");
-    expect(report).toContain("## Charts");
-    expect(report).toContain("AWS BucketDeployment / RustBucketDeployment ratio");
-    expect(report).toContain("xychart-beta");
-    expect(report).toContain('bar "Provider duration" [4]');
-    expect(report).toContain('bar "RustBucketDeployment" [2]');
-    expect(report).toContain('bar "AWS BucketDeployment" [8]');
+    expect(report).toContain("## Visual Summary");
+    expect(report).toContain("### Provider Duration Saved By RustBucketDeployment");
+    expect(report).toContain(
+      "cold-create 1024           | ############################## 6 s faster (4x AWS/Rust)",
+    );
+    expect(report).toContain("### Max Memory Saved By RustBucketDeployment");
+    expect(report).not.toContain("xychart-beta");
   });
 });
