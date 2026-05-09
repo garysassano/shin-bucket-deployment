@@ -17,7 +17,7 @@ This repository keeps human-readable summaries and full append-only machine reco
 
 ## Source Of Truth
 
-- `docs/benchmarking.md` is the human benchmark page.
+- `docs/benchmark.md` is the human benchmark page.
 - `docs/benchmark-history.jsonl` is the append-only full benchmark history.
 - `docs/verification.md` is the human verification page.
 - `docs/verification-history.jsonl` is the append-only full verification history.
@@ -121,7 +121,7 @@ Use `null` for unavailable values. Do not invent data.
 
 ## Benchmark Human Page
 
-After appending JSONL records, update `docs/benchmarking.md` `Current Results` for humans.
+After appending JSONL records, update `docs/benchmark.md` `Current Results` for humans.
 
 The human page should include:
 

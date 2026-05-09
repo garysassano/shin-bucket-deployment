@@ -91,12 +91,12 @@ Cataloged `Source.asset` packaging has these current limits:
 
 Use `Source.asset(path, { embeddedCatalog: false })` to opt out of cataloged packaging and use upstream CDK asset behavior.
 
-## Validation
+## Verification
 
-Local validation currently covers:
+Local verification currently covers:
 
 - Rust compile and unit tests for ranged entry reads, decompression, CRC validation, catalog parsing, destination planning, and marker replacement.
 - TypeScript synthesis tests for custom-resource properties and cataloged asset output.
 - TypeScript build, typecheck, lint, and Vitest suite.
 
-AWS validation on 2026-05-02 covered catalog sparse skips, source prefetch behavior, and changed-object overwrite behavior with the `large-few` benchmark profile at 512, 1024, and 2048 MiB. The detailed sanitized records live in `docs/benchmark-history.jsonl`.
+AWS verification on 2026-05-02 covered catalog sparse skips, source prefetch behavior, and changed-object overwrite behavior with the `large-few` benchmark profile at 512, 1024, and 2048 MiB. The detailed sanitized records live in `docs/benchmark-history.jsonl`.

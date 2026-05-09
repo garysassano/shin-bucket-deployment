@@ -22,8 +22,8 @@ Runbooks, evidence collection rules, and sanitization rules live in the repo-loc
 | --- | --- | --- | --- |
 | P0 | Rust provider tests | CloudFormation parsing, marker replacement, archive planning, destination prune planning, chunked hashing, MD5/ETag helpers, retryable body helpers, and `PutObject` retry policy helpers. | Pass as of 2026-05-02 |
 | P0 | S3 algorithm integration | Ignored Rust S3-to-S3 generated ZIP integration test with 2,500 generated files and bounded-memory ranged reads. | Pass as of 2026-05-02 |
-| P0 | TypeScript tests | CDK synthesis, custom resource properties, unsupported prop validation, provider singleton behavior. | Pass as of 2026-05-09 local validation |
-| P0 | Build and lint | TypeScript build/typecheck/lint and Rust checks. | Pass as of latest local validation runs |
+| P0 | TypeScript tests | CDK synthesis, custom resource properties, unsupported prop checks, provider singleton behavior. | Pass as of 2026-05-09 local verification |
+| P0 | Build and lint | TypeScript build/typecheck/lint and Rust checks. | Pass as of latest local verification runs |
 | P0 | Example synthesis | Public runner examples synthesize, including benchmark Rust and AWS variants. | Pass as of 2026-05-09 smoke checks |
 | P0 | Benchmark-backed Rust deployment | Mixed profile create, forced unchanged, sparse update, prune update, and destroy at 1024 MiB. | Pass as of 2026-05-09 |
 | P0 | Benchmark-backed AWS comparison deployment | Matching upstream AWS CDK `BucketDeployment` phases for the mixed profile at 1024 MiB. | Pass as of 2026-05-09 |
@@ -48,7 +48,7 @@ Runbooks, evidence collection rules, and sanitization rules live in the repo-loc
 | `2026-05-09-rust-aws-mixed-1024-fixed` | benchmark-backed | Rust mixed profile create/forced-unchanged/sparse/prune/destroy | Pass | Sanitized benchmark counters show expected upload, skip, and prune behavior after the destination read IAM fix. |
 | `2026-05-09-rust-aws-mixed-1024-fixed` | benchmark-backed | AWS BucketDeployment paired comparison | Pass | Matching upstream comparison stack completed the same phases and was destroyed. |
 
-Historical sanitized verification rows for 2026-04-25 and 2026-05-02 were migrated from the previous validation page into `docs/verification-history.jsonl` so the human page can stay concise while preserving full verification history.
+Historical sanitized verification rows for 2026-04-25 and 2026-05-02 were migrated into `docs/verification-history.jsonl` so the human page can stay concise while preserving full verification history.
 
 ## Known Limitations
 
