@@ -598,7 +598,7 @@ mod tests {
                     md5: "\"ABC123\"".to_string(),
                 },
                 EmbeddedCatalogEntry {
-                    path: ".sbd/catalog.v1.json".to_string(),
+                    path: ".shin/catalog.v1.json".to_string(),
                     md5: "ignored".to_string(),
                 },
             ],
@@ -610,7 +610,7 @@ mod tests {
             catalog.get("index.html").map(String::as_str),
             Some("abc123")
         );
-        assert!(!catalog.contains_key(".sbd/catalog.v1.json"));
+        assert!(!catalog.contains_key(".shin/catalog.v1.json"));
     }
 
     fn zip_from_entries(entries: &[(&str, &[u8])]) -> zip::ZipArchive<Cursor<Vec<u8>>> {

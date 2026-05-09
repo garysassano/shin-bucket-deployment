@@ -52,7 +52,7 @@ const EXAMPLES = {
     file: "benchmark-assets-app.js",
     stackHint: "AwsBucketDeploymentBenchmarkAssetsDemo",
     env: {
-      SBD_BENCH_IMPLEMENTATION: "aws",
+      SHIN_BENCH_IMPLEMENTATION: "aws",
     },
   },
   "prune-update": {

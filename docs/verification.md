@@ -2,7 +2,7 @@
 
 This page is the human-readable verification snapshot for `ShinBucketDeployment` correctness. Benchmarks and AWS CDK `BucketDeployment` comparisons are tracked separately in `docs/benchmark.md` and `docs/benchmark-history.jsonl`. Full sanitized verification history is append-only JSONL in `docs/verification-history.jsonl`.
 
-Runbooks, evidence collection rules, and sanitization rules live in the repo-local agent skill at `.agents/skills/sbd-verification/SKILL.md`.
+Runbooks, evidence collection rules, and sanitization rules live in the repo-local agent skill at `.agents/skills/shin-verification/SKILL.md`.
 
 ## Current Snapshot
 

@@ -77,7 +77,7 @@ Unsupported upstream props:
 
 ## How It Works
 
-For `extract=true`, the provider reads each source zip's central directory with ranged S3 `GetObject` requests, walks the archive entries, applies filters, and builds the deployment plan from the archive contents. Directory `Source.asset` inputs are packaged with an embedded `.sbd/catalog.v1.json` MD5 catalog so unchanged marker-free files can be skipped from destination metadata. Entry data is read through coalesced source blocks with a bounded resident window. Source GET concurrency and the source window are derived from `memoryLimit` by default and can be overridden through `advancedRuntimeTuning` when diagnosing unusual workloads. It does not download the whole archive and does not write the archive or extracted entries to Lambda `/tmp`.
+For `extract=true`, the provider reads each source zip's central directory with ranged S3 `GetObject` requests, walks the archive entries, applies filters, and builds the deployment plan from the archive contents. Directory `Source.asset` inputs are packaged with an embedded `.shin/catalog.v1.json` MD5 catalog so unchanged marker-free files can be skipped from destination metadata. Entry data is read through coalesced source blocks with a bounded resident window. Source GET concurrency and the source window are derived from `memoryLimit` by default and can be overridden through `advancedRuntimeTuning` when diagnosing unusual workloads. It does not download the whole archive and does not write the archive or extracted entries to Lambda `/tmp`.
 
 `ephemeralStorageSize` is accepted for upstream `BucketDeployment` API compatibility, but it is rarely useful for this provider because ZIP planning, extraction, hashing, and uploads avoid Lambda `/tmp`.
 
@@ -93,7 +93,7 @@ At the default 1024 MiB memory limit, adaptive source scheduling reserves about 
 
 CloudFront invalidation is created after S3 changes when `distribution` is provided. If `distributionPaths` is omitted, the default path is the destination prefix plus `*`, for example `/site/*`.
 
-The provider logs one sanitized `sbd_deployment_summary` JSON line per custom-resource request plus structured source scheduler and destination `PutObject` diagnostics to CloudWatch Logs. The summary includes phase timings and aggregate counters, but excludes bucket names, object keys, account IDs, distribution IDs, URLs, and ETags.
+The provider logs one sanitized `shin_deployment_summary` JSON line per custom-resource request plus structured source scheduler and destination `PutObject` diagnostics to CloudWatch Logs. The summary includes phase timings and aggregate counters, but excludes bucket names, object keys, account IDs, distribution IDs, URLs, and ETags.
 
 ## Limits
 

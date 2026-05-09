@@ -31,7 +31,7 @@ This matrix is point-in-time documentation. Re-check it when `s3-unspool` change
 | Small bounded entry streaming buffers | Implemented with the same defaults as the local `s3-unspool` extraction path: 64 KiB entry read buffers, 256 KiB S3 body chunks, and 1 MiB body pipe capacity. |
 | Destination prefix list as comparison input | Implemented. Destination `ListObjectsV2` drives skip and prune decisions. |
 | Destination size short-circuit | Implemented. Existing objects with different listed size upload without pre-hashing. |
-| Embedded MD5 catalog runtime support | Implemented. Existing `.sbd/catalog.v1.json` entries are consumed. |
+| Embedded MD5 catalog runtime support | Implemented. Existing `.shin/catalog.v1.json` entries are consumed. |
 | Cataloged asset production | Implemented for local directory `Source.asset` inputs through this construct's `Source` wrapper. |
 | Catalog sparse skip | Implemented. Marker-free files with catalog MD5 and matching destination size/ETag are skipped without reading entry data. |
 | Destination write preconditions | Implemented for extracted uploads. Missing destination keys use `If-None-Match: *`; existing keys with listed `ETag`s use `If-Match`; existing keys without usable `ETag`s fall back to plain `PutObject`. |
@@ -82,7 +82,7 @@ Cataloged `Source.asset` packaging has these current limits:
 
 - Local directory assets are cataloged by default.
 - Local `.zip` files and `Source.bucket` archives are not rewritten.
-- Caller-provided ZIPs still benefit from catalog skips if they already contain `.sbd/catalog.v1.json`.
+- Caller-provided ZIPs still benefit from catalog skips if they already contain `.shin/catalog.v1.json`.
 - CDK asset `bundling` is not executed by the cataloged wrapper.
 - Symlinks are rejected by cataloged packaging.
 - The wrapper writes a temporary ZIP during synth/package time on the local machine.

@@ -35,7 +35,7 @@ const ADAPTIVE_CACHE_LARGE_RSS_SLACK: u64 = 384 * 1024 * 1024;
 const ADAPTIVE_CACHE_MAX_WINDOW_BYTES: u64 = 512 * 1024 * 1024;
 const ADAPTIVE_SOURCE_GET_MEMORY_STEP_MB: u64 = 256;
 const ADAPTIVE_SOURCE_MAX_GET_CONCURRENCY: usize = 8;
-const EMBEDDED_CATALOG_PATH: &str = ".sbd/catalog.v1.json";
+const EMBEDDED_CATALOG_PATH: &str = ".shin/catalog.v1.json";
 const EMBEDDED_CATALOG_VERSION: u32 = 1;
 const EMBEDDED_CATALOG_MAX_BYTES: u64 = 64 * 1024 * 1024;
 
@@ -234,8 +234,8 @@ mod aws_integration_tests {
         };
 
         let suffix = Uuid::new_v4().simple().to_string();
-        let source_bucket = format!("sbd-it-src-{}", &suffix[..24]);
-        let destination_bucket = format!("sbd-it-dst-{}", &suffix[..24]);
+        let source_bucket = format!("shin-it-src-{}", &suffix[..24]);
+        let destination_bucket = format!("shin-it-dst-{}", &suffix[..24]);
         let prefix = format!("integration/{suffix}");
 
         create_bucket(&source_s3, &source_bucket, &region).await?;
@@ -243,7 +243,7 @@ mod aws_integration_tests {
 
         let result: Result<()> = async {
             let file_count = env_usize(
-                "SBD_AWS_INTEGRATION_FILE_COUNT",
+                "SHIN_AWS_INTEGRATION_FILE_COUNT",
                 DEFAULT_AWS_INTEGRATION_FILE_COUNT,
             )?;
             let plain_zip_key = "plain.zip";
