@@ -433,25 +433,29 @@ For branch comparisons:
 
 Mixed Rust/AWS comparison:
 
-| Implementation | Phase | Variant | CDK deploy time | Local wall time | Provider duration | Billed duration | Init duration | Max memory |
-| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Rust | Cold create | `v1` | 66.30 s | 111.89 s | 2.049 s | 2.188 s | 0.139 s | 66 MB |
-| AWS | Cold create | `v1` | 70.70 s | 107.91 s | 9.988 s | 10.535 s | 0.547 s | 251 MB |
-| Rust | Forced unchanged | `v1` | 14.24 s | 57.56 s | 0.203 s | 0.203 s | n/a | 66 MB |
-| AWS | Forced unchanged | `v1` | 26.50 s | 73.05 s | 9.594 s | 9.594 s | n/a | 251 MB |
-| Rust | Sparse update | `v2` | 14.02 s | 57.38 s | 0.376 s | 0.377 s | n/a | 66 MB |
-| AWS | Sparse update | `v2` | 26.41 s | 70.47 s | 9.612 s | 9.612 s | n/a | 251 MB |
-| Rust | Prune update | `pruned` | 21.98 s | 65.15 s | 3.296 s | 3.296 s | n/a | 68 MB |
-| AWS | Prune update | `pruned` | 26.53 s | 70.18 s | 9.204 s | 9.204 s | n/a | 251 MB |
-
-Provider duration and memory ratios:
-
 | Phase | Rust duration | AWS duration | AWS/Rust duration | Rust max memory | AWS max memory | AWS/Rust memory |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | Cold create | 2.049 s | 9.988 s | 4.875x | 66 MB | 251 MB | 3.803x |
 | Forced unchanged | 0.203 s | 9.594 s | 47.261x | 66 MB | 251 MB | 3.803x |
 | Sparse update | 0.376 s | 9.612 s | 25.564x | 66 MB | 251 MB | 3.803x |
 | Prune update | 3.296 s | 9.204 s | 2.792x | 68 MB | 251 MB | 3.691x |
+
+Provider duration by phase:
+
+```text
+mixed cold-create 1024
+  rust | ######                         2.049 s
+  aws  | ############################## 9.988 s
+mixed forced-unchanged 1024
+  rust | #                              0.203 s
+  aws  | #############################  9.594 s
+mixed sparse-update 1024
+  rust | #                              0.376 s
+  aws  | #############################  9.612 s
+mixed prune-update 1024
+  rust | ##########                     3.296 s
+  aws  | ############################   9.204 s
+```
 
 Provider summary highlights:
 

@@ -178,9 +178,11 @@ describe("benchmark result collector", () => {
     expect(readFileSync(outputFile, "utf8")).toEqual(report);
     expect(report).toContain("Benchmark Report: comparison");
     expect(report).toContain("| mixed | cold-create | 1024 | rust | 1 | 2 | 2 | 2 | 2 |");
-    expect(report).toContain("### Provider Duration");
-    expect(report).toContain("| mixed | cold-create | 1024 | 2 | 8 | 4x |");
-    expect(report).toContain("### Max Memory");
-    expect(report).toContain("| mixed | cold-create | 1024 | 80 | 180 | 2.25x |");
+    expect(report).toContain("## Rust vs AWS Comparison");
+    expect(report).toContain("| mixed | cold-create | 1024 | 2 | 8 | 4x | 80 | 180 | 2.25x |");
+    expect(report).toContain("### Provider Duration By Phase");
+    expect(report).toContain("mixed cold-create 1024");
+    expect(report).toContain("  rust | ########");
+    expect(report).toContain("  aws  | ############################## 8 s");
   });
 });
