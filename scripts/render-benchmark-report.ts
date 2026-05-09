@@ -78,7 +78,21 @@ function renderReport(records: BenchmarkRecord[], options: RenderOptions): strin
     ...METRICS.flatMap((metric) => renderMetricSection(comparable, metric)),
     "## Comparison Ratios",
     "",
-    renderRatioTable(comparable, "providerDurationSeconds"),
+    "### Provider Duration",
+    "",
+    renderRatioTable(comparable, {
+      name: "providerDurationSeconds",
+      unit: "s",
+      noPairsMessage: "No rust/aws pairs were available for provider-duration ratios.",
+    }),
+    "",
+    "### Max Memory",
+    "",
+    renderRatioTable(comparable, {
+      name: "maxMemoryMb",
+      unit: "MiB",
+      noPairsMessage: "No rust/aws pairs were available for max-memory ratios.",
+    }),
     "",
   ].join("\n");
 }
@@ -145,8 +159,11 @@ function renderBarChart(rows: AggregatedRow[], unit: string): string {
   return ["```text", ...lines, "```"].join("\n");
 }
 
-function renderRatioTable(records: BenchmarkRecord[], metric: MetricName): string {
-  const rows = aggregateRows(records, metric);
+function renderRatioTable(
+  records: BenchmarkRecord[],
+  metric: { name: MetricName; unit: string; noPairsMessage: string },
+): string {
+  const rows = aggregateRows(records, metric.name);
   const grouped = new Map<string, AggregatedRow[]>();
   for (const row of rows) {
     const key = `${row.profile}\u0000${row.phase}\u0000${row.memoryMb ?? ""}`;
@@ -167,11 +184,11 @@ function renderRatioTable(records: BenchmarkRecord[], metric: MetricName): strin
     .filter((row) => row !== undefined);
 
   if (ratioRows.length === 0) {
-    return "No rust/aws pairs were available for provider-duration ratios.";
+    return metric.noPairsMessage;
   }
 
   return [
-    "| Profile | Phase | Memory MiB | Rust median (s) | AWS median (s) | AWS/Rust |",
+    `| Profile | Phase | Memory MiB | Rust median (${metric.unit}) | AWS median (${metric.unit}) | AWS/Rust |`,
     "| --- | --- | ---: | ---: | ---: | ---: |",
     ...ratioRows.map(
       ({ aws, rust, ratio }) =>

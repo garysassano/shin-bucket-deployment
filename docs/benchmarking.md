@@ -444,14 +444,14 @@ Mixed Rust/AWS comparison:
 | Rust | Prune update | `pruned` | 21.98 s | 65.15 s | 3.296 s | 3.296 s | n/a | 68 MB |
 | AWS | Prune update | `pruned` | 26.53 s | 70.18 s | 9.204 s | 9.204 s | n/a | 251 MB |
 
-Provider duration ratios:
+Provider duration and memory ratios:
 
-| Phase | Rust median | AWS median | AWS/Rust |
-| --- | ---: | ---: | ---: |
-| Cold create | 2.049 s | 9.988 s | 4.875x |
-| Forced unchanged | 0.203 s | 9.594 s | 47.261x |
-| Sparse update | 0.376 s | 9.612 s | 25.564x |
-| Prune update | 3.296 s | 9.204 s | 2.792x |
+| Phase | Rust duration | AWS duration | AWS/Rust duration | Rust max memory | AWS max memory | AWS/Rust memory |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Cold create | 2.049 s | 9.988 s | 4.875x | 66 MB | 251 MB | 3.803x |
+| Forced unchanged | 0.203 s | 9.594 s | 47.261x | 66 MB | 251 MB | 3.803x |
+| Sparse update | 0.376 s | 9.612 s | 25.564x | 66 MB | 251 MB | 3.803x |
+| Prune update | 3.296 s | 9.204 s | 2.792x | 68 MB | 251 MB | 3.691x |
 
 Provider summary highlights:
 
