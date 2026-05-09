@@ -178,19 +178,19 @@ describe("benchmark result collector", () => {
     expect(readFileSync(outputFile, "utf8")).toEqual(report);
     expect(report).toContain("Benchmark Report: comparison");
     expect(report).toContain("| mixed | cold-create | 1024 | rust | 1 | 2 | 2 | 2 | 2 |");
-    expect(report).toContain("## Rust vs AWS Comparison");
+    expect(report).toContain("## RustBucketDeployment vs AWS BucketDeployment");
     expect(report).toContain(
-      "| mixed | cold-create | 1024 | Provider duration | 2 s | 8 s | +6 s | 4x | +300% |",
+      "| mixed | cold-create | 1024 | 2 s vs 8 s (4x faster) | 90 s vs 120 s (1.333x faster) | 60 s vs 90 s (1.5x faster) | 80 MiB vs 180 MiB (55.556% lower) |",
     );
-    expect(report).toContain(
-      "| mixed | cold-create | 1024 | Init duration | 0.1 s | 0.2 s | +0.1 s | 2x | +100% |",
-    );
-    expect(report).toContain(
-      "| mixed | cold-create | 1024 | Max memory | 80 MiB | 180 MiB | +100 MiB | 2.25x | +125% |",
-    );
+    expect(report).toContain("### mixed cold-create at 1024 MiB");
+    expect(report).toContain("| Provider duration | 2 s | 8 s | +6 s | 4x | +300% |");
+    expect(report).toContain("| Init duration | 0.1 s | 0.2 s | +0.1 s | 2x | +100% |");
+    expect(report).toContain("| Max memory | 80 MiB | 180 MiB | +100 MiB | 2.25x | +125% |");
     expect(report).toContain("## Charts");
+    expect(report).toContain("AWS BucketDeployment / RustBucketDeployment ratio");
     expect(report).toContain("xychart-beta");
-    expect(report).toContain('bar "Rust" [2]');
-    expect(report).toContain('bar "AWS" [8]');
+    expect(report).toContain('bar "Provider duration" [4]');
+    expect(report).toContain('bar "RustBucketDeployment" [2]');
+    expect(report).toContain('bar "AWS BucketDeployment" [8]');
   });
 });

@@ -96,7 +96,7 @@ Generate Markdown tables and text bar charts from committed or scratch JSONL rec
 pnpm benchmark:report -- --run-id 2026-05-02-large-few-memory-matrix
 ```
 
-The report groups records by profile, phase, implementation, and memory size. It includes medians, p90, min/max, detailed Rust-vs-AWS metric comparisons, and generated Mermaid charts when paired implementation records exist.
+The report groups records by profile, phase, implementation, and memory size. It includes medians, p90, min/max, compact Rust-vs-AWS insight tables, grouped per-phase metric details, and generated Mermaid charts when paired implementation records exist.
 
 Do not commit `.benchmark-runs/` raw output. Commit only curated aggregate results that do not include sensitive resource identifiers.
 
@@ -121,41 +121,48 @@ Every committed benchmark result is represented as sanitized records in `docs/be
 | Cleanup | All benchmark stacks destroyed after collection |
 | Notes | Paired Rust/AWS comparison. Forced unchanged rows used `RBD_BENCH_WAIT=false` on a stack with no CloudFront distribution. Rust rows include sanitized provider summary counters in `docs/benchmark-history.jsonl`. The first attempted Rust update exposed the destination `s3:GetObject` IAM gap; this snapshot records the rerun after the fix. |
 
-Mixed Rust/AWS comparison by metric:
+RustBucketDeployment vs AWS BucketDeployment insight table:
 
-| Phase | Metric | Rust | AWS | AWS - Rust | AWS/Rust | AWS delta % |
-| --- | --- | ---: | ---: | ---: | ---: | ---: |
-| Cold create | Provider duration | 2.049 s | 9.988 s | +7.939 s | 4.875x | +387.457% |
-| Cold create | Billed duration | 2.188 s | 10.535 s | +8.347 s | 4.815x | +381.49% |
-| Cold create | Init duration | 0.139 s | 0.547 s | +0.408 s | 3.935x | +293.525% |
-| Cold create | Local wall time | 111.89 s | 107.91 s | -3.98 s | 0.964x | -3.557% |
-| Cold create | CDK deploy time | 66.3 s | 70.7 s | +4.4 s | 1.066x | +6.637% |
-| Cold create | Max memory | 66 MiB | 251 MiB | +185 MiB | 3.803x | +280.303% |
-| Forced unchanged | Provider duration | 0.203 s | 9.594 s | +9.391 s | 47.261x | +4626.108% |
-| Forced unchanged | Billed duration | 0.203 s | 9.594 s | +9.391 s | 47.261x | +4626.108% |
-| Forced unchanged | Local wall time | 57.56 s | 73.05 s | +15.49 s | 1.269x | +26.911% |
-| Forced unchanged | CDK deploy time | 14.24 s | 26.5 s | +12.26 s | 1.861x | +86.096% |
-| Forced unchanged | Max memory | 66 MiB | 251 MiB | +185 MiB | 3.803x | +280.303% |
-| Sparse update | Provider duration | 0.376 s | 9.612 s | +9.236 s | 25.564x | +2456.383% |
-| Sparse update | Billed duration | 0.377 s | 9.612 s | +9.235 s | 25.496x | +2449.602% |
-| Sparse update | Local wall time | 57.38 s | 70.47 s | +13.09 s | 1.228x | +22.813% |
-| Sparse update | CDK deploy time | 14.02 s | 26.41 s | +12.39 s | 1.884x | +88.374% |
-| Sparse update | Max memory | 66 MiB | 251 MiB | +185 MiB | 3.803x | +280.303% |
-| Prune update | Provider duration | 3.296 s | 9.204 s | +5.908 s | 2.792x | +179.248% |
-| Prune update | Billed duration | 3.296 s | 9.204 s | +5.908 s | 2.792x | +179.248% |
-| Prune update | Local wall time | 65.15 s | 70.18 s | +5.03 s | 1.077x | +7.721% |
-| Prune update | CDK deploy time | 21.98 s | 26.53 s | +4.55 s | 1.207x | +20.701% |
-| Prune update | Max memory | 68 MiB | 251 MiB | +183 MiB | 3.691x | +269.118% |
+| Phase | Provider duration | Local wall time | CDK deploy time | Max memory |
+| --- | ---: | ---: | ---: | ---: |
+| Cold create | 2.049 s vs 9.988 s (4.875x faster) | 111.89 s vs 107.91 s (1.037x slower) | 66.3 s vs 70.7 s (1.066x faster) | 66 MiB vs 251 MiB (73.705% lower) |
+| Forced unchanged | 0.203 s vs 9.594 s (47.261x faster) | 57.56 s vs 73.05 s (1.269x faster) | 14.24 s vs 26.5 s (1.861x faster) | 66 MiB vs 251 MiB (73.705% lower) |
+| Sparse update | 0.376 s vs 9.612 s (25.564x faster) | 57.38 s vs 70.47 s (1.228x faster) | 14.02 s vs 26.41 s (1.884x faster) | 66 MiB vs 251 MiB (73.705% lower) |
+| Prune update | 3.296 s vs 9.204 s (2.792x faster) | 65.15 s vs 70.18 s (1.077x faster) | 21.98 s vs 26.53 s (1.207x faster) | 68 MiB vs 251 MiB (72.908% lower) |
 
-Metric charts are generated from `docs/benchmark-history.jsonl` using `pnpm benchmark:report`. Example provider-duration chart:
+Detailed per-phase metric comparisons are generated from `docs/benchmark-history.jsonl` using `pnpm benchmark:report`. The human-facing charts below compare the two constructs directly.
+
+Provider duration by construct:
 
 ```mermaid
 xychart-beta
-  title "Provider duration by Phase"
+  title "Provider duration: RustBucketDeployment vs AWS BucketDeployment"
   x-axis ["cold-create", "forced-unchanged", "sparse-update", "prune-update"]
   y-axis "s" 0 --> 20
-  bar "Rust" [2.049, 0.203, 0.376, 3.296]
-  bar "AWS" [9.988, 9.594, 9.612, 9.204]
+  bar "RustBucketDeployment" [2.049, 0.203, 0.376, 3.296]
+  bar "AWS BucketDeployment" [9.988, 9.594, 9.612, 9.204]
+```
+
+Local wall time by construct:
+
+```mermaid
+xychart-beta
+  title "Local wall time: RustBucketDeployment vs AWS BucketDeployment"
+  x-axis ["cold-create", "forced-unchanged", "sparse-update", "prune-update"]
+  y-axis "s" 0 --> 130
+  bar "RustBucketDeployment" [111.89, 57.56, 57.38, 65.15]
+  bar "AWS BucketDeployment" [107.91, 73.05, 70.47, 70.18]
+```
+
+Max memory by construct:
+
+```mermaid
+xychart-beta
+  title "Max memory: RustBucketDeployment vs AWS BucketDeployment"
+  x-axis ["cold-create", "forced-unchanged", "sparse-update", "prune-update"]
+  y-axis "MiB" 0 --> 280
+  bar "RustBucketDeployment" [66, 66, 66, 68]
+  bar "AWS BucketDeployment" [251, 251, 251, 251]
 ```
 
 Provider summary highlights:
