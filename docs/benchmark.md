@@ -96,7 +96,7 @@ Generate Markdown tables and text bar charts from committed or scratch JSONL rec
 pnpm benchmark:report -- --run-id 2026-05-02-large-few-memory-matrix
 ```
 
-The report groups records by profile, phase, implementation, and memory size. It includes medians, p90, min/max, compact Rust-vs-AWS insight tables, grouped per-phase metric details, and generated Mermaid charts when paired implementation records exist.
+The report groups records by profile, phase, implementation, and memory size. It includes medians, p90, min/max, compact Rust-vs-AWS insight tables, grouped per-phase metric details, and text visual summaries when paired implementation records exist.
 
 Do not commit `.benchmark-runs/` raw output. Commit only curated aggregate results that do not include sensitive resource identifiers.
 
@@ -109,63 +109,72 @@ Every committed benchmark result is represented as sanitized records in `docs/be
 | Field | Value |
 | --- | --- |
 | Run date | 2026-05-09 |
-| Provider implementation commit | `4f5f0ca` (`allow destination reads for replacements`) |
+| Provider implementation commit | `69ad582` (`use bucket grants for destination writes`) |
 | Result documentation commit | Pending |
 | Region | `ap-southeast-2` |
 | Implementations | `rust`, `aws` |
-| Profile | `mixed` |
+| Profile | `tiny-many` |
 | Baseline variant | `v1` |
-| Baseline bundle | 442 files, 52,904,649 bytes |
-| Comparison variants | `v2`: 442 files, 52,904,649 bytes; `pruned`: 397 files, 48,185,955 bytes |
+| Baseline bundle | 2,584 files, 8,178,618 bytes |
+| Comparison variants | `v2`: 2,584 files, 8,178,618 bytes; `pruned`: 2,325 files, 7,332,858 bytes |
 | Provider memory | 1024 MiB |
 | Cleanup | All benchmark stacks destroyed after collection |
-| Notes | Paired Rust/AWS comparison. Forced unchanged rows used `RBD_BENCH_WAIT=false` on a stack with no CloudFront distribution. Rust rows include sanitized provider summary counters in `docs/benchmark-history.jsonl`. The first attempted Rust update exposed the destination `s3:GetObject` IAM gap; this snapshot records the rerun after the fix. |
+| Notes | Paired Rust/AWS comparison for the many-small-files profile. Forced unchanged rows used `RBD_BENCH_WAIT=false` on a stack with no CloudFront distribution. Rust rows include sanitized provider summary counters in `docs/benchmark-history.jsonl`. |
 
 RustBucketDeployment vs AWS BucketDeployment insight table:
 
 | Phase | Provider duration | Local wall time | CDK deploy time | Max memory |
 | --- | ---: | ---: | ---: | ---: |
-| Cold create | 2.049 s vs 9.988 s (4.875x faster) | 111.89 s vs 107.91 s (1.037x slower) | 66.3 s vs 70.7 s (1.066x faster) | 66 MiB vs 251 MiB (73.705% lower) |
-| Forced unchanged | 0.203 s vs 9.594 s (47.261x faster) | 57.56 s vs 73.05 s (1.269x faster) | 14.24 s vs 26.5 s (1.861x faster) | 66 MiB vs 251 MiB (73.705% lower) |
-| Sparse update | 0.376 s vs 9.612 s (25.564x faster) | 57.38 s vs 70.47 s (1.228x faster) | 14.02 s vs 26.41 s (1.884x faster) | 66 MiB vs 251 MiB (73.705% lower) |
-| Prune update | 3.296 s vs 9.204 s (2.792x faster) | 65.15 s vs 70.18 s (1.077x faster) | 21.98 s vs 26.53 s (1.207x faster) | 68 MiB vs 251 MiB (72.908% lower) |
+| Cold create | 14.259 s vs 27.316 s (1.916x faster) | 138.37 s vs 160.91 s (1.163x faster) | 70.89 s vs 90.82 s (1.281x faster) | 79 MiB vs 212 MiB (62.736% lower) |
+| Forced unchanged | 0.46 s vs 28.264 s (61.443x faster) | 57.93 s vs 86.4 s (1.491x faster) | 14.19 s vs 46.06 s (3.246x faster) | 89 MiB vs 214 MiB (58.411% lower) |
+| Sparse update | 0.622 s vs 28.76 s (46.238x faster) | 66.53 s vs 108.05 s (1.624x faster) | 14.14 s vs 46.23 s (3.269x faster) | 89 MiB vs 214 MiB (58.411% lower) |
+| Prune update | 15.758 s vs 28.356 s (1.799x faster) | 88.43 s vs 107.79 s (1.219x faster) | 34.14 s vs 46.08 s (1.35x faster) | 95 MiB vs 214 MiB (55.607% lower) |
 
 Detailed per-phase metric comparisons are generated from `docs/benchmark-history.jsonl` using `pnpm benchmark:report`. The visual summaries below show the actual amount saved by RustBucketDeployment instead of plotting two overlapping construct series.
 
 Provider duration saved by RustBucketDeployment:
 
 ```text
-cold-create 1024           | ##########################     7.939 s faster (4.875x AWS/Rust)
-forced-unchanged 1024      | ############################## 9.391 s faster (47.261x AWS/Rust)
-sparse-update 1024         | #############################  9.236 s faster (25.564x AWS/Rust)
-prune-update 1024          | ###################            5.908 s faster (2.792x AWS/Rust)
+cold-create 1024           | ##############                 13.057 s faster (1.916x AWS/Rust)
+forced-unchanged 1024      | ############################## 27.804 s faster (61.443x AWS/Rust)
+sparse-update 1024         | ############################## 28.138 s faster (46.238x AWS/Rust)
+prune-update 1024          | #############                  12.598 s faster (1.799x AWS/Rust)
 ```
 
 Local wall time saved by RustBucketDeployment:
 
 ```text
-cold-create 1024           | <<<<<<<<                       3.98 s slower (0.964x AWS/Rust)
-forced-unchanged 1024      | ############################## 15.49 s faster (1.269x AWS/Rust)
-sparse-update 1024         | #########################      13.09 s faster (1.228x AWS/Rust)
-prune-update 1024          | ##########                     5.03 s faster (1.077x AWS/Rust)
+cold-create 1024           | ################               22.54 s faster (1.163x AWS/Rust)
+forced-unchanged 1024      | #####################          28.47 s faster (1.491x AWS/Rust)
+sparse-update 1024         | ############################## 41.52 s faster (1.624x AWS/Rust)
+prune-update 1024          | ##############                 19.36 s faster (1.219x AWS/Rust)
+```
+
+CDK deploy time saved by RustBucketDeployment:
+
+```text
+cold-create 1024           | ###################            19.93 s faster (1.281x AWS/Rust)
+forced-unchanged 1024      | ############################## 31.87 s faster (3.246x AWS/Rust)
+sparse-update 1024         | ############################## 32.09 s faster (3.269x AWS/Rust)
+prune-update 1024          | ###########                    11.94 s faster (1.35x AWS/Rust)
 ```
 
 Max memory saved by RustBucketDeployment:
 
 ```text
-cold-create 1024           | ############################## 185 MiB lower (3.803x AWS/Rust)
-forced-unchanged 1024      | ############################## 185 MiB lower (3.803x AWS/Rust)
-sparse-update 1024         | ############################## 185 MiB lower (3.803x AWS/Rust)
-prune-update 1024          | ############################## 183 MiB lower (3.691x AWS/Rust)
+cold-create 1024           | ############################## 133 MiB lower (2.684x AWS/Rust)
+forced-unchanged 1024      | ############################   125 MiB lower (2.404x AWS/Rust)
+sparse-update 1024         | ############################   125 MiB lower (2.404x AWS/Rust)
+prune-update 1024          | ###########################    119 MiB lower (2.253x AWS/Rust)
 ```
 
 Provider summary highlights:
 
 | Implementation | Phase | Uploaded objects | Skipped objects | Deleted objects | Uploaded bytes | Source fetched bytes |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| Rust | Cold create | 443 | 0 | 0 | 52,904,739 | 388,708 |
-| Rust | Forced unchanged | 0 | 443 | 0 | 0 | 13,133 |
-| Rust | Sparse update | 7 | 436 | 0 | 1,379,280 | 307,728 |
-| Rust | Prune update | 398 | 0 | 45 | 48,186,049 | 351,670 |
+| Rust | Cold create | 2,585 | 0 | 0 | 8,178,712 | 856,771 |
+| Rust | Forced unchanged | 0 | 2,585 | 0 | 0 | 74,147 |
+| Rust | Sparse update | 3 | 2,582 | 0 | 20,806 | 74,943 |
+| Rust | Prune update | 2,326 | 0 | 259 | 7,332,956 | 770,804 |
 
-These results validate that the ranged, no-disk ZIP path stays comfortably below the 1024 MiB default for the `mixed` profile. The highest reported Rust memory in this paired run was 68 MB, compared with 251 MB for upstream AWS `BucketDeployment`. Rust provider duration was lower in every measured phase, especially unchanged and sparse updates where the embedded catalog avoided per-object source hashing.
+These results validate the many-small-files path at the 1024 MiB default. The highest reported Rust memory in this paired run was 95 MB, compared with 214 MB for upstream AWS `BucketDeployment`. Rust provider duration was lower in every measured phase, with the largest relative gains on unchanged and sparse updates where the embedded catalog avoided per-object source hashing.
