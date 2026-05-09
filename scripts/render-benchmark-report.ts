@@ -51,7 +51,6 @@ type ChartTheme = {
   readonly name: ChartThemeName;
   readonly background: string;
   readonly header: string;
-  readonly headerShapeSecondary: string;
   readonly page: string;
   readonly panel: string;
   readonly panelStroke: string;
@@ -101,7 +100,6 @@ const CHART_THEMES: Record<ChartThemeName, ChartTheme> = {
     name: "signal",
     background: "#081018",
     header: "#101923",
-    headerShapeSecondary: "#eec643",
     page: "#dfe6e9",
     panel: "#f7fafb",
     panelStroke: "#c9d4da",
@@ -109,8 +107,8 @@ const CHART_THEMES: Record<ChartThemeName, ChartTheme> = {
     muted: "#576875",
     headerText: "#f8fbfd",
     track: "#d9e2e7",
-    shinStops: ["#22c55e", "#14b8a6", "#67e8f9"],
-    awsStops: ["#f43f5e", "#f97316", "#facc15"],
+    shinStops: ["#12e29c", "#19c8ff", "#8bffdb"],
+    awsStops: ["#f04452", "#ff6b1a", "#ff9f1c"],
     shinText: "#052018",
     awsText: "#351006",
     chip: "#12212d",
@@ -120,7 +118,6 @@ const CHART_THEMES: Record<ChartThemeName, ChartTheme> = {
     name: "forge",
     background: "#211711",
     header: "#2a1e17",
-    headerShapeSecondary: "#2f9c95",
     page: "#e7e2da",
     panel: "#fbf8f2",
     panelStroke: "#d4c7b7",
@@ -139,7 +136,6 @@ const CHART_THEMES: Record<ChartThemeName, ChartTheme> = {
     name: "circuit",
     background: "#07080f",
     header: "#111827",
-    headerShapeSecondary: "#06b6d4",
     page: "#111827",
     panel: "#f4f7fb",
     panelStroke: "#263244",
@@ -427,11 +423,10 @@ function renderSplitComparisonSvg(
     "</defs>",
     `<rect width="${width}" height="${height}" fill="${theme.page}"/>`,
     `<rect width="${width}" height="${headerHeight}" fill="url(#bg)"/>`,
-    `<path d="M0 ${headerHeight - 10}h1180v10H0z" fill="${theme.headerShapeSecondary}" opacity="0.7"/>`,
     `<g filter="url(#textShadow)" fill="${theme.headerText}">`,
-    '<text x="32" y="55" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="38" font-weight="700">ShinBucketDeployment</text>',
-    `<text x="32" y="92" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="22" font-weight="600">vs AWS BucketDeployment - ${escapeXml(benchmarkLabel)}</text>`,
-    '<text x="32" y="122" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="16" opacity="0.9">Lower bars are better; medians from benchmark-history.jsonl.</text>',
+    '<text x="32" y="55" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="38" font-weight="700">ShinBucketDeployment</text>',
+    `<text x="32" y="92" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="22" font-weight="600">vs AWS BucketDeployment - ${escapeXml(benchmarkLabel)}</text>`,
+    '<text x="32" y="122" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="16" opacity="0.9">Lower bars are better; medians from benchmark-history.jsonl.</text>',
     "</g>",
     renderHeaderStats(674, 28, context, theme),
     renderLegend(674, 132, theme),
@@ -501,11 +496,10 @@ function renderScorecardComparisonSvg(
     "</defs>",
     `<rect width="${width}" height="${height}" fill="${theme.page}"/>`,
     `<rect width="${width}" height="${headerHeight}" fill="url(#bg)"/>`,
-    `<path d="M0 ${headerHeight - 10}h1180v10H0z" fill="${theme.headerShapeSecondary}" opacity="0.7"/>`,
     `<g filter="url(#textShadow)" fill="${theme.headerText}">`,
-    '<text x="32" y="55" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="38" font-weight="700">ShinBucketDeployment</text>',
-    `<text x="32" y="92" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="22" font-weight="600">phase scorecard vs AWS - ${escapeXml(benchmarkLabel)}</text>`,
-    `<text x="32" y="122" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="16" opacity="0.9">${escapeXml(context.fileCount)} files, ${escapeXml(context.totalBytes)} source bundle, ${escapeXml(context.catalogSkips)} catalog skips.</text>`,
+    '<text x="32" y="55" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="38" font-weight="700">ShinBucketDeployment</text>',
+    `<text x="32" y="92" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="22" font-weight="600">phase scorecard vs AWS - ${escapeXml(benchmarkLabel)}</text>`,
+    `<text x="32" y="122" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="16" opacity="0.9">${escapeXml(context.fileCount)} files, ${escapeXml(context.totalBytes)} source bundle, ${escapeXml(context.catalogSkips)} catalog skips.</text>`,
     "</g>",
     renderHeaderStats(674, 28, context, theme),
     renderLegend(674, 132, theme),
@@ -567,11 +561,10 @@ function renderCardsComparisonSvg(
     "</defs>",
     `<rect width="${width}" height="${height}" fill="${theme.page}"/>`,
     `<rect width="${width}" height="${headerHeight}" fill="url(#bg)"/>`,
-    `<path d="M0 ${headerHeight - 10}h1180v10H0z" fill="${theme.headerShapeSecondary}" opacity="0.7"/>`,
     `<g filter="url(#textShadow)" fill="${theme.headerText}">`,
-    '<text x="32" y="55" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="38" font-weight="700">ShinBucketDeployment</text>',
-    `<text x="32" y="92" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="22" font-weight="600">phase cards vs AWS - ${escapeXml(benchmarkLabel)}</text>`,
-    '<text x="32" y="122" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="16" opacity="0.9">Lower bars are better; duration and memory are grouped by deployment phase.</text>',
+    '<text x="32" y="55" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="38" font-weight="700">ShinBucketDeployment</text>',
+    `<text x="32" y="92" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="22" font-weight="600">phase cards vs AWS - ${escapeXml(benchmarkLabel)}</text>`,
+    '<text x="32" y="122" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="16" opacity="0.9">Lower bars are better; duration and memory are grouped by deployment phase.</text>',
     "</g>",
     renderHeaderStats(674, 28, context, theme),
     renderLegend(674, 132, theme),
@@ -604,16 +597,16 @@ function renderPhaseCard(options: {
 }): string {
   const duration = options.row.metrics.providerDurationSeconds;
   const memory = options.row.metrics.maxMemoryMb;
-  const speedup = duration === undefined ? "n/a" : formatRustAdvantage(duration.ratio);
+  const speedup = duration === undefined ? "n/a" : formatChartRustAdvantage(duration.ratio);
   const memorySaved =
     memory === undefined ? "n/a" : `${formatNumber(Math.max(0, memory.diff))} MiB saved`;
   return [
     `<rect x="${options.x}" y="${options.y}" width="${options.width}" height="${options.height}" rx="8" fill="${options.theme.panel}" stroke="${options.theme.panelStroke}" filter="url(#shadow)"/>`,
-    `<text x="${options.x + 22}" y="${options.y + 36}" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="22" font-weight="900" fill="${options.theme.text}">${escapeXml(options.row.phase)}</text>`,
-    `<text x="${options.x + 22}" y="${options.y + 58}" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="12" font-weight="900" fill="${options.theme.muted}">${options.row.memoryMb ?? ""} MiB provider</text>`,
+    `<text x="${options.x + 22}" y="${options.y + 36}" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="22" font-weight="900" fill="${options.theme.text}">${escapeXml(options.row.phase)}</text>`,
+    `<text x="${options.x + 22}" y="${options.y + 58}" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="12" font-weight="900" fill="${options.theme.muted}">${options.row.memoryMb ?? ""} MiB provider</text>`,
     `<rect x="${options.x + options.width - 174}" y="${options.y + 18}" width="150" height="34" rx="6" fill="${options.theme.chip}"/>`,
-    `<text x="${options.x + options.width - 99}" y="${options.y + 40}" text-anchor="middle" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="14" font-weight="900" fill="${options.theme.chipText}">${escapeXml(speedup)}</text>`,
-    `<text x="${options.x + options.width - 99}" y="${options.y + 70}" text-anchor="middle" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="12" font-weight="900" fill="${options.theme.muted}">${escapeXml(memorySaved)}</text>`,
+    `<text x="${options.x + options.width - 99}" y="${options.y + 40}" text-anchor="middle" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="14" font-weight="900" fill="${options.theme.chipText}">${escapeXml(speedup)}</text>`,
+    `<text x="${options.x + options.width - 99}" y="${options.y + 70}" text-anchor="middle" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="12" font-weight="900" fill="${options.theme.muted}">${escapeXml(memorySaved)}</text>`,
     duration === undefined
       ? ""
       : renderMiniMetric({
@@ -652,11 +645,11 @@ function renderScorecardRow(options: {
 }): string {
   const duration = options.row.metrics.providerDurationSeconds;
   const memory = options.row.metrics.maxMemoryMb;
-  const speedup = duration === undefined ? "" : formatRustAdvantage(duration.ratio);
+  const speedup = duration === undefined ? "" : formatChartRustAdvantage(duration.ratio);
   return [
     `<rect x="${options.x}" y="${options.y}" width="${options.width}" height="68" rx="8" fill="${options.theme.panel}" stroke="${options.theme.panelStroke}" filter="url(#shadow)"/>`,
-    `<text x="${options.x + 22}" y="${options.y + 30}" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="18" font-weight="900" fill="${options.theme.text}">${escapeXml(options.row.phase)}</text>`,
-    `<text x="${options.x + 22}" y="${options.y + 50}" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="12" font-weight="800" fill="${options.theme.muted}">${options.row.memoryMb ?? ""} MiB provider</text>`,
+    `<text x="${options.x + 22}" y="${options.y + 30}" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="18" font-weight="900" fill="${options.theme.text}">${escapeXml(options.row.phase)}</text>`,
+    `<text x="${options.x + 22}" y="${options.y + 50}" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="12" font-weight="800" fill="${options.theme.muted}">${options.row.memoryMb ?? ""} MiB provider</text>`,
     duration === undefined
       ? ""
       : renderMiniMetric({
@@ -682,7 +675,7 @@ function renderScorecardRow(options: {
           theme: options.theme,
         }),
     `<rect x="${options.x + 892}" y="${options.y + 16}" width="210" height="36" rx="6" fill="${options.theme.chip}"/>`,
-    `<text x="${options.x + 997}" y="${options.y + 39}" text-anchor="middle" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="16" font-weight="900" fill="${options.theme.chipText}">${escapeXml(speedup)}</text>`,
+    `<text x="${options.x + 997}" y="${options.y + 39}" text-anchor="middle" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="16" font-weight="900" fill="${options.theme.chipText}">${escapeXml(speedup)}</text>`,
   ].join("\n");
 }
 
@@ -702,15 +695,15 @@ function renderMiniMetric(options: {
   const shinWidth = Math.max(2, (options.row.rust / options.maxValue) * barWidth);
   const awsWidth = Math.max(2, (options.row.aws / options.maxValue) * barWidth);
   return [
-    `<text x="${options.x}" y="${options.y + 9}" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="11" font-weight="900" fill="${options.theme.muted}">${escapeXml(options.title)}</text>`,
-    `<text x="${options.x}" y="${options.y + 28}" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="10" font-weight="900" fill="${options.theme.text}">SHIN</text>`,
+    `<text x="${options.x}" y="${options.y + 9}" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="11" font-weight="900" fill="${options.theme.muted}">${escapeXml(options.title)}</text>`,
+    `<text x="${options.x}" y="${options.y + 28}" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="10" font-weight="900" fill="${options.theme.text}">SHIN</text>`,
     `<rect x="${barX}" y="${options.y + 17}" width="${barWidth}" height="12" rx="3" fill="${options.theme.track}"/>`,
     `<rect x="${barX}" y="${options.y + 17}" width="${formatSvgNumber(shinWidth)}" height="12" rx="3" fill="url(#shin)"/>`,
-    `<text x="${barX + barWidth + 8}" y="${options.y + 28}" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="10" font-weight="900" fill="${options.theme.text}">${escapeXml(formatValue(options.row.rust, options.unit))}</text>`,
-    `<text x="${options.x}" y="${options.y + 47}" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="10" font-weight="900" fill="${options.theme.text}">AWS</text>`,
+    `<text x="${barX + barWidth + 8}" y="${options.y + 28}" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="10" font-weight="900" fill="${options.theme.text}">${escapeXml(formatValue(options.row.rust, options.unit))}</text>`,
+    `<text x="${options.x}" y="${options.y + 47}" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="10" font-weight="900" fill="${options.theme.text}">AWS</text>`,
     `<rect x="${barX}" y="${options.y + 36}" width="${barWidth}" height="12" rx="3" fill="${options.theme.track}"/>`,
     `<rect x="${barX}" y="${options.y + 36}" width="${formatSvgNumber(awsWidth)}" height="12" rx="3" fill="url(#aws)"/>`,
-    `<text x="${barX + barWidth + 8}" y="${options.y + 47}" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="10" font-weight="900" fill="${options.theme.text}">${escapeXml(formatValue(options.row.aws, options.unit))}</text>`,
+    `<text x="${barX + barWidth + 8}" y="${options.y + 47}" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="10" font-weight="900" fill="${options.theme.text}">${escapeXml(formatValue(options.row.aws, options.unit))}</text>`,
   ].join("\n");
 }
 
@@ -735,7 +728,7 @@ function renderMetricPanel(options: {
   const rowTop = options.y + 64;
 
   return [
-    `<text x="${options.x + 22}" y="${options.y + 34}" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="22" font-weight="800" fill="${options.theme.text}">${escapeXml(options.title)}</text>`,
+    `<text x="${options.x + 22}" y="${options.y + 34}" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="22" font-weight="800" fill="${options.theme.text}">${escapeXml(options.title)}</text>`,
     ...metricRows.map((row, index) =>
       renderMetricRow({
         row,
@@ -773,24 +766,24 @@ function renderMetricRow(options: {
   const awsTextInside = awsWidth >= 74;
   const chip =
     options.metricName === "maxMemoryMb"
-      ? formatMemoryAdvantage(options.row)
-      : formatRustAdvantage(options.row.ratio);
+      ? formatChartMemoryAdvantage(options.row)
+      : formatChartRustAdvantage(options.row.ratio);
   return [
-    `<text x="${options.x + 22}" y="${options.y + 21}" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="14" font-weight="800" fill="${options.theme.text}">${escapeXml(options.row.phase)}</text>`,
+    `<text x="${options.x + 22}" y="${options.y + 21}" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="14" font-weight="800" fill="${options.theme.text}">${escapeXml(options.row.phase)}</text>`,
     `<rect x="${options.barX}" y="${options.y + 2}" width="${options.barWidth}" height="17" rx="3" fill="${options.theme.track}"/>`,
     `<rect x="${options.barX}" y="${options.y + 2}" width="${formatSvgNumber(shinWidth)}" height="17" rx="3" fill="url(#shin)"/>`,
-    `<text x="${formatSvgNumber(options.barX + shinWidth + (shinTextInside ? -8 : 6))}" y="${options.y + 15}" text-anchor="${shinTextInside ? "end" : "start"}" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="12" font-weight="800" fill="${shinTextInside ? options.theme.shinText : options.theme.text}">${escapeXml(shinValue)}</text>`,
+    `<text x="${formatSvgNumber(options.barX + shinWidth + (shinTextInside ? -8 : 6))}" y="${options.y + 15}" text-anchor="${shinTextInside ? "end" : "start"}" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="12" font-weight="800" fill="${shinTextInside ? options.theme.shinText : options.theme.text}">${escapeXml(shinValue)}</text>`,
     `<rect x="${options.barX}" y="${options.y + 28}" width="${options.barWidth}" height="17" rx="3" fill="${options.theme.track}"/>`,
     `<rect x="${options.barX}" y="${options.y + 28}" width="${formatSvgNumber(awsWidth)}" height="17" rx="3" fill="url(#aws)"/>`,
-    `<text x="${formatSvgNumber(options.barX + awsWidth + (awsTextInside ? -8 : 6))}" y="${options.y + 41}" text-anchor="${awsTextInside ? "end" : "start"}" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="12" font-weight="800" fill="${awsTextInside ? options.theme.awsText : options.theme.text}">${escapeXml(awsValue)}</text>`,
+    `<text x="${formatSvgNumber(options.barX + awsWidth + (awsTextInside ? -8 : 6))}" y="${options.y + 41}" text-anchor="${awsTextInside ? "end" : "start"}" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="12" font-weight="800" fill="${awsTextInside ? options.theme.awsText : options.theme.text}">${escapeXml(awsValue)}</text>`,
     `<rect x="${options.x + options.labelWidth + options.barWidth + 36}" y="${options.y + 6}" width="88" height="28" rx="4" fill="${options.theme.chip}"/>`,
-    `<text x="${options.x + options.labelWidth + options.barWidth + 80}" y="${options.y + 24}" text-anchor="middle" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="9" font-weight="800" fill="${options.theme.chipText}">${escapeXml(chip)}</text>`,
+    `<text x="${options.x + options.labelWidth + options.barWidth + 80}" y="${options.y + 24}" text-anchor="middle" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="9" font-weight="800" fill="${options.theme.chipText}">${escapeXml(chip)}</text>`,
   ].join("\n");
 }
 
 function renderLegend(x: number, y: number, theme: ChartTheme): string {
   return [
-    `<g font-family="Inter, Segoe UI, Arial, sans-serif" font-size="13" font-weight="800" fill="${theme.headerText}">`,
+    `<g font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="13" font-weight="800" fill="${theme.headerText}">`,
     `<rect x="${x - 14}" y="${y - 24}" width="356" height="38" rx="6" fill="${theme.background}" opacity="0.6"/>`,
     `<rect x="${x}" y="${y - 14}" width="16" height="10" rx="2" fill="url(#shin)"/><text x="${x + 24}" y="${y - 5}">ShinBucketDeployment</text>`,
     `<rect x="${x + 190}" y="${y - 14}" width="16" height="10" rx="2" fill="url(#aws)"/><text x="${x + 214}" y="${y - 5}">AWS BucketDeployment</text>`,
@@ -812,7 +805,7 @@ function renderHeaderStats(
     ["Memory saved", context.peakMemorySaved],
   ];
   return [
-    `<g transform="translate(${x} ${y})" font-family="Inter, Segoe UI, Arial, sans-serif">`,
+    `<g transform="translate(${x} ${y})" font-family="Liberation Sans, Arial, Helvetica, sans-serif">`,
     ...stats.map((stat, index) => {
       const statX = (index % 3) * 152;
       const statY = Math.floor(index / 3) * 34;
@@ -924,7 +917,7 @@ function buildBenchmarkChartContext(
     fileCount: formatOptionalInteger(baseline?.fileCount),
     totalBytes: formatOptionalBytes(baseline?.totalBytes),
     bestDurationSpeedup:
-      bestDuration === undefined ? "n/a" : `${formatRatio(bestDuration.ratio)} faster`,
+      bestDuration === undefined ? "n/a" : `${formatChartRatio(bestDuration.ratio)} faster`,
     peakMemorySaved:
       peakMemory === undefined ? "n/a" : `${formatNumber(Math.max(0, peakMemory.diff))} MiB`,
     catalogSkips: catalogSkips === 0 ? "n/a" : formatInteger(catalogSkips),
@@ -1186,11 +1179,33 @@ function formatRustAdvantage(value: number): string {
   return value >= 1 ? `${formatRatio(value)} faster` : `${formatRatio(1 / value)} slower`;
 }
 
+function formatChartRustAdvantage(value: number): string {
+  return value >= 1 ? `${formatChartRatio(value)} faster` : `${formatChartRatio(1 / value)} slower`;
+}
+
 function formatMemoryAdvantage(row: MetricComparisonRow): string {
   const reduction = ((row.aws - row.rust) / row.aws) * 100;
   return reduction >= 0
     ? `${formatNumber(reduction)}% lower`
     : `${formatNumber(Math.abs(reduction))}% higher`;
+}
+
+function formatChartMemoryAdvantage(row: MetricComparisonRow): string {
+  const reduction = ((row.aws - row.rust) / row.aws) * 100;
+  return reduction >= 0
+    ? `${formatChartNumber(reduction)}% lower`
+    : `${formatChartNumber(Math.abs(reduction))}% higher`;
+}
+
+function formatChartRatio(value: number): string {
+  return `${formatChartNumber(value)}x`;
+}
+
+function formatChartNumber(value: number): string {
+  if (value >= 10) {
+    return value.toFixed(1).replace(/0$/, "").replace(/\.$/, "");
+  }
+  return value.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
 }
 
 function formatSignedPercent(value: number): string {

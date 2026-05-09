@@ -198,7 +198,7 @@ describe("benchmark result collector", () => {
     expect(svg).toContain("Lambda Handler Duration");
     expect(svg).toContain("Max Memory Used");
     expect(svg).toContain("4x faster");
-    expect(svg).toContain("55.556% lower");
+    expect(svg).toContain("55.6% lower");
     expect(report).not.toContain("xychart-beta");
   });
 });
