@@ -418,47 +418,48 @@ For branch comparisons:
 
 | Field | Value |
 | --- | --- |
-| Run date | 2026-05-02 |
-| Provider implementation commit | `856afbb` (`add provider telemetry and benchmark collector`) |
+| Run date | 2026-05-09 |
+| Provider implementation commit | `4f5f0ca` (`allow destination reads for replacements`) |
 | Result documentation commit | Pending |
 | Region | `ap-southeast-2` |
-| Profile | `large-few` |
+| Implementations | `rust`, `aws` |
+| Profile | `mixed` |
 | Baseline variant | `v1` |
-| Baseline bundle | 32 files, 144,167,470 bytes |
-| Comparison variants | `v2`: 32 files, 144,167,470 bytes |
-| Provider memory | 512, 1024, and 2048 MiB |
+| Baseline bundle | 442 files, 52,904,649 bytes |
+| Comparison variants | `v2`: 442 files, 52,904,649 bytes; `pruned`: 397 files, 48,185,955 bytes |
+| Provider memory | 1024 MiB |
 | Cleanup | All benchmark stacks destroyed after collection |
-| Notes | Forced unchanged rows used `RBD_BENCH_WAIT=false` on a stack with no CloudFront distribution. Rows include sanitized provider summary counters in `docs/benchmark-history.jsonl`. |
+| Notes | Paired Rust/AWS comparison. Forced unchanged rows used `RBD_BENCH_WAIT=false` on a stack with no CloudFront distribution. Rust rows include sanitized provider summary counters in `docs/benchmark-history.jsonl`. The first attempted Rust update exposed the destination `s3:GetObject` IAM gap; this snapshot records the rerun after the fix. |
 
-Large-few create/unchanged/update sequence:
+Mixed Rust/AWS comparison:
 
-| Memory | Phase | Variant | CDK deploy time | Local wall time | Provider duration | Billed duration | Init duration | Max memory |
-| ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| 512 MiB | Cold create | `v1` | 66.03 s | 161.16 s | 1.876 s | 2.040 s | 0.163 s | 92 MB |
-| 512 MiB | Forced unchanged | `v1` | 14.34 s | 59.38 s | 0.237 s | 0.237 s | n/a | 92 MB |
-| 512 MiB | Sparse update | `v2` | 14.16 s | 60.92 s | 0.471 s | 0.471 s | n/a | 92 MB |
-| 512 MiB | Destroy | n/a | n/a | 45.31 s | 0.230 s | 0.400 s | 0.170 s | 34 MB |
-| 1024 MiB | Cold create | `v1` | 58.09 s | 99.99 s | 0.941 s | 1.071 s | 0.130 s | 86 MB |
-| 1024 MiB | Forced unchanged | `v1` | 14.26 s | 58.77 s | 0.199 s | 0.200 s | n/a | 86 MB |
-| 1024 MiB | Sparse update | `v2` | 14.18 s | 72.80 s | 0.387 s | 0.387 s | n/a | 86 MB |
-| 1024 MiB | Destroy | n/a | n/a | 44.37 s | 0.173 s | 0.311 s | 0.137 s | 34 MB |
-| 2048 MiB | Cold create | `v1` | 58.68 s | 100.68 s | 0.674 s | 0.812 s | 0.137 s | 84 MB |
-| 2048 MiB | Forced unchanged | `v1` | 14.25 s | 58.75 s | 0.200 s | 0.200 s | n/a | 84 MB |
-| 2048 MiB | Sparse update | `v2` | 14.12 s | 56.99 s | 0.327 s | 0.327 s | n/a | 84 MB |
-| 2048 MiB | Destroy | n/a | n/a | 37.91 s | 0.043 s | 0.044 s | n/a | 84 MB |
+| Implementation | Phase | Variant | CDK deploy time | Local wall time | Provider duration | Billed duration | Init duration | Max memory |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Rust | Cold create | `v1` | 66.30 s | 111.89 s | 2.049 s | 2.188 s | 0.139 s | 66 MB |
+| AWS | Cold create | `v1` | 70.70 s | 107.91 s | 9.988 s | 10.535 s | 0.547 s | 251 MB |
+| Rust | Forced unchanged | `v1` | 14.24 s | 57.56 s | 0.203 s | 0.203 s | n/a | 66 MB |
+| AWS | Forced unchanged | `v1` | 26.50 s | 73.05 s | 9.594 s | 9.594 s | n/a | 251 MB |
+| Rust | Sparse update | `v2` | 14.02 s | 57.38 s | 0.376 s | 0.377 s | n/a | 66 MB |
+| AWS | Sparse update | `v2` | 26.41 s | 70.47 s | 9.612 s | 9.612 s | n/a | 251 MB |
+| Rust | Prune update | `pruned` | 21.98 s | 65.15 s | 3.296 s | 3.296 s | n/a | 68 MB |
+| AWS | Prune update | `pruned` | 26.53 s | 70.18 s | 9.204 s | 9.204 s | n/a | 251 MB |
+
+Provider duration ratios:
+
+| Phase | Rust median | AWS median | AWS/Rust |
+| --- | ---: | ---: | ---: |
+| Cold create | 2.049 s | 9.988 s | 4.875x |
+| Forced unchanged | 0.203 s | 9.594 s | 47.261x |
+| Sparse update | 0.376 s | 9.612 s | 25.564x |
+| Prune update | 3.296 s | 9.204 s | 2.792x |
 
 Provider summary highlights:
 
-| Memory | Phase | Uploaded objects | Skipped objects | Uploaded bytes | Source fetched bytes |
-| ---: | --- | ---: | ---: | ---: | ---: |
-| 512 MiB | Cold create | 33 | 0 | 144,167,564 | 620,873 |
-| 512 MiB | Forced unchanged | 0 | 33 | 0 | 1,125 |
-| 512 MiB | Sparse update | 4 | 29 | 8,209,834 | 199,427 |
-| 1024 MiB | Cold create | 33 | 0 | 144,167,564 | 620,873 |
-| 1024 MiB | Forced unchanged | 0 | 33 | 0 | 1,125 |
-| 1024 MiB | Sparse update | 4 | 29 | 8,209,834 | 199,427 |
-| 2048 MiB | Cold create | 33 | 0 | 144,167,564 | 620,873 |
-| 2048 MiB | Forced unchanged | 0 | 33 | 0 | 1,125 |
-| 2048 MiB | Sparse update | 4 | 29 | 8,209,834 | 199,427 |
+| Implementation | Phase | Uploaded objects | Skipped objects | Deleted objects | Uploaded bytes | Source fetched bytes |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Rust | Cold create | 443 | 0 | 0 | 52,904,739 | 388,708 |
+| Rust | Forced unchanged | 0 | 443 | 0 | 0 | 13,133 |
+| Rust | Sparse update | 7 | 436 | 0 | 1,379,280 | 307,728 |
+| Rust | Prune update | 398 | 0 | 45 | 48,186,049 | 351,670 |
 
-These results validate that the ranged, no-disk ZIP path stays comfortably below the 1024 MiB default for the `large-few` profile. The highest reported memory across this matrix was 92 MB. Moving from 512 to 1024 MiB roughly halved cold-create provider duration for this profile, while 2048 MiB provided a smaller additional cold-create improvement and only modest sparse-update improvement.
+These results validate that the ranged, no-disk ZIP path stays comfortably below the 1024 MiB default for the `mixed` profile. The highest reported Rust memory in this paired run was 68 MB, compared with 251 MB for upstream AWS `BucketDeployment`. Rust provider duration was lower in every measured phase, especially unchanged and sparse updates where the embedded catalog avoided per-object source hashing.
