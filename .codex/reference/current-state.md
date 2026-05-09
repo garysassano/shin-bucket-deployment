@@ -5,7 +5,7 @@ This folder is intentionally small. Project-facing documentation lives in:
 - `README.md`
 - `docs/architecture.md`
 - `docs/verification.md`
-- `docs/benchmarking.md`
+- `docs/benchmark.md`
 
 ## Implementation
 
@@ -28,6 +28,6 @@ The repository docs have been consolidated into fewer source-of-truth files. The
 
 ## Validation Notes
 
-Durable validation status is in `docs/verification.md`; append-only sanitized validation records are in `docs/verification-history.jsonl`. Latest benchmark context is in `docs/benchmarking.md`; append-only sanitized benchmark records are in `docs/benchmark-history.jsonl`. Benchmark and verification runbooks live in `.agents/skills/rbd-benchmark-verification/SKILL.md`.
+Durable verification status is in `docs/verification.md`; append-only sanitized verification records are in `docs/verification-history.jsonl`. Latest benchmark context is in `docs/benchmark.md`; append-only sanitized benchmark records are in `docs/benchmark-history.jsonl`. Benchmark and verification runbooks live in `.agents/skills/rbd-benchmark-verification/SKILL.md`.
 
 Do not store raw AWS logs, profile names, account IDs, resource IDs, ETags, bucket names, distribution IDs, or incident-specific stack names in this folder.
