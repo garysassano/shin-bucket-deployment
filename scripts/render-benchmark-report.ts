@@ -277,7 +277,7 @@ function renderBarChart(rows: AggregatedRow[], unit: string): string {
 function renderComparisonSummaryTable(records: BenchmarkRecord[]): string {
   const rows = buildPhaseComparisonRows(records);
   if (rows.length === 0) {
-    return "No rust/aws pairs were available for comparison.";
+    return "No shin/aws pairs were available for comparison.";
   }
 
   return [
@@ -308,11 +308,11 @@ function renderPhaseComparisonTable(phaseRow: PhaseComparisonRow): string {
     (row) => row !== undefined,
   );
   return [
-    "| Metric | ShinBucketDeployment | AWS BucketDeployment | Difference | AWS/Rust | AWS delta % |",
+    "| Metric | ShinBucketDeployment | AWS BucketDeployment | Difference | AWS/Shin | AWS delta % |",
     "| --- | ---: | ---: | ---: | ---: | ---: |",
     ...rows.map(
       (row) =>
-        `| ${row.metricLabel} | ${formatValue(row.rust, row.unit)} | ${formatValue(row.aws, row.unit)} | ${formatSignedValue(row.diff, row.unit)} | ${formatRatio(row.ratio)} | ${formatSignedPercent(row.percentDelta)} |`,
+        `| ${row.metricLabel} | ${formatValue(row.shin, row.unit)} | ${formatValue(row.aws, row.unit)} | ${formatSignedValue(row.diff, row.unit)} | ${formatRatio(row.ratio)} | ${formatSignedPercent(row.percentDelta)} |`,
     ),
   ].join("\n");
 }
@@ -323,7 +323,7 @@ function renderComparisonCharts(
 ): string[] {
   const rows = buildPhaseComparisonRows(records);
   if (rows.length === 0) {
-    return ["No rust/aws pairs were available for visual summaries.", ""];
+    return ["No shin/aws pairs were available for visual summaries.", ""];
   }
 
   if (chartPath !== undefined) {
@@ -479,8 +479,8 @@ function renderScorecardComparisonSvg(
   const memoryRows = renderedRows
     .map((row) => row.metrics.maxMemoryMb)
     .filter((row) => row !== undefined);
-  const maxDuration = Math.max(...durationRows.flatMap((row) => [row.rust, row.aws]), 1);
-  const maxMemory = Math.max(...memoryRows.flatMap((row) => [row.rust, row.aws]), 1);
+  const maxDuration = Math.max(...durationRows.flatMap((row) => [row.shin, row.aws]), 1);
+  const maxMemory = Math.max(...memoryRows.flatMap((row) => [row.shin, row.aws]), 1);
   const benchmarkLabel = svgBenchmarkLabel(renderedRows);
 
   return [
@@ -544,8 +544,8 @@ function renderCardsComparisonSvg(
   const memoryRows = renderedRows
     .map((row) => row.metrics.maxMemoryMb)
     .filter((row) => row !== undefined);
-  const maxDuration = Math.max(...durationRows.flatMap((row) => [row.rust, row.aws]), 1);
-  const maxMemory = Math.max(...memoryRows.flatMap((row) => [row.rust, row.aws]), 1);
+  const maxDuration = Math.max(...durationRows.flatMap((row) => [row.shin, row.aws]), 1);
+  const maxMemory = Math.max(...memoryRows.flatMap((row) => [row.shin, row.aws]), 1);
   const benchmarkLabel = svgBenchmarkLabel(renderedRows);
 
   return [
@@ -597,7 +597,7 @@ function renderPhaseCard(options: {
 }): string {
   const duration = options.row.metrics.providerDurationSeconds;
   const memory = options.row.metrics.maxMemoryMb;
-  const speedup = duration === undefined ? "n/a" : formatChartRustAdvantage(duration.ratio);
+  const speedup = duration === undefined ? "n/a" : formatChartShinAdvantage(duration.ratio);
   const memorySaved =
     memory === undefined ? "n/a" : `${formatNumber(Math.max(0, memory.diff))} MiB saved`;
   return [
@@ -645,7 +645,7 @@ function renderScorecardRow(options: {
 }): string {
   const duration = options.row.metrics.providerDurationSeconds;
   const memory = options.row.metrics.maxMemoryMb;
-  const speedup = duration === undefined ? "" : formatChartRustAdvantage(duration.ratio);
+  const speedup = duration === undefined ? "" : formatChartShinAdvantage(duration.ratio);
   return [
     `<rect x="${options.x}" y="${options.y}" width="${options.width}" height="68" rx="8" fill="${options.theme.panel}" stroke="${options.theme.panelStroke}" filter="url(#shadow)"/>`,
     `<text x="${options.x + 22}" y="${options.y + 30}" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="18" font-weight="900" fill="${options.theme.text}">${escapeXml(options.row.phase)}</text>`,
@@ -692,14 +692,14 @@ function renderMiniMetric(options: {
   const labelWidth = 70;
   const barX = options.x + labelWidth;
   const barWidth = options.width - labelWidth;
-  const shinWidth = Math.max(2, (options.row.rust / options.maxValue) * barWidth);
+  const shinWidth = Math.max(2, (options.row.shin / options.maxValue) * barWidth);
   const awsWidth = Math.max(2, (options.row.aws / options.maxValue) * barWidth);
   return [
     `<text x="${options.x}" y="${options.y + 9}" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="11" font-weight="900" fill="${options.theme.muted}">${escapeXml(options.title)}</text>`,
     `<text x="${options.x}" y="${options.y + 28}" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="10" font-weight="900" fill="${options.theme.text}">SHIN</text>`,
     `<rect x="${barX}" y="${options.y + 17}" width="${barWidth}" height="12" rx="3" fill="${options.theme.track}"/>`,
     `<rect x="${barX}" y="${options.y + 17}" width="${formatSvgNumber(shinWidth)}" height="12" rx="3" fill="url(#shin)"/>`,
-    `<text x="${barX + barWidth + 8}" y="${options.y + 28}" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="10" font-weight="900" fill="${options.theme.text}">${escapeXml(formatValue(options.row.rust, options.unit))}</text>`,
+    `<text x="${barX + barWidth + 8}" y="${options.y + 28}" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="10" font-weight="900" fill="${options.theme.text}">${escapeXml(formatValue(options.row.shin, options.unit))}</text>`,
     `<text x="${options.x}" y="${options.y + 47}" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="10" font-weight="900" fill="${options.theme.text}">AWS</text>`,
     `<rect x="${barX}" y="${options.y + 36}" width="${barWidth}" height="12" rx="3" fill="${options.theme.track}"/>`,
     `<rect x="${barX}" y="${options.y + 36}" width="${formatSvgNumber(awsWidth)}" height="12" rx="3" fill="url(#aws)"/>`,
@@ -720,7 +720,7 @@ function renderMetricPanel(options: {
   const metricRows = options.rows
     .map((row) => row.metrics[options.metricName])
     .filter((row) => row !== undefined);
-  const maxValue = Math.max(...metricRows.flatMap((row) => [row.rust, row.aws]), 1);
+  const maxValue = Math.max(...metricRows.flatMap((row) => [row.shin, row.aws]), 1);
   const labelWidth = 178;
   const valueWidth = 92;
   const barX = options.x + labelWidth + 26;
@@ -758,16 +758,16 @@ function renderMetricRow(options: {
   readonly metricName: MetricName;
   readonly theme: ChartTheme;
 }): string {
-  const shinWidth = Math.max(2, (options.row.rust / options.maxValue) * options.barWidth);
+  const shinWidth = Math.max(2, (options.row.shin / options.maxValue) * options.barWidth);
   const awsWidth = Math.max(2, (options.row.aws / options.maxValue) * options.barWidth);
-  const shinValue = formatValue(options.row.rust, options.unit);
+  const shinValue = formatValue(options.row.shin, options.unit);
   const awsValue = formatValue(options.row.aws, options.unit);
   const shinTextInside = shinWidth >= 74;
   const awsTextInside = awsWidth >= 74;
   const chip =
     options.metricName === "maxMemoryMb"
       ? formatChartMemoryAdvantage(options.row)
-      : formatChartRustAdvantage(options.row.ratio);
+      : formatChartShinAdvantage(options.row.ratio);
   return [
     `<text x="${options.x + 22}" y="${options.y + 21}" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="14" font-weight="800" fill="${options.theme.text}">${escapeXml(options.row.phase)}</text>`,
     `<rect x="${options.barX}" y="${options.y + 2}" width="${options.barWidth}" height="17" rx="3" fill="${options.theme.track}"/>`,
@@ -832,7 +832,7 @@ function renderDeltaChart(
     const symbol = row.diff >= 0 ? "#" : "<";
     const direction = row.diff >= 0 ? positiveLabel : negativeLabel;
     const label = `${row.phase}${row.memoryMb === null ? "" : ` ${row.memoryMb}`}`;
-    return `${label.padEnd(26)} | ${symbol.repeat(width).padEnd(30)} ${formatValue(Math.abs(row.diff), row.unit)} ${direction} (${formatRatio(row.ratio)} AWS/Rust)`;
+    return `${label.padEnd(26)} | ${symbol.repeat(width).padEnd(30)} ${formatValue(Math.abs(row.diff), row.unit)} ${direction} (${formatRatio(row.ratio)} AWS/Shin)`;
   });
 
   return ["```text", ...lines, "```"].join("\n");
@@ -848,11 +848,11 @@ function buildMetricComparisonRows(records: BenchmarkRecord[]): MetricComparison
       metricLabel: metric.label,
       metricIndex,
       unit: metric.unit,
-      rust: pair.rust,
+      shin: pair.shin,
       aws: pair.aws,
-      diff: pair.aws - pair.rust,
+      diff: pair.aws - pair.shin,
       ratio: pair.ratio,
-      percentDelta: ((pair.aws - pair.rust) / pair.rust) * 100,
+      percentDelta: ((pair.aws - pair.shin) / pair.shin) * 100,
     }));
   }).sort(compareMetricComparisonRows);
 }
@@ -894,7 +894,7 @@ function buildBenchmarkChartContext(
   const baseline =
     comparableRecords.find(
       (record) =>
-        implementationLabel(record).startsWith("rust") &&
+        implementationLabel(record).startsWith("shin") &&
         record.phase === "cold-create" &&
         record.variant === "v1",
     ) ??
@@ -959,18 +959,18 @@ function metricPairs(records: BenchmarkRecord[], metric: MetricName): MetricPair
   return [...grouped.values()]
     .map((group) => {
       const aws = group.find((row) => row.implementation.startsWith("aws"));
-      const rust = group.find((row) => row.implementation.startsWith("rust"));
-      if (!aws || !rust || rust.median === 0) {
+      const shin = group.find((row) => row.implementation.startsWith("shin"));
+      if (!aws || !shin || shin.median === 0) {
         return undefined;
       }
       return {
-        key: comparisonKey(rust),
-        profile: rust.profile,
-        phase: rust.phase,
-        memoryMb: rust.memoryMb,
-        rust: rust.median,
+        key: comparisonKey(shin),
+        profile: shin.profile,
+        phase: shin.phase,
+        memoryMb: shin.memoryMb,
+        shin: shin.median,
         aws: aws.median,
-        ratio: aws.median / rust.median,
+        ratio: aws.median / shin.median,
       };
     })
     .filter((row) => row !== undefined)
@@ -985,7 +985,7 @@ type MetricComparisonRow = {
   readonly metricLabel: string;
   readonly metricIndex: number;
   readonly unit: string;
-  readonly rust: number;
+  readonly shin: number;
   readonly aws: number;
   readonly diff: number;
   readonly ratio: number;
@@ -1004,7 +1004,7 @@ type MetricPair = {
   readonly profile: string;
   readonly phase: string;
   readonly memoryMb: number | null;
-  readonly rust: number;
+  readonly shin: number;
   readonly aws: number;
   readonly ratio: number;
 };
@@ -1098,12 +1098,16 @@ function percentile(sorted: number[], quantile: number): number {
 }
 
 function implementationLabel(record: BenchmarkRecord): string {
-  return record.implementation ?? inferImplementation(record) ?? "unknown";
+  const implementation = record.implementation ?? inferImplementation(record);
+  if (implementation === "rust") {
+    return "shin";
+  }
+  return implementation ?? "unknown";
 }
 
 function inferImplementation(record: BenchmarkRecord): string | null {
   if (record.providerImplementationCommit || record.providerSummary) {
-    return "rust";
+    return "shin";
   }
   return null;
 }
@@ -1151,7 +1155,7 @@ function formatValue(value: number, unit: string): string {
 }
 
 function formatComparisonCell(row: MetricComparisonRow): string {
-  return `${formatValue(row.rust, row.unit)} vs ${formatValue(row.aws, row.unit)} (${formatRustAdvantage(row.ratio)})`;
+  return `${formatValue(row.shin, row.unit)} vs ${formatValue(row.aws, row.unit)} (${formatShinAdvantage(row.ratio)})`;
 }
 
 function formatOptionalComparisonCell(row: MetricComparisonRow | undefined): string {
@@ -1159,7 +1163,7 @@ function formatOptionalComparisonCell(row: MetricComparisonRow | undefined): str
 }
 
 function formatMemoryCell(row: MetricComparisonRow): string {
-  return `${formatValue(row.rust, row.unit)} vs ${formatValue(row.aws, row.unit)} (${formatMemoryAdvantage(row)})`;
+  return `${formatValue(row.shin, row.unit)} vs ${formatValue(row.aws, row.unit)} (${formatMemoryAdvantage(row)})`;
 }
 
 function formatOptionalMemoryCell(row: MetricComparisonRow | undefined): string {
@@ -1175,23 +1179,23 @@ function formatRatio(value: number): string {
   return `${formatNumber(value)}x`;
 }
 
-function formatRustAdvantage(value: number): string {
+function formatShinAdvantage(value: number): string {
   return value >= 1 ? `${formatRatio(value)} faster` : `${formatRatio(1 / value)} slower`;
 }
 
-function formatChartRustAdvantage(value: number): string {
+function formatChartShinAdvantage(value: number): string {
   return value >= 1 ? `${formatChartRatio(value)} faster` : `${formatChartRatio(1 / value)} slower`;
 }
 
 function formatMemoryAdvantage(row: MetricComparisonRow): string {
-  const reduction = ((row.aws - row.rust) / row.aws) * 100;
+  const reduction = ((row.aws - row.shin) / row.aws) * 100;
   return reduction >= 0
     ? `${formatNumber(reduction)}% lower`
     : `${formatNumber(Math.abs(reduction))}% higher`;
 }
 
 function formatChartMemoryAdvantage(row: MetricComparisonRow): string {
-  const reduction = ((row.aws - row.rust) / row.aws) * 100;
+  const reduction = ((row.aws - row.shin) / row.aws) * 100;
   return reduction >= 0
     ? `${formatChartNumber(reduction)}% lower`
     : `${formatChartNumber(Math.abs(reduction))}% higher`;

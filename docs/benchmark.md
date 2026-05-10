@@ -42,7 +42,7 @@ Benchmark runs should answer these questions:
 
 ## Current Harness
 
-The `benchmark-assets` example generates deterministic static-site bundles under `.benchmark-assets/`, which is ignored by git. The same stack definition can instantiate either this construct or the upstream AWS CDK `BucketDeployment`; the benchmark implementation is the only intended comparison dimension. Rust uses its normal `Source.asset` path, including the embedded catalog optimization, while AWS uses upstream `Source.asset`.
+The `benchmark-assets` example generates deterministic static-site bundles under `.benchmark-assets/`, which is ignored by git. The same stack definition can instantiate either this construct or the upstream AWS CDK `BucketDeployment`; the benchmark implementation is the only intended comparison dimension. Shin uses its normal `Source.asset` path, including the embedded catalog optimization, while AWS uses upstream `Source.asset`.
 
 ```bash
 SHIN_BENCH_PROFILE=mixed SHIN_BENCH_VARIANT=v1 SHIN_BENCH_STACK_SUFFIX=RunA pnpm example deploy benchmark-assets
@@ -57,11 +57,11 @@ Environment variables:
 | --- | --- | --- |
 | `SHIN_BENCH_PROFILE` | `mixed` | Asset shape: `tiny-many`, `mixed`, or `large-few`. |
 | `SHIN_BENCH_VARIANT` | `v1` | Asset variant: `v1`, `v2`, or `pruned`. |
-| `SHIN_BENCH_IMPLEMENTATION` | `rust` | Deployment implementation: `rust` or `aws`. The `benchmark-assets-aws` example sets this to `aws`. |
+| `SHIN_BENCH_IMPLEMENTATION` | `shin` | Deployment implementation: `shin` or `aws`. The `benchmark-assets-aws` example sets this to `aws`. |
 | `SHIN_BENCH_STACK_SUFFIX` | none | Adds a suffix to the benchmark stack name so multiple runs can coexist. |
 | `SHIN_BENCH_DESTINATION_PREFIX` | `benchmark-site` | Destination prefix inside the generated bucket. |
 | `SHIN_BENCH_MEMORY_LIMIT_MB` | `1024` | Provider Lambda memory size in MiB. Use distinct stack suffixes when comparing memory sizes. |
-| `SHIN_BENCH_MAX_PARALLEL_TRANSFERS` | `8` | Rust provider `maxParallelTransfers` setting for transfer concurrency sweeps. |
+| `SHIN_BENCH_MAX_PARALLEL_TRANSFERS` | `8` | Shin provider `maxParallelTransfers` setting for transfer concurrency sweeps. |
 | `SHIN_BENCH_PRUNE` | `true` | Set to `false` to disable prune. |
 | `SHIN_BENCH_WAIT` | `true` | Present for property toggling; the benchmark stack currently has no CloudFront distribution. |
 
@@ -83,13 +83,13 @@ Variants:
 
 ## Methodology Summary
 
-The benchmark harness measures deterministic static-site bundles across create, unchanged, sparse-update, and prune-update phases. Paired Rust-vs-AWS comparison runs must use the same region, profile, variants, destination prefix, memory setting, and repetition count. The latest full workflow is maintained in `.agents/skills/shin-benchmark/SKILL.md`.
+The benchmark harness measures deterministic static-site bundles across create, unchanged, sparse-update, and prune-update phases. Paired Shin-vs-AWS comparison runs must use the same region, profile, variants, destination prefix, memory setting, and repetition count. The latest full workflow is maintained in `.agents/skills/shin-benchmark/SKILL.md`.
 
 The 1024 MiB setting is the preferred default because earlier `large-few` runs showed much faster cold-create provider duration than 512 MiB while keeping billed compute cost in the same range. Memory comparison runs should still include 512, 1024, and 2048 MiB when measuring runtime tuning changes.
 
 ## Provider Telemetry
 
-Rust benchmark rows may include the sanitized `shin_deployment_summary` object emitted by the provider. The summary contains aggregate timings, counters, bytes, source range-read stats, and `PutObject` diagnostics, and intentionally omits bucket names, object keys, account IDs, distribution IDs, URLs, and ETags.
+Shin benchmark rows may include the sanitized `shin_deployment_summary` object emitted by the provider. The summary contains aggregate timings, counters, bytes, source range-read stats, and `PutObject` diagnostics, and intentionally omits bucket names, object keys, account IDs, distribution IDs, URLs, and ETags.
 
 `source.blockWaits` is an aggregate count of times a ZIP entry reader could not immediately read a planned source block. Newer provider builds split this into `source.blockWaitsFetching` for readers waiting on an in-flight ranged `GetObject` and `source.blockWaitsCapacity` for readers waiting for source-window memory capacity. `source.blockRefetches` counts replay claims that needed a source block after it had already been released; newer builds also expose `source.replayClaimsAfterRelease`, `source.activeReadersHighWater`, and `source.residentBytesHighWater` to distinguish replay timing from S3 retry/throttle behavior.
 
@@ -99,7 +99,7 @@ Generate Markdown tables and SVG charts from committed or scratch JSONL records:
 pnpm benchmark:report -- --run-id 2026-05-02-large-few-memory-matrix
 ```
 
-The report groups records by profile, phase, implementation, and memory size. It includes medians, p90, min/max, compact Rust-vs-AWS insight tables, grouped per-phase metric details, and generated SVG visual summaries when paired implementation records exist.
+The report groups records by profile, phase, implementation, and memory size. It includes medians, p90, min/max, compact Shin-vs-AWS insight tables, grouped per-phase metric details, and generated SVG visual summaries when paired implementation records exist.
 
 Do not commit `.benchmark-runs/` raw output. Commit only curated aggregate results that do not include sensitive resource identifiers.
 
@@ -115,14 +115,14 @@ Every committed benchmark result is represented as sanitized records in `docs/be
 | Provider implementation commit | `4aed47a` (`expand source block diagnostics`) |
 | Result documentation commit | Pending |
 | Region | `ap-southeast-2` |
-| Implementation | `rust` |
+| Implementation | `shin` |
 | Profile | `tiny-many` |
 | Baseline variant | `v1` |
 | Bundle | 2,584 files, 8,178,618 bytes |
 | Provider memory | 1024 and 2048 MiB |
 | Swept setting | `maxParallelTransfers`: 8, 16, 32, 64 |
 | Cleanup | All benchmark stacks destroyed after telemetry collection |
-| Notes | Rust-only cold-create tuning sweep for the many-small-files profile. The latest 2048 MiB run held all inputs constant except `maxParallelTransfers` and is compared with the earlier 1024 MiB sweep. Rows include CloudWatch REPORT metrics and sanitized `shin_deployment_summary` counters in `docs/benchmark-history.jsonl`. |
+| Notes | Shin-only cold-create tuning sweep for the many-small-files profile. The latest 2048 MiB run held all inputs constant except `maxParallelTransfers` and is compared with the earlier 1024 MiB sweep. Rows include CloudWatch REPORT metrics and sanitized `shin_deployment_summary` counters in `docs/benchmark-history.jsonl`. |
 
 2048 MiB parallel transfer score table:
 
