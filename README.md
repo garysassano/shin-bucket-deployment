@@ -4,19 +4,19 @@ Rust-backed alternative to AWS CDK's official [`BucketDeployment`](https://docs.
 
 This repository is currently a local prototype, not a published construct library. The construct API and Rust provider Lambda are working and tracked through AWS validation runs.
 
-`ShinBucketDeployment` is intended for S3 static asset deployment when you want a lower-overhead provider than the upstream Python Lambda and a deployment path that avoids extracting whole archives before syncing them.
+`ShinBucketDeployment` is intended for S3 static asset deployment when you want faster deployments, a leaner custom resource, and fewer full-archive extraction costs than the upstream construct.
 
 ## Why Build This
 
-The official `BucketDeployment` is a good default for many stacks, but its provider is built around AWS CLI copy/sync orchestration. This construct keeps the familiar CDK surface while using a purpose-built Rust Lambda for static asset deployment.
+The official `BucketDeployment` is a good default for many stacks, but its provider is built around AWS CLI copy/sync orchestration. This construct keeps the familiar CDK surface while using a purpose-built Rust Lambda function for static asset deployment.
 
-| Advantage | What changes |
-| --- | --- |
-| Lower-overhead provider | The custom resource runs on the [Lambda Rust runtime](https://github.com/aws/aws-lambda-rust-runtime) (`provided.al2023`) instead of the upstream Python provider. In practice this can mean faster cold starts and lower memory footprint; for background, see [lambda-perf](https://maxday.github.io/lambda-perf/). |
-| Direct AWS SDK operations | Copy, upload, delete, and CloudFront invalidation are executed through SDK calls instead of shelling out to `aws s3 cp` / `aws s3 sync`. |
-| Archive-aware planning | For extracted assets, the provider plans directly from the zip archive instead of extracting the whole archive to a working directory before syncing. |
-| `ETag`-based skip decisions | The provider lists the destination prefix once and compares planned content MD5 values with destination `ETag` values to skip unchanged single-part static objects. |
-| Marker-free streaming path | Missing sources without deploy-time markers stream directly from archive entries; replacement buffers are only used for sources that declare markers. |
+| Advantage                   | What changes                                                                                                                                                                                                                                                                                                                                                |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Leaner runtime              | This custom resource provider runs on the [Lambda Rust runtime](https://github.com/aws/aws-lambda-rust-runtime) (`provided.al2023`) rather than the Python runtime used by the upstream provider. In practice, the lower runtime overhead can mean faster cold starts and lower memory footprint; see [lambda-perf](https://maxday.github.io/lambda-perf/). |
+| Direct AWS SDK operations   | Copy, upload, delete, and CloudFront invalidation are executed through SDK calls instead of shelling out to `aws s3 cp` / `aws s3 sync`.                                                                                                                                                                                                                    |
+| Archive-aware planning      | For extracted assets, the provider plans directly from the zip archive instead of extracting the whole archive to a working directory before syncing.                                                                                                                                                                                                       |
+| `ETag`-based skip decisions | The provider lists the destination prefix once and compares planned content MD5 values with destination `ETag` values to skip unchanged single-part static objects.                                                                                                                                                                                         |
+| Marker-free streaming path  | Missing sources without deploy-time markers stream directly from archive entries; replacement buffers are only used for sources that declare markers.                                                                                                                                                                                                       |
 
 ## Benchmark Snapshot
 
@@ -59,25 +59,25 @@ export class DemoStack extends Stack {
 
 The construct follows the upstream `BucketDeployment` API where the behavior maps cleanly to the Rust provider.
 
-| Area | Supported |
-| --- | --- |
-| Sources | `sources`, `Source.data`, `Source.jsonData`, `Source.yamlData`, `embeddedCatalog` |
-| Destination | `destinationBucket`, `destinationKeyPrefix`, `deployedBucket`, `objectKeys` |
-| Filtering | `include`, `exclude` |
-| Update behavior | `extract`, `prune`, `retainOnDelete`, `outputObjectKeys` |
-| S3 metadata | `accessControl`, `cacheControl`, `contentDisposition`, `contentEncoding`, `contentLanguage`, `contentType`, `metadata`, `serverSideEncryption`, `serverSideEncryptionAwsKmsKeyId`, `storageClass`, `websiteRedirectLocation` |
-| CloudFront | `distribution`, `distributionPaths`, `waitForDistributionInvalidation` |
-| Provider Lambda | `architecture`, `bundling`, `ephemeralStorageSize`, `logGroup`, `logRetention`, `memoryLimit`, `role`, `securityGroups`, `vpc`, `vpcSubnets` |
-| Runtime tuning | `maxParallelTransfers`, `advancedRuntimeTuning` |
+| Area            | Supported                                                                                                                                                                                                                    |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Sources         | `sources`, `Source.data`, `Source.jsonData`, `Source.yamlData`, `embeddedCatalog`                                                                                                                                            |
+| Destination     | `destinationBucket`, `destinationKeyPrefix`, `deployedBucket`, `objectKeys`                                                                                                                                                  |
+| Filtering       | `include`, `exclude`                                                                                                                                                                                                         |
+| Update behavior | `extract`, `prune`, `retainOnDelete`, `outputObjectKeys`                                                                                                                                                                     |
+| S3 metadata     | `accessControl`, `cacheControl`, `contentDisposition`, `contentEncoding`, `contentLanguage`, `contentType`, `metadata`, `serverSideEncryption`, `serverSideEncryptionAwsKmsKeyId`, `storageClass`, `websiteRedirectLocation` |
+| CloudFront      | `distribution`, `distributionPaths`, `waitForDistributionInvalidation`                                                                                                                                                       |
+| Provider Lambda | `architecture`, `bundling`, `ephemeralStorageSize`, `logGroup`, `logRetention`, `memoryLimit`, `role`, `securityGroups`, `vpc`, `vpcSubnets`                                                                                 |
+| Runtime tuning  | `maxParallelTransfers`, `advancedRuntimeTuning`                                                                                                                                                                              |
 
 Unsupported upstream props:
 
-| Prop | Reason |
-| --- | --- |
-| `expires` | Prefer `cacheControl` for deployment-time cache behavior. |
-| `serverSideEncryptionCustomerAlgorithm` | SSE-C is intentionally not implemented; use SSE-S3 or SSE-KMS. |
-| `signContent` | The provider uses AWS SDK calls directly, not the upstream AWS CLI upload path. |
-| `useEfs` | The provider reads source archives with S3 ranges and does not use EFS. |
+| Prop                                    | Reason                                                                          |
+| --------------------------------------- | ------------------------------------------------------------------------------- |
+| `expires`                               | Prefer `cacheControl` for deployment-time cache behavior.                       |
+| `serverSideEncryptionCustomerAlgorithm` | SSE-C is intentionally not implemented; use SSE-S3 or SSE-KMS.                  |
+| `signContent`                           | The provider uses AWS SDK calls directly, not the upstream AWS CLI upload path. |
+| `useEfs`                                | The provider reads source archives with S3 ranges and does not use EFS.         |
 
 ## How It Works
 
