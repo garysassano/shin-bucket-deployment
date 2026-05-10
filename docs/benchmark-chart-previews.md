@@ -2,38 +2,50 @@
 
 These preview charts use the same sanitized `2026-05-09-rust-aws-tiny-many-1024` records from `docs/benchmark-history.jsonl`.
 
-## Signal Split
+Preview-only SVGs live in `docs/benchmark-preview-assets`. The generated benchmark report chart remains in `docs/benchmark-assets`.
+
+## Signal Split v5
+
+Default current preview. Two metric panels, one for Lambda handler duration and one for max memory.
+
+![Signal split v5 benchmark chart](benchmark-preview-assets/signal-split-v5.svg)
+
+## Earlier Renderer Previews
+
+These are retained as design history.
+
+### Signal Split v1
 
 Two metric panels, one for Lambda handler duration and one for max memory.
 
-![Signal split benchmark chart](benchmark-assets/preview-signal-split.svg)
+![Signal split v1 benchmark chart](benchmark-preview-assets/signal-split-v1.svg)
 
-## Signal Scorecard
+### Signal Scorecard
 
 Phase-first rows. Each phase carries compact duration and memory bars, with the handler speedup called out on the right.
 
-![Signal scorecard benchmark chart](benchmark-assets/preview-signal-scorecard.svg)
+![Signal scorecard benchmark chart](benchmark-preview-assets/signal-scorecard.svg)
 
-## Signal Cards
+### Signal Cards
 
 Each phase gets a larger card with speedup, memory saved, duration bars, and memory bars grouped together.
 
-![Signal cards benchmark chart](benchmark-assets/preview-signal-cards.svg)
+![Signal cards benchmark chart](benchmark-preview-assets/signal-cards.svg)
 
-## Circuit Scorecard
+### Circuit Scorecard
 
 Scorecard renderer with an alternate high-contrast palette.
 
-![Circuit scorecard benchmark chart](benchmark-assets/preview-circuit-scorecard.svg)
+![Circuit scorecard benchmark chart](benchmark-preview-assets/circuit-scorecard.svg)
 
-## Circuit Cards
+### Circuit Cards
 
 Card renderer with the alternate high-contrast palette.
 
-![Circuit cards benchmark chart](benchmark-assets/preview-circuit-cards.svg)
+![Circuit cards benchmark chart](benchmark-preview-assets/circuit-cards.svg)
 
-## Forge Cards
+### Forge Cards
 
 Card renderer with a warmer palette.
 
-![Forge cards benchmark chart](benchmark-assets/preview-forge-cards.svg)
+![Forge cards benchmark chart](benchmark-preview-assets/forge-cards.svg)

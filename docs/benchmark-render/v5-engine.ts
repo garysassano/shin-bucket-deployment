@@ -1,36 +1,7 @@
 /**
- * Benchmark SVG render engine for preview-signal-split-v5.
+ * Benchmark SVG render engine for signal-split-v5.
  * All positions derived from layout constants — change one value and everything adapts.
  */
-
-type ChartVariant = 'short' | 'long';
-
-function parseVariant(argv: string[]): ChartVariant {
-  const variantIndex = argv.indexOf('--variant');
-  const variantValue = variantIndex === -1 ? undefined : argv[variantIndex + 1];
-  const inlineVariant = argv
-    .find((arg) => arg.startsWith('--variant='))
-    ?.slice('--variant='.length);
-
-  if (argv.includes('--long')) {
-    return 'long';
-  }
-  if (argv.includes('--short')) {
-    return 'short';
-  }
-
-  const requestedVariant = inlineVariant ?? variantValue;
-  if (requestedVariant === undefined) {
-    return 'short';
-  }
-  if (requestedVariant === 'short' || requestedVariant === 'long') {
-    return requestedVariant;
-  }
-
-  throw new Error(`Unknown chart variant "${requestedVariant}". Use "short" or "long".`);
-}
-
-const chartVariant = parseVariant(process.argv.slice(2));
 
 // ═══ LAYOUT CONSTANTS ═══
 const CANVAS_PAD_LEFT = 24;
@@ -44,7 +15,7 @@ const BAR_H = 11;             // bar thickness
 const BAR_RX = 5.5;           // bar corner radius
 const BAR_GAP = 6;            // gap between shin and aws bar
 const BAR_X = 180;            // bar left edge
-const BAR_W = chartVariant === 'long' ? 540 : 400; // max bar width
+const BAR_W = 400;            // max bar width
 
 const ROW_PAD_TOP = 11;       // space from separator to shin bar top
 const ROW_PAD_BOTTOM = 11;    // space from aws bar bottom to next separator
@@ -229,12 +200,8 @@ function render(): string {
 // ═══ OUTPUT ═══
 import * as fs from 'fs';
 import * as path from 'path';
-const outFileName =
-  chartVariant === 'long'
-    ? 'preview-signal-split-v5-long.svg'
-    : 'preview-signal-split-v5-short.svg';
-const outPath = path.join(__dirname, '..', 'benchmark-assets', outFileName);
+const outPath = path.join(__dirname, '..', 'benchmark-preview-assets', 'signal-split-v5.svg');
+fs.mkdirSync(path.dirname(outPath), { recursive: true });
 fs.writeFileSync(outPath, render());
 console.log(`Written: ${outPath}`);
-console.log(`Variant: ${chartVariant}`);
 console.log(`Canvas: ${CANVAS_W}×${CANVAS_H}, Row height: ${ROW_H}px, Bar: ${BAR_H}px`);
