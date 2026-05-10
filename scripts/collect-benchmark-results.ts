@@ -203,9 +203,85 @@ function readSummaryFile(path: string): unknown | undefined {
   if (!existsSync(path)) {
     return undefined;
   }
-  const lines = readFileSync(path, "utf8").trim().split(/\n/).filter(Boolean);
-  const parsed = lines.map((line) => JSON.parse(line) as unknown);
-  return parsed.at(-1);
+  const text = readFileSync(path, "utf8").trim();
+  if (!text) {
+    return undefined;
+  }
+  const summary = readCloudWatchSummaryJson(text) ?? readSummaryJsonLines(text);
+  if (summary === undefined) {
+    throw new Error(`No shin_deployment_summary record found in ${path}.`);
+  }
+  return summary;
+}
+
+function readCloudWatchSummaryJson(text: string): unknown | undefined {
+  const parsed = tryParseJson(text);
+  if (!isRecord(parsed) || !Array.isArray(parsed.events)) {
+    return undefined;
+  }
+
+  const summaries = parsed.events
+    .filter(isRecord)
+    .sort((left, right) => optionalTimestamp(left) - optionalTimestamp(right))
+    .map((event) => (typeof event.message === "string" ? summaryFromMessage(event.message) : undefined))
+    .filter((summary) => summary !== undefined);
+  return summaries.at(-1);
+}
+
+function readSummaryJsonLines(text: string): unknown | undefined {
+  const summaries = text
+    .split(/\n/)
+    .filter(Boolean)
+    .map((line) => summaryFromJsonLine(line))
+    .filter((summary) => summary !== undefined);
+  return summaries.at(-1);
+}
+
+function summaryFromJsonLine(line: string): unknown | undefined {
+  const parsed = JSON.parse(line) as unknown;
+  if (isDeploymentSummary(parsed)) {
+    return parsed;
+  }
+  if (isRecord(parsed) && typeof parsed.message === "string") {
+    return summaryFromMessage(parsed.message);
+  }
+  return undefined;
+}
+
+function summaryFromMessage(message: string): unknown | undefined {
+  const cleanMessage = stripAnsi(message);
+  const match = cleanMessage.match(/\bsummary=(?:"((?:\\.|[^"\\])*)"|(\{.*\}))/);
+  if (!match) {
+    return undefined;
+  }
+
+  const summaryText = match[1] ? JSON.parse(`"${match[1]}"`) : match[2];
+  const summary = tryParseJson(summaryText);
+  return isDeploymentSummary(summary) ? summary : undefined;
+}
+
+function isDeploymentSummary(value: unknown): value is Record<string, unknown> {
+  return isRecord(value) && value.event === "shin_deployment_summary";
+}
+
+function optionalTimestamp(value: Record<string, unknown>): number {
+  return typeof value.timestamp === "number" ? value.timestamp : 0;
+}
+
+function tryParseJson(value: string): unknown | undefined {
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function stripAnsi(value: string): string {
+  return value.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
 }
 
 function outputString(logText: string, outputName: string): string | null {
