@@ -83,13 +83,15 @@ pnpm example deploy benchmark-assets -- --profile <profile>
 
 Repeat the same sequence with `benchmark-assets-aws` for upstream AWS CDK `BucketDeployment`.
 
-For parameter sweeps, keep all non-swept inputs identical and encode the swept value in the record so rows remain distinguishable. For `maxParallelTransfers` sweeps, use distinct phase names such as `cold-create-parallel-8`, `cold-create-parallel-16`, and include the provider summary field `maxParallelTransfers`.
+For parameter sweeps, keep all non-swept inputs identical and encode the swept value in the record so rows remain distinguishable. For `maxParallelTransfers` sweeps, use distinct phase names such as `cold-create-parallel-8`, `cold-create-parallel-16`, and include the provider summary field `maxParallelTransfers`. Use a distinct `runId` and `series` for each memory or configuration sweep so generated reports can be scoped cleanly.
 
 Always collect telemetry first, then destroy benchmark stacks, then verify they are absent before finalizing records.
 
 ## Telemetry Capture
 
 Capture raw deploy output, CloudWatch `REPORT` events, and CloudWatch `shin_deployment_summary` events in scratch outside the repo. The benchmark collector understands both sanitized JSONL summary files and raw `aws logs filter-log-events --output json` files; prefer passing the raw CloudWatch summary file directly to avoid manual unescaping mistakes.
+
+Use CloudWatch `REPORT` as the source of truth for `providerDurationSeconds`, `billedDurationSeconds`, `initDurationSeconds`, and `maxMemoryMb`. Use `providerSummary.durationMs` and `providerSummary.phaseMs` for provider-internal phase analysis only. If the two differ slightly, do not overwrite CloudWatch duration fields with summary values.
 
 After each deploy/update and before destroy:
 
@@ -196,8 +198,9 @@ After appending JSONL records, update `docs/benchmark.md` `Current Results` for 
 The human page should include:
 
 - metadata table
-- detailed Rust vs AWS comparison table for every comparable metric
-- generated charts from committed JSONL data
+- detailed Rust vs AWS comparison table for every comparable metric when the current run has paired implementations
+- parameter-sweep comparison tables when the current run is Rust-only, including the swept value, baseline-relative speedup, memory, end-to-end timings, and telemetry counters
+- generated charts from committed JSONL data when applicable
 - provider summary highlights for Rust aggregate counters
 - short caveats and cleanup status
 
