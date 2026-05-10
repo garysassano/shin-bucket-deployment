@@ -38,10 +38,10 @@ function parseHeaderLayout(argv: string[]): HeaderLayout {
     ?.slice('--header='.length);
 
   const requestedHeader = inlineHeader ?? headerValue;
-  if (requestedHeader === undefined || requestedHeader === 'two-line') {
-    return 'two-line';
+  if (requestedHeader === undefined || requestedHeader === 'three-line') {
+    return 'three-line';
   }
-  if (requestedHeader === 'three-line') {
+  if (requestedHeader === 'two-line') {
     return requestedHeader;
   }
 
@@ -131,7 +131,7 @@ const chartMemory = chartVariant === 'aws' ? simulateAwsWins(memory) : memory;
 const subtitlePrefix =
   chartVariant === 'aws' ? 'AWS win simulation' : 'vs AWS BucketDeployment';
 const outFileSuffix =
-  `${chartVariant === 'aws' ? '-aws' : ''}${headerLayout === 'three-line' ? '-three-line' : ''}`;
+  `${chartVariant === 'aws' ? '-aws' : ''}${headerLayout === 'two-line' ? '-two-line' : ''}`;
 
 const legendSwatchY = headerLayout === 'three-line' ? 22 : 12;
 const legendLabelY = headerLayout === 'three-line' ? 30 : 20;
