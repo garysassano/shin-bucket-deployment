@@ -3,6 +3,32 @@
  * All positions derived from layout constants — change one value and everything adapts.
  */
 
+type ChartVariant = 'default' | 'aws';
+
+function parseVariant(argv: string[]): ChartVariant {
+  const variantIndex = argv.indexOf('--variant');
+  const variantValue = variantIndex === -1 ? undefined : argv[variantIndex + 1];
+  const inlineVariant = argv
+    .find((arg) => arg.startsWith('--variant='))
+    ?.slice('--variant='.length);
+
+  if (argv.includes('--aws')) {
+    return 'aws';
+  }
+
+  const requestedVariant = inlineVariant ?? variantValue;
+  if (requestedVariant === undefined || requestedVariant === 'default') {
+    return 'default';
+  }
+  if (requestedVariant === 'aws') {
+    return requestedVariant;
+  }
+
+  throw new Error(`Unknown chart variant "${requestedVariant}". Use "default" or "aws".`);
+}
+
+const chartVariant = parseVariant(process.argv.slice(2));
+
 // ═══ LAYOUT CONSTANTS ═══
 const CANVAS_PAD_LEFT = 24;
 const CANVAS_PAD_RIGHT = 30;
@@ -44,38 +70,76 @@ const FONT_SIZE_BADGE = 11;
 // ═══ COLOR CONSTANTS ═══
 const COLOR_SECTION_HEADER_TEXT = '#6f91a8';
 const COLOR_ROW_LABEL_TEXT = '#d8edf8';
+const COLOR_BADGE_NEUTRAL_FILL = '#12202c';
+const COLOR_BADGE_NEUTRAL_TEXT = '#f0f8ff';
+const COLOR_BADGE_SHIN_FILL = '#082b35';
+const COLOR_BADGE_SHIN_STROKE = '#18d4f8';
+const COLOR_BADGE_SHIN_TEXT = '#6ef0d0';
+const COLOR_BADGE_AWS_FILL = '#341821';
+const COLOR_BADGE_AWS_STROKE = '#ff6a2b';
+const COLOR_BADGE_AWS_TEXT = '#ffa033';
 
 // ═══ DATA ═══
-interface Row { label: string; shin: number; aws: number; delta: string; best?: boolean; }
+interface Row { label: string; shin: number; aws: number; }
 
 const duration: Row[] = [
-  { label: 'cold-create', shin: 14.3, aws: 27.3, delta: '1.92×' },
-  { label: 'forced-unchanged', shin: 0.46, aws: 28.3, delta: '61.4×', best: true },
-  { label: 'sparse-update', shin: 0.62, aws: 28.8, delta: '46.2×' },
-  { label: 'prune-update', shin: 15.8, aws: 28.4, delta: '1.8×' },
+  { label: 'cold-create', shin: 14.3, aws: 27.3 },
+  { label: 'forced-unchanged', shin: 0.46, aws: 28.3 },
+  { label: 'sparse-update', shin: 0.62, aws: 28.8 },
+  { label: 'prune-update', shin: 15.8, aws: 28.4 },
 ];
 const memory: Row[] = [
-  { label: 'cold-create', shin: 79, aws: 212, delta: '−63%', best: true },
-  { label: 'forced-unchanged', shin: 89, aws: 214, delta: '−58%' },
-  { label: 'sparse-update', shin: 89, aws: 214, delta: '−58%' },
-  { label: 'prune-update', shin: 95, aws: 214, delta: '−56%' },
+  { label: 'cold-create', shin: 79, aws: 212 },
+  { label: 'forced-unchanged', shin: 89, aws: 214 },
+  { label: 'sparse-update', shin: 89, aws: 214 },
+  { label: 'prune-update', shin: 95, aws: 214 },
 ];
 const MAX_DUR = 28.8;
 const MAX_MEM = 214;
 
+function simulateAwsWins(rows: Row[]): Row[] {
+  return rows.map((row) => ({
+    ...row,
+    shin: row.aws,
+    aws: row.shin,
+  }));
+}
+
+const chartDuration = chartVariant === 'aws' ? simulateAwsWins(duration) : duration;
+const chartMemory = chartVariant === 'aws' ? simulateAwsWins(memory) : memory;
+const subtitlePrefix =
+  chartVariant === 'aws' ? 'AWS win simulation' : 'vs AWS BucketDeployment';
+
 // ═══ DERIVED POSITIONS ═══
 const sectionATop = HEADER_H;
 const sectionARowsTop = sectionATop + SECTION_HDR_H + 1; // +1 for bottom line
-const sectionABottom = sectionARowsTop + ROW_H * duration.length - 1;
+const sectionABottom = sectionARowsTop + ROW_H * chartDuration.length - 1;
 const dividerY = sectionABottom;
 const sectionBTop = dividerY + 1;
 const sectionBRowsTop = sectionBTop + SECTION_HDR_H + 1;
-const sectionBBottom = sectionBRowsTop + ROW_H * memory.length - 1;
+const sectionBBottom = sectionBRowsTop + ROW_H * chartMemory.length - 1;
 const CANVAS_H = sectionBBottom;
 
 // ═══ HELPERS ═══
 function barWidth(val: number, max: number): number {
   return Math.max(4, (val / max) * BAR_W);
+}
+
+function formatMultiplier(value: number): string {
+  const decimals = value < 2 ? 2 : 1;
+  return `${value.toFixed(decimals).replace(/\.?0+$/, '')}×`;
+}
+
+function formatBadgeText(row: Row, isMem: boolean): string {
+  const winner = Math.min(row.shin, row.aws);
+  const loser = Math.max(row.shin, row.aws);
+  if (winner === loser) {
+    return 'tie';
+  }
+  if (isMem) {
+    return `${Math.round(((loser - winner) / loser) * 100)}%`;
+  }
+  return formatMultiplier(loser / winner);
 }
 
 function rowY(sectionRowsTop: number, index: number) {
@@ -94,15 +158,29 @@ function renderRow(row: Row, index: number, sectionRowsTop: number, max: number,
   const aw = barWidth(row.aws, max);
   const shinVal = isMem ? `${row.shin} MiB` : `${row.shin}s`;
   const awsVal = isMem ? `${row.aws} MiB` : `${row.aws}s`;
+  const badgeText = formatBadgeText(row, isMem);
   const useGlowShin = sw > 30;
-  const badgeFill = row.best ? '#0a3028' : '#12202c';
-  const badgeStroke = row.best ? ' stroke="#0ee89e" stroke-width="0.5"' : '';
-  const badgeTextFill = row.best ? '#6ef0d0' : '#f0f8ff';
 
   // Determine winner: lower is better
   const shinWins = row.shin < row.aws;
+  const awsWins = row.aws < row.shin;
   const shinValFill = shinWins ? '#6ef0d0' : '#5a7a94';
   const awsValFill = shinWins ? '#5a7a94' : '#ffa033';
+  const badgeFill = shinWins
+    ? COLOR_BADGE_SHIN_FILL
+    : awsWins
+      ? COLOR_BADGE_AWS_FILL
+      : COLOR_BADGE_NEUTRAL_FILL;
+  const badgeStroke = shinWins
+    ? ` stroke="${COLOR_BADGE_SHIN_STROKE}" stroke-width="0.5"`
+    : awsWins
+      ? ` stroke="${COLOR_BADGE_AWS_STROKE}" stroke-width="0.5"`
+      : '';
+  const badgeTextFill = shinWins
+    ? COLOR_BADGE_SHIN_TEXT
+    : awsWins
+      ? COLOR_BADGE_AWS_TEXT
+      : COLOR_BADGE_NEUTRAL_TEXT;
 
   let s = '';
   // Label
@@ -120,7 +198,7 @@ function renderRow(row: Row, index: number, sectionRowsTop: number, max: number,
   s += `<text x="${COL_AWS_X}" y="${textY}" font-family="JetBrains Mono, monospace" font-size="${FONT_SIZE_METRIC_VALUE}" font-weight="${shinWins ? '400' : '700'}" fill="${awsValFill}">${awsVal}</text>\n`;
   // Badge
   s += `<rect x="${COL_DELTA_X}" y="${badgeY}" width="${BADGE_W}" height="${BADGE_H}" rx="${BADGE_RX}" fill="${badgeFill}"${badgeStroke} filter="url(#badgeShadow)"/>\n`;
-  s += `<text x="${COL_DELTA_X + BADGE_W / 2}" y="${badgeY + 15}" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="${FONT_SIZE_BADGE}" font-weight="800" fill="${badgeTextFill}">${row.delta}</text>\n`;
+  s += `<text x="${COL_DELTA_X + BADGE_W / 2}" y="${badgeY + 15}" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="${FONT_SIZE_BADGE}" font-weight="800" fill="${badgeTextFill}">${badgeText}</text>\n`;
   // Separator (skip for last row)
   if (!isLast) {
     s += `<rect x="${CANVAS_PAD_LEFT}" y="${sepY}" width="${CANVAS_W - CANVAS_PAD_LEFT - CANVAS_PAD_RIGHT}" height="1" fill="#142230"/>\n`;
@@ -172,7 +250,7 @@ function render(): string {
 
 <!-- Header -->
 <text x="${CANVAS_PAD_LEFT}" y="26" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_TITLE}" font-weight="800" fill="#f0f8ff" letter-spacing="-0.3">ShinBucketDeployment</text>
-<text x="${CANVAS_PAD_LEFT}" y="46" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_SUBTITLE}" font-weight="500" fill="${COLOR_SECTION_HEADER_TEXT}">vs AWS BucketDeployment · Lambda 1024 MiB · tiny-many · 2,584 objects · 7.8 MiB</text>
+<text x="${CANVAS_PAD_LEFT}" y="46" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_SUBTITLE}" font-weight="500" fill="${COLOR_SECTION_HEADER_TEXT}">${subtitlePrefix} · Lambda 1024 MiB · tiny-many · 2,584 objects · 7.8 MiB</text>
 <rect x="${CANVAS_W - 200}" y="12" width="12" height="8" rx="2" fill="url(#shin)"/>
 <text x="${CANVAS_W - 182}" y="20" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_HEADER_LEGEND}" font-weight="700" fill="#8ab8d0">SHIN</text>
 <rect x="${CANVAS_W - 130}" y="12" width="12" height="8" rx="2" fill="url(#aws)"/>
@@ -183,9 +261,9 @@ function render(): string {
 `;
 
   // Section A: Duration
-  svg += renderSectionHeader(sectionATop, 'HANDLER DURATION', 'GAIN');
-  for (let i = 0; i < duration.length; i++) {
-    svg += renderRow(duration[i], i, sectionARowsTop, MAX_DUR, false, i === duration.length - 1);
+  svg += renderSectionHeader(sectionATop, 'HANDLER DURATION', 'FASTER');
+  for (let i = 0; i < chartDuration.length; i++) {
+    svg += renderRow(chartDuration[i], i, sectionARowsTop, MAX_DUR, false, i === chartDuration.length - 1);
   }
 
   // Divider
@@ -193,8 +271,8 @@ function render(): string {
 
   // Section B: Memory
   svg += renderSectionHeader(sectionBTop, 'MAX MEMORY', 'SAVED');
-  for (let i = 0; i < memory.length; i++) {
-    svg += renderRow(memory[i], i, sectionBRowsTop, MAX_MEM, true, i === memory.length - 1);
+  for (let i = 0; i < chartMemory.length; i++) {
+    svg += renderRow(chartMemory[i], i, sectionBRowsTop, MAX_MEM, true, i === chartMemory.length - 1);
   }
 
   svg += `</svg>`;
@@ -204,8 +282,10 @@ function render(): string {
 // ═══ OUTPUT ═══
 import * as fs from 'fs';
 import * as path from 'path';
-const outPath = path.join(__dirname, '..', 'benchmark-preview-assets', 'signal-split-v5.svg');
+const outFileName = chartVariant === 'aws' ? 'signal-split-v5-aws.svg' : 'signal-split-v5.svg';
+const outPath = path.join(__dirname, '..', 'benchmark-preview-assets', outFileName);
 fs.mkdirSync(path.dirname(outPath), { recursive: true });
 fs.writeFileSync(outPath, render());
 console.log(`Written: ${outPath}`);
+console.log(`Variant: ${chartVariant}`);
 console.log(`Canvas: ${CANVAS_W}×${CANVAS_H}, Row height: ${ROW_H}px, Bar: ${BAR_H}px`);
