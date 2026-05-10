@@ -10,6 +10,12 @@ Default current preview with compact bar tracks. Two metric panels, one for Lamb
 
 ![Signal split v5 benchmark chart](benchmark-preview-assets/signal-split-v5.svg)
 
+## Signal Split v5 Three-line Header
+
+Alternate header layout with comparison and metadata split across separate lines.
+
+![Signal split v5 three-line header benchmark chart](benchmark-preview-assets/signal-split-v5-three-line.svg)
+
 ## Signal Split v5 AWS Win Simulation
 
 Simulated AWS-winning data to verify the winner-colored badge treatment.

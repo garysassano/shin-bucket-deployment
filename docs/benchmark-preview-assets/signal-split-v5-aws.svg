@@ -29,7 +29,7 @@
 
 <!-- Header -->
 <text x="24" y="26" font-family="Inter, -apple-system, sans-serif" font-size="18" font-weight="800" fill="#f0f8ff" letter-spacing="-0.3">ShinBucketDeployment</text>
-<text x="24" y="46" font-family="Inter, -apple-system, sans-serif" font-size="12" font-weight="500" fill="#6f91a8">AWS win simulation · Lambda 1024 MiB · tiny-many · 2,584 objects · 7.8 MiB</text>
+<text x="24" y="46" font-family="Inter, -apple-system, sans-serif" font-size="12" font-weight="500" fill="#6f91a8">AWS win simulation · Profile: tiny-many · Lambda mem: 1024 MiB · Assets: 2,584 / 7.8 MiB</text>
 <rect x="590" y="12" width="12" height="8" rx="2" fill="url(#shin)"/>
 <text x="608" y="20" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="700" fill="#8ab8d0">SHIN</text>
 <rect x="660" y="12" width="12" height="8" rx="2" fill="url(#aws)"/>

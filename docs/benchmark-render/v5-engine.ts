@@ -4,6 +4,7 @@
  */
 
 type ChartVariant = 'default' | 'aws';
+type HeaderLayout = 'two-line' | 'three-line';
 
 function parseVariant(argv: string[]): ChartVariant {
   const variantIndex = argv.indexOf('--variant');
@@ -29,11 +30,31 @@ function parseVariant(argv: string[]): ChartVariant {
 
 const chartVariant = parseVariant(process.argv.slice(2));
 
+function parseHeaderLayout(argv: string[]): HeaderLayout {
+  const headerIndex = argv.indexOf('--header');
+  const headerValue = headerIndex === -1 ? undefined : argv[headerIndex + 1];
+  const inlineHeader = argv
+    .find((arg) => arg.startsWith('--header='))
+    ?.slice('--header='.length);
+
+  const requestedHeader = inlineHeader ?? headerValue;
+  if (requestedHeader === undefined || requestedHeader === 'two-line') {
+    return 'two-line';
+  }
+  if (requestedHeader === 'three-line') {
+    return requestedHeader;
+  }
+
+  throw new Error(`Unknown header layout "${requestedHeader}". Use "two-line" or "three-line".`);
+}
+
+const headerLayout = parseHeaderLayout(process.argv.slice(2));
+
 // ═══ LAYOUT CONSTANTS ═══
 const CANVAS_PAD_LEFT = 24;
 const CANVAS_PAD_RIGHT = 30;
 
-const HEADER_H = 60;          // header band height (title + subtitle + padding)
+const HEADER_H = headerLayout === 'three-line' ? 72 : 60; // header band height
 const SECTION_HDR_H = 22;     // section column-header band
 const SECTION_HDR_PAD_TOP = 15; // text baseline within section header
 
@@ -109,6 +130,8 @@ const chartDuration = chartVariant === 'aws' ? simulateAwsWins(duration) : durat
 const chartMemory = chartVariant === 'aws' ? simulateAwsWins(memory) : memory;
 const subtitlePrefix =
   chartVariant === 'aws' ? 'AWS win simulation' : 'vs AWS BucketDeployment';
+const outFileSuffix =
+  `${chartVariant === 'aws' ? '-aws' : ''}${headerLayout === 'three-line' ? '-three-line' : ''}`;
 
 // ═══ DERIVED POSITIONS ═══
 const sectionATop = HEADER_H;
@@ -217,6 +240,17 @@ function renderSectionHeader(y: number, title: string, deltaLabel: string): stri
   return s;
 }
 
+function renderHeader(): string {
+  if (headerLayout === 'three-line') {
+    return `<text x="${CANVAS_PAD_LEFT}" y="23" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_TITLE}" font-weight="800" fill="#f0f8ff" letter-spacing="-0.3">ShinBucketDeployment</text>
+<text x="${CANVAS_PAD_LEFT}" y="43" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_SUBTITLE}" font-weight="600" fill="${COLOR_SECTION_HEADER_TEXT}">${subtitlePrefix}</text>
+<text x="${CANVAS_PAD_LEFT}" y="61" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_HEADER_LEGEND}" font-weight="500" fill="${COLOR_SECTION_HEADER_TEXT}">Profile: tiny-many · Lambda mem: 1024 MiB · Assets: 2,584 / 7.8 MiB</text>`;
+  }
+
+  return `<text x="${CANVAS_PAD_LEFT}" y="26" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_TITLE}" font-weight="800" fill="#f0f8ff" letter-spacing="-0.3">ShinBucketDeployment</text>
+<text x="${CANVAS_PAD_LEFT}" y="46" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_SUBTITLE}" font-weight="500" fill="${COLOR_SECTION_HEADER_TEXT}">${subtitlePrefix} · Profile: tiny-many · Lambda mem: 1024 MiB · Assets: 2,584 / 7.8 MiB</text>`;
+}
+
 // ═══ RENDER ═══
 function render(): string {
   let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${CANVAS_W}" height="${CANVAS_H}" viewBox="0 0 ${CANVAS_W} ${CANVAS_H}" role="img" aria-labelledby="title desc">
@@ -249,8 +283,7 @@ function render(): string {
 <rect width="${CANVAS_W}" height="${CANVAS_H}" fill="url(#bgGrad)"/>
 
 <!-- Header -->
-<text x="${CANVAS_PAD_LEFT}" y="26" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_TITLE}" font-weight="800" fill="#f0f8ff" letter-spacing="-0.3">ShinBucketDeployment</text>
-<text x="${CANVAS_PAD_LEFT}" y="46" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_SUBTITLE}" font-weight="500" fill="${COLOR_SECTION_HEADER_TEXT}">${subtitlePrefix} · Lambda 1024 MiB · tiny-many · 2,584 objects · 7.8 MiB</text>
+${renderHeader()}
 <rect x="${CANVAS_W - 200}" y="12" width="12" height="8" rx="2" fill="url(#shin)"/>
 <text x="${CANVAS_W - 182}" y="20" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_HEADER_LEGEND}" font-weight="700" fill="#8ab8d0">SHIN</text>
 <rect x="${CANVAS_W - 130}" y="12" width="12" height="8" rx="2" fill="url(#aws)"/>
@@ -282,10 +315,11 @@ function render(): string {
 // ═══ OUTPUT ═══
 import * as fs from 'fs';
 import * as path from 'path';
-const outFileName = chartVariant === 'aws' ? 'signal-split-v5-aws.svg' : 'signal-split-v5.svg';
+const outFileName = `signal-split-v5${outFileSuffix}.svg`;
 const outPath = path.join(__dirname, '..', 'benchmark-preview-assets', outFileName);
 fs.mkdirSync(path.dirname(outPath), { recursive: true });
 fs.writeFileSync(outPath, render());
 console.log(`Written: ${outPath}`);
 console.log(`Variant: ${chartVariant}`);
+console.log(`Header: ${headerLayout}`);
 console.log(`Canvas: ${CANVAS_W}×${CANVAS_H}, Row height: ${ROW_H}px, Bar: ${BAR_H}px`);
