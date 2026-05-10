@@ -31,17 +31,17 @@
 <text x="24" y="26" font-family="Inter, -apple-system, sans-serif" font-size="18" font-weight="800" fill="#f0f8ff" letter-spacing="-0.3">ShinBucketDeployment</text>
 <text x="24" y="46" font-family="Inter, -apple-system, sans-serif" font-size="12" font-weight="500" fill="#5a7a94">vs AWS BucketDeployment · 1024 MiB · tiny-many · 2,584 objects · 7.8 MiB</text>
 <rect x="670" y="12" width="12" height="8" rx="2" fill="url(#shin)"/>
-<text x="688" y="20" font-family="Inter, -apple-system, sans-serif" font-size="10" font-weight="700" fill="#8ab8d0">SHIN</text>
+<text x="688" y="20" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="700" fill="#8ab8d0">SHIN</text>
 <rect x="740" y="12" width="12" height="8" rx="2" fill="url(#aws)"/>
-<text x="758" y="20" font-family="Inter, -apple-system, sans-serif" font-size="10" font-weight="700" fill="#8ab8d0">AWS</text>
-<text x="670" y="42" font-family="Inter, -apple-system, sans-serif" font-size="10" font-weight="500" fill="#3d5a70">▼ lower is better</text>
+<text x="758" y="20" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="700" fill="#8ab8d0">AWS</text>
+<text x="670" y="42" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="500" fill="#3d5a70">▼ lower is better</text>
 <rect x="0" y="59" width="870" height="1" fill="#1a2a38"/>
 
 <rect y="60" width="870" height="22" fill="#0c1420"/>
-<text x="24" y="75" font-family="Inter, -apple-system, sans-serif" font-size="10" font-weight="700" fill="#4a6a80" letter-spacing="0.8">HANDLER DURATION</text>
-<text x="600" y="75" font-family="Inter, -apple-system, sans-serif" font-size="10" font-weight="700" fill="#4a6a80" letter-spacing="0.8">SHIN</text>
-<text x="690" y="75" font-family="Inter, -apple-system, sans-serif" font-size="10" font-weight="700" fill="#4a6a80" letter-spacing="0.8">AWS</text>
-<text x="790" y="75" font-family="Inter, -apple-system, sans-serif" font-size="10" font-weight="700" fill="#4a6a80" letter-spacing="0.8">GAIN</text>
+<text x="24" y="75" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="700" fill="#4a6a80" letter-spacing="0.8">HANDLER DURATION</text>
+<text x="600" y="75" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="700" fill="#4a6a80" letter-spacing="0.8">SHIN</text>
+<text x="690" y="75" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="700" fill="#4a6a80" letter-spacing="0.8">AWS</text>
+<text x="790" y="75" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="700" fill="#4a6a80" letter-spacing="0.8">GAIN</text>
 <rect x="0" y="82" width="870" height="1" fill="#142230"/>
 <text x="24" y="112" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="600" fill="#c8e0f0">cold-create</text>
 <rect x="180" y="94" width="400" height="11" rx="5.5" fill="#12202c"/>
@@ -90,10 +90,10 @@
 <text x="810" y="263" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" font-weight="800" fill="#f0f8ff">1.8×</text>
 <rect x="0" y="282" width="870" height="1" fill="#1a2a38"/>
 <rect y="283" width="870" height="22" fill="#0c1420"/>
-<text x="24" y="298" font-family="Inter, -apple-system, sans-serif" font-size="10" font-weight="700" fill="#4a6a80" letter-spacing="0.8">MAX MEMORY</text>
-<text x="600" y="298" font-family="Inter, -apple-system, sans-serif" font-size="10" font-weight="700" fill="#4a6a80" letter-spacing="0.8">SHIN</text>
-<text x="690" y="298" font-family="Inter, -apple-system, sans-serif" font-size="10" font-weight="700" fill="#4a6a80" letter-spacing="0.8">AWS</text>
-<text x="790" y="298" font-family="Inter, -apple-system, sans-serif" font-size="10" font-weight="700" fill="#4a6a80" letter-spacing="0.8">SAVED</text>
+<text x="24" y="298" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="700" fill="#4a6a80" letter-spacing="0.8">MAX MEMORY</text>
+<text x="600" y="298" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="700" fill="#4a6a80" letter-spacing="0.8">SHIN</text>
+<text x="690" y="298" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="700" fill="#4a6a80" letter-spacing="0.8">AWS</text>
+<text x="790" y="298" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="700" fill="#4a6a80" letter-spacing="0.8">SAVED</text>
 <rect x="0" y="305" width="870" height="1" fill="#142230"/>
 <text x="24" y="335" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="600" fill="#c8e0f0">cold-create</text>
 <rect x="180" y="317" width="400" height="11" rx="5.5" fill="#12202c"/>

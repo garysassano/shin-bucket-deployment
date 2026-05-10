@@ -61,6 +61,15 @@ const DIVIDER_PAD = 6;        // extra space before section divider
 
 const CANVAS_W = COL_DELTA_X + BADGE_W + CANVAS_PAD_RIGHT;
 
+// ═══ TYPOGRAPHY CONSTANTS ═══
+const FONT_SIZE_TITLE = 18;
+const FONT_SIZE_SUBTITLE = 12;
+const FONT_SIZE_HEADER_LEGEND = 11;
+const FONT_SIZE_SECTION_HEADER = 11;
+const FONT_SIZE_ROW_LABEL = 13;
+const FONT_SIZE_METRIC_VALUE = 12;
+const FONT_SIZE_BADGE = 11;
+
 // ═══ DATA ═══
 interface Row { label: string; shin: number; aws: number; delta: string; best?: boolean; }
 
@@ -122,7 +131,7 @@ function renderRow(row: Row, index: number, sectionRowsTop: number, max: number,
 
   let s = '';
   // Label
-  s += `<text x="${CANVAS_PAD_LEFT}" y="${textY}" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="600" fill="#c8e0f0">${row.label}</text>\n`;
+  s += `<text x="${CANVAS_PAD_LEFT}" y="${textY}" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_ROW_LABEL}" font-weight="600" fill="#c8e0f0">${row.label}</text>\n`;
   // Shin bar
   s += `<rect x="${BAR_X}" y="${shinY}" width="${BAR_W}" height="${BAR_H}" rx="${BAR_RX}" fill="#12202c"/>\n`;
   if (useGlowShin) s += `<rect x="${BAR_X}" y="${shinY}" width="${sw}" height="${BAR_H}" rx="${BAR_RX}" fill="url(#shin)" filter="url(#gS)" opacity="0.5"/>\n`;
@@ -132,11 +141,11 @@ function renderRow(row: Row, index: number, sectionRowsTop: number, max: number,
   s += `<rect x="${BAR_X}" y="${awsY}" width="${aw}" height="${BAR_H}" rx="${BAR_RX}" fill="url(#aws)" filter="url(#gA)" opacity="0.35"/>\n`;
   s += `<rect x="${BAR_X}" y="${awsY}" width="${aw}" height="${BAR_H}" rx="${BAR_RX}" fill="url(#aws)" opacity="0.75"/>\n`;
   // Values — winner gets colored
-  s += `<text x="${COL_SHIN_X}" y="${textY}" font-family="JetBrains Mono, monospace" font-size="12" font-weight="700" fill="${shinValFill}">${shinVal}</text>\n`;
-  s += `<text x="${COL_AWS_X}" y="${textY}" font-family="JetBrains Mono, monospace" font-size="12" font-weight="${shinWins ? '400' : '700'}" fill="${awsValFill}">${awsVal}</text>\n`;
+  s += `<text x="${COL_SHIN_X}" y="${textY}" font-family="JetBrains Mono, monospace" font-size="${FONT_SIZE_METRIC_VALUE}" font-weight="700" fill="${shinValFill}">${shinVal}</text>\n`;
+  s += `<text x="${COL_AWS_X}" y="${textY}" font-family="JetBrains Mono, monospace" font-size="${FONT_SIZE_METRIC_VALUE}" font-weight="${shinWins ? '400' : '700'}" fill="${awsValFill}">${awsVal}</text>\n`;
   // Badge
   s += `<rect x="${COL_DELTA_X}" y="${badgeY}" width="${BADGE_W}" height="${BADGE_H}" rx="${BADGE_RX}" fill="${badgeFill}"${badgeStroke} filter="url(#badgeShadow)"/>\n`;
-  s += `<text x="${COL_DELTA_X + BADGE_W / 2}" y="${badgeY + 15}" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" font-weight="800" fill="${badgeTextFill}">${row.delta}</text>\n`;
+  s += `<text x="${COL_DELTA_X + BADGE_W / 2}" y="${badgeY + 15}" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="${FONT_SIZE_BADGE}" font-weight="800" fill="${badgeTextFill}">${row.delta}</text>\n`;
   // Separator (skip for last row)
   if (!isLast) {
     s += `<rect x="${CANVAS_PAD_LEFT}" y="${sepY}" width="${CANVAS_W - CANVAS_PAD_LEFT - CANVAS_PAD_RIGHT}" height="1" fill="#142230"/>\n`;
@@ -147,10 +156,10 @@ function renderRow(row: Row, index: number, sectionRowsTop: number, max: number,
 function renderSectionHeader(y: number, title: string, deltaLabel: string): string {
   let s = '';
   s += `<rect y="${y}" width="${CANVAS_W}" height="${SECTION_HDR_H}" fill="#0c1420"/>\n`;
-  s += `<text x="${CANVAS_PAD_LEFT}" y="${y + SECTION_HDR_PAD_TOP}" font-family="Inter, -apple-system, sans-serif" font-size="10" font-weight="700" fill="#4a6a80" letter-spacing="0.8">${title}</text>\n`;
-  s += `<text x="${COL_SHIN_X}" y="${y + SECTION_HDR_PAD_TOP}" font-family="Inter, -apple-system, sans-serif" font-size="10" font-weight="700" fill="#4a6a80" letter-spacing="0.8">SHIN</text>\n`;
-  s += `<text x="${COL_AWS_X}" y="${y + SECTION_HDR_PAD_TOP}" font-family="Inter, -apple-system, sans-serif" font-size="10" font-weight="700" fill="#4a6a80" letter-spacing="0.8">AWS</text>\n`;
-  s += `<text x="${COL_DELTA_X + 10}" y="${y + SECTION_HDR_PAD_TOP}" font-family="Inter, -apple-system, sans-serif" font-size="10" font-weight="700" fill="#4a6a80" letter-spacing="0.8">${deltaLabel}</text>\n`;
+  s += `<text x="${CANVAS_PAD_LEFT}" y="${y + SECTION_HDR_PAD_TOP}" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_SECTION_HEADER}" font-weight="700" fill="#4a6a80" letter-spacing="0.8">${title}</text>\n`;
+  s += `<text x="${COL_SHIN_X}" y="${y + SECTION_HDR_PAD_TOP}" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_SECTION_HEADER}" font-weight="700" fill="#4a6a80" letter-spacing="0.8">SHIN</text>\n`;
+  s += `<text x="${COL_AWS_X}" y="${y + SECTION_HDR_PAD_TOP}" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_SECTION_HEADER}" font-weight="700" fill="#4a6a80" letter-spacing="0.8">AWS</text>\n`;
+  s += `<text x="${COL_DELTA_X + 10}" y="${y + SECTION_HDR_PAD_TOP}" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_SECTION_HEADER}" font-weight="700" fill="#4a6a80" letter-spacing="0.8">${deltaLabel}</text>\n`;
   s += `<rect x="0" y="${y + SECTION_HDR_H}" width="${CANVAS_W}" height="1" fill="#142230"/>\n`;
   return s;
 }
@@ -187,13 +196,13 @@ function render(): string {
 <rect width="${CANVAS_W}" height="${CANVAS_H}" fill="url(#bgGrad)"/>
 
 <!-- Header -->
-<text x="${CANVAS_PAD_LEFT}" y="26" font-family="Inter, -apple-system, sans-serif" font-size="18" font-weight="800" fill="#f0f8ff" letter-spacing="-0.3">ShinBucketDeployment</text>
-<text x="${CANVAS_PAD_LEFT}" y="46" font-family="Inter, -apple-system, sans-serif" font-size="12" font-weight="500" fill="#5a7a94">vs AWS BucketDeployment · 1024 MiB · tiny-many · 2,584 objects · 7.8 MiB</text>
+<text x="${CANVAS_PAD_LEFT}" y="26" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_TITLE}" font-weight="800" fill="#f0f8ff" letter-spacing="-0.3">ShinBucketDeployment</text>
+<text x="${CANVAS_PAD_LEFT}" y="46" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_SUBTITLE}" font-weight="500" fill="#5a7a94">vs AWS BucketDeployment · 1024 MiB · tiny-many · 2,584 objects · 7.8 MiB</text>
 <rect x="${CANVAS_W - 200}" y="12" width="12" height="8" rx="2" fill="url(#shin)"/>
-<text x="${CANVAS_W - 182}" y="20" font-family="Inter, -apple-system, sans-serif" font-size="10" font-weight="700" fill="#8ab8d0">SHIN</text>
+<text x="${CANVAS_W - 182}" y="20" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_HEADER_LEGEND}" font-weight="700" fill="#8ab8d0">SHIN</text>
 <rect x="${CANVAS_W - 130}" y="12" width="12" height="8" rx="2" fill="url(#aws)"/>
-<text x="${CANVAS_W - 112}" y="20" font-family="Inter, -apple-system, sans-serif" font-size="10" font-weight="700" fill="#8ab8d0">AWS</text>
-<text x="${CANVAS_W - 200}" y="42" font-family="Inter, -apple-system, sans-serif" font-size="10" font-weight="500" fill="#3d5a70">▼ lower is better</text>
+<text x="${CANVAS_W - 112}" y="20" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_HEADER_LEGEND}" font-weight="700" fill="#8ab8d0">AWS</text>
+<text x="${CANVAS_W - 200}" y="42" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_HEADER_LEGEND}" font-weight="500" fill="#3d5a70">▼ lower is better</text>
 <rect x="0" y="${HEADER_H - 1}" width="${CANVAS_W}" height="1" fill="#1a2a38"/>
 
 `;
