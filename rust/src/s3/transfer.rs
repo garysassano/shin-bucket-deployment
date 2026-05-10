@@ -820,10 +820,17 @@ fn log_source_diagnostics(
         source_get_errors = diagnostics.source_get_errors,
         block_hits = diagnostics.block_hits,
         block_waits = diagnostics.block_waits,
+        block_waits_fetching = diagnostics.block_waits_fetching,
+        block_waits_capacity = diagnostics.block_waits_capacity,
         block_releases = diagnostics.block_releases,
         block_misses = diagnostics.block_misses,
         block_refetches = diagnostics.block_refetches,
+        replay_claims = diagnostics.replay_claims,
+        replay_claims_after_release = diagnostics.replay_claims_after_release,
+        replay_claims_after_failure = diagnostics.replay_claims_after_failure,
         active_gets_high_water = diagnostics.active_gets_high_water,
+        active_readers_high_water = diagnostics.active_readers_high_water,
+        resident_bytes_high_water = diagnostics.resident_bytes_high_water,
         "source block diagnostics"
     );
 }

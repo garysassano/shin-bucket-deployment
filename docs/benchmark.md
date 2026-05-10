@@ -91,6 +91,8 @@ The 1024 MiB setting is the preferred default because earlier `large-few` runs s
 
 Rust benchmark rows may include the sanitized `shin_deployment_summary` object emitted by the provider. The summary contains aggregate timings, counters, bytes, source range-read stats, and `PutObject` diagnostics, and intentionally omits bucket names, object keys, account IDs, distribution IDs, URLs, and ETags.
 
+`source.blockWaits` is an aggregate count of times a ZIP entry reader could not immediately read a planned source block. Newer provider builds split this into `source.blockWaitsFetching` for readers waiting on an in-flight ranged `GetObject` and `source.blockWaitsCapacity` for readers waiting for source-window memory capacity. `source.blockRefetches` counts replay claims that needed a source block after it had already been released; newer builds also expose `source.replayClaimsAfterRelease`, `source.activeReadersHighWater`, and `source.residentBytesHighWater` to distinguish replay timing from S3 retry/throttle behavior.
+
 Generate Markdown tables and SVG charts from committed or scratch JSONL records:
 
 ```bash

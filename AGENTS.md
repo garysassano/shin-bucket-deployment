@@ -25,3 +25,5 @@ Never commit raw AWS evidence or identifiers:
 - AWS profile names
 
 Keep raw AWS output in scratch directories outside the repo. Commit only sanitized docs, JSONL histories, source, tests, and examples.
+
+For benchmark telemetry interpretation, use the `docs/architecture.md` Diagnostics field reference. Do not infer S3 throttling from source block refetches or waits unless the provider summary also shows source `getRetries`/`getErrors` or destination `putObject.throttledAttempts`/`retryAttempts`.

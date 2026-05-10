@@ -65,11 +65,19 @@ pub(crate) struct SourceDiagnostics {
     fetched_source_bytes: AtomicU64,
     block_hits: AtomicU64,
     block_waits: AtomicU64,
+    block_waits_fetching: AtomicU64,
+    block_waits_capacity: AtomicU64,
     block_releases: AtomicU64,
     block_misses: AtomicU64,
     block_refetches: AtomicU64,
+    replay_claims: AtomicU64,
+    replay_claims_after_release: AtomicU64,
+    replay_claims_after_failure: AtomicU64,
     active_gets: AtomicU64,
     active_gets_high_water: AtomicU64,
+    active_readers: AtomicU64,
+    active_readers_high_water: AtomicU64,
+    resident_bytes_high_water: AtomicU64,
 }
 
 #[derive(Debug)]
@@ -93,10 +101,17 @@ pub(crate) struct SourceDiagnosticsSnapshot {
     pub(crate) source_amplification: f64,
     pub(crate) block_hits: u64,
     pub(crate) block_waits: u64,
+    pub(crate) block_waits_fetching: u64,
+    pub(crate) block_waits_capacity: u64,
     pub(crate) block_releases: u64,
     pub(crate) block_misses: u64,
     pub(crate) block_refetches: u64,
+    pub(crate) replay_claims: u64,
+    pub(crate) replay_claims_after_release: u64,
+    pub(crate) replay_claims_after_failure: u64,
     pub(crate) active_gets_high_water: u64,
+    pub(crate) active_readers_high_water: u64,
+    pub(crate) resident_bytes_high_water: u64,
 }
 
 struct ActiveSourceGetGuard {
@@ -355,11 +370,19 @@ impl SourceDiagnostics {
             fetched_source_bytes: AtomicU64::new(0),
             block_hits: AtomicU64::new(0),
             block_waits: AtomicU64::new(0),
+            block_waits_fetching: AtomicU64::new(0),
+            block_waits_capacity: AtomicU64::new(0),
             block_releases: AtomicU64::new(0),
             block_misses: AtomicU64::new(0),
             block_refetches: AtomicU64::new(0),
+            replay_claims: AtomicU64::new(0),
+            replay_claims_after_release: AtomicU64::new(0),
+            replay_claims_after_failure: AtomicU64::new(0),
             active_gets: AtomicU64::new(0),
             active_gets_high_water: AtomicU64::new(0),
+            active_readers: AtomicU64::new(0),
+            active_readers_high_water: AtomicU64::new(0),
+            resident_bytes_high_water: AtomicU64::new(0),
         }
     }
 
@@ -392,8 +415,7 @@ impl SourceDiagnostics {
 
     fn track_active_get(self: &Arc<Self>) -> ActiveSourceGetGuard {
         let active = self.active_gets.fetch_add(1, Ordering::AcqRel) + 1;
-        self.active_gets_high_water
-            .fetch_max(active, Ordering::Relaxed);
+        update_high_water(&self.active_gets_high_water, active);
         ActiveSourceGetGuard {
             diagnostics: Arc::clone(self),
         }
@@ -428,10 +450,69 @@ impl SourceDiagnostics {
             source_amplification,
             block_hits: self.block_hits.load(Ordering::Relaxed),
             block_waits: self.block_waits.load(Ordering::Relaxed),
+            block_waits_fetching: self.block_waits_fetching.load(Ordering::Relaxed),
+            block_waits_capacity: self.block_waits_capacity.load(Ordering::Relaxed),
             block_releases: self.block_releases.load(Ordering::Relaxed),
             block_misses: self.block_misses.load(Ordering::Relaxed),
             block_refetches: self.block_refetches.load(Ordering::Relaxed),
+            replay_claims: self.replay_claims.load(Ordering::Relaxed),
+            replay_claims_after_release: self.replay_claims_after_release.load(Ordering::Relaxed),
+            replay_claims_after_failure: self.replay_claims_after_failure.load(Ordering::Relaxed),
             active_gets_high_water: self.active_gets_high_water.load(Ordering::Relaxed),
+            active_readers_high_water: self.active_readers_high_water.load(Ordering::Relaxed),
+            resident_bytes_high_water: self.resident_bytes_high_water.load(Ordering::Relaxed),
+        }
+    }
+
+    fn record_resident_bytes(&self, resident_bytes: u64) {
+        update_high_water(&self.resident_bytes_high_water, resident_bytes);
+    }
+
+    fn record_reader_started(&self, count: usize) {
+        let active = self
+            .active_readers
+            .fetch_add(u64::try_from(count).unwrap_or(u64::MAX), Ordering::Relaxed)
+            .saturating_add(u64::try_from(count).unwrap_or(u64::MAX));
+        update_high_water(&self.active_readers_high_water, active);
+    }
+
+    fn record_reader_finished(&self) {
+        self.active_readers.fetch_sub(1, Ordering::Relaxed);
+    }
+
+    fn record_wait_fetching(&self) {
+        self.block_waits.fetch_add(1, Ordering::Relaxed);
+        self.block_waits_fetching.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_wait_capacity(&self) {
+        self.block_waits.fetch_add(1, Ordering::Relaxed);
+        self.block_waits_capacity.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_replay_claim(&self) {
+        self.replay_claims.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_replay_claim_after_release(&self) {
+        self.replay_claims_after_release
+            .fetch_add(1, Ordering::Relaxed);
+        self.block_refetches.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_replay_claim_after_failure(&self) {
+        self.replay_claims_after_failure
+            .fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+fn update_high_water(target: &AtomicU64, candidate: u64) {
+    let mut current = target.load(Ordering::Relaxed);
+    while candidate > current {
+        match target.compare_exchange_weak(current, candidate, Ordering::Relaxed, Ordering::Relaxed)
+        {
+            Ok(_) => break,
+            Err(next) => current = next,
         }
     }
 }
@@ -607,6 +688,9 @@ impl SourceBlockStore {
                 let target_window = self.window_bytes.max(block_len);
                 if state.resident_bytes.saturating_add(block_len) <= target_window {
                     state.resident_bytes = state.resident_bytes.saturating_add(block_len);
+                    self.source
+                        .diagnostics
+                        .record_resident_bytes(state.resident_bytes);
                     state.slots[index].status = SourceBlockStatus::Fetching;
                     return Some(block);
                 }
@@ -696,6 +780,7 @@ impl SourceBlockStore {
         for &index in &indices {
             state.slots[index].live_claims = state.slots[index].live_claims.saturating_add(1);
         }
+        self.source.diagnostics.record_reader_started(indices.len());
         Ok(indices.into())
     }
 
@@ -710,6 +795,7 @@ impl SourceBlockStore {
             .lock()
             .expect("source block state mutex should not be poisoned");
         for index in indices {
+            self.source.diagnostics.record_replay_claim();
             let Some(slot) = state.slots.get_mut(index) else {
                 continue;
             };
@@ -719,10 +805,9 @@ impl SourceBlockStore {
                 SourceBlockStatus::Released | SourceBlockStatus::Failed(_)
             ) {
                 if matches!(slot.status, SourceBlockStatus::Released) {
-                    self.source
-                        .diagnostics
-                        .block_refetches
-                        .fetch_add(1, Ordering::Relaxed);
+                    self.source.diagnostics.record_replay_claim_after_release();
+                } else {
+                    self.source.diagnostics.record_replay_claim_after_failure();
                 }
                 slot.status = SourceBlockStatus::Pending;
             }
@@ -782,10 +867,7 @@ impl SourceBlockStore {
                         ));
                     }
                     SourceBlockStatus::Fetching => {
-                        self.source
-                            .diagnostics
-                            .block_waits
-                            .fetch_add(1, Ordering::Relaxed);
+                        self.source.diagnostics.record_wait_fetching();
                         SourceBlockAction::Wait(enabled_notification(&self.notify))
                     }
                     SourceBlockStatus::Pending => {
@@ -802,13 +884,13 @@ impl SourceBlockStore {
                                 .block_misses
                                 .fetch_add(1, Ordering::Relaxed);
                             state.resident_bytes = state.resident_bytes.saturating_add(block_len);
+                            self.source
+                                .diagnostics
+                                .record_resident_bytes(state.resident_bytes);
                             state.slots[index].status = SourceBlockStatus::Fetching;
                             SourceBlockAction::Fetch(block)
                         } else {
-                            self.source
-                                .diagnostics
-                                .block_waits
-                                .fetch_add(1, Ordering::Relaxed);
+                            self.source.diagnostics.record_wait_capacity();
                             SourceBlockAction::WaitCapacity(enabled_notification(
                                 &self.capacity_notify,
                             ))
@@ -864,6 +946,7 @@ impl SourceBlockStore {
                 return;
             }
             slot.live_claims -= 1;
+            self.source.diagnostics.record_reader_finished();
             slot.remaining_claims = slot.remaining_claims.saturating_sub(1);
             if slot.live_claims == 0
                 && slot.remaining_claims == 0
@@ -1551,7 +1634,7 @@ mod tests {
 
     use super::{SourceDiagnostics, plan_source_blocks, send_zip_entry_chunks, zip_entry_reader};
     use crate::s3::archive::{
-        SourceBlockRange, SourceBlockSlot, SourceBlockState, SourceBlockStatus,
+        SourceBlockOptions, SourceBlockRange, SourceBlockSlot, SourceBlockState, SourceBlockStatus,
     };
     use crate::s3::planner::ZipEntryPlan;
     use crate::s3::{DEFAULT_SOURCE_BLOCK_BYTES, DEFAULT_SOURCE_BLOCK_MERGE_GAP_BYTES};
@@ -1605,6 +1688,42 @@ mod tests {
             .unwrap_err();
 
         assert!(error.to_string().contains("CRC32"));
+    }
+
+    #[test]
+    fn source_diagnostics_splits_waits_and_replay_refetch_reasons() {
+        let diagnostics = SourceDiagnostics::new(1024);
+        diagnostics.record_plan(
+            SourceBlockOptions {
+                block_bytes: 64,
+                merge_gap_bytes: 0,
+                get_concurrency: 1,
+                window_bytes: 128,
+            },
+            &[SourceBlockRange { start: 0, end: 63 }],
+            1,
+        );
+        diagnostics.record_wait_fetching();
+        diagnostics.record_wait_capacity();
+        diagnostics.record_replay_claim();
+        diagnostics.record_replay_claim_after_release();
+        diagnostics.record_replay_claim_after_failure();
+        diagnostics.record_resident_bytes(64);
+        diagnostics.record_resident_bytes(32);
+        diagnostics.record_reader_started(2);
+        diagnostics.record_reader_finished();
+
+        let snapshot = diagnostics.snapshot();
+
+        assert_eq!(snapshot.block_waits, 2);
+        assert_eq!(snapshot.block_waits_fetching, 1);
+        assert_eq!(snapshot.block_waits_capacity, 1);
+        assert_eq!(snapshot.block_refetches, 1);
+        assert_eq!(snapshot.replay_claims, 1);
+        assert_eq!(snapshot.replay_claims_after_release, 1);
+        assert_eq!(snapshot.replay_claims_after_failure, 1);
+        assert_eq!(snapshot.resident_bytes_high_water, 64);
+        assert_eq!(snapshot.active_readers_high_water, 2);
     }
 
     fn ready_store_for_plan(zip: &[u8], plan: &ZipEntryPlan) -> Arc<super::SourceBlockStore> {

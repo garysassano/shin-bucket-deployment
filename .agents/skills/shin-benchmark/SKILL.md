@@ -176,6 +176,19 @@ Use `null` for unavailable values. Do not invent data.
 
 For Rust records with provider invocation, prefer a record with both CloudWatch `REPORT` metrics and `providerSummary`. Missing provider telemetry is acceptable only when the provider was not invoked or when the record notes why capture was impossible.
 
+## Telemetry Interpretation
+
+Use the `docs/architecture.md` Diagnostics field reference when explaining provider summaries.
+
+Do not infer S3 throttling from local source block counters alone:
+
+- `source.blockWaits`, `source.blockWaitsFetching`, and `source.blockWaitsCapacity` describe local source block scheduling waits.
+- `source.blockRefetches` and `source.replayClaimsAfterRelease` describe local replay-after-release duplicate source reads.
+- Source S3 pressure requires source `getRetries` or `getErrors` evidence.
+- Destination S3 throttling requires `putObject.throttledAttempts` or retry evidence.
+
+For parameter sweeps, report both performance and pressure counters. For `maxParallelTransfers` sweeps, include at least provider duration, billed duration, max memory, CDK deploy time, local wall time, source fetched bytes, block waits split by reason when available, block refetches, replay claims after release, active reader high-water, resident bytes high-water, and PutObject retry/throttle counters.
+
 ## Benchmark Human Page
 
 After appending JSONL records, update `docs/benchmark.md` `Current Results` for humans.
