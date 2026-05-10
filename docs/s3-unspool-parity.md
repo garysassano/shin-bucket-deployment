@@ -38,7 +38,7 @@ This matrix is point-in-time documentation. Re-check it when `s3-unspool` change
 | `PutObject` retry/backoff | Implemented with capped retry delays, full/no jitter, and a shared throttle cooldown. |
 | Runtime tuning surface | Implemented for transfer concurrency, source block/window settings, source GET concurrency, and PUT retry policy. |
 | Adaptive source tuning | Implemented. Source GET concurrency and source block window default from the provider Lambda memory size. |
-| Structured diagnostics counters | Implemented as provider logs for source GET attempts/retries/errors, bytes/amplification, block hits/waits/releases/refetches, active GET high-water, conditional write conflicts, and PUT retry/failure counters. |
+| Structured diagnostics counters | Implemented as provider logs for source GET attempts/retries/errors, bytes/amplification, block hits/waits/releases/refetches, split wait reasons, replay-claim counters, resident source-window high-water, active reader and active GET high-water, conditional write conflicts, and PUT retry/failure counters. |
 | `DestinationCleanup` policy | Mapped to CDK `prune`: `prune=true` behaves like `DeleteExtra`; `prune=false` behaves like `KeepExtra`. |
 | `ComparisonMode` policy | Mapped to fixed `CatalogThenHash` behavior for marker-free ZIP entries. There is no public force-hash mode. |
 | `ConflictPolicy` policy | Mapped to CloudFormation fail-fast behavior. Conditional destination write conflicts are counted in the sanitized provider summary and fail the custom-resource request instead of being reported and continued. |

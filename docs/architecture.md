@@ -60,6 +60,28 @@ The default provider Lambda memory is 1024 MiB. That default is sized around the
 
 The explicit streaming buffers are small enough to fit inside the transfer worker reserve: each active marker-free upload stream uses about 64 KiB read buffer, 64 KiB held-back validation buffer, 256 KiB body assembly buffer, and up to 1 MiB of queued body frames. At eight active transfers that is roughly 11 MiB of entry stream buffering. For 2,500 ZIP entries, the file reserve is about 5 MiB and the adaptive source window can grow to about 443 MiB when the source ZIP is large enough. For small archives, the source window is clamped down to the actual source ZIP size, so observed RSS is much lower than the worst-case budget.
 
+Adaptive source window formula:
+
+```text
+sourceGetConcurrency = clamp(memoryLimitMiB / 256, 1, 8)
+
+reservedBytes =
+  64 MiB
+  + (maxParallelTransfers * 12 MiB)
+  + (zipFileCount * 2 KiB)
+  + (sourceGetConcurrency * sourceBlockBytes)
+
+capacityBytes = min(memoryBudgetBytes - reservedBytes, sourceZipBytes)
+
+if capacityBytes > 512 MiB:
+  capacityBytes -= 384 MiB
+
+sourceWindowBytes = min(capacityBytes, 512 MiB)
+sourceWindowBytes = max(sourceWindowBytes, min(sourceBlockBytes, sourceZipBytes))
+```
+
+`memoryBudgetBytes` defaults to `memoryLimit` but can be isolated with `advancedRuntimeTuning.sourceWindowMemoryBudgetMb`. The final `max` ensures at least one source block can be admitted, while the `min(sourceZipBytes)` clamp avoids reserving more resident source data than the archive can contain.
+
 ## Supported Examples
 
 Examples are driven through the repository runner:
@@ -226,9 +248,45 @@ Cataloged asset packaging limitations:
 
 ## Diagnostics
 
-Each extracted deployment logs the effective source schedule and a final source diagnostics record per source archive. These records include planned entries and blocks, planned and fetched source bytes, source amplification, ranged `GetObject` attempts/retries/errors, block hits/waits/releases/refetches, and active source GET high-water. The upload path also logs destination `PutObject` retry settings plus failed attempts, retry attempts, throttled attempts, retry wait milliseconds, and failures grouped by error code.
+Each extracted deployment logs the effective source schedule and a final source diagnostics record per source archive. These records include planned entries and blocks, planned and fetched source bytes, source amplification, ranged `GetObject` attempts/retries/errors, block hits/misses/releases/refetches, split wait counters for in-flight fetches versus source-window capacity, replay-claim counters, resident source-window high-water, active ZIP entry reader high-water, and active source GET high-water. The upload path also logs destination `PutObject` retry settings plus failed attempts, retry attempts, throttled attempts, retry wait milliseconds, and failures grouped by error code.
 
 Diagnostics are emitted to CloudWatch Logs through structured `tracing` fields. They are not returned in the CloudFormation custom-resource response because that response has a small practical size limit and is already used for `objectKeys` and `deployedBucket` outputs.
+
+Source diagnostics field reference:
+
+| Field | Meaning | Use when debugging |
+| --- | --- | --- |
+| `plannedBlocks` | Number of coalesced source ZIP byte ranges planned for deployment. | Understand source block granularity. |
+| `plannedBytes` | Total bytes covered by planned source blocks. | Compare required source reads with actual reads. |
+| `fetchedBlocks` | Number of ranged source blocks fetched from S3. | Detect duplicate source fetches. |
+| `fetchedBytes` | Total ranged source bytes fetched. | Calculate source read amplification. |
+| `getAttempts` | Ranged `GetObject` attempts. | Separate S3 activity from local block reuse. |
+| `getRetries` | Ranged `GetObject` retry attempts. | Identify source S3 retry pressure. |
+| `getErrors` | Ranged `GetObject` terminal errors. | Identify source S3 failures. |
+| `blockHits` | Reader accesses satisfied from a resident ready source block. | Confirm source block reuse. |
+| `blockMisses` | Reader accesses that had to fetch or attempted to use a released block. | Understand non-resident block access. |
+| `blockWaits` | Total reader waits for a planned source block. | High-level source block contention signal. |
+| `blockWaitsFetching` | Reader waits because another task is fetching the block. | Distinguish normal fetch sharing from memory pressure. |
+| `blockWaitsCapacity` | Reader waits because the source block window is full. | Diagnose source-window capacity pressure. |
+| `blockReleases` | Blocks released from the resident source window. | Correlate memory pressure with replay/refetch behavior. |
+| `blockRefetches` | Replay claims that needed a block after it was released. | Identify local replay-after-release duplicate reads. |
+| `replayClaims` | Source block replay claims added for payload replay. | Measure replay demand. |
+| `replayClaimsAfterRelease` | Replay claims added after a block was released. | Explain `blockRefetches` without blaming S3 throttling. |
+| `replayClaimsAfterFailure` | Replay claims added after a block failed. | Correlate replay with failed source reads. |
+| `activeGetsHighWater` | Peak concurrent ranged `GetObject` calls. | Check adaptive source GET concurrency behavior. |
+| `activeReadersHighWater` | Peak active ZIP entry source block readers. | Understand pressure from transfer concurrency. |
+| `residentBytesHighWater` | Peak resident source block bytes. | Compare actual source window use with configured capacity. |
+
+Destination upload diagnostics field reference:
+
+| Field | Meaning | Use when debugging |
+| --- | --- | --- |
+| `failedAttempts` | Failed `PutObject` attempts. | Identify destination upload instability. |
+| `retryAttempts` | `PutObject` attempts retried by the provider. | Measure retry pressure. |
+| `throttledAttempts` | Failed attempts classified as destination throttling, such as S3 `SlowDown`. | Distinguish S3 throttling from local scheduling effects. |
+| `retryWaitMs` | Milliseconds spent waiting for ordinary retry backoff. | Estimate retry cost. |
+| `throttleCooldownWaits` | Worker waits caused by shared throttle cooldown. | Diagnose throttle fan-out control. |
+| `throttleCooldownWaitMs` | Milliseconds spent in shared throttle cooldown waits. | Estimate throttle cooldown cost. |
 
 ## Compatibility Tradeoffs
 

@@ -196,6 +196,13 @@ pub(crate) struct DeploymentStats {
     source_block_misses: AtomicU64,
     source_block_refetches: AtomicU64,
     source_block_waits: AtomicU64,
+    source_block_waits_fetching: AtomicU64,
+    source_block_waits_capacity: AtomicU64,
+    source_replay_claims: AtomicU64,
+    source_replay_claims_after_release: AtomicU64,
+    source_replay_claims_after_failure: AtomicU64,
+    source_active_readers_high_water: AtomicU64,
+    source_resident_bytes_high_water: AtomicU64,
     put_failed_attempts: AtomicU64,
     put_retry_attempts: AtomicU64,
     put_throttled_attempts: AtomicU64,
@@ -276,6 +283,13 @@ pub(crate) struct SourceStats {
     pub(crate) block_misses: u64,
     pub(crate) block_refetches: u64,
     pub(crate) block_waits: u64,
+    pub(crate) block_waits_fetching: u64,
+    pub(crate) block_waits_capacity: u64,
+    pub(crate) replay_claims: u64,
+    pub(crate) replay_claims_after_release: u64,
+    pub(crate) replay_claims_after_failure: u64,
+    pub(crate) active_readers_high_water: u64,
+    pub(crate) resident_bytes_high_water: u64,
 }
 
 #[derive(Serialize)]
@@ -405,6 +419,20 @@ impl DeploymentStats {
             .fetch_add(stats.block_refetches, Ordering::Relaxed);
         self.source_block_waits
             .fetch_add(stats.block_waits, Ordering::Relaxed);
+        self.source_block_waits_fetching
+            .fetch_add(stats.block_waits_fetching, Ordering::Relaxed);
+        self.source_block_waits_capacity
+            .fetch_add(stats.block_waits_capacity, Ordering::Relaxed);
+        self.source_replay_claims
+            .fetch_add(stats.replay_claims, Ordering::Relaxed);
+        self.source_replay_claims_after_release
+            .fetch_add(stats.replay_claims_after_release, Ordering::Relaxed);
+        self.source_replay_claims_after_failure
+            .fetch_add(stats.replay_claims_after_failure, Ordering::Relaxed);
+        self.source_active_readers_high_water
+            .fetch_max(stats.active_readers_high_water, Ordering::Relaxed);
+        self.source_resident_bytes_high_water
+            .fetch_max(stats.resident_bytes_high_water, Ordering::Relaxed);
     }
 
     pub(crate) fn add_put_stats(
@@ -486,6 +514,21 @@ impl DeploymentStats {
                 block_misses: self.source_block_misses.load(Ordering::Relaxed),
                 block_refetches: self.source_block_refetches.load(Ordering::Relaxed),
                 block_waits: self.source_block_waits.load(Ordering::Relaxed),
+                block_waits_fetching: self.source_block_waits_fetching.load(Ordering::Relaxed),
+                block_waits_capacity: self.source_block_waits_capacity.load(Ordering::Relaxed),
+                replay_claims: self.source_replay_claims.load(Ordering::Relaxed),
+                replay_claims_after_release: self
+                    .source_replay_claims_after_release
+                    .load(Ordering::Relaxed),
+                replay_claims_after_failure: self
+                    .source_replay_claims_after_failure
+                    .load(Ordering::Relaxed),
+                active_readers_high_water: self
+                    .source_active_readers_high_water
+                    .load(Ordering::Relaxed),
+                resident_bytes_high_water: self
+                    .source_resident_bytes_high_water
+                    .load(Ordering::Relaxed),
             },
             put_object: PutObjectStats {
                 failed_attempts: self.put_failed_attempts.load(Ordering::Relaxed),
