@@ -6,15 +6,15 @@ Preview-only SVGs live in `docs/benchmark-preview-assets`. The generated benchma
 
 ## Signal Split v5
 
-Default current preview with compact bar tracks. Two metric panels, one for Lambda handler duration and one for max memory.
+Default current preview with compact bar tracks and a three-line header.
 
 ![Signal split v5 benchmark chart](benchmark-preview-assets/signal-split-v5.svg)
 
-## Signal Split v5 Three-line Header
+## Signal Split v5 Two-line Header
 
-Alternate header layout with comparison and metadata split across separate lines.
+Alternate compact header layout with comparison and metadata on one line.
 
-![Signal split v5 three-line header benchmark chart](benchmark-preview-assets/signal-split-v5-three-line.svg)
+![Signal split v5 two-line header benchmark chart](benchmark-preview-assets/signal-split-v5-two-line.svg)
 
 ## Signal Split v5 AWS Win Simulation
 
