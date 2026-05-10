@@ -72,7 +72,9 @@ export function collectBenchmarkResult(options: CollectBenchmarkOptions): Benchm
     providerImplementationSubject: options.subject ?? null,
     resultDocumentationCommit: options.resultCommit ?? null,
     region: options.region ?? null,
-    implementation: options.implementation ?? outputString(logText, "BenchmarkImplementation"),
+    implementation: normalizeImplementation(
+      options.implementation ?? outputString(logText, "BenchmarkImplementation"),
+    ),
     profile: options.profile ?? outputString(logText, "BenchmarkProfile"),
     series: options.series ?? null,
     memoryMb: options.memoryMb ?? outputNumber(logText, "BenchmarkMemoryLimitMb"),
@@ -158,9 +160,16 @@ function optionalNumber(values: Map<string, string>, name: string): number | und
   return parsed;
 }
 
+function normalizeImplementation(value: string | null | undefined): string | null {
+  if (value === "rust") {
+    return "shin";
+  }
+  return value ?? null;
+}
+
 function usage(): never {
   console.error(
-    "Usage: node dist/scripts/collect-benchmark-results.js --log-file <path> --run-id <id> --run-date <YYYY-MM-DD> --phase <name> [--report-file <path>] [--summary-file <path>] [--implementation <rust|aws>] [--profile <name>] [--memory-mb <n>]",
+    "Usage: node dist/scripts/collect-benchmark-results.js --log-file <path> --run-id <id> --run-date <YYYY-MM-DD> --phase <name> [--report-file <path>] [--summary-file <path>] [--implementation <shin|aws>] [--profile <name>] [--memory-mb <n>]",
   );
   process.exit(1);
 }

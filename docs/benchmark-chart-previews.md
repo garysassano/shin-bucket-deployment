@@ -1,6 +1,6 @@
 # Benchmark Chart Renderer Previews
 
-These preview charts use the same sanitized `2026-05-09-rust-aws-tiny-many-1024` records from `docs/benchmark-history.jsonl`.
+These preview charts use the same sanitized `2026-05-09-shin-aws-tiny-many-1024` records from `docs/benchmark-history.jsonl`.
 
 Preview-only SVGs live in `docs/benchmark-preview-assets`. The generated benchmark report chart remains in `docs/benchmark-assets`.
 

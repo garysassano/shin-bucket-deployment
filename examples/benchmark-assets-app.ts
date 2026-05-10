@@ -5,9 +5,9 @@ import {
   Source as AwsSource,
 } from "aws-cdk-lib/aws-s3-deployment";
 import { ensureBenchmarkAssets } from "../scripts/benchmark-assets";
-import { Source as RustSource, ShinBucketDeployment } from "../src";
+import { Source as ShinSource, ShinBucketDeployment } from "../src";
 
-type BenchmarkImplementation = "rust" | "aws";
+type BenchmarkImplementation = "shin" | "aws";
 
 class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
   constructor(scope: App, id: string, props?: StackProps) {
@@ -34,11 +34,11 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
       waitForDistributionInvalidation: process.env.SHIN_BENCH_WAIT !== "false",
     };
 
-    if (implementation === "rust") {
+    if (implementation === "shin") {
       new ShinBucketDeployment(this, "DeployBenchmarkAssets", {
         ...deploymentProps,
         ...(maxParallelTransfers === undefined ? {} : { maxParallelTransfers }),
-        sources: [RustSource.asset(bundle.root)],
+        sources: [ShinSource.asset(bundle.root)],
       });
     } else {
       new AwsBucketDeployment(this, "DeployBenchmarkAssets", {
@@ -86,13 +86,16 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
 }
 
 function parseImplementation(value: string | undefined): BenchmarkImplementation {
-  if (value === undefined || value === "" || value === "rust") {
-    return "rust";
+  if (value === undefined || value === "" || value === "shin") {
+    return "shin";
+  }
+  if (value === "rust") {
+    throw new Error('SHIN_BENCH_IMPLEMENTATION value "rust" was renamed to "shin".');
   }
   if (value === "aws") {
     return "aws";
   }
-  throw new Error('SHIN_BENCH_IMPLEMENTATION must be either "rust" or "aws".');
+  throw new Error('SHIN_BENCH_IMPLEMENTATION must be either "shin" or "aws".');
 }
 
 function parseOptionalPositiveIntegerEnv(name: string): number | undefined {
@@ -124,7 +127,7 @@ const stackName = suffix
   : benchmarkStackNamePrefix(implementation);
 
 function benchmarkStackNamePrefix(implementation: BenchmarkImplementation): string {
-  return implementation === "rust"
+  return implementation === "shin"
     ? "ShinBucketDeploymentBenchmarkAssetsDemo"
     : "AwsBucketDeploymentBenchmarkAssetsDemo";
 }
