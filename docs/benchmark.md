@@ -112,43 +112,52 @@ Every committed benchmark result is represented as sanitized records in `docs/be
 | Field | Value |
 | --- | --- |
 | Run date | 2026-05-10 |
-| Provider implementation commit | `b74e03d` (`Refine README positioning copy`) |
+| Provider implementation commit | `4aed47a` (`expand source block diagnostics`) |
 | Result documentation commit | Pending |
 | Region | `ap-southeast-2` |
 | Implementation | `rust` |
 | Profile | `tiny-many` |
 | Baseline variant | `v1` |
 | Bundle | 2,584 files, 8,178,618 bytes |
-| Provider memory | 1024 MiB |
+| Provider memory | 1024 and 2048 MiB |
 | Swept setting | `maxParallelTransfers`: 8, 16, 32, 64 |
 | Cleanup | All benchmark stacks destroyed after telemetry collection |
-| Notes | Rust-only cold-create tuning sweep for the many-small-files profile. All inputs were held constant except `maxParallelTransfers`. Rows include CloudWatch REPORT metrics and sanitized `shin_deployment_summary` counters in `docs/benchmark-history.jsonl`. |
+| Notes | Rust-only cold-create tuning sweep for the many-small-files profile. The latest 2048 MiB run held all inputs constant except `maxParallelTransfers` and is compared with the earlier 1024 MiB sweep. Rows include CloudWatch REPORT metrics and sanitized `shin_deployment_summary` counters in `docs/benchmark-history.jsonl`. |
 
-Parallel transfer score table:
+2048 MiB parallel transfer score table:
 
 | Parallel transfers | Provider duration | Billed duration | Init duration | Max memory | Provider speedup vs 8 |
 | ---: | ---: | ---: | ---: | ---: | ---: |
-| 8 | 14.261 s | 14.425 s | 0.163 s | 77 MiB | baseline |
-| 16 | 6.874 s | 7.048 s | 0.174 s | 85 MiB | 2.07x faster, 51.8% lower |
-| 32 | 3.695 s | 3.830 s | 0.135 s | 96 MiB | 3.86x faster, 74.1% lower |
-| 64 | 3.530 s | 3.709 s | 0.178 s | 119 MiB | 4.04x faster, 75.2% lower |
+| 8 | 14.876 s | 15.029 s | 0.152 s | 82 MiB | baseline |
+| 16 | 6.828 s | 6.968 s | 0.140 s | 84 MiB | 2.18x faster, 54.1% lower |
+| 32 | 3.699 s | 3.834 s | 0.134 s | 96 MiB | 4.02x faster, 75.1% lower |
+| 64 | 2.120 s | 2.287 s | 0.166 s | 121 MiB | 7.02x faster, 85.8% lower |
 
-End-to-end timings:
+1024 vs 2048 MiB provider comparison:
+
+| Parallel transfers | 1024 MiB provider | 2048 MiB provider | 2048 delta | 2048 relative | 1024 max memory | 2048 max memory |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 8 | 14.261 s | 14.876 s | +0.615 s | 4.3% higher | 77 MiB | 82 MiB |
+| 16 | 6.874 s | 6.828 s | -0.046 s | 0.7% lower | 85 MiB | 84 MiB |
+| 32 | 3.695 s | 3.699 s | +0.004 s | 0.1% higher | 96 MiB | 96 MiB |
+| 64 | 3.530 s | 2.120 s | -1.410 s | 39.9% lower | 119 MiB | 121 MiB |
+
+2048 MiB end-to-end timings:
 
 | Parallel transfers | CDK deploy time | Local wall time | CDK delta vs 8 | Local delta vs 8 |
 | ---: | ---: | ---: | ---: | ---: |
-| 8 | 74.03 s | 118.35 s | baseline | baseline |
-| 16 | 67.69 s | 108.92 s | 8.6% lower | 8.0% lower |
-| 32 | 66.68 s | 128.05 s | 9.9% lower | 8.2% higher |
-| 64 | 67.32 s | 109.94 s | 9.1% lower | 7.1% lower |
+| 8 | 74.40 s | 171.96 s | baseline | baseline |
+| 16 | 65.45 s | 106.39 s | 12.0% lower | 38.1% lower |
+| 32 | 65.47 s | 103.69 s | 12.0% lower | 39.7% lower |
+| 64 | 64.39 s | 102.41 s | 13.5% lower | 40.4% lower |
 
-Provider summary highlights:
+2048 MiB provider summary highlights:
 
-| Parallel transfers | Plan | Destination list | Transfer | Uploaded objects | Uploaded bytes | Source fetched bytes | Block waits | Refetches |
-| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 8 | 284 ms | 32 ms | 13,896 ms | 2,585 | 8,178,712 | 856,765 | 72 | 0 |
-| 16 | 288 ms | 35 ms | 6,501 ms | 2,585 | 8,178,712 | 856,765 | 117 | 0 |
-| 32 | 221 ms | 32 ms | 3,378 ms | 2,585 | 8,178,712 | 856,765 | 262 | 0 |
-| 64 | 239 ms | 37 ms | 3,202 ms | 2,585 | 8,178,712 | 1,639,389 | 439 | 1 |
+| Parallel transfers | Plan | Destination list | Transfer | Uploaded objects | Uploaded bytes | Source fetched bytes | Block waits | Fetch waits | Capacity waits | Refetches | Replay after release | Active readers high-water | Resident bytes high-water | Put retries/throttles |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 8 | 238 ms | 28 ms | 14,562 ms | 2,585 | 8,178,712 | 856,765 | 46 | 46 | 0 | 0 | 0 | 2 | 782,624 | 0 / 0 |
+| 16 | 224 ms | 40 ms | 6,513 ms | 2,585 | 8,178,712 | 856,765 | 142 | 142 | 0 | 0 | 0 | 2 | 782,624 | 0 / 0 |
+| 32 | 211 ms | 35 ms | 3,403 ms | 2,585 | 8,178,712 | 856,765 | 238 | 238 | 0 | 0 | 0 | 2 | 782,624 | 0 / 0 |
+| 64 | 203 ms | 38 ms | 1,823 ms | 2,585 | 8,178,712 | 856,765 | 458 | 458 | 0 | 0 | 0 | 2 | 782,624 | 0 / 0 |
 
-The provider transfer phase improved strongly from 8 to 32 parallel transfers, then mostly plateaued at 64. The 64-worker run was only 0.165 s faster than 32 in provider duration, but used 23 MiB more peak memory and had one source block refetch, so 32 looks like the better speed/memory balance for this single-run tiny-many cold-create sweep. End-to-end CDK deploy time improved by about 9-10% from 8 to 32/64 because CloudFormation and CDK overhead dominate once provider transfer time falls below roughly 4 seconds.
+At 2048 MiB, the provider transfer phase continued to improve through 64 parallel transfers for this many-small-files cold-create sweep. The 64-worker run was 1.579 s faster than 32 in CloudWatch provider duration, with peak memory rising from 96 MiB to 121 MiB. Compared with the earlier 1024 MiB sweep, 2048 MiB materially changed only the 64-worker result: 2.120 s instead of 3.530 s, while 8, 16, and 32 were effectively flat. The expanded diagnostics show no source block refetches, no replay claims after release, no source-window capacity waits, and no destination put retries or throttles in the 2048 MiB sweep; all source block waits were waiting on in-flight ranged reads.
