@@ -133,6 +133,12 @@ const subtitlePrefix =
 const outFileSuffix =
   `${chartVariant === 'aws' ? '-aws' : ''}${headerLayout === 'three-line' ? '-three-line' : ''}`;
 
+const legendSwatchY = headerLayout === 'three-line' ? 22 : 12;
+const legendLabelY = headerLayout === 'three-line' ? 30 : 20;
+const legendNoteY = headerLayout === 'three-line' ? 52 : 42;
+const LEGEND_W = 111;
+const legendX = CANVAS_W - CANVAS_PAD_LEFT - LEGEND_W;
+
 // ═══ DERIVED POSITIONS ═══
 const sectionATop = HEADER_H;
 const sectionARowsTop = sectionATop + SECTION_HDR_H + 1; // +1 for bottom line
@@ -284,11 +290,11 @@ function render(): string {
 
 <!-- Header -->
 ${renderHeader()}
-<rect x="${CANVAS_W - 200}" y="12" width="12" height="8" rx="2" fill="url(#shin)"/>
-<text x="${CANVAS_W - 182}" y="20" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_HEADER_LEGEND}" font-weight="700" fill="#8ab8d0">SHIN</text>
-<rect x="${CANVAS_W - 130}" y="12" width="12" height="8" rx="2" fill="url(#aws)"/>
-<text x="${CANVAS_W - 112}" y="20" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_HEADER_LEGEND}" font-weight="700" fill="#8ab8d0">AWS</text>
-<text x="${CANVAS_W - 200}" y="42" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_HEADER_LEGEND}" font-weight="500" fill="${COLOR_SECTION_HEADER_TEXT}">▼ lower is better</text>
+<rect x="${legendX}" y="${legendSwatchY}" width="12" height="8" rx="2" fill="url(#shin)"/>
+<text x="${legendX + 18}" y="${legendLabelY}" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_HEADER_LEGEND}" font-weight="700" fill="#8ab8d0">SHIN</text>
+<rect x="${legendX + 70}" y="${legendSwatchY}" width="12" height="8" rx="2" fill="url(#aws)"/>
+<text x="${legendX + 88}" y="${legendLabelY}" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_HEADER_LEGEND}" font-weight="700" fill="#8ab8d0">AWS</text>
+<text x="${legendX}" y="${legendNoteY}" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_HEADER_LEGEND}" font-weight="500" fill="${COLOR_SECTION_HEADER_TEXT}">▼ lower is better</text>
 <rect x="0" y="${HEADER_H - 1}" width="${CANVAS_W}" height="1" fill="#1a2a38"/>
 
 `;
