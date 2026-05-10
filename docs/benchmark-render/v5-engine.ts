@@ -21,9 +21,9 @@ const ROW_PAD_TOP = 11;       // space from separator to shin bar top
 const ROW_PAD_BOTTOM = 11;    // space from aws bar bottom to next separator
 const ROW_H = ROW_PAD_TOP + BAR_H + BAR_GAP + BAR_H + ROW_PAD_BOTTOM; // total row height
 
-const COL_SHIN_X = 740;       // shin value column
-const COL_AWS_X = 830;        // aws value column
-const COL_DELTA_X = 930;      // delta badge column
+const COL_SHIN_X = BAR_X + BAR_W + 20;  // shin value column
+const COL_AWS_X = COL_SHIN_X + 90;      // aws value column
+const COL_DELTA_X = COL_AWS_X + 90;     // delta badge column
 const BADGE_W = 60;
 const BADGE_H = 22;
 const BADGE_RX = 5;
@@ -155,11 +155,11 @@ function render(): string {
 <!-- Header -->
 <text x="${CANVAS_PAD_LEFT}" y="26" font-family="Inter, -apple-system, sans-serif" font-size="18" font-weight="800" fill="#f0f8ff" letter-spacing="-0.3">ShinBucketDeployment</text>
 <text x="${CANVAS_PAD_LEFT}" y="46" font-family="Inter, -apple-system, sans-serif" font-size="12" font-weight="500" fill="#5a7a94">vs AWS BucketDeployment · 1024 MiB · tiny-many · 2,584 objects · 7.8 MiB</text>
-<rect x="820" y="12" width="12" height="8" rx="2" fill="url(#shin)"/>
-<text x="838" y="20" font-family="Inter, -apple-system, sans-serif" font-size="10" font-weight="700" fill="#8ab8d0">SHIN</text>
-<rect x="890" y="12" width="12" height="8" rx="2" fill="url(#aws)"/>
-<text x="908" y="20" font-family="Inter, -apple-system, sans-serif" font-size="10" font-weight="700" fill="#8ab8d0">AWS</text>
-<text x="820" y="42" font-family="Inter, -apple-system, sans-serif" font-size="10" font-weight="500" fill="#3d5a70">▼ lower is better</text>
+<rect x="${CANVAS_W - 200}" y="12" width="12" height="8" rx="2" fill="url(#shin)"/>
+<text x="${CANVAS_W - 182}" y="20" font-family="Inter, -apple-system, sans-serif" font-size="10" font-weight="700" fill="#8ab8d0">SHIN</text>
+<rect x="${CANVAS_W - 130}" y="12" width="12" height="8" rx="2" fill="url(#aws)"/>
+<text x="${CANVAS_W - 112}" y="20" font-family="Inter, -apple-system, sans-serif" font-size="10" font-weight="700" fill="#8ab8d0">AWS</text>
+<text x="${CANVAS_W - 200}" y="42" font-family="Inter, -apple-system, sans-serif" font-size="10" font-weight="500" fill="#3d5a70">▼ lower is better</text>
 <rect x="0" y="${HEADER_H - 1}" width="${CANVAS_W}" height="1" fill="#1a2a38"/>
 
 `;
