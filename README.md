@@ -61,7 +61,7 @@ The construct follows the upstream `BucketDeployment` API where the behavior map
 
 | Area | Supported |
 | --- | --- |
-| Sources | `sources`, cataloged `Source.asset`, `Source.data`, `Source.jsonData`, `Source.yamlData`, deploy-time markers |
+| Sources | `sources`, `Source.data`, `Source.jsonData`, `Source.yamlData`, `embeddedCatalog` |
 | Destination | `destinationBucket`, `destinationKeyPrefix`, `deployedBucket`, `objectKeys` |
 | Filtering | `include`, `exclude` |
 | Update behavior | `extract`, `prune`, `retainOnDelete`, `outputObjectKeys` |
