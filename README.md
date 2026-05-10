@@ -18,6 +18,10 @@ The official `BucketDeployment` is a good default for many stacks, but its provi
 | `ETag`-based skip decisions | The provider lists the destination prefix once and compares planned content MD5 values with destination `ETag` values to skip unchanged single-part static objects. |
 | Marker-free streaming path | Missing sources without deploy-time markers stream directly from archive entries; replacement buffers are only used for sources that declare markers. |
 
+## Benchmark Snapshot
+
+<img src="./docs/benchmark-preview-assets/signal-split-v5.svg" alt="ShinBucketDeployment vs AWS BucketDeployment benchmark" width="100%">
+
 ## Quick Start
 
 ```ts
@@ -115,18 +119,3 @@ Cataloged `Source.asset` packaging limitations:
 Source archives are read with S3 ranges and do not need to fit in Lambda memory or ephemeral storage. Individual files inside the asset ZIP must be <= 5 GiB because extracted uploads currently use S3 `PutObject`, not multipart upload.
 
 This construct targets static asset deployment to S3. It is not a general-purpose sync engine and does not provide byte-range diffing, persistent manifests, or non-S3 backend behavior.
-
-## Examples and Validation
-
-Examples are driven through the repository runner:
-
-```bash
-pnpm example list
-pnpm example synth simple
-pnpm example deploy cloudfront-sync
-pnpm example destroy retain-on-delete
-```
-
-See [docs/architecture.md](./docs/architecture.md) for the full example list and runtime design, [docs/s3-unspool-parity.md](./docs/s3-unspool-parity.md) for optimization parity, [docs/verification.md](./docs/verification.md) for verification status, and [docs/benchmark.md](./docs/benchmark.md) for benchmark results.
-
-The Rust provider lives under [rust](./rust), the construct code under [src](./src), and provider workflow diagrams are in [docs/architecture.md](./docs/architecture.md).
