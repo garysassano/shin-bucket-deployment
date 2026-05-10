@@ -51,7 +51,7 @@ Committed benchmark records may include:
 
 Do not finalize timing-only benchmark rows when provider telemetry is expected. For every provider-invoking deploy/update/delete phase, capture the Lambda CloudWatch `REPORT` line and the sanitized `shin_deployment_summary` line before destroying the stack or otherwise deleting provider log groups. If telemetry cannot be captured, either rerun the phase or clearly mark the record as incomplete with `null` provider fields and explain why.
 
-Use paired inputs for Rust vs AWS comparisons:
+Use paired inputs for Shin vs AWS comparisons:
 
 - same region and account
 - same profile
@@ -61,7 +61,7 @@ Use paired inputs for Rust vs AWS comparisons:
 - same repetition count
 - same stack suffix family
 
-Standard focused Rust sequence:
+Standard focused Shin sequence:
 
 ```bash
 AWS_PROFILE=<profile> AWS_REGION=ap-southeast-2 AWS_DEFAULT_REGION=ap-southeast-2 \
@@ -132,7 +132,7 @@ pnpm benchmark:collect -- \
   --commit <short-sha> \
   --subject "<commit subject>" \
   --region <region> \
-  --implementation rust \
+  --implementation shin \
   --profile <benchmark-profile> \
   --memory-mb <memory> \
   --variant <variant> \
@@ -155,7 +155,7 @@ Required fields:
 - `providerImplementationSubject`
 - `resultDocumentationCommit`
 - `region`
-- `implementation`: `rust` or `aws`
+- `implementation`: `shin` or `aws`
 - `profile`
 - `series`
 - `memoryMb`
@@ -172,11 +172,11 @@ Required fields:
 - `providerInvoked`
 - `cleanup`
 - `notes`
-- `providerSummary` for Rust records when a sanitized summary is available
+- `providerSummary` for Shin records when a sanitized summary is available
 
 Use `null` for unavailable values. Do not invent data.
 
-For Rust records with provider invocation, prefer a record with both CloudWatch `REPORT` metrics and `providerSummary`. Missing provider telemetry is acceptable only when the provider was not invoked or when the record notes why capture was impossible.
+For Shin records with provider invocation, prefer a record with both CloudWatch `REPORT` metrics and `providerSummary`. Missing provider telemetry is acceptable only when the provider was not invoked or when the record notes why capture was impossible.
 
 ## Telemetry Interpretation
 
@@ -198,18 +198,18 @@ After appending JSONL records, update `docs/benchmark.md` `Current Results` for 
 The human page should include:
 
 - metadata table
-- detailed Rust vs AWS comparison table for every comparable metric when the current run has paired implementations
-- parameter-sweep comparison tables when the current run is Rust-only, including the swept value, baseline-relative speedup, memory, end-to-end timings, and telemetry counters
+- detailed Shin vs AWS comparison table for every comparable metric when the current run has paired implementations
+- parameter-sweep comparison tables when the current run is Shin-only, including the swept value, baseline-relative speedup, memory, end-to-end timings, and telemetry counters
 - generated charts from committed JSONL data when applicable
-- provider summary highlights for Rust aggregate counters
+- provider summary highlights for Shin aggregate counters
 - short caveats and cleanup status
 
 The comparison table should show, per phase and metric:
 
-- Rust value
+- Shin value
 - AWS value
-- AWS minus Rust
-- AWS/Rust multiplier
+- AWS minus Shin
+- AWS/Shin multiplier
 - AWS delta percentage
 
 Generate reports with:

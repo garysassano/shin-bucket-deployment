@@ -18,7 +18,7 @@ describe("benchmark result collector", () => {
         "✨  Deployment time: 14.16s",
         "Outputs:",
         "Stack.BenchmarkFileCount = 442",
-        "Stack.BenchmarkImplementation = rust",
+        "Stack.BenchmarkImplementation = shin",
         "Stack.BenchmarkMemoryLimitMb = 512",
         "Stack.BenchmarkProfile = mixed",
         "Stack.BenchmarkTotalBytes = 52904649",
@@ -60,7 +60,7 @@ describe("benchmark result collector", () => {
       runDate: "2026-05-02",
       providerImplementationCommit: "abc1234",
       region: "ap-southeast-2",
-      implementation: "rust",
+      implementation: "shin",
       profile: "mixed",
       series: "forced-unchanged",
       memoryMb: 512,
@@ -130,7 +130,7 @@ describe("benchmark result collector", () => {
         "✨  Deployment time: 66.68s",
         "Outputs:",
         "Stack.BenchmarkFileCount = 2584",
-        "Stack.BenchmarkImplementation = rust",
+        "Stack.BenchmarkImplementation = shin",
         "Stack.BenchmarkMemoryLimitMb = 1024",
         "Stack.BenchmarkProfile = tiny-many",
         "Stack.BenchmarkTotalBytes = 8178618",
@@ -200,7 +200,7 @@ describe("benchmark result collector", () => {
           providerImplementationSubject: "test",
           resultDocumentationCommit: null,
           region: "ap-southeast-2",
-          implementation: "rust",
+          implementation: "shin",
           profile: "mixed",
           series: "comparison",
           memoryMb: 1024,
@@ -253,7 +253,7 @@ describe("benchmark result collector", () => {
 
     expect(readFileSync(outputFile, "utf8")).toEqual(report);
     expect(report).toContain("Benchmark Report: comparison");
-    expect(report).toContain("| mixed | cold-create | 1024 | rust | 1 | 2 | 2 | 2 | 2 |");
+    expect(report).toContain("| mixed | cold-create | 1024 | shin | 1 | 2 | 2 | 2 | 2 |");
     expect(report).toContain("## ShinBucketDeployment vs AWS BucketDeployment");
     expect(report).toContain(
       "| mixed | cold-create | 1024 | 2 s vs 8 s (4x faster) | 90 s vs 120 s (1.333x faster) | 60 s vs 90 s (1.5x faster) | 80 MiB vs 180 MiB (55.556% lower) |",
