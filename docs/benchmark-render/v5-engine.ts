@@ -86,6 +86,11 @@ function renderRow(row: Row, index: number, sectionRowsTop: number, max: number,
   const badgeStroke = row.best ? ' stroke="#0ee89e" stroke-width="0.5"' : '';
   const badgeTextFill = row.best ? '#6ef0d0' : '#f0f8ff';
 
+  // Determine winner: lower is better
+  const shinWins = row.shin < row.aws;
+  const shinValFill = shinWins ? '#6ef0d0' : '#5a7a94';
+  const awsValFill = shinWins ? '#5a7a94' : '#ffa033';
+
   let s = '';
   // Label
   s += `<text x="${CANVAS_PAD_LEFT}" y="${textY}" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="600" fill="#c8e0f0">${row.label}</text>\n`;
@@ -97,9 +102,9 @@ function renderRow(row: Row, index: number, sectionRowsTop: number, max: number,
   s += `<rect x="${BAR_X}" y="${awsY}" width="${BAR_W}" height="${BAR_H}" rx="${BAR_RX}" fill="#12202c"/>\n`;
   s += `<rect x="${BAR_X}" y="${awsY}" width="${aw}" height="${BAR_H}" rx="${BAR_RX}" fill="url(#aws)" filter="url(#gA)" opacity="0.35"/>\n`;
   s += `<rect x="${BAR_X}" y="${awsY}" width="${aw}" height="${BAR_H}" rx="${BAR_RX}" fill="url(#aws)" opacity="0.75"/>\n`;
-  // Values
-  s += `<text x="${COL_SHIN_X}" y="${textY}" font-family="JetBrains Mono, monospace" font-size="12" font-weight="700" fill="#6ef0d0">${shinVal}</text>\n`;
-  s += `<text x="${COL_AWS_X}" y="${textY}" font-family="JetBrains Mono, monospace" font-size="12" font-weight="400" fill="#5a7a94">${awsVal}</text>\n`;
+  // Values — winner gets colored
+  s += `<text x="${COL_SHIN_X}" y="${textY}" font-family="JetBrains Mono, monospace" font-size="12" font-weight="700" fill="${shinValFill}">${shinVal}</text>\n`;
+  s += `<text x="${COL_AWS_X}" y="${textY}" font-family="JetBrains Mono, monospace" font-size="12" font-weight="${shinWins ? '400' : '700'}" fill="${awsValFill}">${awsVal}</text>\n`;
   // Badge
   s += `<rect x="${COL_DELTA_X}" y="${badgeY}" width="${BADGE_W}" height="${BADGE_H}" rx="${BADGE_RX}" fill="${badgeFill}"${badgeStroke} filter="url(#badgeShadow)"/>\n`;
   s += `<text x="${COL_DELTA_X + BADGE_W / 2}" y="${badgeY + 15}" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" font-weight="800" fill="${badgeTextFill}">${row.delta}</text>\n`;
