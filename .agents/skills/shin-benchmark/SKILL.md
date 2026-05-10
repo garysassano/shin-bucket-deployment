@@ -49,6 +49,8 @@ Committed benchmark records may include:
 
 ## Benchmark Workflow
 
+Do not finalize timing-only benchmark rows when provider telemetry is expected. For every provider-invoking deploy/update/delete phase, capture the Lambda CloudWatch `REPORT` line and the sanitized `shin_deployment_summary` line before destroying the stack or otherwise deleting provider log groups. If telemetry cannot be captured, either rerun the phase or clearly mark the record as incomplete with `null` provider fields and explain why.
+
 Use paired inputs for Rust vs AWS comparisons:
 
 - same region and account
@@ -81,7 +83,62 @@ pnpm example deploy benchmark-assets -- --profile <profile>
 
 Repeat the same sequence with `benchmark-assets-aws` for upstream AWS CDK `BucketDeployment`.
 
-Always destroy both stacks and verify they are absent before finalizing records.
+For parameter sweeps, keep all non-swept inputs identical and encode the swept value in the record so rows remain distinguishable. For `maxParallelTransfers` sweeps, use distinct phase names such as `cold-create-parallel-8`, `cold-create-parallel-16`, and include the provider summary field `maxParallelTransfers`.
+
+Always collect telemetry first, then destroy benchmark stacks, then verify they are absent before finalizing records.
+
+## Telemetry Capture
+
+Capture raw deploy output, CloudWatch `REPORT` events, and CloudWatch `shin_deployment_summary` events in scratch outside the repo. The benchmark collector understands both sanitized JSONL summary files and raw `aws logs filter-log-events --output json` files; prefer passing the raw CloudWatch summary file directly to avoid manual unescaping mistakes.
+
+After each deploy/update and before destroy:
+
+```bash
+aws cloudformation describe-stack-resources \
+  --region <region> --profile <profile> \
+  --stack-name <stack-name> \
+  --query "StackResources[?ResourceType=='AWS::Lambda::Function'].PhysicalResourceId" \
+  --output json > <scratch>/functions.json
+
+HANDLER=$(node -e 'const fs=require("fs"); const funcs=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); const handler=funcs.find((name)=>name.includes("ShinBucketDeploymentHand")); if (!handler) process.exit(2); process.stdout.write(handler);' <scratch>/functions.json)
+
+aws logs filter-log-events \
+  --region <region> --profile <profile> \
+  --log-group-name "/aws/lambda/$HANDLER" \
+  --filter-pattern "REPORT" \
+  --output json > <scratch>/report.json
+
+aws logs filter-log-events \
+  --region <region> --profile <profile> \
+  --log-group-name "/aws/lambda/$HANDLER" \
+  --filter-pattern "shin_deployment_summary" \
+  --output json > <scratch>/summary.json
+```
+
+Then append the record with:
+
+```bash
+pnpm benchmark:collect -- \
+  --log-file <scratch>/deploy.log \
+  --report-file <scratch>/report.json \
+  --summary-file <scratch>/summary.json \
+  --output-file docs/benchmark-history.jsonl \
+  --run-id <run-id> \
+  --run-date <YYYY-MM-DD> \
+  --phase <phase> \
+  --series <series> \
+  --commit <short-sha> \
+  --subject "<commit subject>" \
+  --region <region> \
+  --implementation rust \
+  --profile <benchmark-profile> \
+  --memory-mb <memory> \
+  --variant <variant> \
+  --cleanup "all benchmark stacks destroyed" \
+  --notes "<sanitized note>"
+```
+
+Do not parse `summary=...` tracing lines by hand. If parsing fails, fix `scripts/collect-benchmark-results.ts` and add a test in `test/benchmark-collector.test.ts`.
 
 ## Benchmark Records
 
@@ -116,6 +173,8 @@ Required fields:
 - `providerSummary` for Rust records when a sanitized summary is available
 
 Use `null` for unavailable values. Do not invent data.
+
+For Rust records with provider invocation, prefer a record with both CloudWatch `REPORT` metrics and `providerSummary`. Missing provider telemetry is acceptable only when the provider was not invoked or when the record notes why capture was impossible.
 
 ## Benchmark Human Page
 
