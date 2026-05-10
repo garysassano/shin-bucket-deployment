@@ -15,7 +15,7 @@ const BAR_H = 11;             // bar thickness
 const BAR_RX = 5.5;           // bar corner radius
 const BAR_GAP = 6;            // gap between shin and aws bar
 const BAR_X = 180;            // bar left edge
-const BAR_W = 400;            // max bar width
+const BAR_W = 320;            // max bar width
 
 const ROW_PAD_TOP = 11;       // space from separator to shin bar top
 const ROW_PAD_BOTTOM = 11;    // space from aws bar bottom to next separator

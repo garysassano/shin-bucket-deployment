@@ -6,7 +6,7 @@ Preview-only SVGs live in `docs/benchmark-preview-assets`. The generated benchma
 
 ## Signal Split v5
 
-Default current preview. Two metric panels, one for Lambda handler duration and one for max memory.
+Default current preview with compact bar tracks. Two metric panels, one for Lambda handler duration and one for max memory.
 
 ![Signal split v5 benchmark chart](benchmark-preview-assets/signal-split-v5.svg)
 
