@@ -61,6 +61,7 @@ Environment variables:
 | `SHIN_BENCH_STACK_SUFFIX` | none | Adds a suffix to the benchmark stack name so multiple runs can coexist. |
 | `SHIN_BENCH_DESTINATION_PREFIX` | `benchmark-site` | Destination prefix inside the generated bucket. |
 | `SHIN_BENCH_MEMORY_LIMIT_MB` | `1024` | Provider Lambda memory size in MiB. Use distinct stack suffixes when comparing memory sizes. |
+| `SHIN_BENCH_MAX_PARALLEL_TRANSFERS` | `8` | Rust provider `maxParallelTransfers` setting for transfer concurrency sweeps. |
 | `SHIN_BENCH_PRUNE` | `true` | Set to `false` to disable prune. |
 | `SHIN_BENCH_WAIT` | `true` | Present for property toggling; the benchmark stack currently has no CloudFront distribution. |
 
@@ -108,39 +109,44 @@ Every committed benchmark result is represented as sanitized records in `docs/be
 
 | Field | Value |
 | --- | --- |
-| Run date | 2026-05-09 |
-| Provider implementation commit | `69ad582` (`use bucket grants for destination writes`) |
+| Run date | 2026-05-10 |
+| Provider implementation commit | `b74e03d` (`Refine README positioning copy`) |
 | Result documentation commit | Pending |
 | Region | `ap-southeast-2` |
-| Implementations | `rust`, `aws` |
+| Implementation | `rust` |
 | Profile | `tiny-many` |
 | Baseline variant | `v1` |
-| Baseline bundle | 2,584 files, 8,178,618 bytes |
-| Comparison variants | `v2`: 2,584 files, 8,178,618 bytes; `pruned`: 2,325 files, 7,332,858 bytes |
+| Bundle | 2,584 files, 8,178,618 bytes |
 | Provider memory | 1024 MiB |
-| Cleanup | All benchmark stacks destroyed after collection |
-| Notes | Paired Rust/AWS comparison for the many-small-files profile. Forced unchanged rows used `SHIN_BENCH_WAIT=false` on a stack with no CloudFront distribution. Rust rows include sanitized provider summary counters in `docs/benchmark-history.jsonl`. |
+| Swept setting | `maxParallelTransfers`: 8, 16, 32, 64 |
+| Cleanup | All benchmark stacks destroyed after telemetry collection |
+| Notes | Rust-only cold-create tuning sweep for the many-small-files profile. All inputs were held constant except `maxParallelTransfers`. Rows include CloudWatch REPORT metrics and sanitized `shin_deployment_summary` counters in `docs/benchmark-history.jsonl`. |
 
-ShinBucketDeployment vs AWS BucketDeployment insight table:
+Parallel transfer score table:
 
-| Phase | Provider duration | Local wall time | CDK deploy time | Max memory |
-| --- | ---: | ---: | ---: | ---: |
-| Cold create | 14.259 s vs 27.316 s (1.916x faster) | 138.37 s vs 160.91 s (1.163x faster) | 70.89 s vs 90.82 s (1.281x faster) | 79 MiB vs 212 MiB (62.736% lower) |
-| Forced unchanged | 0.46 s vs 28.264 s (61.443x faster) | 57.93 s vs 86.4 s (1.491x faster) | 14.19 s vs 46.06 s (3.246x faster) | 89 MiB vs 214 MiB (58.411% lower) |
-| Sparse update | 0.622 s vs 28.76 s (46.238x faster) | 66.53 s vs 108.05 s (1.624x faster) | 14.14 s vs 46.23 s (3.269x faster) | 89 MiB vs 214 MiB (58.411% lower) |
-| Prune update | 15.758 s vs 28.356 s (1.799x faster) | 88.43 s vs 107.79 s (1.219x faster) | 34.14 s vs 46.08 s (1.35x faster) | 95 MiB vs 214 MiB (55.607% lower) |
+| Parallel transfers | Provider duration | Billed duration | Init duration | Max memory | Provider speedup vs 8 |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 8 | 14.261 s | 14.425 s | 0.163 s | 77 MiB | baseline |
+| 16 | 6.874 s | 7.048 s | 0.174 s | 85 MiB | 2.07x faster, 51.8% lower |
+| 32 | 3.695 s | 3.830 s | 0.135 s | 96 MiB | 3.86x faster, 74.1% lower |
+| 64 | 3.530 s | 3.709 s | 0.178 s | 119 MiB | 4.04x faster, 75.2% lower |
 
-Detailed per-phase metric comparisons are generated from `docs/benchmark-history.jsonl` using `pnpm benchmark:report`. The visual summary below uses the same paired medians as the table and shows Lambda handler duration plus max memory in a hardware-benchmark style chart.
+End-to-end timings:
 
-![ShinBucketDeployment vs AWS BucketDeployment Lambda handler duration and max memory](benchmark-assets/shin-vs-aws-duration-memory.svg)
+| Parallel transfers | CDK deploy time | Local wall time | CDK delta vs 8 | Local delta vs 8 |
+| ---: | ---: | ---: | ---: | ---: |
+| 8 | 74.03 s | 118.35 s | baseline | baseline |
+| 16 | 67.69 s | 108.92 s | 8.6% lower | 8.0% lower |
+| 32 | 66.68 s | 128.05 s | 9.9% lower | 8.2% higher |
+| 64 | 67.32 s | 109.94 s | 9.1% lower | 7.1% lower |
 
 Provider summary highlights:
 
-| Implementation | Phase | Uploaded objects | Skipped objects | Deleted objects | Uploaded bytes | Source fetched bytes |
-| --- | --- | ---: | ---: | ---: | ---: | ---: |
-| Rust | Cold create | 2,585 | 0 | 0 | 8,178,712 | 856,771 |
-| Rust | Forced unchanged | 0 | 2,585 | 0 | 0 | 74,147 |
-| Rust | Sparse update | 3 | 2,582 | 0 | 20,806 | 74,943 |
-| Rust | Prune update | 2,326 | 0 | 259 | 7,332,956 | 770,804 |
+| Parallel transfers | Plan | Destination list | Transfer | Uploaded objects | Uploaded bytes | Source fetched bytes | Block waits | Refetches |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 8 | 284 ms | 32 ms | 13,896 ms | 2,585 | 8,178,712 | 856,765 | 72 | 0 |
+| 16 | 288 ms | 35 ms | 6,501 ms | 2,585 | 8,178,712 | 856,765 | 117 | 0 |
+| 32 | 221 ms | 32 ms | 3,378 ms | 2,585 | 8,178,712 | 856,765 | 262 | 0 |
+| 64 | 239 ms | 37 ms | 3,202 ms | 2,585 | 8,178,712 | 1,639,389 | 439 | 1 |
 
-These results validate the many-small-files path at the 1024 MiB default. The highest reported Rust memory in this paired run was 95 MB, compared with 214 MB for upstream AWS `BucketDeployment`. Rust provider duration was lower in every measured phase, with the largest relative gains on unchanged and sparse updates where the embedded catalog avoided per-object source hashing.
+The provider transfer phase improved strongly from 8 to 32 parallel transfers, then mostly plateaued at 64. The 64-worker run was only 0.165 s faster than 32 in provider duration, but used 23 MiB more peak memory and had one source block refetch, so 32 looks like the better speed/memory balance for this single-run tiny-many cold-create sweep. End-to-end CDK deploy time improved by about 9-10% from 8 to 32/64 because CloudFormation and CDK overhead dominate once provider transfer time falls below roughly 4 seconds.

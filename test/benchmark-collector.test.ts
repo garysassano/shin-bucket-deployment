@@ -109,6 +109,82 @@ describe("benchmark result collector", () => {
     });
   });
 
+  test("extracts sanitized provider summary from raw CloudWatch log events", () => {
+    const dir = mkdtempSync(join(tmpdir(), "shin-bench-collector-"));
+    const logFile = join(dir, "deploy.log");
+    const reportFile = join(dir, "report.json");
+    const summaryFile = join(dir, "summary.json");
+    const outputFile = join(dir, "history.jsonl");
+    const summary = {
+      event: "shin_deployment_summary",
+      requestType: "Create",
+      status: "success",
+      maxParallelTransfers: 32,
+      durationMs: 3632,
+      counts: { uploadedObjects: 2585 },
+    };
+
+    writeFileSync(
+      logFile,
+      [
+        "✨  Deployment time: 66.68s",
+        "Outputs:",
+        "Stack.BenchmarkFileCount = 2584",
+        "Stack.BenchmarkImplementation = rust",
+        "Stack.BenchmarkMemoryLimitMb = 1024",
+        "Stack.BenchmarkProfile = tiny-many",
+        "Stack.BenchmarkTotalBytes = 8178618",
+        "Stack.BenchmarkVariant = v1",
+        "real 128.05",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(
+      reportFile,
+      JSON.stringify({
+        events: [
+          {
+            timestamp: 1,
+            message:
+              "REPORT RequestId: id\tDuration: 3694.94 ms\tBilled Duration: 3830 ms\tMemory Size: 1024 MB\tMax Memory Used: 96 MB\tInit Duration: 134.50 ms",
+          },
+        ],
+      }),
+    );
+    writeFileSync(
+      summaryFile,
+      JSON.stringify({
+        events: [
+          {
+            timestamp: 1,
+            message: `\u001b[0m{requestId="redacted"}: summary=${JSON.stringify(JSON.stringify(summary))}`,
+          },
+        ],
+      }),
+    );
+
+    const collected = collectBenchmarkResult({
+      logFile,
+      reportFile,
+      summaryFile,
+      outputFile,
+      runId: "parallel-transfer",
+      runDate: "2026-05-10",
+      phase: "cold-create-parallel-32",
+      series: "parallel-transfers-1024",
+      region: "ap-southeast-2",
+    });
+
+    expect(collected.providerSummary).toEqual(summary);
+    expect(collected).toMatchObject({
+      providerDurationSeconds: 3.695,
+      billedDurationSeconds: 3.83,
+      initDurationSeconds: 0.135,
+      maxMemoryMb: 96,
+      providerInvoked: true,
+    });
+  });
+
   test("renders markdown benchmark comparison reports", () => {
     const dir = mkdtempSync(join(tmpdir(), "shin-bench-report-"));
     const inputFile = join(dir, "history.jsonl");

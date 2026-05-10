@@ -16,6 +16,9 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
     const bundle = ensureBenchmarkAssets();
     const destinationPrefix = process.env.SHIN_BENCH_DESTINATION_PREFIX ?? "benchmark-site";
     const memoryLimitMb = parseOptionalPositiveIntegerEnv("SHIN_BENCH_MEMORY_LIMIT_MB") ?? 1024;
+    const maxParallelTransfers = parseOptionalPositiveIntegerEnv(
+      "SHIN_BENCH_MAX_PARALLEL_TRANSFERS",
+    );
     const implementation = parseImplementation(process.env.SHIN_BENCH_IMPLEMENTATION);
 
     const websiteBucket = new Bucket(this, "WebsiteBucket", {
@@ -34,6 +37,7 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
     if (implementation === "rust") {
       new ShinBucketDeployment(this, "DeployBenchmarkAssets", {
         ...deploymentProps,
+        ...(maxParallelTransfers === undefined ? {} : { maxParallelTransfers }),
         sources: [RustSource.asset(bundle.root)],
       });
     } else {
@@ -71,6 +75,10 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
       value: String(memoryLimitMb),
     });
 
+    new CfnOutput(this, "BenchmarkMaxParallelTransfers", {
+      value: String(maxParallelTransfers ?? 8),
+    });
+
     new CfnOutput(this, "BenchmarkImplementation", {
       value: implementation,
     });
@@ -95,7 +103,7 @@ function parseOptionalPositiveIntegerEnv(name: string): number | undefined {
 
   const value = Number(raw);
   if (!Number.isInteger(value) || value < 1) {
-    throw new Error(`${name} must be a positive integer number of MiB.`);
+    throw new Error(`${name} must be a positive integer.`);
   }
   return value;
 }
