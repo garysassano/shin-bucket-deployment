@@ -3,8 +3,14 @@
  * All positions derived from layout constants — change one value and everything adapts.
  */
 
+import * as fs from 'fs';
+import * as path from 'path';
+import { fileURLToPath } from 'url';
+
 type ChartVariant = 'default' | 'aws';
 type HeaderLayout = 'two-line' | 'three-line';
+
+const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 
 function parseVariant(argv: string[]): ChartVariant {
   const variantIndex = argv.indexOf('--variant');
@@ -30,14 +36,15 @@ function parseVariant(argv: string[]): ChartVariant {
 
 const chartVariant = parseVariant(process.argv.slice(2));
 
-function parseHeaderLayout(argv: string[]): HeaderLayout {
-  const headerIndex = argv.indexOf('--header');
-  const headerValue = headerIndex === -1 ? undefined : argv[headerIndex + 1];
-  const inlineHeader = argv
-    .find((arg) => arg.startsWith('--header='))
-    ?.slice('--header='.length);
+function parseStringArg(argv: string[], name: string): string | undefined {
+  const valueIndex = argv.indexOf(name);
+  const value = valueIndex === -1 ? undefined : argv[valueIndex + 1];
+  const inlineValue = argv.find((arg) => arg.startsWith(`${name}=`))?.slice(name.length + 1);
+  return inlineValue ?? value;
+}
 
-  const requestedHeader = inlineHeader ?? headerValue;
+function parseHeaderLayout(argv: string[]): HeaderLayout {
+  const requestedHeader = parseStringArg(argv, '--header');
   if (requestedHeader === undefined || requestedHeader === 'three-line') {
     return 'three-line';
   }
@@ -49,6 +56,12 @@ function parseHeaderLayout(argv: string[]): HeaderLayout {
 }
 
 const headerLayout = parseHeaderLayout(process.argv.slice(2));
+const requestedRunId = parseStringArg(process.argv.slice(2), '--run-id');
+const inputFile = path.resolve(
+  process.cwd(),
+  parseStringArg(process.argv.slice(2), '--input-file') ??
+    path.join(scriptDir, '..', 'benchmark-history.jsonl'),
+);
 
 // ═══ LAYOUT CONSTANTS ═══
 const CANVAS_PAD_LEFT = 24;
@@ -100,23 +113,165 @@ const COLOR_BADGE_AWS_FILL = '#341821';
 const COLOR_BADGE_AWS_STROKE = '#ff6a2b';
 const COLOR_BADGE_AWS_TEXT = '#ffa033';
 
-// ═══ DATA ═══
 interface Row { label: string; shin: number; aws: number; }
 
-const duration: Row[] = [
-  { label: 'cold-create', shin: 14.3, aws: 27.3 },
-  { label: 'forced-unchanged', shin: 0.46, aws: 28.3 },
-  { label: 'sparse-update', shin: 0.62, aws: 28.8 },
-  { label: 'prune-update', shin: 15.8, aws: 28.4 },
-];
-const memory: Row[] = [
-  { label: 'cold-create', shin: 79, aws: 212 },
-  { label: 'forced-unchanged', shin: 89, aws: 214 },
-  { label: 'sparse-update', shin: 89, aws: 214 },
-  { label: 'prune-update', shin: 95, aws: 214 },
-];
-const MAX_DUR = 28.8;
-const MAX_MEM = 214;
+interface ProviderSummary {
+  maxParallelTransfers?: number;
+}
+
+interface BenchmarkRecord {
+  runId?: string;
+  implementation?: string | null;
+  profile?: string | null;
+  memoryMb?: number | null;
+  phase?: string;
+  fileCount?: number | null;
+  totalBytes?: number | null;
+  providerDurationSeconds?: number | null;
+  maxMemoryMb?: number | null;
+  providerSummary?: ProviderSummary;
+}
+
+interface BenchmarkData {
+  duration: Row[];
+  memory: Row[];
+  metadata: string;
+}
+
+const PHASE_ORDER = new Map([
+  ['cold-create', 0],
+  ['forced-unchanged', 1],
+  ['sparse-update', 2],
+  ['prune-update', 3],
+]);
+
+function readRecords(filePath: string): BenchmarkRecord[] {
+  return fs
+    .readFileSync(filePath, 'utf8')
+    .split(/\r?\n/)
+    .filter((line) => line.trim().length > 0)
+    .map((line, index) => {
+      try {
+        return JSON.parse(line) as BenchmarkRecord;
+      } catch (cause) {
+        throw new Error(`Invalid JSONL record at ${filePath}:${index + 1}`, { cause });
+      }
+    });
+}
+
+function comparablePhases(records: BenchmarkRecord[]): string[] {
+  const phases = new Set(records.map((record) => record.phase).filter((phase) => phase !== undefined));
+  return [...phases]
+    .filter((phase) =>
+      ['shin', 'aws'].every((implementation) =>
+        records.some(
+          (record) => record.phase === phase && record.implementation === implementation,
+        ),
+      ),
+    )
+    .sort((left, right) => (PHASE_ORDER.get(left) ?? 999) - (PHASE_ORDER.get(right) ?? 999));
+}
+
+function latestComparableRunId(records: BenchmarkRecord[]): string {
+  const runIds = [...new Set(records.map((record) => record.runId).filter((runId) => runId !== undefined))];
+  const runId = runIds
+    .filter((candidate) => comparablePhases(records.filter((record) => record.runId === candidate)).length > 0)
+    .at(-1);
+  if (runId === undefined) {
+    throw new Error(`No paired Shin/AWS benchmark run found in ${inputFile}`);
+  }
+  return runId;
+}
+
+function requireNumber(value: number | null | undefined, label: string): number {
+  if (value === null || value === undefined) {
+    throw new Error(`Missing ${label}`);
+  }
+  return value;
+}
+
+function recordFor(records: BenchmarkRecord[], phase: string, implementation: 'shin' | 'aws'): BenchmarkRecord {
+  const record = records.find(
+    (candidate) => candidate.phase === phase && candidate.implementation === implementation,
+  );
+  if (record === undefined) {
+    throw new Error(`Missing ${implementation} record for ${phase}`);
+  }
+  return record;
+}
+
+function formatDuration(value: number): number {
+  return Number(value.toPrecision(value < 1 ? 2 : 3));
+}
+
+function formatBytes(value: number): string {
+  const units = ['bytes', 'KiB', 'MiB', 'GiB'];
+  let amount = value;
+  let unitIndex = 0;
+  while (amount >= 1024 && unitIndex < units.length - 1) {
+    amount /= 1024;
+    unitIndex++;
+  }
+  return unitIndex === 0
+    ? `${Math.round(amount).toLocaleString('en-US')} ${units[unitIndex]}`
+    : `${amount.toFixed(1).replace(/\.0$/, '')} ${units[unitIndex]}`;
+}
+
+function buildBenchmarkData(records: BenchmarkRecord[]): BenchmarkData {
+  const runId = requestedRunId ?? latestComparableRunId(records);
+  const runRecords = records.filter((record) => record.runId === runId);
+  const phases = comparablePhases(runRecords);
+  if (phases.length === 0) {
+    throw new Error(`Run "${runId}" does not contain paired Shin/AWS benchmark records`);
+  }
+
+  const duration = phases.map((phase) => {
+    const shin = recordFor(runRecords, phase, 'shin');
+    const aws = recordFor(runRecords, phase, 'aws');
+    return {
+      label: phase,
+      shin: formatDuration(requireNumber(shin.providerDurationSeconds, `${phase} shin duration`)),
+      aws: formatDuration(requireNumber(aws.providerDurationSeconds, `${phase} aws duration`)),
+    };
+  });
+  const memory = phases.map((phase) => {
+    const shin = recordFor(runRecords, phase, 'shin');
+    const aws = recordFor(runRecords, phase, 'aws');
+    return {
+      label: phase,
+      shin: requireNumber(shin.maxMemoryMb, `${phase} shin max memory`),
+      aws: requireNumber(aws.maxMemoryMb, `${phase} aws max memory`),
+    };
+  });
+
+  const metadataRecord = runRecords.find((record) => record.implementation === 'shin') ?? runRecords[0];
+  const parallelTransfers = runRecords.find(
+    (record) => record.implementation === 'shin' && record.providerSummary?.maxParallelTransfers !== undefined,
+  )?.providerSummary?.maxParallelTransfers;
+  const metadataParts = [
+    metadataRecord.profile === null || metadataRecord.profile === undefined
+      ? undefined
+      : `Profile: ${metadataRecord.profile}`,
+    metadataRecord.memoryMb === null || metadataRecord.memoryMb === undefined
+      ? undefined
+      : `Lambda mem: ${metadataRecord.memoryMb} MiB`,
+    parallelTransfers === undefined ? undefined : `Parallel: ${parallelTransfers}`,
+    metadataRecord.fileCount === null ||
+    metadataRecord.fileCount === undefined ||
+    metadataRecord.totalBytes === null ||
+    metadataRecord.totalBytes === undefined
+      ? undefined
+      : `Assets: ${metadataRecord.fileCount.toLocaleString('en-US')} objects / ${formatBytes(metadataRecord.totalBytes)}`,
+  ].filter((part) => part !== undefined);
+
+  return {
+    duration,
+    memory,
+    metadata: metadataParts.join(' · '),
+  };
+}
+
+const benchmarkData = buildBenchmarkData(readRecords(inputFile));
 
 function simulateAwsWins(rows: Row[]): Row[] {
   return rows.map((row) => ({
@@ -126,8 +281,10 @@ function simulateAwsWins(rows: Row[]): Row[] {
   }));
 }
 
-const chartDuration = chartVariant === 'aws' ? simulateAwsWins(duration) : duration;
-const chartMemory = chartVariant === 'aws' ? simulateAwsWins(memory) : memory;
+const chartDuration = chartVariant === 'aws' ? simulateAwsWins(benchmarkData.duration) : benchmarkData.duration;
+const chartMemory = chartVariant === 'aws' ? simulateAwsWins(benchmarkData.memory) : benchmarkData.memory;
+const MAX_DUR = Math.max(...chartDuration.flatMap((row) => [row.shin, row.aws]));
+const MAX_MEM = Math.max(...chartMemory.flatMap((row) => [row.shin, row.aws]));
 const subtitlePrefix =
   chartVariant === 'aws' ? 'AWS win simulation' : 'vs AWS BucketDeployment';
 const outFileSuffix =
@@ -250,11 +407,11 @@ function renderHeader(): string {
   if (headerLayout === 'three-line') {
     return `<text x="${CANVAS_PAD_LEFT}" y="23" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_TITLE}" font-weight="800" fill="#f0f8ff" letter-spacing="-0.3">ShinBucketDeployment</text>
 <text x="${CANVAS_PAD_LEFT}" y="43" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_SUBTITLE}" font-weight="600" fill="${COLOR_SECTION_HEADER_TEXT}">${subtitlePrefix}</text>
-<text x="${CANVAS_PAD_LEFT}" y="61" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_HEADER_LEGEND}" font-weight="500" fill="${COLOR_SECTION_HEADER_TEXT}">Profile: tiny-many · Lambda mem: 1024 MiB · Assets: 2,584 objects / 7.8 MiB</text>`;
+<text x="${CANVAS_PAD_LEFT}" y="61" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_HEADER_LEGEND}" font-weight="500" fill="${COLOR_SECTION_HEADER_TEXT}">${benchmarkData.metadata}</text>`;
   }
 
   return `<text x="${CANVAS_PAD_LEFT}" y="26" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_TITLE}" font-weight="800" fill="#f0f8ff" letter-spacing="-0.3">ShinBucketDeployment</text>
-<text x="${CANVAS_PAD_LEFT}" y="46" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_SUBTITLE}" font-weight="500" fill="${COLOR_SECTION_HEADER_TEXT}">${subtitlePrefix} · Profile: tiny-many · Lambda mem: 1024 MiB · Assets: 2,584 objects / 7.8 MiB</text>`;
+<text x="${CANVAS_PAD_LEFT}" y="46" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_SUBTITLE}" font-weight="500" fill="${COLOR_SECTION_HEADER_TEXT}">${subtitlePrefix} · ${benchmarkData.metadata}</text>`;
 }
 
 // ═══ RENDER ═══
@@ -319,10 +476,8 @@ ${renderHeader()}
 }
 
 // ═══ OUTPUT ═══
-import * as fs from 'fs';
-import * as path from 'path';
 const outFileName = `signal-split-v5${outFileSuffix}.svg`;
-const outPath = path.join(__dirname, '..', 'benchmark-preview-assets', outFileName);
+const outPath = path.join(scriptDir, '..', 'benchmark-preview-assets', outFileName);
 fs.mkdirSync(path.dirname(outPath), { recursive: true });
 fs.writeFileSync(outPath, render());
 console.log(`Written: ${outPath}`);
