@@ -43,6 +43,19 @@ function parseStringArg(argv: string[], name: string): string | undefined {
   return inlineValue ?? value;
 }
 
+function parseNumberArg(argv: string[], name: string): number | undefined {
+  const value = parseStringArg(argv, name);
+  if (value === undefined) {
+    return undefined;
+  }
+
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`Invalid ${name} value "${value}". Use a positive integer.`);
+  }
+  return parsed;
+}
+
 function parseHeaderLayout(argv: string[]): HeaderLayout {
   const requestedHeader = parseStringArg(argv, '--header');
   if (requestedHeader === undefined || requestedHeader === 'three-line') {
@@ -57,6 +70,7 @@ function parseHeaderLayout(argv: string[]): HeaderLayout {
 
 const headerLayout = parseHeaderLayout(process.argv.slice(2));
 const requestedRunId = parseStringArg(process.argv.slice(2), '--run-id');
+const requestedShinParallel = parseNumberArg(process.argv.slice(2), '--shin-parallel');
 const inputFile = path.resolve(
   process.cwd(),
   parseStringArg(process.argv.slice(2), '--input-file') ??
@@ -138,6 +152,12 @@ interface BenchmarkData {
   metadata: string;
 }
 
+interface DataSelection {
+  runRecords: BenchmarkRecord[];
+  shinRecords: Map<string, BenchmarkRecord>;
+  awsRecords: Map<string, BenchmarkRecord>;
+}
+
 const PHASE_ORDER = new Map([
   ['cold-create', 0],
   ['forced-unchanged', 1],
@@ -172,6 +192,10 @@ function comparablePhases(records: BenchmarkRecord[]): string[] {
     .sort((left, right) => (PHASE_ORDER.get(left) ?? 999) - (PHASE_ORDER.get(right) ?? 999));
 }
 
+function basePhaseName(phase: string): string {
+  return phase.replace(/-parallel-\d+$/, '');
+}
+
 function latestComparableRunId(records: BenchmarkRecord[]): string {
   const runIds = [...new Set(records.map((record) => record.runId).filter((runId) => runId !== undefined))];
   const runId = runIds
@@ -190,14 +214,12 @@ function requireNumber(value: number | null | undefined, label: string): number 
   return value;
 }
 
-function recordFor(records: BenchmarkRecord[], phase: string, implementation: 'shin' | 'aws'): BenchmarkRecord {
-  const record = records.find(
-    (candidate) => candidate.phase === phase && candidate.implementation === implementation,
+function recordsByBasePhase(records: BenchmarkRecord[], implementation: 'shin' | 'aws'): Map<string, BenchmarkRecord> {
+  return new Map(
+    records
+      .filter((record) => record.phase !== undefined && record.implementation === implementation)
+      .map((record) => [basePhaseName(record.phase as string), record]),
   );
-  if (record === undefined) {
-    throw new Error(`Missing ${implementation} record for ${phase}`);
-  }
-  return record;
 }
 
 function formatDuration(value: number): number {
@@ -217,7 +239,7 @@ function formatBytes(value: number): string {
     : `${amount.toFixed(1).replace(/\.0$/, '')} ${units[unitIndex]}`;
 }
 
-function buildBenchmarkData(records: BenchmarkRecord[]): BenchmarkData {
+function selectData(records: BenchmarkRecord[]): DataSelection {
   const runId = requestedRunId ?? latestComparableRunId(records);
   const runRecords = records.filter((record) => record.runId === runId);
   const phases = comparablePhases(runRecords);
@@ -225,9 +247,55 @@ function buildBenchmarkData(records: BenchmarkRecord[]): BenchmarkData {
     throw new Error(`Run "${runId}" does not contain paired Shin/AWS benchmark records`);
   }
 
+  const baseShinRecords = recordsByBasePhase(runRecords, 'shin');
+  const awsRecords = recordsByBasePhase(runRecords, 'aws');
+  const firstShin = baseShinRecords.values().next().value;
+  if (firstShin === undefined) {
+    throw new Error(`Run "${runId}" does not contain Shin benchmark records`);
+  }
+
+  if (requestedShinParallel === undefined) {
+    return {
+      runRecords,
+      shinRecords: baseShinRecords,
+      awsRecords,
+    };
+  }
+
+  const requestedShinRecords = records
+    .filter((record) => record.implementation === 'shin')
+    .filter((record) => record.profile === firstShin.profile)
+    .filter((record) => record.memoryMb === firstShin.memoryMb)
+    .filter((record) => record.providerSummary?.maxParallelTransfers === requestedShinParallel);
+  if (requestedShinRecords.length === 0) {
+    throw new Error(
+      `No Shin benchmark records found for profile=${firstShin.profile}, memory=${firstShin.memoryMb}, maxParallelTransfers=${requestedShinParallel}`,
+    );
+  }
+  return {
+    runRecords,
+    shinRecords: recordsByBasePhase(requestedShinRecords, 'shin'),
+    awsRecords,
+  };
+}
+
+function buildBenchmarkData(records: BenchmarkRecord[]): BenchmarkData {
+  const selection = selectData(records);
+  const phases = [...selection.shinRecords.keys()]
+    .filter((phase) => selection.awsRecords.has(phase))
+    .sort((left, right) => (PHASE_ORDER.get(left) ?? 999) - (PHASE_ORDER.get(right) ?? 999));
+  if (phases.length === 0) {
+    const parallelDescription =
+      requestedShinParallel === undefined ? 'the selected Shin rows' : `Shin maxParallelTransfers=${requestedShinParallel}`;
+    throw new Error(`No paired AWS rows match ${parallelDescription}`);
+  }
+
   const duration = phases.map((phase) => {
-    const shin = recordFor(runRecords, phase, 'shin');
-    const aws = recordFor(runRecords, phase, 'aws');
+    const shin = selection.shinRecords.get(phase);
+    const aws = selection.awsRecords.get(phase);
+    if (shin === undefined || aws === undefined) {
+      throw new Error(`Missing comparable records for ${phase}`);
+    }
     return {
       label: phase,
       shin: formatDuration(requireNumber(shin.providerDurationSeconds, `${phase} shin duration`)),
@@ -235,8 +303,11 @@ function buildBenchmarkData(records: BenchmarkRecord[]): BenchmarkData {
     };
   });
   const memory = phases.map((phase) => {
-    const shin = recordFor(runRecords, phase, 'shin');
-    const aws = recordFor(runRecords, phase, 'aws');
+    const shin = selection.shinRecords.get(phase);
+    const aws = selection.awsRecords.get(phase);
+    if (shin === undefined || aws === undefined) {
+      throw new Error(`Missing comparable records for ${phase}`);
+    }
     return {
       label: phase,
       shin: requireNumber(shin.maxMemoryMb, `${phase} shin max memory`),
@@ -244,9 +315,10 @@ function buildBenchmarkData(records: BenchmarkRecord[]): BenchmarkData {
     };
   });
 
-  const metadataRecord = runRecords.find((record) => record.implementation === 'shin') ?? runRecords[0];
-  const parallelTransfers = runRecords.find(
-    (record) => record.implementation === 'shin' && record.providerSummary?.maxParallelTransfers !== undefined,
+  const shinRows = [...selection.shinRecords.values()];
+  const metadataRecord = shinRows[0] ?? selection.runRecords[0];
+  const parallelTransfers = shinRows.find(
+    (record) => record.providerSummary?.maxParallelTransfers !== undefined,
   )?.providerSummary?.maxParallelTransfers;
   const metadataParts = [
     metadataRecord.profile === null || metadataRecord.profile === undefined
@@ -288,7 +360,7 @@ const MAX_MEM = Math.max(...chartMemory.flatMap((row) => [row.shin, row.aws]));
 const subtitlePrefix =
   chartVariant === 'aws' ? 'AWS win simulation' : 'vs AWS BucketDeployment';
 const outFileSuffix =
-  `${chartVariant === 'aws' ? '-aws' : ''}${headerLayout === 'two-line' ? '-two-line' : ''}`;
+  `${chartVariant === 'aws' ? '-aws' : ''}${requestedShinParallel === undefined ? '' : `-parallel-${requestedShinParallel}`}${headerLayout === 'two-line' ? '-two-line' : ''}`;
 
 const legendSwatchY = headerLayout === 'three-line' ? 22 : 12;
 const legendLabelY = headerLayout === 'three-line' ? 30 : 20;
