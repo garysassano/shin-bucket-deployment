@@ -326,7 +326,7 @@ function buildBenchmarkData(records: BenchmarkRecord[]): BenchmarkData {
       : `Profile: ${metadataRecord.profile}`,
     metadataRecord.memoryMb === null || metadataRecord.memoryMb === undefined
       ? undefined
-      : `Lambda mem: ${metadataRecord.memoryMb} MiB`,
+      : `Lambda: ${metadataRecord.memoryMb} MiB`,
     parallelTransfers === undefined ? undefined : `Parallel: ${parallelTransfers}`,
     metadataRecord.fileCount === null ||
     metadataRecord.fileCount === undefined ||
