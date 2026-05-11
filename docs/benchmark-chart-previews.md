@@ -1,6 +1,10 @@
 # Benchmark Chart Renderer Previews
 
-These preview charts use the same sanitized `2026-05-09-shin-aws-tiny-many-1024` records from `docs/benchmark-history.jsonl`.
+The Signal Split v5 previews use sanitized tiny-many records from `docs/benchmark-history.jsonl`.
+The default v5 chart keeps the four-phase 1024 MiB `maxParallelTransfers=8` Shin/AWS
+comparison from `2026-05-09-shin-aws-tiny-many-1024`. The p32 preview uses the latest
+1024 MiB Shin `maxParallelTransfers=32` cold-create row from
+`2026-05-10-shin-tiny-many-parallel-transfers-1024` with the matching AWS cold-create row.
 
 Preview-only SVGs live in `docs/benchmark-preview-assets`. The generated benchmark report chart remains in `docs/benchmark-assets`.
 
@@ -9,6 +13,13 @@ Preview-only SVGs live in `docs/benchmark-preview-assets`. The generated benchma
 Default current preview with compact bar tracks and a three-line header.
 
 ![Signal split v5 benchmark chart](benchmark-preview-assets/signal-split-v5.svg)
+
+## Signal Split v5 Parallel 32
+
+Cold-create-only preview using the latest tiny-many 1024 MiB Shin `maxParallelTransfers=32`
+row.
+
+![Signal split v5 parallel 32 benchmark chart](benchmark-preview-assets/signal-split-v5-parallel-32.svg)
 
 ## Signal Split v5 Two-line Header
 
