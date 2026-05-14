@@ -1,0 +1,42 @@
+{
+  "$schema": "./schema.json",
+  "name": "tiny-many Shin/AWS comparison at 2048 MiB and 4096 MiB",
+  "region": "ap-southeast-2",
+  "outputFile": "benchmarks/results.jsonl",
+  "destinationPrefix": "benchmark-site",
+  "concurrency": 1,
+  "profiles": ["tiny-many"],
+  "families": [
+    {
+      "memoryMb": 2048,
+      "parallel": 64
+    },
+    {
+      "memoryMb": 4096,
+      "parallel": 128
+    }
+  ],
+  "implementations": ["shin", "aws"],
+  "phases": [
+    {
+      "name": "cold-create",
+      "state": "baseline",
+      "wait": true
+    },
+    {
+      "name": "forced-unchanged",
+      "state": "baseline",
+      "wait": false
+    },
+    {
+      "name": "sparse-update",
+      "state": "changed",
+      "wait": true
+    },
+    {
+      "name": "prune-update",
+      "state": "pruned",
+      "wait": true
+    }
+  ]
+}

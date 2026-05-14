@@ -47,11 +47,12 @@ Benchmark runs should answer these questions:
 The `assets` benchmark scenario generates deterministic static-site bundles under `.benchmark-assets/`, which is ignored by git. The same stack definition can instantiate either this construct or the upstream AWS CDK `BucketDeployment`; the benchmark implementation is the only intended comparison dimension. Shin uses its normal `Source.asset` path, including the embedded catalog optimization, while AWS uses upstream `Source.asset`.
 
 ```bash
-pnpm benchmark deploy assets --profiles mixed --states baseline --memory-mb 1024 --parallel 8 --implementations shin
-pnpm benchmark destroy assets --profiles mixed --states baseline --memory-mb 1024 --parallel 8 --implementations shin
-pnpm benchmark deploy assets --profiles mixed --states baseline --memory-mb 1024 --parallel 8 --implementations aws
-pnpm benchmark destroy assets --profiles mixed --states baseline --memory-mb 1024 --parallel 8 --implementations aws
+AWS_PROFILE=<profile> AWS_REGION=ap-southeast-2 AWS_DEFAULT_REGION=ap-southeast-2 \
+pnpm benchmark:run-assets -- \
+  --config benchmarks/configs/tiny-many-shin-aws-2048-4096.json
 ```
+
+Curated benchmark matrices should live as committed JSON files under `benchmarks/configs/`. The runner still accepts CLI overrides such as `--run-id`, `--run-date`, `--scratch-root`, and `--concurrency`, but the config file is the source of truth for profile, memory/parallel families, implementations, phases, region, output file, and destination prefix.
 
 Environment variables:
 
