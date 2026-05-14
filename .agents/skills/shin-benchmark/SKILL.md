@@ -81,14 +81,10 @@ Prefer the automated asset comparison runner for Shin-vs-AWS asset benchmarks:
 ```bash
 AWS_PROFILE=<profile> AWS_REGION=ap-southeast-2 AWS_DEFAULT_REGION=ap-southeast-2 \
 pnpm benchmark:run-assets -- \
-  --profiles tiny-many \
-  --memory-parallel 2048:64,4096:128 \
-  --implementations shin,aws \
-  --concurrency 1 \
-  --output-file benchmarks/results.jsonl
+  --config benchmarks/configs/tiny-many-shin-aws-2048-4096.json
 ```
 
-The runner deploys each stack family through `cold-create`, `forced-unchanged`, `sparse-update`, and `prune-update`, captures CloudWatch `REPORT` events and Shin `shin_deployment_summary` events before cleanup, destroys the stack, verifies cleanup, and appends sanitized result rows. Keep `--concurrency 1` unless intentionally running multiple stack families in parallel; each family is stateful and its phases must stay ordered.
+The config file defines the profiles, memory/parallel families, implementations, phases, region, output file, and default concurrency. Prefer adding or editing a committed config under `benchmarks/configs/` over building long CLI invocations. The runner deploys each stack family through the configured phases, captures CloudWatch `REPORT` events and Shin `shin_deployment_summary` events before cleanup, destroys the stack, verifies cleanup, and writes sanitized result rows. Keep `concurrency` or `--concurrency` at `1` unless intentionally running multiple stack families in parallel; each family is stateful and its phases must stay ordered.
 
 Choose benchmark configs deliberately. Paired Shin vs AWS comparisons should use:
 

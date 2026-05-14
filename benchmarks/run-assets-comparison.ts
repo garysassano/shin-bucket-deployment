@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { z } from "zod";
 import { ensureBenchmarkAssets } from "./assets";
 import { type CollectBenchmarkOptions, collectBenchmarkResult } from "./collect-results";
 
@@ -19,6 +20,22 @@ type PhaseConfig = {
   readonly wait: boolean;
 };
 
+type RunnerConfig = {
+  readonly profiles: string[];
+  readonly configs: MemoryParallelConfig[];
+  readonly implementations: BenchmarkImplementation[];
+  readonly region: string;
+  readonly outputFile: string;
+  readonly scratchRoot?: string;
+  readonly runId?: string;
+  readonly runDate?: string;
+  readonly concurrency: number;
+  readonly destinationPrefix: string;
+  readonly phases: PhaseConfig[];
+};
+
+type BenchmarkConfig = z.infer<typeof benchmarkConfigSchema>;
+
 type RunOptions = {
   readonly profiles: string[];
   readonly configs: MemoryParallelConfig[];
@@ -30,6 +47,7 @@ type RunOptions = {
   readonly runDate: string;
   readonly concurrency: number;
   readonly destinationPrefix: string;
+  readonly phases: PhaseConfig[];
 };
 
 type PhaseEvidence = {
@@ -42,12 +60,62 @@ type StackResource = {
   readonly ResourceType?: string;
 };
 
-const PHASES: PhaseConfig[] = [
+const DEFAULT_PHASES: PhaseConfig[] = [
   { phase: "cold-create", state: "baseline", wait: true },
   { phase: "forced-unchanged", state: "baseline", wait: false },
   { phase: "sparse-update", state: "changed", wait: true },
   { phase: "prune-update", state: "pruned", wait: true },
 ];
+
+const CLI_OPTIONS = new Set([
+  "config",
+  "profiles",
+  "memory-parallel",
+  "implementations",
+  "region",
+  "output-file",
+  "run-id",
+  "run-date",
+  "scratch-root",
+  "concurrency",
+  "destination-prefix",
+]);
+
+const nonEmptyStringSchema = z.string().min(1);
+const positiveIntegerSchema = z.number().int().positive();
+const implementationSchema = z.enum(["shin", "aws"]);
+const stateSchema = z.enum(["baseline", "changed", "pruned"]);
+const familySchema = z.object({
+  memoryMb: positiveIntegerSchema,
+  parallel: positiveIntegerSchema,
+});
+const phaseSchema = z.object({
+  name: nonEmptyStringSchema,
+  state: stateSchema,
+  wait: z.boolean(),
+});
+const benchmarkConfigSchema = z
+  .object({
+    $schema: nonEmptyStringSchema.optional(),
+    name: nonEmptyStringSchema.optional(),
+    runId: nonEmptyStringSchema.optional(),
+    runDate: nonEmptyStringSchema.optional(),
+    region: nonEmptyStringSchema.optional(),
+    outputFile: nonEmptyStringSchema.optional(),
+    scratchRoot: nonEmptyStringSchema.optional(),
+    concurrency: positiveIntegerSchema.optional(),
+    destinationPrefix: nonEmptyStringSchema.optional(),
+    profiles: z.array(nonEmptyStringSchema).nonempty().optional(),
+    families: z.array(familySchema).nonempty().optional(),
+    configs: z.array(familySchema).nonempty().optional(),
+    implementations: z.array(implementationSchema).nonempty().optional(),
+    phases: z.array(phaseSchema).nonempty().optional(),
+  })
+  .strict()
+  .refine((config) => !(config.families && config.configs), {
+    message: 'Use either "families" or "configs", not both.',
+    path: ["families"],
+  });
 
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
@@ -61,8 +129,9 @@ async function main(): Promise<void> {
       options.implementations.map((implementation) => ({ implementation, profile, ...config })),
     ),
   );
+  const states = [...new Set(options.phases.map((phase) => phase.state))];
   for (const profile of options.profiles) {
-    for (const state of PHASES.map((phase) => phase.state)) {
+    for (const state of states) {
       ensureBenchmarkAssets({ profile, state });
     }
   }
@@ -104,7 +173,7 @@ async function runFamily(args: {
   const evidence: PhaseEvidence[] = [];
   let runError: unknown;
   try {
-    for (const phase of PHASES) {
+    for (const phase of options.phases) {
       console.log(`${label}: ${phase.phase}`);
       const phaseStartedAt = Date.now();
       const deployLog = join(scratch, `${phase.phase}.deploy.log`);
@@ -193,7 +262,7 @@ async function runFamily(args: {
       env: benchmarkEnv({
         family,
         options,
-        phase: { phase: "destroy", state: "pruned", wait: true },
+        phase: { phase: "destroy", state: options.phases.at(-1)?.state ?? "baseline", wait: true },
         stackSuffix,
       }),
       logFile: join(scratch, "destroy.log"),
@@ -457,42 +526,109 @@ function parseArgs(args: string[]): RunOptions {
     }
     const inlineIndex = key.indexOf("=");
     if (inlineIndex !== -1) {
-      values.set(key.slice(2, inlineIndex), key.slice(inlineIndex + 1));
+      const name = key.slice(2, inlineIndex);
+      assertCliOption(name);
+      values.set(name, key.slice(inlineIndex + 1));
       continue;
     }
     const value = normalizedArgs[index + 1];
     if (value === undefined || value.startsWith("--")) {
       usage();
     }
-    values.set(key.slice(2), value);
+    const name = key.slice(2);
+    assertCliOption(name);
+    values.set(name, value);
     index += 1;
   }
 
-  const profiles = listValue(values.get("profiles") ?? "tiny-many");
-  const configs = listValue(values.get("memory-parallel") ?? "2048:64,4096:128").map(
-    parseMemoryParallel,
-  );
-  const implementations = listValue(values.get("implementations") ?? "shin,aws").map(
-    parseImplementation,
-  );
-  const region = values.get("region") ?? process.env.AWS_REGION ?? "ap-southeast-2";
-  const runDate = values.get("run-date") ?? new Date().toISOString().slice(0, 10);
-  const runId = values.get("run-id") ?? defaultRunId(runDate, profiles, configs);
+  const config = readConfigFile(values.get("config"));
+  const profiles = values.has("profiles")
+    ? listValue(required(values, "profiles"))
+    : config.profiles;
+  const configs = values.has("memory-parallel")
+    ? listValue(required(values, "memory-parallel")).map(parseMemoryParallel)
+    : config.configs;
+  const implementations = values.has("implementations")
+    ? listValue(required(values, "implementations")).map(parseImplementation)
+    : config.implementations;
+  const region = values.get("region") ?? config.region;
+  const runDate = values.get("run-date") ?? config.runDate ?? new Date().toISOString().slice(0, 10);
+  const runId = values.get("run-id") ?? config.runId ?? defaultRunId(runDate, profiles, configs);
   const scratchRoot = resolve(
-    values.get("scratch-root") ?? join(tmpdir(), "shin-benchmark-runs", runId),
+    values.get("scratch-root") ??
+      config.scratchRoot ??
+      join(tmpdir(), "shin-benchmark-runs", runId),
   );
+  const outputFile = values.get("output-file") ?? config.outputFile;
+  const concurrency = positiveInteger(
+    values.get("concurrency") ?? String(config.concurrency),
+    "concurrency",
+  );
+  const destinationPrefix = values.get("destination-prefix") ?? config.destinationPrefix;
+  const phases = config.phases;
 
   return {
     profiles,
     configs,
     implementations,
     region,
-    outputFile: values.get("output-file") ?? "benchmarks/results.jsonl",
+    outputFile,
     scratchRoot,
     runId,
     runDate,
-    concurrency: positiveInteger(values.get("concurrency") ?? "1", "concurrency"),
-    destinationPrefix: values.get("destination-prefix") ?? "benchmark-site",
+    concurrency,
+    destinationPrefix,
+    phases,
+  };
+}
+
+function readConfigFile(configPath: string | undefined): RunnerConfig {
+  if (configPath === undefined) {
+    return defaultConfig();
+  }
+
+  const filePath = resolve(process.cwd(), configPath);
+  const parsed = benchmarkConfigSchema.parse(JSON.parse(readFileSync(filePath, "utf8")));
+  const defaults = defaultConfig();
+  const configFamily = parsed.families ?? parsed.configs;
+  const fileConfig = {
+    ...defaults,
+    ...(parsed.profiles === undefined ? {} : { profiles: parsed.profiles }),
+    ...(configFamily === undefined ? {} : { configs: configFamily }),
+    ...(parsed.implementations === undefined ? {} : { implementations: parsed.implementations }),
+    ...(parsed.region === undefined ? {} : { region: parsed.region }),
+    ...(parsed.outputFile === undefined ? {} : { outputFile: parsed.outputFile }),
+    ...(parsed.scratchRoot === undefined ? {} : { scratchRoot: parsed.scratchRoot }),
+    ...(parsed.runId === undefined ? {} : { runId: parsed.runId }),
+    ...(parsed.runDate === undefined ? {} : { runDate: parsed.runDate }),
+    ...(parsed.destinationPrefix === undefined
+      ? {}
+      : { destinationPrefix: parsed.destinationPrefix }),
+    ...(parsed.concurrency === undefined ? {} : { concurrency: parsed.concurrency }),
+    ...(parsed.phases === undefined ? {} : { phases: parsed.phases.map(configPhaseToRunPhase) }),
+  };
+  return fileConfig;
+}
+
+function configPhaseToRunPhase(phase: NonNullable<BenchmarkConfig["phases"]>[number]): PhaseConfig {
+  return { phase: phase.name, state: phase.state, wait: phase.wait };
+}
+
+function defaultConfig(): RunnerConfig {
+  const profiles = ["tiny-many"];
+  const configs = [
+    { memoryMb: 2048, parallel: 64 },
+    { memoryMb: 4096, parallel: 128 },
+  ];
+  return {
+    profiles,
+    configs,
+    implementations: ["shin", "aws"],
+    region: process.env.AWS_REGION ?? "ap-southeast-2",
+    outputFile: "benchmarks/results.jsonl",
+    concurrency: 1,
+    destinationPrefix: "benchmark-site",
+    phases: DEFAULT_PHASES,
   };
 }
 
@@ -501,6 +637,20 @@ function listValue(value: string): string[] {
     .split(",")
     .map((part) => part.trim())
     .filter(Boolean);
+}
+
+function required(values: Map<string, string>, name: string): string {
+  const value = values.get(name);
+  if (!value) {
+    usage();
+  }
+  return value;
+}
+
+function assertCliOption(name: string): void {
+  if (!CLI_OPTIONS.has(name)) {
+    throw new Error(`Unknown option --${name}.`);
+  }
 }
 
 function parseMemoryParallel(value: string): MemoryParallelConfig {
@@ -598,7 +748,7 @@ function sleep(milliseconds: number): Promise<void> {
 
 function usage(): never {
   console.error(
-    "Usage: node dist/benchmarks/run-assets-comparison.js [--profiles tiny-many] [--memory-parallel 2048:64,4096:128] [--implementations shin,aws] [--region ap-southeast-2] [--output-file benchmarks/results.jsonl] [--run-id <id>] [--scratch-root <outside-repo>] [--concurrency 1]",
+    "Usage: node dist/benchmarks/run-assets-comparison.js --config benchmarks/configs/tiny-many-shin-aws-2048-4096.json [--run-id <id>] [--run-date <YYYY-MM-DD>] [--scratch-root <outside-repo>] [--concurrency 1]",
   );
   process.exit(1);
 }
