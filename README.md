@@ -27,9 +27,9 @@ The official `BucketDeployment` is a good default for many stacks, but its provi
 ## Quick Start
 
 ```ts
-import * as cloudfront from "aws-cdk-lib/aws-cloudfront";
-import * as origins from "aws-cdk-lib/aws-cloudfront-origins";
-import * as s3 from "aws-cdk-lib/aws-s3";
+import { Distribution } from "aws-cdk-lib/aws-cloudfront";
+import { S3BucketOrigin } from "aws-cdk-lib/aws-cloudfront-origins";
+import { Bucket } from "aws-cdk-lib/aws-s3";
 import { Stack } from "aws-cdk-lib";
 import { Construct } from "constructs";
 import { ShinBucketDeployment, Source } from "./src";
@@ -38,10 +38,10 @@ export class DemoStack extends Stack {
   constructor(scope: Construct, id: string) {
     super(scope, id);
 
-    const bucket = new s3.Bucket(this, "WebsiteBucket");
-    const distribution = new cloudfront.Distribution(this, "Distribution", {
+    const bucket = new Bucket(this, "WebsiteBucket");
+    const distribution = new Distribution(this, "Distribution", {
       defaultBehavior: {
-        origin: origins.S3BucketOrigin.withOriginAccessControl(bucket),
+        origin: S3BucketOrigin.withOriginAccessControl(bucket),
       },
     });
 

@@ -3,31 +3,30 @@
  * All positions derived from layout constants — change one value and everything adapts.
  */
 
-import * as fs from 'fs';
-import * as path from 'path';
-import { fileURLToPath } from 'url';
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 
-type ChartVariant = 'default' | 'aws';
-type HeaderLayout = 'two-line' | 'three-line';
+type ChartVariant = "default" | "aws";
+type HeaderLayout = "two-line" | "three-line";
 
-const scriptDir = path.dirname(fileURLToPath(import.meta.url));
+const scriptDir = __dirname;
 
 function parseVariant(argv: string[]): ChartVariant {
-  const variantIndex = argv.indexOf('--variant');
+  const variantIndex = argv.indexOf("--variant");
   const variantValue = variantIndex === -1 ? undefined : argv[variantIndex + 1];
   const inlineVariant = argv
-    .find((arg) => arg.startsWith('--variant='))
-    ?.slice('--variant='.length);
+    .find((arg) => arg.startsWith("--variant="))
+    ?.slice("--variant=".length);
 
-  if (argv.includes('--aws')) {
-    return 'aws';
+  if (argv.includes("--aws")) {
+    return "aws";
   }
 
   const requestedVariant = inlineVariant ?? variantValue;
-  if (requestedVariant === undefined || requestedVariant === 'default') {
-    return 'default';
+  if (requestedVariant === undefined || requestedVariant === "default") {
+    return "default";
   }
-  if (requestedVariant === 'aws') {
+  if (requestedVariant === "aws") {
     return requestedVariant;
   }
 
@@ -57,11 +56,11 @@ function parseNumberArg(argv: string[], name: string): number | undefined {
 }
 
 function parseHeaderLayout(argv: string[]): HeaderLayout {
-  const requestedHeader = parseStringArg(argv, '--header');
-  if (requestedHeader === undefined || requestedHeader === 'three-line') {
-    return 'three-line';
+  const requestedHeader = parseStringArg(argv, "--header");
+  if (requestedHeader === undefined || requestedHeader === "three-line") {
+    return "three-line";
   }
-  if (requestedHeader === 'two-line') {
+  if (requestedHeader === "two-line") {
     return requestedHeader;
   }
 
@@ -69,40 +68,38 @@ function parseHeaderLayout(argv: string[]): HeaderLayout {
 }
 
 const headerLayout = parseHeaderLayout(process.argv.slice(2));
-const requestedRunId = parseStringArg(process.argv.slice(2), '--run-id');
-const requestedShinParallel = parseNumberArg(process.argv.slice(2), '--shin-parallel');
-const inputFile = path.resolve(
+const requestedRunId = parseStringArg(process.argv.slice(2), "--run-id");
+const requestedShinParallel = parseNumberArg(process.argv.slice(2), "--shin-parallel");
+const inputFile = resolve(
   process.cwd(),
-  parseStringArg(process.argv.slice(2), '--input-file') ??
-    path.join(scriptDir, '..', 'benchmark-history.jsonl'),
+  parseStringArg(process.argv.slice(2), "--input-file") ??
+    join(scriptDir, "..", "benchmark-history.jsonl"),
 );
 
 // ═══ LAYOUT CONSTANTS ═══
 const CANVAS_PAD_LEFT = 24;
 const CANVAS_PAD_RIGHT = 30;
 
-const HEADER_H = headerLayout === 'three-line' ? 72 : 60; // header band height
-const SECTION_HDR_H = 22;     // section column-header band
+const HEADER_H = headerLayout === "three-line" ? 72 : 60; // header band height
+const SECTION_HDR_H = 22; // section column-header band
 const SECTION_HDR_PAD_TOP = 15; // text baseline within section header
 
-const BAR_H = 11;             // bar thickness
-const BAR_RX = 5.5;           // bar corner radius
-const BAR_GAP = 6;            // gap between shin and aws bar
-const BAR_X = 180;            // bar left edge
-const BAR_W = 320;            // max bar width
+const BAR_H = 11; // bar thickness
+const BAR_RX = 5.5; // bar corner radius
+const BAR_GAP = 6; // gap between shin and aws bar
+const BAR_X = 180; // bar left edge
+const BAR_W = 320; // max bar width
 
-const ROW_PAD_TOP = 11;       // space from separator to shin bar top
-const ROW_PAD_BOTTOM = 11;    // space from aws bar bottom to next separator
+const ROW_PAD_TOP = 11; // space from separator to shin bar top
+const ROW_PAD_BOTTOM = 11; // space from aws bar bottom to next separator
 const ROW_H = ROW_PAD_TOP + BAR_H + BAR_GAP + BAR_H + ROW_PAD_BOTTOM; // total row height
 
-const COL_SHIN_X = BAR_X + BAR_W + 20;  // shin value column
-const COL_AWS_X = COL_SHIN_X + 90;      // aws value column
-const COL_DELTA_X = COL_AWS_X + 90;     // delta badge column
+const COL_SHIN_X = BAR_X + BAR_W + 20; // shin value column
+const COL_AWS_X = COL_SHIN_X + 90; // aws value column
+const COL_DELTA_X = COL_AWS_X + 90; // delta badge column
 const BADGE_W = 60;
 const BADGE_H = 22;
 const BADGE_RX = 5;
-
-const DIVIDER_PAD = 6;        // extra space before section divider
 
 const CANVAS_W = COL_DELTA_X + BADGE_W + CANVAS_PAD_RIGHT;
 
@@ -116,18 +113,22 @@ const FONT_SIZE_METRIC_VALUE = 12;
 const FONT_SIZE_BADGE = 11;
 
 // ═══ COLOR CONSTANTS ═══
-const COLOR_SECTION_HEADER_TEXT = '#6f91a8';
-const COLOR_ROW_LABEL_TEXT = '#d8edf8';
-const COLOR_BADGE_NEUTRAL_FILL = '#12202c';
-const COLOR_BADGE_NEUTRAL_TEXT = '#f0f8ff';
-const COLOR_BADGE_SHIN_FILL = '#082b35';
-const COLOR_BADGE_SHIN_STROKE = '#18d4f8';
-const COLOR_BADGE_SHIN_TEXT = '#6ef0d0';
-const COLOR_BADGE_AWS_FILL = '#341821';
-const COLOR_BADGE_AWS_STROKE = '#ff6a2b';
-const COLOR_BADGE_AWS_TEXT = '#ffa033';
+const COLOR_SECTION_HEADER_TEXT = "#6f91a8";
+const COLOR_ROW_LABEL_TEXT = "#d8edf8";
+const COLOR_BADGE_NEUTRAL_FILL = "#12202c";
+const COLOR_BADGE_NEUTRAL_TEXT = "#f0f8ff";
+const COLOR_BADGE_SHIN_FILL = "#082b35";
+const COLOR_BADGE_SHIN_STROKE = "#18d4f8";
+const COLOR_BADGE_SHIN_TEXT = "#6ef0d0";
+const COLOR_BADGE_AWS_FILL = "#341821";
+const COLOR_BADGE_AWS_STROKE = "#ff6a2b";
+const COLOR_BADGE_AWS_TEXT = "#ffa033";
 
-interface Row { label: string; shin: number; aws: number; }
+interface Row {
+  label: string;
+  shin: number;
+  aws: number;
+}
 
 interface ProviderSummary {
   maxParallelTransfers?: number;
@@ -159,15 +160,14 @@ interface DataSelection {
 }
 
 const PHASE_ORDER = new Map([
-  ['cold-create', 0],
-  ['forced-unchanged', 1],
-  ['sparse-update', 2],
-  ['prune-update', 3],
+  ["cold-create", 0],
+  ["forced-unchanged", 1],
+  ["sparse-update", 2],
+  ["prune-update", 3],
 ]);
 
 function readRecords(filePath: string): BenchmarkRecord[] {
-  return fs
-    .readFileSync(filePath, 'utf8')
+  return readFileSync(filePath, "utf8")
     .split(/\r?\n/)
     .filter((line) => line.trim().length > 0)
     .map((line, index) => {
@@ -180,10 +180,12 @@ function readRecords(filePath: string): BenchmarkRecord[] {
 }
 
 function comparablePhases(records: BenchmarkRecord[]): string[] {
-  const phases = new Set(records.map((record) => record.phase).filter((phase) => phase !== undefined));
+  const phases = new Set(
+    records.map((record) => record.phase).filter((phase) => phase !== undefined),
+  );
   return [...phases]
     .filter((phase) =>
-      ['shin', 'aws'].every((implementation) =>
+      ["shin", "aws"].every((implementation) =>
         records.some(
           (record) => record.phase === phase && record.implementation === implementation,
         ),
@@ -193,13 +195,18 @@ function comparablePhases(records: BenchmarkRecord[]): string[] {
 }
 
 function basePhaseName(phase: string): string {
-  return phase.replace(/-parallel-\d+$/, '');
+  return phase.replace(/-parallel-\d+$/, "");
 }
 
 function latestComparableRunId(records: BenchmarkRecord[]): string {
-  const runIds = [...new Set(records.map((record) => record.runId).filter((runId) => runId !== undefined))];
+  const runIds = [
+    ...new Set(records.map((record) => record.runId).filter((runId) => runId !== undefined)),
+  ];
   const runId = runIds
-    .filter((candidate) => comparablePhases(records.filter((record) => record.runId === candidate)).length > 0)
+    .filter(
+      (candidate) =>
+        comparablePhases(records.filter((record) => record.runId === candidate)).length > 0,
+    )
     .at(-1);
   if (runId === undefined) {
     throw new Error(`No paired Shin/AWS benchmark run found in ${inputFile}`);
@@ -214,7 +221,10 @@ function requireNumber(value: number | null | undefined, label: string): number 
   return value;
 }
 
-function recordsByBasePhase(records: BenchmarkRecord[], implementation: 'shin' | 'aws'): Map<string, BenchmarkRecord> {
+function recordsByBasePhase(
+  records: BenchmarkRecord[],
+  implementation: "shin" | "aws",
+): Map<string, BenchmarkRecord> {
   return new Map(
     records
       .filter((record) => record.phase !== undefined && record.implementation === implementation)
@@ -227,7 +237,7 @@ function formatDuration(value: number): number {
 }
 
 function formatBytes(value: number): string {
-  const units = ['bytes', 'KiB', 'MiB', 'GiB'];
+  const units = ["bytes", "KiB", "MiB", "GiB"];
   let amount = value;
   let unitIndex = 0;
   while (amount >= 1024 && unitIndex < units.length - 1) {
@@ -235,8 +245,8 @@ function formatBytes(value: number): string {
     unitIndex++;
   }
   return unitIndex === 0
-    ? `${Math.round(amount).toLocaleString('en-US')} ${units[unitIndex]}`
-    : `${amount.toFixed(1).replace(/\.0$/, '')} ${units[unitIndex]}`;
+    ? `${Math.round(amount).toLocaleString("en-US")} ${units[unitIndex]}`
+    : `${amount.toFixed(1).replace(/\.0$/, "")} ${units[unitIndex]}`;
 }
 
 function selectData(records: BenchmarkRecord[]): DataSelection {
@@ -247,8 +257,8 @@ function selectData(records: BenchmarkRecord[]): DataSelection {
     throw new Error(`Run "${runId}" does not contain paired Shin/AWS benchmark records`);
   }
 
-  const baseShinRecords = recordsByBasePhase(runRecords, 'shin');
-  const awsRecords = recordsByBasePhase(runRecords, 'aws');
+  const baseShinRecords = recordsByBasePhase(runRecords, "shin");
+  const awsRecords = recordsByBasePhase(runRecords, "aws");
   const firstShin = baseShinRecords.values().next().value;
   if (firstShin === undefined) {
     throw new Error(`Run "${runId}" does not contain Shin benchmark records`);
@@ -263,7 +273,7 @@ function selectData(records: BenchmarkRecord[]): DataSelection {
   }
 
   const requestedShinRecords = records
-    .filter((record) => record.implementation === 'shin')
+    .filter((record) => record.implementation === "shin")
     .filter((record) => record.profile === firstShin.profile)
     .filter((record) => record.memoryMb === firstShin.memoryMb)
     .filter((record) => record.providerSummary?.maxParallelTransfers === requestedShinParallel);
@@ -274,7 +284,7 @@ function selectData(records: BenchmarkRecord[]): DataSelection {
   }
   return {
     runRecords,
-    shinRecords: recordsByBasePhase(requestedShinRecords, 'shin'),
+    shinRecords: recordsByBasePhase(requestedShinRecords, "shin"),
     awsRecords,
   };
 }
@@ -286,7 +296,9 @@ function buildBenchmarkData(records: BenchmarkRecord[]): BenchmarkData {
     .sort((left, right) => (PHASE_ORDER.get(left) ?? 999) - (PHASE_ORDER.get(right) ?? 999));
   if (phases.length === 0) {
     const parallelDescription =
-      requestedShinParallel === undefined ? 'the selected Shin rows' : `Shin maxParallelTransfers=${requestedShinParallel}`;
+      requestedShinParallel === undefined
+        ? "the selected Shin rows"
+        : `Shin maxParallelTransfers=${requestedShinParallel}`;
     throw new Error(`No paired AWS rows match ${parallelDescription}`);
   }
 
@@ -333,13 +345,13 @@ function buildBenchmarkData(records: BenchmarkRecord[]): BenchmarkData {
     metadataRecord.totalBytes === null ||
     metadataRecord.totalBytes === undefined
       ? undefined
-      : `Assets: ${metadataRecord.fileCount.toLocaleString('en-US')} objects / ${formatBytes(metadataRecord.totalBytes)}`,
+      : `Assets: ${metadataRecord.fileCount.toLocaleString("en-US")} objects / ${formatBytes(metadataRecord.totalBytes)}`,
   ].filter((part) => part !== undefined);
 
   return {
     duration,
     memory,
-    metadata: metadataParts.join(' · '),
+    metadata: metadataParts.join(" · "),
   };
 }
 
@@ -353,18 +365,18 @@ function simulateAwsWins(rows: Row[]): Row[] {
   }));
 }
 
-const chartDuration = chartVariant === 'aws' ? simulateAwsWins(benchmarkData.duration) : benchmarkData.duration;
-const chartMemory = chartVariant === 'aws' ? simulateAwsWins(benchmarkData.memory) : benchmarkData.memory;
+const chartDuration =
+  chartVariant === "aws" ? simulateAwsWins(benchmarkData.duration) : benchmarkData.duration;
+const chartMemory =
+  chartVariant === "aws" ? simulateAwsWins(benchmarkData.memory) : benchmarkData.memory;
 const MAX_DUR = Math.max(...chartDuration.flatMap((row) => [row.shin, row.aws]));
 const MAX_MEM = Math.max(...chartMemory.flatMap((row) => [row.shin, row.aws]));
-const subtitlePrefix =
-  chartVariant === 'aws' ? 'AWS win simulation' : 'vs AWS BucketDeployment';
-const outFileSuffix =
-  `${chartVariant === 'aws' ? '-aws' : ''}${requestedShinParallel === undefined ? '' : `-parallel-${requestedShinParallel}`}${headerLayout === 'two-line' ? '-two-line' : ''}`;
+const subtitlePrefix = chartVariant === "aws" ? "AWS win simulation" : "vs AWS BucketDeployment";
+const outFileSuffix = `${chartVariant === "aws" ? "-aws" : ""}${requestedShinParallel === undefined ? "" : `-parallel-${requestedShinParallel}`}${headerLayout === "two-line" ? "-two-line" : ""}`;
 
-const legendSwatchY = headerLayout === 'three-line' ? 22 : 12;
-const legendLabelY = headerLayout === 'three-line' ? 30 : 20;
-const legendNoteY = headerLayout === 'three-line' ? 52 : 42;
+const legendSwatchY = headerLayout === "three-line" ? 22 : 12;
+const legendLabelY = headerLayout === "three-line" ? 30 : 20;
+const legendNoteY = headerLayout === "three-line" ? 52 : 42;
 const LEGEND_W = 111;
 const legendX = CANVAS_W - CANVAS_PAD_LEFT - LEGEND_W;
 
@@ -385,14 +397,14 @@ function barWidth(val: number, max: number): number {
 
 function formatMultiplier(value: number): string {
   const decimals = value < 2 ? 2 : 1;
-  return `${value.toFixed(decimals).replace(/\.?0+$/, '')}×`;
+  return `${value.toFixed(decimals).replace(/\.?0+$/, "")}×`;
 }
 
 function formatBadgeText(row: Row, isMem: boolean): string {
   const winner = Math.min(row.shin, row.aws);
   const loser = Math.max(row.shin, row.aws);
   if (winner === loser) {
-    return 'tie';
+    return "tie";
   }
   if (isMem) {
     return `${Math.round(((loser - winner) / loser) * 100)}%`;
@@ -410,7 +422,14 @@ function rowY(sectionRowsTop: number, index: number) {
   return { shinY, awsY, textY, badgeY, sepY };
 }
 
-function renderRow(row: Row, index: number, sectionRowsTop: number, max: number, isMem: boolean, isLast: boolean): string {
+function renderRow(
+  row: Row,
+  index: number,
+  sectionRowsTop: number,
+  max: number,
+  isMem: boolean,
+  isLast: boolean,
+): string {
   const { shinY, awsY, textY, badgeY, sepY } = rowY(sectionRowsTop, index);
   const sw = barWidth(row.shin, max);
   const aw = barWidth(row.aws, max);
@@ -422,8 +441,8 @@ function renderRow(row: Row, index: number, sectionRowsTop: number, max: number,
   // Determine winner: lower is better
   const shinWins = row.shin < row.aws;
   const awsWins = row.aws < row.shin;
-  const shinValFill = shinWins ? '#6ef0d0' : '#5a7a94';
-  const awsValFill = shinWins ? '#5a7a94' : '#ffa033';
+  const shinValFill = shinWins ? "#6ef0d0" : "#5a7a94";
+  const awsValFill = shinWins ? "#5a7a94" : "#ffa033";
   const badgeFill = shinWins
     ? COLOR_BADGE_SHIN_FILL
     : awsWins
@@ -433,19 +452,20 @@ function renderRow(row: Row, index: number, sectionRowsTop: number, max: number,
     ? ` stroke="${COLOR_BADGE_SHIN_STROKE}" stroke-width="0.5"`
     : awsWins
       ? ` stroke="${COLOR_BADGE_AWS_STROKE}" stroke-width="0.5"`
-      : '';
+      : "";
   const badgeTextFill = shinWins
     ? COLOR_BADGE_SHIN_TEXT
     : awsWins
       ? COLOR_BADGE_AWS_TEXT
       : COLOR_BADGE_NEUTRAL_TEXT;
 
-  let s = '';
+  let s = "";
   // Label
   s += `<text x="${CANVAS_PAD_LEFT}" y="${textY}" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_ROW_LABEL}" font-weight="600" fill="${COLOR_ROW_LABEL_TEXT}">${row.label}</text>\n`;
   // Shin bar
   s += `<rect x="${BAR_X}" y="${shinY}" width="${BAR_W}" height="${BAR_H}" rx="${BAR_RX}" fill="#12202c"/>\n`;
-  if (useGlowShin) s += `<rect x="${BAR_X}" y="${shinY}" width="${sw}" height="${BAR_H}" rx="${BAR_RX}" fill="url(#shin)" filter="url(#gS)" opacity="0.5"/>\n`;
+  if (useGlowShin)
+    s += `<rect x="${BAR_X}" y="${shinY}" width="${sw}" height="${BAR_H}" rx="${BAR_RX}" fill="url(#shin)" filter="url(#gS)" opacity="0.5"/>\n`;
   s += `<rect x="${BAR_X}" y="${shinY}" width="${sw}" height="${BAR_H}" rx="${BAR_RX}" fill="url(#shin)"/>\n`;
   // AWS bar
   s += `<rect x="${BAR_X}" y="${awsY}" width="${BAR_W}" height="${BAR_H}" rx="${BAR_RX}" fill="#12202c"/>\n`;
@@ -453,7 +473,7 @@ function renderRow(row: Row, index: number, sectionRowsTop: number, max: number,
   s += `<rect x="${BAR_X}" y="${awsY}" width="${aw}" height="${BAR_H}" rx="${BAR_RX}" fill="url(#aws)" opacity="0.75"/>\n`;
   // Values — winner gets colored
   s += `<text x="${COL_SHIN_X}" y="${textY}" font-family="JetBrains Mono, monospace" font-size="${FONT_SIZE_METRIC_VALUE}" font-weight="700" fill="${shinValFill}">${shinVal}</text>\n`;
-  s += `<text x="${COL_AWS_X}" y="${textY}" font-family="JetBrains Mono, monospace" font-size="${FONT_SIZE_METRIC_VALUE}" font-weight="${shinWins ? '400' : '700'}" fill="${awsValFill}">${awsVal}</text>\n`;
+  s += `<text x="${COL_AWS_X}" y="${textY}" font-family="JetBrains Mono, monospace" font-size="${FONT_SIZE_METRIC_VALUE}" font-weight="${shinWins ? "400" : "700"}" fill="${awsValFill}">${awsVal}</text>\n`;
   // Badge
   s += `<rect x="${COL_DELTA_X}" y="${badgeY}" width="${BADGE_W}" height="${BADGE_H}" rx="${BADGE_RX}" fill="${badgeFill}"${badgeStroke} filter="url(#badgeShadow)"/>\n`;
   s += `<text x="${COL_DELTA_X + BADGE_W / 2}" y="${badgeY + 15}" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="${FONT_SIZE_BADGE}" font-weight="800" fill="${badgeTextFill}">${badgeText}</text>\n`;
@@ -465,7 +485,7 @@ function renderRow(row: Row, index: number, sectionRowsTop: number, max: number,
 }
 
 function renderSectionHeader(y: number, title: string, deltaLabel: string): string {
-  let s = '';
+  let s = "";
   s += `<rect y="${y}" width="${CANVAS_W}" height="${SECTION_HDR_H}" fill="#0c1420"/>\n`;
   s += `<text x="${CANVAS_PAD_LEFT}" y="${y + SECTION_HDR_PAD_TOP}" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_SECTION_HEADER}" font-weight="700" fill="${COLOR_SECTION_HEADER_TEXT}" letter-spacing="0.8">${title}</text>\n`;
   s += `<text x="${COL_SHIN_X}" y="${y + SECTION_HDR_PAD_TOP}" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_SECTION_HEADER}" font-weight="700" fill="${COLOR_SECTION_HEADER_TEXT}" letter-spacing="0.8">SHIN</text>\n`;
@@ -476,7 +496,7 @@ function renderSectionHeader(y: number, title: string, deltaLabel: string): stri
 }
 
 function renderHeader(): string {
-  if (headerLayout === 'three-line') {
+  if (headerLayout === "three-line") {
     return `<text x="${CANVAS_PAD_LEFT}" y="23" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_TITLE}" font-weight="800" fill="#f0f8ff" letter-spacing="-0.3">ShinBucketDeployment</text>
 <text x="${CANVAS_PAD_LEFT}" y="43" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_SUBTITLE}" font-weight="600" fill="${COLOR_SECTION_HEADER_TEXT}">${subtitlePrefix}</text>
 <text x="${CANVAS_PAD_LEFT}" y="61" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_HEADER_LEGEND}" font-weight="500" fill="${COLOR_SECTION_HEADER_TEXT}">${benchmarkData.metadata}</text>`;
@@ -529,18 +549,32 @@ ${renderHeader()}
 `;
 
   // Section A: Duration
-  svg += renderSectionHeader(sectionATop, 'HANDLER DURATION', 'FASTER');
+  svg += renderSectionHeader(sectionATop, "HANDLER DURATION", "FASTER");
   for (let i = 0; i < chartDuration.length; i++) {
-    svg += renderRow(chartDuration[i], i, sectionARowsTop, MAX_DUR, false, i === chartDuration.length - 1);
+    svg += renderRow(
+      chartDuration[i],
+      i,
+      sectionARowsTop,
+      MAX_DUR,
+      false,
+      i === chartDuration.length - 1,
+    );
   }
 
   // Divider
   svg += `<rect x="0" y="${dividerY}" width="${CANVAS_W}" height="1" fill="#1a2a38"/>\n`;
 
   // Section B: Memory
-  svg += renderSectionHeader(sectionBTop, 'MAX MEMORY', 'SAVED');
+  svg += renderSectionHeader(sectionBTop, "MAX MEMORY", "SAVED");
   for (let i = 0; i < chartMemory.length; i++) {
-    svg += renderRow(chartMemory[i], i, sectionBRowsTop, MAX_MEM, true, i === chartMemory.length - 1);
+    svg += renderRow(
+      chartMemory[i],
+      i,
+      sectionBRowsTop,
+      MAX_MEM,
+      true,
+      i === chartMemory.length - 1,
+    );
   }
 
   svg += `</svg>`;
@@ -549,9 +583,9 @@ ${renderHeader()}
 
 // ═══ OUTPUT ═══
 const outFileName = `signal-split-v5${outFileSuffix}.svg`;
-const outPath = path.join(scriptDir, '..', 'benchmark-preview-assets', outFileName);
-fs.mkdirSync(path.dirname(outPath), { recursive: true });
-fs.writeFileSync(outPath, render());
+const outPath = join(scriptDir, "..", "benchmark-preview-assets", outFileName);
+mkdirSync(dirname(outPath), { recursive: true });
+writeFileSync(outPath, render());
 console.log(`Written: ${outPath}`);
 console.log(`Variant: ${chartVariant}`);
 console.log(`Header: ${headerLayout}`);
