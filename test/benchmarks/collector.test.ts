@@ -6,7 +6,7 @@ import { collectBenchmarkResult } from "../../benchmarks/src/collect-results";
 import { renderBenchmarkReport } from "../../benchmarks/src/render-report";
 
 describe("benchmark result collector", () => {
-  test("appends sanitized benchmark history records", () => {
+  test("upserts sanitized benchmark result records", () => {
     const dir = mkdtempSync(join(tmpdir(), "shin-bench-collector-"));
     const logFile = join(dir, "deploy.log");
     const reportFile = join(dir, "report.json");
@@ -44,10 +44,8 @@ describe("benchmark result collector", () => {
       logFile,
       reportFile,
       outputFile,
-      runId: "test-run",
-      runDate: "2026-05-02",
+      lastUpdated: "2026-05-02",
       phase: "forced-unchanged",
-      series: "forced-unchanged",
       commit: "abc1234",
       region: "ap-southeast-2",
     });
@@ -55,15 +53,13 @@ describe("benchmark result collector", () => {
     const record = JSON.parse(readFileSync(outputFile, "utf8"));
     expect(collected).toEqual(record);
     expect(record).toMatchObject({
-      schemaVersion: 2,
-      runId: "test-run",
-      runDate: "2026-05-02",
+      lastUpdated: "2026-05-02",
       providerImplementationCommit: "abc1234",
       region: "ap-southeast-2",
       implementation: "shin",
       profile: "mixed",
-      series: "forced-unchanged",
       memoryMb: 512,
+      parallel: null,
       phase: "forced-unchanged",
       state: "baseline",
       fileCount: 442,
@@ -88,12 +84,11 @@ describe("benchmark result collector", () => {
     const collected = collectBenchmarkResult({
       logFile,
       outputFile,
-      runId: "test-run",
-      runDate: "2026-05-02",
+      lastUpdated: "2026-05-02",
       phase: "destroy",
-      series: "large-few-create-unchanged-update",
       profile: "large-few",
       memoryMb: 2048,
+      parallel: 8,
       fileCount: 32,
       totalBytes: 144167470,
     });
@@ -101,6 +96,7 @@ describe("benchmark result collector", () => {
     expect(collected).toMatchObject({
       profile: "large-few",
       memoryMb: 2048,
+      parallel: 8,
       phase: "destroy",
       state: null,
       fileCount: 32,
@@ -168,10 +164,9 @@ describe("benchmark result collector", () => {
       reportFile,
       summaryFile,
       outputFile,
-      runId: "parallel-transfer",
-      runDate: "2026-05-10",
+      lastUpdated: "2026-05-10",
       phase: "cold-create-parallel-32",
-      series: "parallel-transfers-1024",
+      parallel: 32,
       region: "ap-southeast-2",
     });
 
@@ -193,17 +188,15 @@ describe("benchmark result collector", () => {
       inputFile,
       `${[
         {
-          schemaVersion: 2,
-          runId: "comparison",
-          runDate: "2026-05-08",
+          lastUpdated: "2026-05-08",
           providerImplementationCommit: "abc1234",
           providerImplementationSubject: "test",
           resultDocumentationCommit: null,
           region: "ap-southeast-2",
           implementation: "shin",
           profile: "mixed",
-          series: "comparison",
           memoryMb: 1024,
+          parallel: 8,
           phase: "cold-create",
           state: "baseline",
           fileCount: 442,
@@ -219,17 +212,15 @@ describe("benchmark result collector", () => {
           notes: null,
         },
         {
-          schemaVersion: 2,
-          runId: "comparison",
-          runDate: "2026-05-08",
+          lastUpdated: "2026-05-08",
           providerImplementationCommit: null,
           providerImplementationSubject: null,
           resultDocumentationCommit: null,
           region: "ap-southeast-2",
           implementation: "aws",
           profile: "mixed",
-          series: "comparison",
           memoryMb: 1024,
+          parallel: 8,
           phase: "cold-create",
           state: "baseline",
           fileCount: 442,
@@ -249,16 +240,16 @@ describe("benchmark result collector", () => {
         .join("\n")}\n`,
     );
 
-    const report = renderBenchmarkReport({ inputFile, outputFile, runId: "comparison" });
+    const report = renderBenchmarkReport({ inputFile, outputFile, profile: "mixed" });
 
     expect(readFileSync(outputFile, "utf8")).toEqual(report);
-    expect(report).toContain("Benchmark Report: comparison");
-    expect(report).toContain("| mixed | cold-create | 1024 | shin | 1 | 2 | 2 | 2 | 2 |");
+    expect(report).toContain("Benchmark Report: mixed");
+    expect(report).toContain("| mixed | cold-create | 1024 | 8 | shin | 1 | 2 | 2 | 2 | 2 |");
     expect(report).toContain("## ShinBucketDeployment vs AWS BucketDeployment");
     expect(report).toContain(
-      "| mixed | cold-create | 1024 | 2 s vs 8 s (4x faster) | 90 s vs 120 s (1.333x faster) | 60 s vs 90 s (1.5x faster) | 80 MiB vs 180 MiB (55.556% lower) |",
+      "| mixed | cold-create | 1024 | 8 | 2 s vs 8 s (4x faster) | 90 s vs 120 s (1.333x faster) | 60 s vs 90 s (1.5x faster) | 80 MiB vs 180 MiB (55.556% lower) |",
     );
-    expect(report).toContain("### mixed cold-create at 1024 MiB");
+    expect(report).toContain("### mixed cold-create at 1024 MiB / parallel 8");
     expect(report).toContain("| Provider duration | 2 s | 8 s | +6 s | 4x | +300% |");
     expect(report).toContain("| Init duration | 0.1 s | 0.2 s | +0.1 s | 2x | +100% |");
     expect(report).toContain("| Max memory | 80 MiB | 180 MiB | +100 MiB | 2.25x | +125% |");

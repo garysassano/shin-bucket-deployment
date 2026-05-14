@@ -12,11 +12,11 @@
       "type": "string",
       "minLength": 1
     },
-    "runId": {
+    "runToken": {
       "type": "string",
       "minLength": 1
     },
-    "runDate": {
+    "lastUpdated": {
       "type": "string",
       "minLength": 1
     },
