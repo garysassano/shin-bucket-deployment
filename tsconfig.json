@@ -18,6 +18,7 @@
     "examples/**/*.ts",
     "scripts/**/*.ts",
     "docs/**/*.ts",
+    "benchmarks/**/*.ts",
     "vitest.config.ts"
   ]
 }

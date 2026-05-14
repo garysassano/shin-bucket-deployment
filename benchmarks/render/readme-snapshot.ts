@@ -1,15 +1,13 @@
 /**
- * Benchmark SVG render engine for signal-split-v5.
+ * Benchmark SVG render engine for README snapshots.
  * All positions derived from layout constants — change one value and everything adapts.
  */
 
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 
 type ChartVariant = "default" | "aws";
 type HeaderLayout = "two-line" | "three-line";
-
-const scriptDir = __dirname;
 
 function parseVariant(argv: string[]): ChartVariant {
   const variantIndex = argv.indexOf("--variant");
@@ -72,8 +70,7 @@ const requestedRunId = parseStringArg(process.argv.slice(2), "--run-id");
 const requestedShinParallel = parseNumberArg(process.argv.slice(2), "--shin-parallel");
 const inputFile = resolve(
   process.cwd(),
-  parseStringArg(process.argv.slice(2), "--input-file") ??
-    join(scriptDir, "..", "benchmark-history.jsonl"),
+  parseStringArg(process.argv.slice(2), "--input-file") ?? "docs/benchmark-history.jsonl",
 );
 
 // ═══ LAYOUT CONSTANTS ═══
@@ -372,7 +369,11 @@ const chartMemory =
 const MAX_DUR = Math.max(...chartDuration.flatMap((row) => [row.shin, row.aws]));
 const MAX_MEM = Math.max(...chartMemory.flatMap((row) => [row.shin, row.aws]));
 const subtitlePrefix = chartVariant === "aws" ? "AWS win simulation" : "vs AWS BucketDeployment";
-const outFileSuffix = `${chartVariant === "aws" ? "-aws" : ""}${requestedShinParallel === undefined ? "" : `-parallel-${requestedShinParallel}`}${headerLayout === "two-line" ? "-two-line" : ""}`;
+const outFilePrefix =
+  requestedShinParallel === undefined
+    ? "benchmark-snapshot"
+    : `parallel-${requestedShinParallel}-snapshot`;
+const outFileSuffix = `${chartVariant === "aws" ? "-aws" : ""}${headerLayout === "two-line" ? "-two-line" : ""}`;
 
 const legendSwatchY = headerLayout === "three-line" ? 22 : 12;
 const legendLabelY = headerLayout === "three-line" ? 30 : 20;
@@ -582,8 +583,8 @@ ${renderHeader()}
 }
 
 // ═══ OUTPUT ═══
-const outFileName = `signal-split-v5${outFileSuffix}.svg`;
-const outPath = join(scriptDir, "..", "benchmark-preview-assets", outFileName);
+const outFileName = `${outFilePrefix}${outFileSuffix}.svg`;
+const outPath = resolve(process.cwd(), "benchmarks", "snapshots", outFileName);
 mkdirSync(dirname(outPath), { recursive: true });
 writeFileSync(outPath, render());
 console.log(`Written: ${outPath}`);
