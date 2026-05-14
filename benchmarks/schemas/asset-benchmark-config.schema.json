@@ -36,7 +36,7 @@
       "type": "string",
       "minLength": 1
     },
-    "profiles": {
+    "assetProfiles": {
       "type": "array",
       "minItems": 1,
       "items": {
@@ -59,16 +59,19 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["name", "state", "wait"],
+        "required": ["assetState", "cloudfrontWait", "name", "prune"],
         "properties": {
+          "assetState": {
+            "enum": ["baseline", "changed", "pruned"]
+          },
+          "cloudfrontWait": {
+            "type": "boolean"
+          },
           "name": {
             "type": "string",
             "minLength": 1
           },
-          "state": {
-            "enum": ["baseline", "changed", "pruned"]
-          },
-          "wait": {
+          "prune": {
             "type": "boolean"
           }
         }

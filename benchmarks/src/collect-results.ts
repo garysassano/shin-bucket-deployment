@@ -28,25 +28,25 @@ export type BenchmarkResultRecord = {
 };
 
 export type CollectBenchmarkOptions = {
-  readonly logFile: string;
-  readonly reportFile?: string;
-  readonly summaryFile?: string;
-  readonly outputFile: string;
-  readonly snapshotDate?: string;
-  readonly phase: string;
-  readonly commit?: string;
-  readonly subject?: string;
-  readonly resultCommit?: string;
-  readonly region?: string;
-  readonly implementation?: string;
-  readonly profile?: string;
-  readonly memoryMb?: number;
-  readonly parallel?: number;
-  readonly state?: string;
-  readonly fileCount?: number;
-  readonly totalBytes?: number;
+  readonly assetProfile?: string;
   readonly cleanup?: string;
+  readonly commit?: string;
+  readonly fileCount?: number;
+  readonly implementation?: string;
+  readonly logFile: string;
+  readonly memoryMb?: number;
   readonly notes?: string;
+  readonly outputFile: string;
+  readonly parallel?: number;
+  readonly phase: string;
+  readonly region?: string;
+  readonly reportFile?: string;
+  readonly resultCommit?: string;
+  readonly snapshotDate?: string;
+  readonly state?: string;
+  readonly subject?: string;
+  readonly summaryFile?: string;
+  readonly totalBytes?: number;
 };
 
 function main(): void {
@@ -70,7 +70,7 @@ export function collectBenchmarkResult(options: CollectBenchmarkOptions): Benchm
     implementation: normalizeImplementation(
       options.implementation ?? outputString(logText, "BenchmarkImplementation"),
     ),
-    profile: options.profile ?? outputString(logText, "BenchmarkProfile"),
+    profile: options.assetProfile ?? outputString(logText, "BenchmarkAssetProfile"),
     memoryMb: options.memoryMb ?? outputNumber(logText, "BenchmarkMemoryLimitMb"),
     parallel: options.parallel ?? outputNumber(logText, "BenchmarkMaxParallelTransfers"),
     phase: options.phase,
@@ -149,25 +149,25 @@ function parseArgs(args: string[]): CollectBenchmarkOptions {
   const phase = required(values, "phase");
 
   return {
-    logFile,
-    reportFile: values.get("report-file"),
-    summaryFile: values.get("summary-file"),
-    outputFile,
-    snapshotDate: values.get("snapshot-date"),
-    phase,
-    commit: values.get("commit"),
-    subject: values.get("subject"),
-    resultCommit: values.get("result-commit"),
-    region: values.get("region"),
-    implementation: values.get("implementation"),
-    profile: values.get("profile"),
-    memoryMb: optionalNumber(values, "memory-mb"),
-    parallel: optionalNumber(values, "parallel"),
-    state: values.get("state"),
-    fileCount: optionalNumber(values, "file-count"),
-    totalBytes: optionalNumber(values, "total-bytes"),
+    assetProfile: values.get("asset-profile"),
     cleanup: values.get("cleanup"),
+    commit: values.get("commit"),
+    fileCount: optionalNumber(values, "file-count"),
+    implementation: values.get("implementation"),
+    logFile,
+    memoryMb: optionalNumber(values, "lambda-memory-mb"),
     notes: values.get("notes"),
+    outputFile,
+    parallel: optionalNumber(values, "lambda-max-parallel-transfers"),
+    phase,
+    region: values.get("region"),
+    reportFile: values.get("report-file"),
+    resultCommit: values.get("result-commit"),
+    snapshotDate: values.get("snapshot-date"),
+    state: values.get("asset-state"),
+    subject: values.get("subject"),
+    summaryFile: values.get("summary-file"),
+    totalBytes: optionalNumber(values, "total-bytes"),
   };
 }
 
@@ -200,7 +200,7 @@ function normalizeImplementation(value: string | null | undefined): string | nul
 
 function usage(): never {
   console.error(
-    "Usage: node dist/benchmarks/src/collect-results.js --log-file <path> --phase <name> [--snapshot-date <YYYY-MM-DD>] [--report-file <path>] [--summary-file <path>] [--output-file benchmarks/results.jsonl] [--implementation <shin|aws>] [--profile <name>] [--memory-mb <n>] [--parallel <n>] [--state <name>]",
+    "Usage: node dist/benchmarks/src/collect-results.js --log-file <path> --phase <name> [--snapshot-date <YYYY-MM-DD>] [--report-file <path>] [--summary-file <path>] [--output-file benchmarks/results.jsonl] [--asset-profile <name>] [--asset-state <name>] [--implementation <shin|aws>] [--lambda-max-parallel-transfers <n>] [--lambda-memory-mb <n>]",
   );
   process.exit(1);
 }

@@ -40,7 +40,7 @@ type RenderOptions = {
   readonly chartReference?: string;
   readonly chartLayout?: ChartLayoutName;
   readonly chartTheme?: ChartThemeName;
-  readonly profile?: string;
+  readonly assetProfile?: string;
   readonly memoryMb?: number;
   readonly parallel?: number;
 };
@@ -160,7 +160,7 @@ function main(): void {
 
 export function renderBenchmarkReport(options: RenderOptions): string {
   const records = readRecords(options.inputFile)
-    .filter((record) => (options.profile ? record.profile === options.profile : true))
+    .filter((record) => (options.assetProfile ? record.profile === options.assetProfile : true))
     .filter((record) => (options.memoryMb ? record.memoryMb === options.memoryMb : true))
     .filter((record) => (options.parallel ? record.parallel === options.parallel : true));
   const comparisonRows = buildPhaseComparisonRows(
@@ -219,7 +219,7 @@ function renderScope(records: BenchmarkRecord[]): string {
 
   const snapshotDates = unique(records.map((record) => record.snapshotDate));
   const implementations = unique(records.map((record) => implementationLabel(record)));
-  const profiles = unique(records.map((record) => record.profile));
+  const assetProfiles = unique(records.map((record) => record.profile));
   const memoryValues = unique(records.map((record) => record.memoryMb));
   const parallelValues = unique(records.map((record) => record.parallel));
   const phases = unique(records.map((record) => record.phase));
@@ -229,7 +229,7 @@ function renderScope(records: BenchmarkRecord[]): string {
     "",
     `- Snapshot date: ${snapshotDates.join(", ")}`,
     `- Implementations: ${implementations.join(", ")}`,
-    `- Profiles: ${profiles.join(", ")}`,
+    `- Asset profiles: ${assetProfiles.join(", ")}`,
     `- Memory MiB: ${memoryValues.join(", ")}`,
     `- Parallel transfers: ${parallelValues.join(", ")}`,
     `- Phases: ${phases.join(", ")}`,
@@ -238,7 +238,7 @@ function renderScope(records: BenchmarkRecord[]): string {
 
 function reportTitle(options: RenderOptions): string {
   const filters = [
-    options.profile,
+    options.assetProfile,
     options.memoryMb === undefined ? undefined : `${options.memoryMb} MiB`,
     options.parallel === undefined ? undefined : `parallel ${options.parallel}`,
   ].filter((value) => value !== undefined);
@@ -266,7 +266,7 @@ function renderMetricSection(
 
 function renderMetricTable(rows: AggregatedRow[], unit: string): string {
   return [
-    `| Profile | Phase | Memory MiB | Parallel | Implementation | n | median (${unit}) | p90 (${unit}) | min (${unit}) | max (${unit}) |`,
+    `| Asset profile | Phase | Memory MiB | Parallel | Implementation | n | median (${unit}) | p90 (${unit}) | min (${unit}) | max (${unit}) |`,
     "| --- | --- | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: |",
     ...rows.map(
       (row) =>
@@ -294,7 +294,7 @@ function renderComparisonSummaryTable(records: BenchmarkRecord[]): string {
   }
 
   return [
-    "| Profile | Phase | Memory MiB | Parallel | Provider duration | Local wall time | CDK deploy time | Max memory |",
+    "| Asset profile | Phase | Memory MiB | Parallel | Provider duration | Local wall time | CDK deploy time | Max memory |",
     "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
     ...rows.map((row) => {
       return `| ${row.profile} | ${row.phase} | ${row.memoryMb ?? ""} | ${row.parallel ?? ""} | ${formatOptionalComparisonCell(row.metrics.providerDurationSeconds)} | ${formatOptionalComparisonCell(row.metrics.localWallSeconds)} | ${formatOptionalComparisonCell(row.metrics.cdkDeploySeconds)} | ${formatOptionalMemoryCell(row.metrics.maxMemoryMb)} |`;
@@ -811,7 +811,7 @@ function renderHeaderStats(
   theme: ChartTheme,
 ): string {
   const stats = [
-    ["Profile", context.profile],
+    ["Asset profile", context.profile],
     ["Objects", context.fileCount],
     ["Bundle", context.totalBytes],
     ["Best", context.bestDurationSpeedup],
@@ -1285,9 +1285,9 @@ function parseArgs(args: string[]): RenderOptions {
     chartReference: values.get("chart-reference"),
     chartLayout: parseChartLayout(values.get("chart-layout")),
     chartTheme: parseChartTheme(values.get("chart-theme")),
-    profile: values.get("profile"),
-    memoryMb: parsePositiveInteger(values.get("memory-mb")),
-    parallel: parsePositiveInteger(values.get("parallel")),
+    memoryMb: parsePositiveInteger(values.get("lambda-memory-mb")),
+    parallel: parsePositiveInteger(values.get("lambda-max-parallel-transfers")),
+    assetProfile: values.get("asset-profile"),
   };
 }
 
@@ -1324,7 +1324,7 @@ function parseChartTheme(value: string | undefined): ChartThemeName | undefined 
 
 function usage(): never {
   console.error(
-    "Usage: node dist/benchmarks/src/render-report.js [--input-file benchmarks/results.jsonl] [--output-file benchmarks/report.md] [--chart-output-file <path>] [--chart-reference <markdown-path>] [--chart-layout split|scorecard|cards] [--chart-theme signal|forge|circuit] [--profile <name>] [--memory-mb <n>] [--parallel <n>]",
+    "Usage: node dist/benchmarks/src/render-report.js [--input-file benchmarks/results.jsonl] [--output-file benchmarks/report.md] [--chart-output-file <path>] [--chart-reference <markdown-path>] [--chart-layout split|scorecard|cards] [--chart-theme signal|forge|circuit] [--asset-profile <name>] [--lambda-max-parallel-transfers <n>] [--lambda-memory-mb <n>]",
   );
   process.exit(1);
 }

@@ -66,9 +66,12 @@ function parseHeaderLayout(argv: string[]): HeaderLayout {
 }
 
 const headerLayout = parseHeaderLayout(process.argv.slice(2));
-const requestedProfile = parseStringArg(process.argv.slice(2), "--profile");
-const requestedShinParallel = parseNumberArg(process.argv.slice(2), "--shin-parallel");
-const requestedMemoryMb = parseNumberArg(process.argv.slice(2), "--memory-mb");
+const requestedProfile = parseStringArg(process.argv.slice(2), "--asset-profile");
+const requestedMemoryMb = parseNumberArg(process.argv.slice(2), "--lambda-memory-mb");
+const requestedShinParallel = parseNumberArg(
+  process.argv.slice(2),
+  "--lambda-max-parallel-transfers",
+);
 const inputFile = resolve(
   process.cwd(),
   parseStringArg(process.argv.slice(2), "--input-file") ?? "benchmarks/results.jsonl",

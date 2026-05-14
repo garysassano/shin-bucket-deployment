@@ -23,12 +23,12 @@ const DEFAULT_STATE: BenchmarkAssetState = "baseline";
 const BINARY_CHUNK_BYTES = 1024 * 1024;
 
 export function ensureBenchmarkAssets(options?: {
-  readonly profile?: string;
+  readonly assetProfile?: string;
   readonly state?: string;
   readonly outputRoot?: string;
 }): GeneratedBundle {
-  const profile = parseProfile(options?.profile ?? process.env.SHIN_BENCH_PROFILE);
-  const state = parseState(options?.state ?? process.env.SHIN_BENCH_STATE);
+  const profile = parseProfile(options?.assetProfile ?? process.env.SHIN_BENCH_ASSET_PROFILE);
+  const state = parseState(options?.state ?? process.env.SHIN_BENCH_ASSET_STATE);
   const outputRoot = options?.outputRoot ?? join(process.cwd(), ".benchmark-assets");
   const root = join(outputRoot, profile, state);
   const markerPath = join(root, ".generated.json");

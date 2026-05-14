@@ -16,7 +16,7 @@ Deploy runs ordered update chains serially within each chain and runs independen
 `pnpm benchmark` runs only the named benchmark scenario and expands the requested config matrix:
 
 ```bash
-pnpm benchmark deploy assets --profiles tiny-many --states baseline --memory-mb 1024 --parallel 32 --implementations shin,aws
+pnpm benchmark deploy assets --asset-profiles tiny-many --implementations shin,aws --lambda-max-parallel-transfers 32 --lambda-memory-mb 1024
 ```
 
 Verification evidence is summarized in `docs/verification.md`. Benchmark result rows and render tooling live in `benchmarks/`.

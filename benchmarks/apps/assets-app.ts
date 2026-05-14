@@ -15,9 +15,9 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
 
     const bundle = ensureBenchmarkAssets();
     const destinationPrefix = process.env.SHIN_BENCH_DESTINATION_PREFIX ?? "benchmark-site";
-    const memoryLimitMb = parseOptionalPositiveIntegerEnv("SHIN_BENCH_MEMORY_LIMIT_MB") ?? 1024;
+    const memoryLimitMb = parseOptionalPositiveIntegerEnv("SHIN_BENCH_LAMBDA_MEMORY_MB") ?? 1024;
     const maxParallelTransfers = parseOptionalPositiveIntegerEnv(
-      "SHIN_BENCH_MAX_PARALLEL_TRANSFERS",
+      "SHIN_BENCH_LAMBDA_MAX_PARALLEL_TRANSFERS",
     );
     const implementation = parseImplementation(process.env.SHIN_BENCH_IMPLEMENTATION);
 
@@ -31,7 +31,7 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
       destinationKeyPrefix: destinationPrefix,
       memoryLimit: memoryLimitMb,
       prune: process.env.SHIN_BENCH_PRUNE !== "false",
-      waitForDistributionInvalidation: process.env.SHIN_BENCH_WAIT !== "false",
+      waitForDistributionInvalidation: process.env.SHIN_BENCH_WAIT_FOR_CLOUDFRONT === "true",
     };
 
     if (implementation === "shin") {
@@ -55,7 +55,7 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
       value: destinationPrefix,
     });
 
-    new CfnOutput(this, "BenchmarkProfile", {
+    new CfnOutput(this, "BenchmarkAssetProfile", {
       value: bundle.profile,
     });
 
