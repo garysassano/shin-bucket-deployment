@@ -1,18 +1,16 @@
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
-import { basename } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { basename, dirname } from "node:path";
 
 export type BenchmarkResultRecord = {
-  readonly schemaVersion: 2;
-  readonly runId: string;
-  readonly runDate: string;
+  readonly lastUpdated: string;
   readonly providerImplementationCommit: string | null;
   readonly providerImplementationSubject: string | null;
   readonly resultDocumentationCommit: string | null;
   readonly region: string | null;
   readonly implementation: string | null;
   readonly profile: string | null;
-  readonly series: string | null;
   readonly memoryMb: number | null;
+  readonly parallel: number | null;
   readonly phase: string;
   readonly state: string | null;
   readonly fileCount: number | null;
@@ -34,10 +32,8 @@ export type CollectBenchmarkOptions = {
   readonly reportFile?: string;
   readonly summaryFile?: string;
   readonly outputFile: string;
-  readonly runId: string;
-  readonly runDate: string;
+  readonly lastUpdated?: string;
   readonly phase: string;
-  readonly series?: string;
   readonly commit?: string;
   readonly subject?: string;
   readonly resultCommit?: string;
@@ -45,6 +41,7 @@ export type CollectBenchmarkOptions = {
   readonly implementation?: string;
   readonly profile?: string;
   readonly memoryMb?: number;
+  readonly parallel?: number;
   readonly state?: string;
   readonly fileCount?: number;
   readonly totalBytes?: number;
@@ -56,7 +53,7 @@ function main(): void {
   const options = parseArgs(process.argv.slice(2));
   collectBenchmarkResult(options);
   console.log(
-    `appended ${options.phase} from ${basename(options.logFile)} to ${options.outputFile}`,
+    `upserted ${options.phase} from ${basename(options.logFile)} to ${options.outputFile}`,
   );
 }
 
@@ -65,9 +62,7 @@ export function collectBenchmarkResult(options: CollectBenchmarkOptions): Benchm
   const report = options.reportFile ? readReportFile(options.reportFile) : undefined;
   const providerSummary = options.summaryFile ? readSummaryFile(options.summaryFile) : undefined;
   const record: BenchmarkResultRecord = {
-    schemaVersion: 2,
-    runId: options.runId,
-    runDate: options.runDate,
+    lastUpdated: options.lastUpdated ?? today(),
     providerImplementationCommit: options.commit ?? null,
     providerImplementationSubject: options.subject ?? null,
     resultDocumentationCommit: options.resultCommit ?? null,
@@ -76,8 +71,8 @@ export function collectBenchmarkResult(options: CollectBenchmarkOptions): Benchm
       options.implementation ?? outputString(logText, "BenchmarkImplementation"),
     ),
     profile: options.profile ?? outputString(logText, "BenchmarkProfile"),
-    series: options.series ?? null,
     memoryMb: options.memoryMb ?? outputNumber(logText, "BenchmarkMemoryLimitMb"),
+    parallel: options.parallel ?? outputNumber(logText, "BenchmarkMaxParallelTransfers"),
     phase: options.phase,
     state: options.state ?? outputString(logText, "BenchmarkState"),
     fileCount: options.fileCount ?? outputNumber(logText, "BenchmarkFileCount"),
@@ -94,8 +89,47 @@ export function collectBenchmarkResult(options: CollectBenchmarkOptions): Benchm
     ...(providerSummary === undefined ? {} : { providerSummary }),
   };
 
-  appendFileSync(options.outputFile, `${JSON.stringify(record)}\n`);
+  upsertBenchmarkResult(options.outputFile, record);
   return record;
+}
+
+export function benchmarkResultKey(
+  record: Pick<
+    BenchmarkResultRecord,
+    "profile" | "memoryMb" | "parallel" | "implementation" | "phase" | "state"
+  >,
+): string {
+  return [
+    record.profile,
+    record.memoryMb,
+    record.parallel,
+    normalizeImplementation(record.implementation),
+    record.phase,
+    record.state,
+  ]
+    .map((part) => part ?? "")
+    .join("\u0000");
+}
+
+function upsertBenchmarkResult(outputFile: string, record: BenchmarkResultRecord): void {
+  const key = benchmarkResultKey(record);
+  const retainedRows = existsSync(outputFile)
+    ? readFileSync(outputFile, "utf8")
+        .split(/\n/)
+        .filter((line) => line.trim() !== "")
+        .filter((line) => rowKey(line) !== key)
+    : [];
+  mkdirSync(dirname(outputFile), { recursive: true });
+  writeFileSync(outputFile, `${[...retainedRows, JSON.stringify(record)].join("\n")}\n`);
+}
+
+function rowKey(line: string): string | null {
+  try {
+    const parsed = JSON.parse(line) as Partial<BenchmarkResultRecord>;
+    return benchmarkResultKey(parsed as BenchmarkResultRecord);
+  } catch {
+    return null;
+  }
 }
 
 function parseArgs(args: string[]): CollectBenchmarkOptions {
@@ -112,8 +146,6 @@ function parseArgs(args: string[]): CollectBenchmarkOptions {
 
   const logFile = required(values, "log-file");
   const outputFile = values.get("output-file") ?? "benchmarks/results.jsonl";
-  const runId = required(values, "run-id");
-  const runDate = required(values, "run-date");
   const phase = required(values, "phase");
 
   return {
@@ -121,10 +153,8 @@ function parseArgs(args: string[]): CollectBenchmarkOptions {
     reportFile: values.get("report-file"),
     summaryFile: values.get("summary-file"),
     outputFile,
-    runId,
-    runDate,
+    lastUpdated: values.get("last-updated"),
     phase,
-    series: values.get("series"),
     commit: values.get("commit"),
     subject: values.get("subject"),
     resultCommit: values.get("result-commit"),
@@ -132,6 +162,7 @@ function parseArgs(args: string[]): CollectBenchmarkOptions {
     implementation: values.get("implementation"),
     profile: values.get("profile"),
     memoryMb: optionalNumber(values, "memory-mb"),
+    parallel: optionalNumber(values, "parallel"),
     state: values.get("state"),
     fileCount: optionalNumber(values, "file-count"),
     totalBytes: optionalNumber(values, "total-bytes"),
@@ -169,7 +200,7 @@ function normalizeImplementation(value: string | null | undefined): string | nul
 
 function usage(): never {
   console.error(
-    "Usage: node dist/benchmarks/src/collect-results.js --log-file <path> --run-id <id> --run-date <YYYY-MM-DD> --phase <name> [--report-file <path>] [--summary-file <path>] [--output-file benchmarks/results.jsonl] [--implementation <shin|aws>] [--profile <name>] [--memory-mb <n>] [--state <name>]",
+    "Usage: node dist/benchmarks/src/collect-results.js --log-file <path> --phase <name> [--last-updated <YYYY-MM-DD>] [--report-file <path>] [--summary-file <path>] [--output-file benchmarks/results.jsonl] [--implementation <shin|aws>] [--profile <name>] [--memory-mb <n>] [--parallel <n>] [--state <name>]",
   );
   process.exit(1);
 }
@@ -335,6 +366,10 @@ function noChangeNote(logText: string): string | null {
 
 function roundSeconds(value: number): number {
   return Math.round(value * 1000) / 1000;
+}
+
+function today(): string {
+  return new Date().toISOString().slice(0, 10);
 }
 
 function escapeRegExp(value: string): string {

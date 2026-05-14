@@ -4,7 +4,12 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { z } from "zod";
 import { ensureBenchmarkAssets } from "./assets";
-import { type CollectBenchmarkOptions, collectBenchmarkResult } from "./collect-results";
+import {
+  type BenchmarkResultRecord,
+  type CollectBenchmarkOptions,
+  benchmarkResultKey,
+  collectBenchmarkResult,
+} from "./collect-results";
 
 type BenchmarkImplementation = "shin" | "aws";
 type BenchmarkState = "baseline" | "changed" | "pruned";
@@ -27,8 +32,8 @@ type RunnerConfig = {
   readonly region: string;
   readonly outputFile: string;
   readonly scratchRoot?: string;
-  readonly runId?: string;
-  readonly runDate?: string;
+  readonly runToken?: string;
+  readonly lastUpdated?: string;
   readonly concurrency: number;
   readonly destinationPrefix: string;
   readonly phases: PhaseConfig[];
@@ -43,8 +48,8 @@ type RunOptions = {
   readonly region: string;
   readonly outputFile: string;
   readonly scratchRoot: string;
-  readonly runId: string;
-  readonly runDate: string;
+  readonly runToken: string;
+  readonly lastUpdated: string;
   readonly concurrency: number;
   readonly destinationPrefix: string;
   readonly phases: PhaseConfig[];
@@ -74,8 +79,8 @@ const CLI_OPTIONS = new Set([
   "implementations",
   "region",
   "output-file",
-  "run-id",
-  "run-date",
+  "run-token",
+  "last-updated",
   "scratch-root",
   "concurrency",
   "destination-prefix",
@@ -98,8 +103,8 @@ const benchmarkConfigSchema = z
   .object({
     $schema: nonEmptyStringSchema.optional(),
     name: nonEmptyStringSchema.optional(),
-    runId: nonEmptyStringSchema.optional(),
-    runDate: nonEmptyStringSchema.optional(),
+    runToken: nonEmptyStringSchema.optional(),
+    lastUpdated: nonEmptyStringSchema.optional(),
     region: nonEmptyStringSchema.optional(),
     outputFile: nonEmptyStringSchema.optional(),
     scratchRoot: nonEmptyStringSchema.optional(),
@@ -120,7 +125,7 @@ const benchmarkConfigSchema = z
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
   mkdirSync(options.scratchRoot, { recursive: true });
-  const rowsFile = join(options.scratchRoot, `${options.runId}.rows.jsonl`);
+  const rowsFile = join(options.scratchRoot, `${options.runToken}.rows.jsonl`);
   writeFileSync(rowsFile, "");
 
   const git = await gitMetadata();
@@ -143,10 +148,9 @@ async function main(): Promise<void> {
     }
   });
 
-  replaceRunRows({
+  upsertResultRows({
     outputFile: options.outputFile,
     rowsText: readFileSync(rowsFile, "utf8"),
-    runId: options.runId,
   });
   console.log(`wrote sanitized benchmark rows to ${options.outputFile}`);
 }
@@ -168,6 +172,7 @@ async function runFamily(args: {
       : "AwsBucketDeploymentBenchmarkAssetsDemo"
   }${stackSuffix}`;
   const scratch = join(options.scratchRoot, label);
+  const cdkOutput = join(scratch, "cdk.out");
   mkdirSync(scratch, { recursive: true });
 
   const evidence: PhaseEvidence[] = [];
@@ -185,6 +190,8 @@ async function runFamily(args: {
           "deploy",
           "--app",
           `node ${JSON.stringify(resolve("dist", "benchmarks", "apps", "assets-app.js"))}`,
+          "--output",
+          cdkOutput,
           "--require-approval",
           "never",
         ],
@@ -226,19 +233,17 @@ async function runFamily(args: {
           reportFile,
           ...(family.implementation === "shin" ? { summaryFile } : {}),
           outputFile: "",
-          runId: options.runId,
-          runDate: options.runDate,
+          lastUpdated: options.lastUpdated,
           phase: phase.phase,
-          series: `${family.profile}-${family.memoryMb}-parallel-${family.parallel}`,
           ...(family.implementation === "shin" && git.commit ? { commit: git.commit } : {}),
           ...(family.implementation === "shin" && git.subject ? { subject: git.subject } : {}),
           region: options.region,
           implementation: family.implementation,
           profile: family.profile,
           memoryMb: family.memoryMb,
+          parallel: family.parallel,
           state: phase.state,
           cleanup: "all benchmark stacks destroyed",
-          notes: `${family.profile} Shin/AWS comparison at ${family.memoryMb} MiB; Shin maxParallelTransfers=${family.parallel}.`,
         },
       });
     }
@@ -257,6 +262,8 @@ async function runFamily(args: {
         "destroy",
         "--app",
         `node ${JSON.stringify(resolve("dist", "benchmarks", "apps", "assets-app.js"))}`,
+        "--output",
+        cdkOutput,
         "--force",
       ],
       env: benchmarkEnv({
@@ -552,12 +559,13 @@ function parseArgs(args: string[]): RunOptions {
     ? listValue(required(values, "implementations")).map(parseImplementation)
     : config.implementations;
   const region = values.get("region") ?? config.region;
-  const runDate = values.get("run-date") ?? config.runDate ?? new Date().toISOString().slice(0, 10);
-  const runId = values.get("run-id") ?? config.runId ?? defaultRunId(runDate, profiles, configs);
+  const lastUpdated = values.get("last-updated") ?? config.lastUpdated ?? today();
+  const runToken =
+    values.get("run-token") ?? config.runToken ?? defaultRunToken(lastUpdated, profiles, configs);
   const scratchRoot = resolve(
     values.get("scratch-root") ??
       config.scratchRoot ??
-      join(tmpdir(), "shin-benchmark-runs", runId),
+      join(tmpdir(), "shin-benchmark-runs", runToken),
   );
   const outputFile = values.get("output-file") ?? config.outputFile;
   const concurrency = positiveInteger(
@@ -574,8 +582,8 @@ function parseArgs(args: string[]): RunOptions {
     region,
     outputFile,
     scratchRoot,
-    runId,
-    runDate,
+    runToken,
+    lastUpdated,
     concurrency,
     destinationPrefix,
     phases,
@@ -599,8 +607,8 @@ function readConfigFile(configPath: string | undefined): RunnerConfig {
     ...(parsed.region === undefined ? {} : { region: parsed.region }),
     ...(parsed.outputFile === undefined ? {} : { outputFile: parsed.outputFile }),
     ...(parsed.scratchRoot === undefined ? {} : { scratchRoot: parsed.scratchRoot }),
-    ...(parsed.runId === undefined ? {} : { runId: parsed.runId }),
-    ...(parsed.runDate === undefined ? {} : { runDate: parsed.runDate }),
+    ...(parsed.runToken === undefined ? {} : { runToken: parsed.runToken }),
+    ...(parsed.lastUpdated === undefined ? {} : { lastUpdated: parsed.lastUpdated }),
     ...(parsed.destinationPrefix === undefined
       ? {}
       : { destinationPrefix: parsed.destinationPrefix }),
@@ -679,35 +687,31 @@ function positiveInteger(value: string, name: string): number {
   return parsed;
 }
 
-function defaultRunId(
-  runDate: string,
+function defaultRunToken(
+  lastUpdated: string,
   profiles: string[],
   configs: MemoryParallelConfig[],
 ): string {
-  return `${runDate}-shin-aws-${profiles.join("-")}-${configs
+  return `${lastUpdated}-shin-aws-${profiles.join("-")}-${configs
     .map((config) => `${config.memoryMb}-${config.parallel}`)
     .join("-")}`;
 }
 
-function replaceRunRows(args: {
-  readonly outputFile: string;
-  readonly rowsText: string;
-  readonly runId: string;
-}): void {
+function upsertResultRows(args: { readonly outputFile: string; readonly rowsText: string }): void {
+  const newRows = args.rowsText.split(/\n/).filter((line) => line.trim() !== "");
+  const newKeys = new Set(newRows.map(rowBenchmarkKey));
   const retainedRows = existsSync(args.outputFile)
     ? readFileSync(args.outputFile, "utf8")
         .split(/\n/)
-        .filter((line) => line.trim() !== "" && rowRunId(line) !== args.runId)
+        .filter((line) => line.trim() !== "" && !newKeys.has(rowBenchmarkKey(line)))
     : [];
-  const newRows = args.rowsText.split(/\n/).filter((line) => line.trim() !== "");
   mkdirSync(dirname(args.outputFile), { recursive: true });
   writeFileSync(args.outputFile, `${[...retainedRows, ...newRows].join("\n")}\n`);
 }
 
-function rowRunId(line: string): string | null {
+function rowBenchmarkKey(line: string): string | null {
   try {
-    const parsed = JSON.parse(line) as { readonly runId?: unknown };
-    return typeof parsed.runId === "string" ? parsed.runId : null;
+    return benchmarkResultKey(JSON.parse(line) as BenchmarkResultRecord);
   } catch {
     return null;
   }
@@ -720,9 +724,13 @@ function stackSuffixFor(args: {
   };
   readonly options: RunOptions;
 }): string {
-  const dateToken = safeName(args.options.runDate).replace(/-/g, "");
-  const runToken = `${dateToken}-${shortHash(args.options.runId)}`;
+  const dateToken = safeName(args.options.lastUpdated).replace(/-/g, "");
+  const runToken = `${dateToken}-${shortHash(args.options.runToken)}`;
   return `-${runToken}-${safeName(args.family.profile)}-${args.family.implementation}-${args.family.memoryMb}-${args.family.parallel}`;
+}
+
+function today(): string {
+  return new Date().toISOString().slice(0, 10);
 }
 
 function safeName(value: string): string {
@@ -748,7 +756,7 @@ function sleep(milliseconds: number): Promise<void> {
 
 function usage(): never {
   console.error(
-    "Usage: node dist/benchmarks/src/run-assets-comparison.js --config benchmarks/configs/tiny-many-shin-aws-2048-4096.json [--run-id <id>] [--run-date <YYYY-MM-DD>] [--scratch-root <outside-repo>] [--concurrency 1]",
+    "Usage: node dist/benchmarks/src/run-assets-comparison.js --config benchmarks/configs/tiny-many-shin-aws-2048-4096.json [--run-token <id>] [--last-updated <YYYY-MM-DD>] [--scratch-root <outside-repo>] [--concurrency 1]",
   );
   process.exit(1);
 }
