@@ -69,7 +69,6 @@ const headerLayout = parseHeaderLayout(process.argv.slice(2));
 const requestedProfile = parseStringArg(process.argv.slice(2), "--profile");
 const requestedShinParallel = parseNumberArg(process.argv.slice(2), "--shin-parallel");
 const requestedMemoryMb = parseNumberArg(process.argv.slice(2), "--memory-mb");
-const selectedMemoryMb = requestedMemoryMb ?? 1024;
 const inputFile = resolve(
   process.cwd(),
   parseStringArg(process.argv.slice(2), "--input-file") ?? "benchmarks/results.jsonl",
@@ -150,12 +149,18 @@ interface BenchmarkData {
   duration: Row[];
   memory: Row[];
   metadata: string;
+  profile: string;
+  memoryMb: number;
+  parallel: number;
 }
 
 interface DataSelection {
   runRecords: BenchmarkRecord[];
   shinRecords: Map<string, BenchmarkRecord>;
   awsRecords: Map<string, BenchmarkRecord>;
+  profile: string;
+  memoryMb: number;
+  parallel: number;
 }
 
 const PHASE_ORDER = new Map([
@@ -193,26 +198,11 @@ function comparablePhases(records: BenchmarkRecord[]): string[] {
     .sort((left, right) => (PHASE_ORDER.get(left) ?? 999) - (PHASE_ORDER.get(right) ?? 999));
 }
 
-function basePhaseName(phase: string): string {
-  return phase.replace(/-parallel-\d+$/, "");
-}
-
 function requireNumber(value: number | null | undefined, label: string): number {
   if (value === null || value === undefined) {
     throw new Error(`Missing ${label}`);
   }
   return value;
-}
-
-function recordsByBasePhase(
-  records: BenchmarkRecord[],
-  implementation: "shin" | "aws",
-): Map<string, BenchmarkRecord> {
-  return new Map(
-    records
-      .filter((record) => record.phase !== undefined && record.implementation === implementation)
-      .map((record) => [basePhaseName(record.phase as string), record]),
-  );
 }
 
 function recordsByPhase(
@@ -243,71 +233,83 @@ function formatBytes(value: number): string {
     : `${amount.toFixed(1).replace(/\.0$/, "")} ${units[unitIndex]}`;
 }
 
-function selectData(records: BenchmarkRecord[]): DataSelection {
-  const runRecords = records
-    .filter((record) => requestedProfile === undefined || record.profile === requestedProfile)
-    .filter((record) => record.memoryMb === selectedMemoryMb);
-  const phases = comparablePhases(runRecords);
-  if (phases.length === 0) {
-    throw new Error(`No paired Shin/AWS benchmark records matched the selected filters`);
+function findSelections(records: BenchmarkRecord[]): DataSelection[] {
+  const groups = new Map<string, BenchmarkRecord[]>();
+  for (const record of records) {
+    if (record.implementation !== "shin" && record.implementation !== "aws") {
+      continue;
+    }
+    if (
+      record.profile === null ||
+      record.profile === undefined ||
+      record.memoryMb === null ||
+      record.memoryMb === undefined ||
+      record.parallel === null ||
+      record.parallel === undefined ||
+      record.phase === undefined
+    ) {
+      continue;
+    }
+    if (requestedProfile !== undefined && record.profile !== requestedProfile) {
+      continue;
+    }
+    if (requestedMemoryMb !== undefined && record.memoryMb !== requestedMemoryMb) {
+      continue;
+    }
+    if (requestedShinParallel !== undefined && record.parallel !== requestedShinParallel) {
+      continue;
+    }
+    const key = [record.profile, record.memoryMb, record.parallel].join("\u0000");
+    groups.set(key, [...(groups.get(key) ?? []), record]);
   }
 
-  const baseShinRecords = recordsByPhase(runRecords, "shin");
-  const awsRecords = recordsByPhase(runRecords, "aws");
-  const firstShin = baseShinRecords.values().next().value;
-  if (firstShin === undefined) {
-    throw new Error(`Selected benchmark records do not contain Shin rows`);
-  }
-
-  if (requestedShinParallel === undefined) {
-    return {
-      runRecords,
-      shinRecords: baseShinRecords,
-      awsRecords,
-    };
-  }
-
-  const targetMemoryMb = selectedMemoryMb;
-  const sameRunShinRecords = runRecords
-    .filter((record) => record.implementation === "shin")
-    .filter((record) => record.profile === firstShin.profile)
-    .filter((record) => record.memoryMb === targetMemoryMb)
-    .filter((record) => record.parallel === requestedShinParallel)
-    .filter((record) => record.providerSummary?.maxParallelTransfers === requestedShinParallel);
-  const requestedShinRecords =
-    sameRunShinRecords.length > 0
-      ? sameRunShinRecords
-      : records
-          .filter((record) => record.implementation === "shin")
-          .filter((record) => record.profile === firstShin.profile)
-          .filter((record) => record.memoryMb === targetMemoryMb)
-          .filter((record) => record.parallel === requestedShinParallel)
-          .filter(
-            (record) => record.providerSummary?.maxParallelTransfers === requestedShinParallel,
-          );
-  if (requestedShinRecords.length === 0) {
-    throw new Error(
-      `No Shin benchmark records found for profile=${firstShin.profile}, memory=${targetMemoryMb}, maxParallelTransfers=${requestedShinParallel}`,
+  const selections = [...groups.values()].flatMap((runRecords) => {
+    const phases = new Set(comparablePhases(runRecords));
+    if (phases.size === 0) {
+      return [];
+    }
+    const comparableRecords = runRecords.filter(
+      (record) => record.phase !== undefined && phases.has(record.phase),
     );
-  }
-  return {
-    runRecords,
-    shinRecords: recordsByBasePhase(requestedShinRecords, "shin"),
-    awsRecords: recordsByBasePhase(runRecords, "aws"),
-  };
+    const metadataRecord = comparableRecords[0];
+    if (
+      metadataRecord?.profile === null ||
+      metadataRecord?.profile === undefined ||
+      metadataRecord.memoryMb === null ||
+      metadataRecord.memoryMb === undefined ||
+      metadataRecord.parallel === null ||
+      metadataRecord.parallel === undefined
+    ) {
+      return [];
+    }
+    return [
+      {
+        runRecords: comparableRecords,
+        shinRecords: recordsByPhase(comparableRecords, "shin"),
+        awsRecords: recordsByPhase(comparableRecords, "aws"),
+        profile: metadataRecord.profile,
+        memoryMb: metadataRecord.memoryMb,
+        parallel: metadataRecord.parallel,
+      },
+    ];
+  });
+
+  return selections.sort(
+    (left, right) =>
+      left.profile.localeCompare(right.profile) ||
+      left.memoryMb - right.memoryMb ||
+      left.parallel - right.parallel,
+  );
 }
 
-function buildBenchmarkData(records: BenchmarkRecord[]): BenchmarkData {
-  const selection = selectData(records);
+function buildBenchmarkData(selection: DataSelection): BenchmarkData {
   const phases = [...selection.shinRecords.keys()]
     .filter((phase) => selection.awsRecords.has(phase))
     .sort((left, right) => (PHASE_ORDER.get(left) ?? 999) - (PHASE_ORDER.get(right) ?? 999));
   if (phases.length === 0) {
-    const parallelDescription =
-      requestedShinParallel === undefined
-        ? "the selected Shin rows"
-        : `Shin maxParallelTransfers=${requestedShinParallel}`;
-    throw new Error(`No paired AWS rows match ${parallelDescription}`);
+    throw new Error(
+      `No paired AWS rows match profile=${selection.profile}, memory=${selection.memoryMb}, parallel=${selection.parallel}`,
+    );
   }
 
   const duration = phases.map((phase) => {
@@ -335,17 +337,8 @@ function buildBenchmarkData(records: BenchmarkRecord[]): BenchmarkData {
     };
   });
 
-  const shinRows = [...selection.shinRecords.values()];
-  const metadataRecord = shinRows[0] ?? selection.runRecords[0];
-  const parallelTransfers = shinRows.find(
-    (record) => record.providerSummary?.maxParallelTransfers !== undefined,
-  )?.providerSummary?.maxParallelTransfers;
-  const lambdaConfig =
-    metadataRecord.memoryMb === null || metadataRecord.memoryMb === undefined
-      ? undefined
-      : `Lambda: ${metadataRecord.memoryMb} MiB${
-          parallelTransfers === undefined ? "" : ` / ${parallelTransfers} parallel`
-        }`;
+  const metadataRecord = selection.shinRecords.values().next().value ?? selection.runRecords[0];
+  const lambdaConfig = `Lambda: ${selection.memoryMb} MiB / ${selection.parallel} parallel`;
   const metadataParts = [
     metadataRecord.profile === null || metadataRecord.profile === undefined
       ? undefined
@@ -363,10 +356,11 @@ function buildBenchmarkData(records: BenchmarkRecord[]): BenchmarkData {
     duration,
     memory,
     metadata: metadataParts.join(" · "),
+    profile: selection.profile,
+    memoryMb: selection.memoryMb,
+    parallel: selection.parallel,
   };
 }
-
-const benchmarkData = buildBenchmarkData(readRecords(inputFile));
 
 function simulateAwsWins(rows: Row[]): Row[] {
   return rows.map((row) => ({
@@ -376,36 +370,21 @@ function simulateAwsWins(rows: Row[]): Row[] {
   }));
 }
 
-const chartDuration =
-  chartVariant === "aws" ? simulateAwsWins(benchmarkData.duration) : benchmarkData.duration;
-const chartMemory =
-  chartVariant === "aws" ? simulateAwsWins(benchmarkData.memory) : benchmarkData.memory;
-const MAX_DUR = Math.max(...chartDuration.flatMap((row) => [row.shin, row.aws]));
-const MAX_MEM = Math.max(...chartMemory.flatMap((row) => [row.shin, row.aws]));
 const subtitlePrefix = chartVariant === "aws" ? "AWS win simulation" : "vs AWS BucketDeployment";
-const outFilePrefix =
-  requestedShinParallel === undefined
-    ? selectedMemoryMb === 1024
-      ? "benchmark-snapshot"
-      : `${selectedMemoryMb}-mib-snapshot`
-    : `parallel-${requestedShinParallel}-snapshot`;
 const outFileSuffix = `${chartVariant === "aws" ? "-aws" : ""}${headerLayout === "two-line" ? "-two-line" : ""}`;
 
-const legendSwatchY = headerLayout === "three-line" ? 22 : 12;
-const legendLabelY = headerLayout === "three-line" ? 30 : 20;
-const legendNoteY = headerLayout === "three-line" ? 52 : 42;
-const LEGEND_W = 111;
-const legendX = CANVAS_W - CANVAS_PAD_LEFT - LEGEND_W;
+function snapshotFileName(benchmarkData: BenchmarkData): string {
+  return `${safeFileToken(benchmarkData.profile)}-${benchmarkData.memoryMb}mib-${benchmarkData.parallel}${outFileSuffix}.svg`;
+}
 
-// ═══ DERIVED POSITIONS ═══
-const sectionATop = HEADER_H;
-const sectionARowsTop = sectionATop + SECTION_HDR_H + 1; // +1 for bottom line
-const sectionABottom = sectionARowsTop + ROW_H * chartDuration.length - 1;
-const dividerY = sectionABottom;
-const sectionBTop = dividerY + 1;
-const sectionBRowsTop = sectionBTop + SECTION_HDR_H + 1;
-const sectionBBottom = sectionBRowsTop + ROW_H * chartMemory.length - 1;
-const CANVAS_H = sectionBBottom;
+function safeFileToken(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
+const LEGEND_W = 111;
 
 // ═══ HELPERS ═══
 function barWidth(val: number, max: number): number {
@@ -512,7 +491,7 @@ function renderSectionHeader(y: number, title: string, deltaLabel: string): stri
   return s;
 }
 
-function renderHeader(): string {
+function renderHeader(benchmarkData: BenchmarkData): string {
   if (headerLayout === "three-line") {
     return `<text x="${CANVAS_PAD_LEFT}" y="23" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_TITLE}" font-weight="800" fill="#f0f8ff" letter-spacing="-0.3">ShinBucketDeployment</text>
 <text x="${CANVAS_PAD_LEFT}" y="43" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_SUBTITLE}" font-weight="600" fill="${COLOR_SECTION_HEADER_TEXT}">${subtitlePrefix}</text>
@@ -524,8 +503,27 @@ function renderHeader(): string {
 }
 
 // ═══ RENDER ═══
-function render(): string {
-  let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${CANVAS_W}" height="${CANVAS_H}" viewBox="0 0 ${CANVAS_W} ${CANVAS_H}" role="img" aria-labelledby="title desc">
+function render(benchmarkData: BenchmarkData): string {
+  const chartDuration =
+    chartVariant === "aws" ? simulateAwsWins(benchmarkData.duration) : benchmarkData.duration;
+  const chartMemory =
+    chartVariant === "aws" ? simulateAwsWins(benchmarkData.memory) : benchmarkData.memory;
+  const maxDuration = Math.max(...chartDuration.flatMap((row) => [row.shin, row.aws]));
+  const maxMemory = Math.max(...chartMemory.flatMap((row) => [row.shin, row.aws]));
+  const legendSwatchY = headerLayout === "three-line" ? 22 : 12;
+  const legendLabelY = headerLayout === "three-line" ? 30 : 20;
+  const legendNoteY = headerLayout === "three-line" ? 52 : 42;
+  const legendX = CANVAS_W - CANVAS_PAD_LEFT - LEGEND_W;
+  const sectionATop = HEADER_H;
+  const sectionARowsTop = sectionATop + SECTION_HDR_H + 1;
+  const sectionABottom = sectionARowsTop + ROW_H * chartDuration.length - 1;
+  const dividerY = sectionABottom;
+  const sectionBTop = dividerY + 1;
+  const sectionBRowsTop = sectionBTop + SECTION_HDR_H + 1;
+  const sectionBBottom = sectionBRowsTop + ROW_H * chartMemory.length - 1;
+  const canvasHeight = sectionBBottom;
+
+  let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${CANVAS_W}" height="${canvasHeight}" viewBox="0 0 ${CANVAS_W} ${canvasHeight}" role="img" aria-labelledby="title desc">
 <title id="title">ShinBucketDeployment vs AWS BucketDeployment benchmark</title>
 <desc id="desc">Benchmark comparing handler duration and memory usage. Lower is better.</desc>
 <defs>
@@ -552,10 +550,10 @@ function render(): string {
 </defs>
 
 <!-- Background -->
-<rect width="${CANVAS_W}" height="${CANVAS_H}" fill="url(#bgGrad)"/>
+<rect width="${CANVAS_W}" height="${canvasHeight}" fill="url(#bgGrad)"/>
 
 <!-- Header -->
-${renderHeader()}
+${renderHeader(benchmarkData)}
 <rect x="${legendX}" y="${legendSwatchY}" width="12" height="8" rx="2" fill="url(#shin)"/>
 <text x="${legendX + 18}" y="${legendLabelY}" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_HEADER_LEGEND}" font-weight="700" fill="#8ab8d0">SHIN</text>
 <rect x="${legendX + 70}" y="${legendSwatchY}" width="12" height="8" rx="2" fill="url(#aws)"/>
@@ -572,7 +570,7 @@ ${renderHeader()}
       chartDuration[i],
       i,
       sectionARowsTop,
-      MAX_DUR,
+      maxDuration,
       false,
       i === chartDuration.length - 1,
     );
@@ -588,7 +586,7 @@ ${renderHeader()}
       chartMemory[i],
       i,
       sectionBRowsTop,
-      MAX_MEM,
+      maxMemory,
       true,
       i === chartMemory.length - 1,
     );
@@ -599,11 +597,22 @@ ${renderHeader()}
 }
 
 // ═══ OUTPUT ═══
-const outFileName = `${outFilePrefix}${outFileSuffix}.svg`;
-const outPath = resolve(process.cwd(), "benchmarks", "snapshots", outFileName);
-mkdirSync(dirname(outPath), { recursive: true });
-writeFileSync(outPath, render());
-console.log(`Written: ${outPath}`);
+const benchmarkDataItems = findSelections(readRecords(inputFile)).map(buildBenchmarkData);
+if (benchmarkDataItems.length === 0) {
+  throw new Error("No complete Shin/AWS benchmark pairs matched the selected filters");
+}
+for (const benchmarkData of benchmarkDataItems) {
+  const outPath = resolve(
+    process.cwd(),
+    "benchmarks",
+    "snapshots",
+    snapshotFileName(benchmarkData),
+  );
+  mkdirSync(dirname(outPath), { recursive: true });
+  writeFileSync(outPath, render(benchmarkData));
+  console.log(`Written: ${outPath}`);
+}
+console.log(`Generated: ${benchmarkDataItems.length}`);
 console.log(`Variant: ${chartVariant}`);
 console.log(`Header: ${headerLayout}`);
-console.log(`Canvas: ${CANVAS_W}×${CANVAS_H}, Row height: ${ROW_H}px, Bar: ${BAR_H}px`);
+console.log(`Canvas width: ${CANVAS_W}, Row height: ${ROW_H}px, Bar: ${BAR_H}px`);

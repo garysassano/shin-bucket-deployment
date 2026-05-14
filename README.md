@@ -20,11 +20,13 @@ The official `BucketDeployment` is a good default for many stacks, but its provi
 
 ## Benchmark Snapshot
 
-<img src="./benchmarks/snapshots/benchmark-snapshot.svg" alt="ShinBucketDeployment vs AWS BucketDeployment benchmark" width="100%">
+<img src="./benchmarks/snapshots/tiny-many-1024mib-16.svg" alt="ShinBucketDeployment tiny-many 1024 MiB parallel 16 benchmark" width="100%">
 
-<img src="./benchmarks/snapshots/parallel-64-snapshot.svg" alt="ShinBucketDeployment 2048 MiB parallel 64 benchmark" width="100%">
+<img src="./benchmarks/snapshots/tiny-many-1024mib-32.svg" alt="ShinBucketDeployment tiny-many 1024 MiB parallel 32 benchmark" width="100%">
 
-<img src="./benchmarks/snapshots/parallel-128-snapshot.svg" alt="ShinBucketDeployment 4096 MiB parallel 128 benchmark" width="100%">
+<img src="./benchmarks/snapshots/tiny-many-2048mib-64.svg" alt="ShinBucketDeployment tiny-many 2048 MiB parallel 64 benchmark" width="100%">
+
+<img src="./benchmarks/snapshots/tiny-many-4096mib-128.svg" alt="ShinBucketDeployment tiny-many 4096 MiB parallel 128 benchmark" width="100%">
 
 ## Quick Start
 
