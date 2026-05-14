@@ -76,13 +76,28 @@ When the matrix has multiple configs and `SHIN_BENCH_STACK_SUFFIX` is not alread
 
 Do not finalize timing-only benchmark rows when provider telemetry is expected. For every provider-invoking deploy/update/delete phase, capture the Lambda CloudWatch `REPORT` line and the sanitized `shin_deployment_summary` line before destroying the stack or otherwise deleting provider log groups. If telemetry cannot be captured, either rerun the phase or clearly mark the record as incomplete with `null` provider fields and explain why.
 
+Prefer the automated asset comparison runner for Shin-vs-AWS asset benchmarks:
+
+```bash
+AWS_PROFILE=<profile> AWS_REGION=ap-southeast-2 AWS_DEFAULT_REGION=ap-southeast-2 \
+pnpm benchmark:run-assets -- \
+  --profiles tiny-many \
+  --memory-parallel 2048:64,4096:128 \
+  --implementations shin,aws \
+  --concurrency 1 \
+  --output-file benchmarks/results.jsonl
+```
+
+The runner deploys each stack family through `cold-create`, `forced-unchanged`, `sparse-update`, and `prune-update`, captures CloudWatch `REPORT` events and Shin `shin_deployment_summary` events before cleanup, destroys the stack, verifies cleanup, and appends sanitized result rows. Keep `--concurrency 1` unless intentionally running multiple stack families in parallel; each family is stateful and its phases must stay ordered.
+
 Choose benchmark configs deliberately. Paired Shin vs AWS comparisons should use:
 
 - same region and account
 - same profile
-- same states
+- same states and phase sequence
 - same destination prefix
 - same memory setting
+- same parallel setting for Shin records, encoded in `series` and phase notes
 - same repetition count
 - same stack suffix family
 

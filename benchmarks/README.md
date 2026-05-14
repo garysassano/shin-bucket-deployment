@@ -4,7 +4,7 @@ This folder contains committed benchmark support assets, sanitized current resul
 
 Deployable benchmark CDK apps live in `benchmarks/apps/**` and are run through `pnpm benchmark`.
 
-README benchmark snapshots use sanitized tiny-many records from `benchmarks/results.jsonl`. The default snapshot keeps the four-phase 1024 MiB `maxParallelTransfers=8` Shin/AWS comparison from `2026-05-09-shin-aws-tiny-many-1024`. The parallel 32 snapshot uses the 1024 MiB Shin `maxParallelTransfers=32` cold-create row from `2026-05-10-shin-tiny-many-parallel-transfers-1024` with the matching AWS cold-create row.
+README benchmark snapshots use sanitized tiny-many records from `benchmarks/results.jsonl`. The default snapshot keeps the four-phase 1024 MiB `maxParallelTransfers=8` Shin/AWS comparison from `2026-05-09-shin-aws-tiny-many-1024`. The parallel 64 and parallel 128 snapshots use the paired Shin/AWS run from `2026-05-14-shin-aws-tiny-many-2048-64-4096-128`.
 
 Only README-linked snapshot SVGs are committed under `benchmarks/snapshots`. Temporary alternate layouts can be regenerated locally with `benchmarks/render/readme-snapshot.ts`, but should not be kept as committed design history. Generated report charts live beside the report output by default.
 
@@ -14,8 +14,14 @@ Default current snapshot with compact bar tracks and a three-line header.
 
 ![Benchmark snapshot chart](snapshots/benchmark-snapshot.svg)
 
-## Parallel 32 Snapshot
+## Parallel 64 Snapshot
 
-Cold-create-only snapshot using the latest tiny-many 1024 MiB Shin `maxParallelTransfers=32` row.
+Four-phase snapshot using the latest tiny-many 2048 MiB Shin `maxParallelTransfers=64` rows.
 
-![Parallel 32 benchmark snapshot chart](snapshots/parallel-32-snapshot.svg)
+![Parallel 64 benchmark snapshot chart](snapshots/parallel-64-snapshot.svg)
+
+## Parallel 128 Snapshot
+
+Four-phase snapshot using the latest tiny-many 4096 MiB Shin `maxParallelTransfers=128` rows.
+
+![Parallel 128 benchmark snapshot chart](snapshots/parallel-128-snapshot.svg)
