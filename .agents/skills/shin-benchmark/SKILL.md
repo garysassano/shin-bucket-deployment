@@ -154,7 +154,7 @@ pnpm benchmark:collect -- \
   --notes "<sanitized note>"
 ```
 
-Do not parse `summary=...` tracing lines by hand. If parsing fails, fix `benchmarks/collect-results.ts` and add a test in `test/benchmarks/collector.test.ts`.
+Do not parse `summary=...` tracing lines by hand. If parsing fails, fix `benchmarks/src/collect-results.ts` and add a test in `test/benchmarks/collector.test.ts`.
 
 ## Benchmark Records
 

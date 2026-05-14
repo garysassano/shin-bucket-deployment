@@ -1279,7 +1279,7 @@ function parseChartTheme(value: string | undefined): ChartThemeName | undefined 
 
 function usage(): never {
   console.error(
-    "Usage: node dist/benchmarks/render-report.js [--input-file benchmarks/results.jsonl] [--output-file benchmarks/report.md] [--chart-output-file <path>] [--chart-reference <markdown-path>] [--chart-layout split|scorecard|cards] [--chart-theme signal|forge|circuit] [--run-id <id>] [--series <name>]",
+    "Usage: node dist/benchmarks/src/render-report.js [--input-file benchmarks/results.jsonl] [--output-file benchmarks/report.md] [--chart-output-file <path>] [--chart-reference <markdown-path>] [--chart-layout split|scorecard|cards] [--chart-theme signal|forge|circuit] [--run-id <id>] [--series <name>]",
   );
   process.exit(1);
 }

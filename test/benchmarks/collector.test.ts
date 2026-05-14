@@ -2,8 +2,8 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import { collectBenchmarkResult } from "../../benchmarks/collect-results";
-import { renderBenchmarkReport } from "../../benchmarks/render-report";
+import { collectBenchmarkResult } from "../../benchmarks/src/collect-results";
+import { renderBenchmarkReport } from "../../benchmarks/src/render-report";
 
 describe("benchmark result collector", () => {
   test("appends sanitized benchmark history records", () => {
