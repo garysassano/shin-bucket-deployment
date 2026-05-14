@@ -32,6 +32,7 @@
     "@types/node": "24.12.4",
     "aws-cdk": "2.1121.0",
     "typescript": "6.0.3",
-    "vitest": "4.1.6"
+    "vitest": "4.1.6",
+    "zod": "^4.4.3"
   }
 }

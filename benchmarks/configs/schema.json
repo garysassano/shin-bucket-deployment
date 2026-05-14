@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/shin-bucket-deployment/benchmark-config.schema.json",
+  "title": "ShinBucketDeployment Asset Benchmark Config",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "runId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "runDate": {
+      "type": "string",
+      "minLength": 1
+    },
+    "region": {
+      "type": "string",
+      "minLength": 1
+    },
+    "outputFile": {
+      "type": "string",
+      "minLength": 1
+    },
+    "scratchRoot": {
+      "type": "string",
+      "minLength": 1
+    },
+    "concurrency": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "destinationPrefix": {
+      "type": "string",
+      "minLength": 1
+    },
+    "profiles": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "families": {
+      "$ref": "#/$defs/families"
+    },
+    "configs": {
+      "$ref": "#/$defs/families"
+    },
+    "implementations": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "enum": ["shin", "aws"]
+      }
+    },
+    "phases": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "state", "wait"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "state": {
+            "enum": ["baseline", "changed", "pruned"]
+          },
+          "wait": {
+            "type": "boolean"
+          }
+        }
+      }
+    }
+  },
+  "not": {
+    "required": ["families", "configs"]
+  },
+  "$defs": {
+    "families": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["memoryMb", "parallel"],
+        "properties": {
+          "memoryMb": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "parallel": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      }
+    }
+  }
+}
