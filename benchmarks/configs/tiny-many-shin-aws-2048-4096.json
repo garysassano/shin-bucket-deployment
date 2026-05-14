@@ -1,5 +1,5 @@
 {
-  "$schema": "./schema.json",
+  "$schema": "../schemas/asset-benchmark-config.schema.json",
   "name": "tiny-many Shin/AWS comparison at 2048 MiB and 4096 MiB",
   "region": "ap-southeast-2",
   "outputFile": "benchmarks/results.jsonl",
