@@ -12,6 +12,7 @@ import {
 } from "./collect-results";
 
 type BenchmarkImplementation = "shin" | "aws";
+type BenchmarkProfile = "tiny-many" | "mixed" | "large-few";
 type BenchmarkState = "baseline" | "changed" | "pruned";
 
 type LambdaConfig = {
@@ -26,7 +27,7 @@ type PhaseConfig = {
 };
 
 type RunnerConfig = {
-  readonly profiles: string[];
+  readonly profiles: BenchmarkProfile[];
   readonly lambdaConfigs: LambdaConfig[];
   readonly implementations: BenchmarkImplementation[];
   readonly region: string;
@@ -42,7 +43,7 @@ type RunnerConfig = {
 type BenchmarkConfig = z.infer<typeof benchmarkConfigSchema>;
 
 type RunOptions = {
-  readonly profiles: string[];
+  readonly profiles: BenchmarkProfile[];
   readonly lambdaConfigs: LambdaConfig[];
   readonly implementations: BenchmarkImplementation[];
   readonly region: string;
@@ -89,6 +90,7 @@ const CLI_OPTIONS = new Set([
 const nonEmptyStringSchema = z.string().min(1);
 const positiveIntegerSchema = z.number().int().positive();
 const implementationSchema = z.enum(["shin", "aws"]);
+const profileSchema = z.enum(["tiny-many", "mixed", "large-few"]);
 const stateSchema = z.enum(["baseline", "changed", "pruned"]);
 const lambdaConfigSchema = z.object({
   memoryMb: positiveIntegerSchema,
@@ -109,7 +111,7 @@ const benchmarkConfigSchema = z
     scratchRoot: nonEmptyStringSchema.optional(),
     concurrency: positiveIntegerSchema.optional(),
     destinationPrefix: nonEmptyStringSchema.optional(),
-    profiles: z.array(nonEmptyStringSchema).nonempty().optional(),
+    profiles: z.array(profileSchema).nonempty().optional(),
     lambdaConfigs: z.array(lambdaConfigSchema).nonempty().optional(),
     implementations: z.array(implementationSchema).nonempty().optional(),
     phases: z.array(phaseSchema).nonempty().optional(),
@@ -548,7 +550,7 @@ function parseArgs(args: string[]): RunOptions {
 
   const config = readConfigFile(values.get("config"));
   const profiles = values.has("profiles")
-    ? listValue(required(values, "profiles"))
+    ? listValue(required(values, "profiles")).map(parseProfile)
     : config.profiles;
   const lambdaConfigs = values.has("lambda-configs")
     ? listValue(required(values, "lambda-configs")).map(parseLambdaConfig)
@@ -622,7 +624,7 @@ function configPhaseToRunPhase(phase: NonNullable<BenchmarkConfig["phases"]>[num
 }
 
 function defaultConfig(): RunnerConfig {
-  const profiles = ["tiny-many"];
+  const profiles: BenchmarkProfile[] = ["tiny-many"];
   const lambdaConfigs = [
     { memoryMb: 2048, parallel: 64 },
     { memoryMb: 4096, parallel: 128 },
@@ -678,6 +680,13 @@ function parseImplementation(value: string): BenchmarkImplementation {
   usage();
 }
 
+function parseProfile(value: string): BenchmarkProfile {
+  if (value === "tiny-many" || value === "mixed" || value === "large-few") {
+    return value;
+  }
+  usage();
+}
+
 function positiveInteger(value: string, name: string): number {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed < 1) {
@@ -688,7 +697,7 @@ function positiveInteger(value: string, name: string): number {
 
 function defaultRunToken(
   snapshotDate: string,
-  profiles: string[],
+  profiles: BenchmarkProfile[],
   lambdaConfigs: LambdaConfig[],
 ): string {
   return `${snapshotDate}-shin-aws-${profiles.join("-")}-${lambdaConfigs

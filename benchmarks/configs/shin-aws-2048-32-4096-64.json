@@ -1,0 +1,39 @@
+{
+  "$schema": "../schemas/asset-benchmark-config.schema.json",
+  "region": "ap-southeast-2",
+  "concurrency": 8,
+  "profiles": ["tiny-many", "large-few"],
+  "implementations": ["shin", "aws"],
+  "lambdaConfigs": [
+    {
+      "memoryMb": 2048,
+      "parallel": 32
+    },
+    {
+      "memoryMb": 4096,
+      "parallel": 64
+    }
+  ],
+  "phases": [
+    {
+      "name": "cold-create",
+      "state": "baseline",
+      "wait": true
+    },
+    {
+      "name": "forced-unchanged",
+      "state": "baseline",
+      "wait": false
+    },
+    {
+      "name": "sparse-update",
+      "state": "changed",
+      "wait": true
+    },
+    {
+      "name": "prune-update",
+      "state": "pruned",
+      "wait": true
+    }
+  ]
+}
