@@ -126,53 +126,46 @@ Committed benchmark results are represented as sanitized records in `benchmarks/
 
 | Field | Value |
 | --- | --- |
-| Run date | 2026-05-10 |
-| Provider implementation commit | `4aed47a` (`expand source block diagnostics`) |
+| Run date | 2026-05-14 |
+| Run ID | `2026-05-14-shin-aws-tiny-many-2048-64-4096-128` |
+| Provider implementation commit | `1dbf9a7` (`rework scenario and benchmark workflows`) |
 | Result documentation commit | Pending |
 | Region | `ap-southeast-2` |
-| Implementation | `shin` |
+| Implementation | Paired `shin` and upstream AWS CDK `BucketDeployment` |
 | Profile | `tiny-many` |
-| Baseline state | `baseline` |
-| Bundle | 2,584 files, 8,178,618 bytes |
-| Provider memory | 1024 and 2048 MiB |
-| Swept setting | `maxParallelTransfers`: 8, 16, 32, 64 |
+| States | `baseline`, `changed`, and `pruned` |
+| Bundle | Baseline/changed: 2,584 files, 8,178,618 bytes; pruned: 2,325 files, 7,332,858 bytes |
+| Provider memory | 2048 and 4096 MiB |
+| Shin parallelism | 2048 MiB used `maxParallelTransfers: 64`; 4096 MiB used `maxParallelTransfers: 128` |
 | Cleanup | All benchmark stacks destroyed after telemetry collection |
-| Notes | Shin-only cold-create tuning sweep for the many-small-files profile. The latest 2048 MiB run held all inputs constant except `maxParallelTransfers` and is compared with the earlier 1024 MiB sweep. Rows include CloudWatch REPORT metrics and sanitized `shin_deployment_summary` counters in `benchmarks/results.jsonl`. |
+| Notes | Paired Shin/AWS comparison for the many-small-files profile. Each row has one repetition and includes CloudWatch REPORT metrics; Shin rows also include sanitized `shin_deployment_summary` counters in `benchmarks/results.jsonl`. |
 
-2048 MiB parallel transfer score table:
+Paired comparison summary:
 
-| Parallel transfers | Provider duration | Billed duration | Init duration | Max memory | Provider speedup vs 8 |
-| ---: | ---: | ---: | ---: | ---: | ---: |
-| 8 | 14.876 s | 15.029 s | 0.152 s | 82 MiB | baseline |
-| 16 | 6.828 s | 6.968 s | 0.140 s | 84 MiB | 2.18x faster, 54.1% lower |
-| 32 | 3.699 s | 3.834 s | 0.134 s | 96 MiB | 4.02x faster, 75.1% lower |
-| 64 | 2.120 s | 2.287 s | 0.166 s | 121 MiB | 7.02x faster, 85.8% lower |
+| Phase | Memory | Provider duration | Local wall time | CDK deploy time | Max memory |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `cold-create` | 2048 MiB | Shin 2.074 s vs AWS 13.974 s, 6.74x faster | Shin 131.105 s vs AWS 132.566 s, 1.01x faster | Shin 73.33 s vs AWS 78.11 s, 1.07x faster | Shin 122 MiB vs AWS 216 MiB |
+| `forced-unchanged` | 2048 MiB | Shin 0.416 s vs AWS 14.349 s, 34.49x faster | Shin 59.360 s vs AWS 77.273 s, 1.30x faster | Shin 15.75 s vs AWS 29.59 s, 1.88x faster | Shin 150 MiB vs AWS 216 MiB |
+| `sparse-update` | 2048 MiB | Shin 0.616 s vs AWS 14.404 s, 23.38x faster | Shin 76.166 s vs AWS 94.392 s, 1.24x faster | Shin 18.02 s vs AWS 31.38 s, 1.74x faster | Shin 181 MiB vs AWS 216 MiB |
+| `prune-update` | 2048 MiB | Shin 2.959 s vs AWS 14.116 s, 4.77x faster | Shin 82.044 s vs AWS 96.835 s, 1.18x faster | Shin 24.08 s vs AWS 32.23 s, 1.34x faster | Shin 219 MiB vs AWS 216 MiB |
+| `cold-create` | 4096 MiB | Shin 1.370 s vs AWS 15.365 s, 11.22x faster | Shin 130.051 s vs AWS 121.002 s, 1.08x slower | Shin 67.55 s vs AWS 75.69 s, 1.12x faster | Shin 169 MiB vs AWS 216 MiB |
+| `forced-unchanged` | 4096 MiB | Shin 0.424 s vs AWS 15.479 s, 36.51x faster | Shin 67.210 s vs AWS 79.084 s, 1.18x faster | Shin 17.73 s vs AWS 31.57 s, 1.78x faster | Shin 177 MiB vs AWS 217 MiB |
+| `sparse-update` | 4096 MiB | Shin 0.651 s vs AWS 15.792 s, 24.26x faster | Shin 73.820 s vs AWS 90.657 s, 1.23x faster | Shin 18.17 s vs AWS 30.25 s, 1.67x faster | Shin 231 MiB vs AWS 218 MiB |
+| `prune-update` | 4096 MiB | Shin 2.191 s vs AWS 15.034 s, 6.86x faster | Shin 67.999 s vs AWS 75.654 s, 1.11x faster | Shin 17.45 s vs AWS 29.12 s, 1.67x faster | Shin 352 MiB vs AWS 218 MiB |
 
-1024 vs 2048 MiB provider comparison:
+Shin provider summary highlights:
 
-| Parallel transfers | 1024 MiB provider | 2048 MiB provider | 2048 delta | 2048 relative | 1024 max memory | 2048 max memory |
-| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 8 | 14.261 s | 14.876 s | +0.615 s | 4.3% higher | 77 MiB | 82 MiB |
-| 16 | 6.874 s | 6.828 s | -0.046 s | 0.7% lower | 85 MiB | 84 MiB |
-| 32 | 3.695 s | 3.699 s | +0.004 s | 0.1% higher | 96 MiB | 96 MiB |
-| 64 | 3.530 s | 2.120 s | -1.410 s | 39.9% lower | 119 MiB | 121 MiB |
+| Memory / parallel | Phase | Plan | Destination list | Transfer | Delete | Uploaded / skipped / deleted objects | Uploaded bytes | Source fetched bytes | Waits fetch / capacity | Refetches | Replay after release | Active readers high-water | Resident bytes high-water | Put retries/throttles |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 2048 MiB / 64 | `cold-create` | 234 ms | 30 ms | 1,765 ms | 0 ms | 2,585 / 0 / 0 | 8,178,716 | 856,774 | 492 / 0 | 0 | 0 | 2 | 782,630 | 0 / 0 |
+| 2048 MiB / 64 | `forced-unchanged` | 110 ms | 257 ms | 1 ms | 0 ms | 0 / 2,585 / 0 | 0 | 74,144 | 0 / 0 | 0 | 0 | 1 | 74,144 | 0 / 0 |
+| 2048 MiB / 64 | `sparse-update` | 208 ms | 233 ms | 120 ms | 0 ms | 3 / 2,582 / 0 | 20,809 | 74,938 | 43 / 0 | 0 | 0 | 2 | 74,135 | 0 / 0 |
+| 2048 MiB / 64 | `prune-update` | 234 ms | 254 ms | 1,599 ms | 822 ms | 2,326 / 0 / 259 | 7,332,954 | 770,797 | 548 / 0 | 0 | 0 | 2 | 703,941 | 0 / 0 |
+| 4096 MiB / 128 | `cold-create` | 217 ms | 35 ms | 1,065 ms | 0 ms | 2,585 / 0 / 0 | 8,178,716 | 856,774 | 939 / 0 | 0 | 0 | 3 | 782,630 | 0 / 0 |
+| 4096 MiB / 128 | `forced-unchanged` | 113 ms | 263 ms | 1 ms | 0 ms | 0 / 2,585 / 0 | 0 | 74,144 | 0 / 0 | 0 | 0 | 1 | 74,144 | 0 / 0 |
+| 4096 MiB / 128 | `sparse-update` | 220 ms | 268 ms | 113 ms | 0 ms | 3 / 2,582 / 0 | 20,809 | 74,938 | 53 / 0 | 0 | 0 | 2 | 74,135 | 0 / 0 |
+| 4096 MiB / 128 | `prune-update` | 173 ms | 268 ms | 886 ms | 821 ms | 2,326 / 0 / 259 | 7,332,954 | 770,797 | 592 / 0 | 0 | 0 | 3 | 703,941 | 0 / 0 |
 
-2048 MiB end-to-end timings:
+The 4096 MiB / 128-worker Shin run improved provider duration over the 2048 MiB / 64-worker run for `cold-create` and `prune-update`, but used more memory and did not improve the small `forced-unchanged` or `sparse-update` handler paths. Across both Shin configs, diagnostics showed no source refetches, no replay-after-release claims, no source-window capacity waits, and no destination `PutObject` retries or throttles; all source block waits were waits on in-flight ranged reads, not S3 throttling evidence.
 
-| Parallel transfers | CDK deploy time | Local wall time | CDK delta vs 8 | Local delta vs 8 |
-| ---: | ---: | ---: | ---: | ---: |
-| 8 | 74.40 s | 171.96 s | baseline | baseline |
-| 16 | 65.45 s | 106.39 s | 12.0% lower | 38.1% lower |
-| 32 | 65.47 s | 103.69 s | 12.0% lower | 39.7% lower |
-| 64 | 64.39 s | 102.41 s | 13.5% lower | 40.4% lower |
-
-2048 MiB provider summary highlights:
-
-| Parallel transfers | Plan | Destination list | Transfer | Uploaded objects | Uploaded bytes | Source fetched bytes | Block waits | Fetch waits | Capacity waits | Refetches | Replay after release | Active readers high-water | Resident bytes high-water | Put retries/throttles |
-| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 8 | 238 ms | 28 ms | 14,562 ms | 2,585 | 8,178,712 | 856,765 | 46 | 46 | 0 | 0 | 0 | 2 | 782,624 | 0 / 0 |
-| 16 | 224 ms | 40 ms | 6,513 ms | 2,585 | 8,178,712 | 856,765 | 142 | 142 | 0 | 0 | 0 | 2 | 782,624 | 0 / 0 |
-| 32 | 211 ms | 35 ms | 3,403 ms | 2,585 | 8,178,712 | 856,765 | 238 | 238 | 0 | 0 | 0 | 2 | 782,624 | 0 / 0 |
-| 64 | 203 ms | 38 ms | 1,823 ms | 2,585 | 8,178,712 | 856,765 | 458 | 458 | 0 | 0 | 0 | 2 | 782,624 | 0 / 0 |
-
-At 2048 MiB, the provider transfer phase continued to improve through 64 parallel transfers for this many-small-files cold-create sweep. The 64-worker run was 1.579 s faster than 32 in CloudWatch provider duration, with peak memory rising from 96 MiB to 121 MiB. Compared with the earlier 1024 MiB sweep, 2048 MiB materially changed only the 64-worker result: 2.120 s instead of 3.530 s, while 8, 16, and 32 were effectively flat. The expanded diagnostics show no source block refetches, no replay claims after release, no source-window capacity waits, and no destination put retries or throttles in the 2048 MiB sweep; all source block waits were waiting on in-flight ranged reads.
+End-to-end local wall times remain dominated by CDK asset work and one-run AWS control-plane variance. In this run, 4096 MiB Shin had a faster CDK deploy time than AWS for `cold-create` but a slower measured local wall time, so use provider duration and repeated runs when making fine-grained tuning decisions.

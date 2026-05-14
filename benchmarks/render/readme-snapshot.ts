@@ -68,6 +68,7 @@ function parseHeaderLayout(argv: string[]): HeaderLayout {
 const headerLayout = parseHeaderLayout(process.argv.slice(2));
 const requestedRunId = parseStringArg(process.argv.slice(2), "--run-id");
 const requestedShinParallel = parseNumberArg(process.argv.slice(2), "--shin-parallel");
+const requestedMemoryMb = parseNumberArg(process.argv.slice(2), "--memory-mb");
 const inputFile = resolve(
   process.cwd(),
   parseStringArg(process.argv.slice(2), "--input-file") ?? "benchmarks/results.jsonl",
@@ -248,7 +249,9 @@ function formatBytes(value: number): string {
 
 function selectData(records: BenchmarkRecord[]): DataSelection {
   const runId = requestedRunId ?? latestComparableRunId(records);
-  const runRecords = records.filter((record) => record.runId === runId);
+  const runRecords = records
+    .filter((record) => record.runId === runId)
+    .filter((record) => requestedMemoryMb === undefined || record.memoryMb === requestedMemoryMb);
   const phases = comparablePhases(runRecords);
   if (phases.length === 0) {
     throw new Error(`Run "${runId}" does not contain paired Shin/AWS benchmark records`);
@@ -269,14 +272,25 @@ function selectData(records: BenchmarkRecord[]): DataSelection {
     };
   }
 
-  const requestedShinRecords = records
+  const targetMemoryMb = requestedMemoryMb ?? firstShin.memoryMb;
+  const sameRunShinRecords = runRecords
     .filter((record) => record.implementation === "shin")
     .filter((record) => record.profile === firstShin.profile)
-    .filter((record) => record.memoryMb === firstShin.memoryMb)
+    .filter((record) => record.memoryMb === targetMemoryMb)
     .filter((record) => record.providerSummary?.maxParallelTransfers === requestedShinParallel);
+  const requestedShinRecords =
+    sameRunShinRecords.length > 0
+      ? sameRunShinRecords
+      : records
+          .filter((record) => record.implementation === "shin")
+          .filter((record) => record.profile === firstShin.profile)
+          .filter((record) => record.memoryMb === targetMemoryMb)
+          .filter(
+            (record) => record.providerSummary?.maxParallelTransfers === requestedShinParallel,
+          );
   if (requestedShinRecords.length === 0) {
     throw new Error(
-      `No Shin benchmark records found for profile=${firstShin.profile}, memory=${firstShin.memoryMb}, maxParallelTransfers=${requestedShinParallel}`,
+      `No Shin benchmark records found for profile=${firstShin.profile}, memory=${targetMemoryMb}, maxParallelTransfers=${requestedShinParallel}`,
     );
   }
   return {
@@ -371,7 +385,9 @@ const MAX_MEM = Math.max(...chartMemory.flatMap((row) => [row.shin, row.aws]));
 const subtitlePrefix = chartVariant === "aws" ? "AWS win simulation" : "vs AWS BucketDeployment";
 const outFilePrefix =
   requestedShinParallel === undefined
-    ? "benchmark-snapshot"
+    ? requestedMemoryMb === undefined
+      ? "benchmark-snapshot"
+      : `${requestedMemoryMb}-mib-snapshot`
     : `parallel-${requestedShinParallel}-snapshot`;
 const outFileSuffix = `${chartVariant === "aws" ? "-aws" : ""}${headerLayout === "two-line" ? "-two-line" : ""}`;
 
