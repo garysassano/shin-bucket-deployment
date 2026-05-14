@@ -22,9 +22,8 @@ type ParsedArgs = {
 };
 
 type BenchmarkConfig = {
+  readonly assetProfile?: string;
   readonly implementation: BenchmarkImplementation;
-  readonly profile?: string;
-  readonly state?: string;
   readonly memoryMb?: string;
   readonly parallel?: string;
 };
@@ -105,7 +104,7 @@ function printUsage(): void {
   console.error("");
   console.error("Benchmarks run selected configs for the named benchmark scenario:");
   console.error(
-    "  pnpm benchmark deploy assets --profiles tiny-many,mixed --states baseline --memory-mb 1024,2048 --parallel 8,32 --implementations shin,aws",
+    "  pnpm benchmark deploy assets --asset-profiles tiny-many,mixed --implementations shin,aws --lambda-max-parallel-transfers 8,32 --lambda-memory-mb 1024,2048",
   );
 }
 
@@ -213,23 +212,22 @@ function benchmarkScenario(name: string | undefined): [string, ScenarioDefinitio
 }
 
 function benchmarkConfigs(options: Map<string, string>): BenchmarkConfig[] {
+  const assetProfiles = listOption(options, "asset-profiles", [undefined]);
   const implementations = listOption(options, "implementations", ["shin"]);
-  const profiles = listOption(options, "profiles", [undefined]);
-  const states = listOption(options, "states", [undefined]);
-  const memories = listOption(options, "memory-mb", [undefined]);
-  const parallels = listOption(options, "parallel", [undefined]);
+  const lambdaMaxParallelTransfers = listOption(options, "lambda-max-parallel-transfers", [
+    undefined,
+  ]);
+  const lambdaMemoryMb = listOption(options, "lambda-memory-mb", [undefined]);
   const configs: BenchmarkConfig[] = [];
 
   for (const implementation of implementations) {
     if (implementation !== "shin" && implementation !== "aws") {
       throw new Error(`Unsupported benchmark implementation: ${implementation}`);
     }
-    for (const profile of profiles) {
-      for (const state of states) {
-        for (const memoryMb of memories) {
-          for (const parallel of parallels) {
-            configs.push({ implementation, profile, state, memoryMb, parallel });
-          }
+    for (const assetProfile of assetProfiles) {
+      for (const memoryMb of lambdaMemoryMb) {
+        for (const parallel of lambdaMaxParallelTransfers) {
+          configs.push({ assetProfile, implementation, memoryMb, parallel });
         }
       }
     }
@@ -254,35 +252,27 @@ function listOption(
 
 function benchmarkEnv(config: BenchmarkConfig, configCount: number): Record<string, string> {
   return {
+    ...(config.assetProfile === undefined ? {} : { SHIN_BENCH_ASSET_PROFILE: config.assetProfile }),
     SHIN_BENCH_IMPLEMENTATION: config.implementation,
+    ...(config.parallel === undefined
+      ? {}
+      : { SHIN_BENCH_LAMBDA_MAX_PARALLEL_TRANSFERS: config.parallel }),
+    ...(config.memoryMb === undefined ? {} : { SHIN_BENCH_LAMBDA_MEMORY_MB: config.memoryMb }),
     ...(process.env.SHIN_BENCH_STACK_SUFFIX !== undefined || configCount === 1
       ? {}
       : { SHIN_BENCH_STACK_SUFFIX: benchmarkStackSuffix(config) }),
-    ...(config.profile === undefined ? {} : { SHIN_BENCH_PROFILE: config.profile }),
-    ...(config.state === undefined ? {} : { SHIN_BENCH_STATE: config.state }),
-    ...(config.memoryMb === undefined ? {} : { SHIN_BENCH_MEMORY_LIMIT_MB: config.memoryMb }),
-    ...(config.parallel === undefined
-      ? {}
-      : { SHIN_BENCH_MAX_PARALLEL_TRANSFERS: config.parallel }),
   };
 }
 
 function benchmarkStackSuffix(config: BenchmarkConfig): string {
-  return `-${[config.implementation, config.profile, config.memoryMb, config.parallel]
+  return `-${[config.implementation, config.assetProfile, config.memoryMb, config.parallel]
     .filter(isDefined)
     .map((part) => part.replace(/[^A-Za-z0-9-]/g, "-"))
     .join("-")}`;
 }
 
 function benchmarkLabel(name: string, config: BenchmarkConfig): string {
-  return [
-    name,
-    config.implementation,
-    config.profile,
-    config.state,
-    config.memoryMb,
-    config.parallel,
-  ]
+  return [name, config.implementation, config.assetProfile, config.memoryMb, config.parallel]
     .filter(isDefined)
     .join("/");
 }
@@ -297,7 +287,9 @@ function benchmarkRunConfigs(
 
   const seen = new Set<string>();
   return configs.filter((config) => {
-    const key = [config.implementation, config.profile, config.memoryMb, config.parallel].join("|");
+    const key = [config.implementation, config.assetProfile, config.memoryMb, config.parallel].join(
+      "|",
+    );
     if (seen.has(key)) {
       return false;
     }

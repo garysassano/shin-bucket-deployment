@@ -18,9 +18,9 @@ describe("benchmark result collector", () => {
         "✨  Deployment time: 14.16s",
         "Outputs:",
         "Stack.BenchmarkFileCount = 442",
+        "Stack.BenchmarkAssetProfile = mixed",
         "Stack.BenchmarkImplementation = shin",
         "Stack.BenchmarkMemoryLimitMb = 512",
-        "Stack.BenchmarkProfile = mixed",
         "Stack.BenchmarkState = baseline",
         "Stack.BenchmarkTotalBytes = 52904649",
         "real 57.72",
@@ -86,7 +86,7 @@ describe("benchmark result collector", () => {
       outputFile,
       snapshotDate: "2026-05-02",
       phase: "destroy",
-      profile: "large-few",
+      assetProfile: "large-few",
       memoryMb: 2048,
       parallel: 8,
       fileCount: 32,
@@ -126,9 +126,9 @@ describe("benchmark result collector", () => {
         "✨  Deployment time: 66.68s",
         "Outputs:",
         "Stack.BenchmarkFileCount = 2584",
+        "Stack.BenchmarkAssetProfile = tiny-many",
         "Stack.BenchmarkImplementation = shin",
         "Stack.BenchmarkMemoryLimitMb = 1024",
-        "Stack.BenchmarkProfile = tiny-many",
         "Stack.BenchmarkState = baseline",
         "Stack.BenchmarkTotalBytes = 8178618",
         "real 128.05",
@@ -240,7 +240,7 @@ describe("benchmark result collector", () => {
         .join("\n")}\n`,
     );
 
-    const report = renderBenchmarkReport({ inputFile, outputFile, profile: "mixed" });
+    const report = renderBenchmarkReport({ assetProfile: "mixed", inputFile, outputFile });
 
     expect(readFileSync(outputFile, "utf8")).toEqual(report);
     expect(report).toContain("Benchmark Report: mixed");
@@ -260,7 +260,7 @@ describe("benchmark result collector", () => {
     );
     const svg = readFileSync(join(dir, "report-assets", "shin-vs-aws-duration-memory.svg"), "utf8");
     expect(svg).toContain("<svg");
-    expect(svg).toContain("Profile");
+    expect(svg).toContain("Asset profile");
     expect(svg).toContain("mixed");
     expect(svg).toContain("Lambda Handler Duration");
     expect(svg).toContain("Max Memory Used");

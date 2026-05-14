@@ -42,7 +42,7 @@ Committed benchmark records may include:
 
 - region
 - commit SHA and subject
-- scenario, profile, state, implementation, and phase names
+- scenario, asset profile, state, implementation, and phase names
 - selected config values such as memory and `maxParallelTransfers`
 - sanitized durations and memory
 - sanitized aggregate counters
@@ -55,20 +55,18 @@ Benchmark mode runs only the selected benchmark scenario and expands the request
 
 ```bash
 pnpm benchmark deploy assets \
-  --profiles tiny-many,mixed \
-  --states baseline \
-  --memory-mb 1024,2048 \
-  --parallel 8,32 \
-  --implementations shin,aws
+  --asset-profiles tiny-many,mixed \
+  --implementations shin,aws \
+  --lambda-max-parallel-transfers 8,32 \
+  --lambda-memory-mb 1024,2048
 ```
 
 Supported runner options:
 
-- `--profiles`: benchmark asset profiles such as `tiny-many`, `mixed`, or `large-few`.
-- `--states`: benchmark asset states such as `baseline`, `changed`, or `pruned`.
-- `--memory-mb`: provider Lambda memory values.
-- `--parallel`: Shin `maxParallelTransfers` values.
+- `--asset-profiles`: benchmark asset profiles such as `tiny-many`, `mixed`, or `large-few`.
 - `--implementations`: `shin`, `aws`, or both.
+- `--lambda-max-parallel-transfers`: Shin `maxParallelTransfers` values.
+- `--lambda-memory-mb`: provider Lambda memory values.
 
 When the matrix has multiple Lambda configs and `SHIN_BENCH_STACK_SUFFIX` is not already set, the runner adds a deterministic suffix per config so stacks can coexist.
 
@@ -81,10 +79,10 @@ Prefer the automated asset comparison runner for Shin-vs-AWS asset benchmarks:
 ```bash
 AWS_PROFILE=<profile> AWS_REGION=ap-southeast-2 AWS_DEFAULT_REGION=ap-southeast-2 \
 pnpm benchmark:run-assets -- \
-  --config benchmarks/configs/tiny-many-shin-aws-2048-4096.json
+  --config benchmarks/configs/shin-aws-2048-64-4096-128.json
 ```
 
-The config file defines the profiles, Lambda configs, implementations, phases, region, output file, and default concurrency. Prefer adding or editing a committed config under `benchmarks/configs/` over building long CLI invocations. Use `lambdaConfigs` in JSON files and `--lambda-configs <memory>:<parallel>` for CLI overrides. The runner deploys each stack through the configured phases, captures CloudWatch `REPORT` events and Shin `shin_deployment_summary` events before cleanup, destroys the stack, verifies cleanup, and writes sanitized result rows. Keep `concurrency` or `--concurrency` at `1` unless intentionally running multiple stacks in parallel; each stack is stateful and its phases must stay ordered.
+The config file defines the asset profiles, Lambda configs, implementations, phases, region, output file, and default concurrency. Prefer adding or editing a committed config under `benchmarks/configs/` over building long CLI invocations. Use `assetProfiles` in JSON files and `--asset-profiles <name>` for CLI overrides. Use `lambdaConfigs` in JSON files and `--lambda-configs <memory>:<parallel>` for Lambda config CLI overrides. The runner deploys each stack through the configured phases, captures CloudWatch `REPORT` events and Shin `shin_deployment_summary` events before cleanup, destroys the stack, verifies cleanup, and writes sanitized result rows. Keep `concurrency` or `--concurrency` at `1` unless intentionally running multiple stacks in parallel; each stack is stateful and its phases must stay ordered.
 
 Choose benchmark configs deliberately. Paired Shin vs AWS comparisons should use:
 
@@ -145,10 +143,10 @@ pnpm benchmark:collect -- \
   --subject "<commit subject>" \
   --region <region> \
   --implementation shin \
-  --profile <benchmark-profile> \
-  --memory-mb <memory> \
-  --parallel <parallel> \
-  --state <state> \
+  --asset-profile <benchmark-profile> \
+  --asset-state <state> \
+  --lambda-max-parallel-transfers <parallel> \
+  --lambda-memory-mb <memory> \
   --cleanup "all benchmark stacks destroyed" \
   --notes "<sanitized note>"
 ```
@@ -226,7 +224,7 @@ The comparison table should show, per phase and metric:
 Generate reports with:
 
 ```bash
-pnpm benchmark:report -- --input-file benchmarks/results.jsonl --profile tiny-many --memory-mb 2048 --parallel 64
+pnpm benchmark:report -- --input-file benchmarks/results.jsonl --asset-profile tiny-many --lambda-memory-mb 2048 --lambda-max-parallel-transfers 64
 ```
 
 ## Final Checks

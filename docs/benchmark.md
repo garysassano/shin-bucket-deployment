@@ -49,28 +49,28 @@ The `assets` benchmark scenario generates deterministic static-site bundles unde
 ```bash
 AWS_PROFILE=<profile> AWS_REGION=ap-southeast-2 AWS_DEFAULT_REGION=ap-southeast-2 \
 pnpm benchmark:run-assets -- \
-  --config benchmarks/configs/tiny-many-shin-aws-2048-4096.json
+  --config benchmarks/configs/shin-aws-2048-64-4096-128.json
 ```
 
-Curated benchmark matrices should live as committed JSON files under `benchmarks/configs/`. The runner accepts CLI overrides such as `--lambda-configs`, `--run-token`, `--snapshot-date`, `--scratch-root`, and `--concurrency`, but the config file is the source of truth for profile, Lambda configs, implementations, phases, region, output file, and destination prefix. `runToken` is only for scratch paths and stack suffixes; committed result rows are upserted by benchmark dimensions.
+Curated benchmark matrices should live as committed JSON files under `benchmarks/configs/`. The runner accepts CLI overrides such as `--asset-profiles`, `--lambda-configs`, `--run-token`, `--snapshot-date`, `--scratch-root`, and `--concurrency`, but the config file is the source of truth for asset profiles, Lambda configs, implementations, phases, region, output file, and destination prefix. `runToken` is only for scratch paths and stack suffixes; committed result rows are upserted by benchmark dimensions.
 
 Environment variables:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `SHIN_BENCH_PROFILE` | `mixed` | Asset shape: `tiny-many`, `mixed`, or `large-few`. |
-| `SHIN_BENCH_STATE` | `baseline` | Asset state: `baseline`, `changed`, or `pruned`. |
-| `SHIN_BENCH_IMPLEMENTATION` | `shin` | Deployment implementation: `shin` or `aws`. The benchmark runner sets this from `--implementations`. |
-| `SHIN_BENCH_STACK_SUFFIX` | none | Adds a suffix to the benchmark stack name so multiple runs can coexist. |
+| `SHIN_BENCH_ASSET_PROFILE` | `mixed` | Asset shape: `tiny-many`, `mixed`, or `large-few`. |
+| `SHIN_BENCH_ASSET_STATE` | `baseline` | Asset state for the current app deployment: `baseline`, `changed`, or `pruned`. |
 | `SHIN_BENCH_DESTINATION_PREFIX` | `benchmark-site` | Destination prefix inside the generated bucket. |
-| `SHIN_BENCH_MEMORY_LIMIT_MB` | `1024` | Provider Lambda memory size in MiB. Use distinct stack suffixes when comparing memory sizes. |
-| `SHIN_BENCH_MAX_PARALLEL_TRANSFERS` | `8` | Shin provider `maxParallelTransfers` setting for transfer concurrency sweeps. |
+| `SHIN_BENCH_IMPLEMENTATION` | `shin` | Deployment implementation: `shin` or `aws`. The benchmark runner sets this from `--implementations`. |
+| `SHIN_BENCH_LAMBDA_MAX_PARALLEL_TRANSFERS` | `8` | Shin provider `maxParallelTransfers` setting for transfer concurrency sweeps. |
+| `SHIN_BENCH_LAMBDA_MEMORY_MB` | `1024` | Provider Lambda memory size in MiB. Use distinct stack suffixes when comparing memory sizes. |
 | `SHIN_BENCH_PRUNE` | `true` | Set to `false` to disable prune. |
-| `SHIN_BENCH_WAIT` | `true` | Present for property toggling; the benchmark stack currently has no CloudFront distribution. |
+| `SHIN_BENCH_STACK_SUFFIX` | none | Adds a suffix to the benchmark stack name so multiple runs can coexist. |
+| `SHIN_BENCH_WAIT_FOR_CLOUDFRONT` | `false` | Set to `true` to wait for CloudFront invalidation when a benchmark stack includes a distribution. |
 
 Asset profiles:
 
-| Profile | Shape | Signal |
+| Asset profile | Shape | Signal |
 | --- | --- | --- |
 | `tiny-many` | Thousands of small JS, CSS, and JSON files. | Per-object overhead, list/skip scaling, many small uploads. |
 | `mixed` | SPA-like bundle with chunks, source maps, JSON, media, and fonts. | Default realistic static-site profile. |
@@ -99,7 +99,7 @@ Treat these as starting points, not universal limits. Re-run a sweep for unusual
 
 ## Methodology Summary
 
-The benchmark harness measures deterministic static-site bundles across create, unchanged, sparse-update, and prune-update phases. Paired Shin-vs-AWS comparison runs must use the same region, profile, states, destination prefix, memory setting, and repetition count. The latest full workflow is maintained in `.agents/skills/shin-benchmark/SKILL.md`.
+The benchmark harness measures deterministic static-site bundles across create, unchanged, sparse-update, and prune-update phases. Paired Shin-vs-AWS comparison runs must use the same region, asset profile, states, destination prefix, memory setting, and repetition count. The latest full workflow is maintained in `.agents/skills/shin-benchmark/SKILL.md`.
 
 The 1024 MiB setting is the preferred conservative default because earlier `large-few` runs showed much faster cold-create provider duration than 512 MiB while keeping billed compute cost in the same range. For many-small-file cold creates, benchmark `maxParallelTransfers` alongside memory because the best observed 1024 MiB setting was 32 transfers, while 2048 MiB was needed for a clear 64-transfer improvement. Memory comparison runs should still include 512, 1024, and 2048 MiB when measuring runtime tuning changes.
 
@@ -112,10 +112,10 @@ Shin benchmark rows may include the sanitized `shin_deployment_summary` object e
 Generate Markdown tables and SVG charts from committed or scratch JSONL records:
 
 ```bash
-pnpm benchmark:report -- --profile tiny-many --memory-mb 2048 --parallel 64
+pnpm benchmark:report -- --asset-profile tiny-many --lambda-memory-mb 2048 --lambda-max-parallel-transfers 64
 ```
 
-The report groups records by profile, phase, implementation, memory size, and parallel setting. It includes medians, p90, min/max, compact Shin-vs-AWS insight tables, grouped per-phase metric details, and generated SVG visual summaries when paired implementation records exist.
+The report groups records by asset profile, phase, implementation, memory size, and parallel setting. It includes medians, p90, min/max, compact Shin-vs-AWS insight tables, grouped per-phase metric details, and generated SVG visual summaries when paired implementation records exist.
 
 Do not commit `.benchmark-runs/` raw output. Commit only curated aggregate results that do not include sensitive resource identifiers.
 
@@ -133,7 +133,7 @@ Committed benchmark results are represented as sanitized current-result records 
 | Result documentation commit | Pending |
 | Region | `ap-southeast-2` |
 | Implementation | Paired `shin` and upstream AWS CDK `BucketDeployment` |
-| Profile | `tiny-many` |
+| Asset profile | `tiny-many` |
 | States | `baseline`, `changed`, and `pruned` |
 | Bundle | Baseline/changed: 2,584 files, 8,178,618 bytes; pruned: 2,325 files, 7,332,858 bytes |
 | Provider memory | 2048 and 4096 MiB |

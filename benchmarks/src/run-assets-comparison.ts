@@ -12,7 +12,7 @@ import {
 } from "./collect-results";
 
 type BenchmarkImplementation = "shin" | "aws";
-type BenchmarkProfile = "tiny-many" | "mixed" | "large-few";
+type BenchmarkAssetProfile = "tiny-many" | "mixed" | "large-few";
 type BenchmarkState = "baseline" | "changed" | "pruned";
 
 type LambdaConfig = {
@@ -21,13 +21,14 @@ type LambdaConfig = {
 };
 
 type PhaseConfig = {
+  readonly assetState: BenchmarkState;
+  readonly cloudfrontWait: boolean;
   readonly phase: string;
-  readonly state: BenchmarkState;
-  readonly wait: boolean;
+  readonly prune: boolean;
 };
 
 type RunnerConfig = {
-  readonly profiles: BenchmarkProfile[];
+  readonly assetProfiles: BenchmarkAssetProfile[];
   readonly lambdaConfigs: LambdaConfig[];
   readonly implementations: BenchmarkImplementation[];
   readonly region: string;
@@ -43,7 +44,7 @@ type RunnerConfig = {
 type BenchmarkConfig = z.infer<typeof benchmarkConfigSchema>;
 
 type RunOptions = {
-  readonly profiles: BenchmarkProfile[];
+  readonly assetProfiles: BenchmarkAssetProfile[];
   readonly lambdaConfigs: LambdaConfig[];
   readonly implementations: BenchmarkImplementation[];
   readonly region: string;
@@ -67,15 +68,15 @@ type StackResource = {
 };
 
 const DEFAULT_PHASES: PhaseConfig[] = [
-  { phase: "cold-create", state: "baseline", wait: true },
-  { phase: "forced-unchanged", state: "baseline", wait: false },
-  { phase: "sparse-update", state: "changed", wait: true },
-  { phase: "prune-update", state: "pruned", wait: true },
+  { assetState: "baseline", cloudfrontWait: false, phase: "cold-create", prune: true },
+  { assetState: "baseline", cloudfrontWait: false, phase: "forced-unchanged", prune: true },
+  { assetState: "changed", cloudfrontWait: false, phase: "sparse-update", prune: true },
+  { assetState: "pruned", cloudfrontWait: false, phase: "prune-update", prune: true },
 ];
 
 const CLI_OPTIONS = new Set([
   "config",
-  "profiles",
+  "asset-profiles",
   "lambda-configs",
   "implementations",
   "region",
@@ -90,16 +91,17 @@ const CLI_OPTIONS = new Set([
 const nonEmptyStringSchema = z.string().min(1);
 const positiveIntegerSchema = z.number().int().positive();
 const implementationSchema = z.enum(["shin", "aws"]);
-const profileSchema = z.enum(["tiny-many", "mixed", "large-few"]);
+const assetProfileSchema = z.enum(["tiny-many", "mixed", "large-few"]);
 const stateSchema = z.enum(["baseline", "changed", "pruned"]);
 const lambdaConfigSchema = z.object({
   memoryMb: positiveIntegerSchema,
   parallel: positiveIntegerSchema,
 });
 const phaseSchema = z.object({
+  assetState: stateSchema,
+  cloudfrontWait: z.boolean(),
   name: nonEmptyStringSchema,
-  state: stateSchema,
-  wait: z.boolean(),
+  prune: z.boolean(),
 });
 const benchmarkConfigSchema = z
   .object({
@@ -111,7 +113,7 @@ const benchmarkConfigSchema = z
     scratchRoot: nonEmptyStringSchema.optional(),
     concurrency: positiveIntegerSchema.optional(),
     destinationPrefix: nonEmptyStringSchema.optional(),
-    profiles: z.array(profileSchema).nonempty().optional(),
+    assetProfiles: z.array(assetProfileSchema).nonempty().optional(),
     lambdaConfigs: z.array(lambdaConfigSchema).nonempty().optional(),
     implementations: z.array(implementationSchema).nonempty().optional(),
     phases: z.array(phaseSchema).nonempty().optional(),
@@ -125,19 +127,19 @@ async function main(): Promise<void> {
   writeFileSync(rowsFile, "");
 
   const git = await gitMetadata();
-  const runs = options.profiles.flatMap((profile) =>
+  const runs = options.assetProfiles.flatMap((assetProfile) =>
     options.lambdaConfigs.flatMap((lambdaConfig) =>
       options.implementations.map((implementation) => ({
+        assetProfile,
         implementation,
-        profile,
         ...lambdaConfig,
       })),
     ),
   );
-  const states = [...new Set(options.phases.map((phase) => phase.state))];
-  for (const profile of options.profiles) {
+  const states = [...new Set(options.phases.map((phase) => phase.assetState))];
+  for (const assetProfile of options.assetProfiles) {
     for (const state of states) {
-      ensureBenchmarkAssets({ profile, state });
+      ensureBenchmarkAssets({ assetProfile, state });
     }
   }
 
@@ -158,13 +160,13 @@ async function main(): Promise<void> {
 async function runBenchmarkStack(args: {
   readonly run: LambdaConfig & {
     readonly implementation: BenchmarkImplementation;
-    readonly profile: string;
+    readonly assetProfile: string;
   };
   readonly git: { readonly commit: string | null; readonly subject: string | null };
   readonly options: RunOptions;
 }): Promise<PhaseEvidence[]> {
   const { git, options, run } = args;
-  const label = `${run.implementation}-${run.profile}-${run.memoryMb}-${run.parallel}`;
+  const label = `${run.implementation}-${run.assetProfile}-${run.memoryMb}-${run.parallel}`;
   const stackSuffix = stackSuffixFor({ options, run });
   const stackName = `${
     run.implementation === "shin"
@@ -239,10 +241,10 @@ async function runBenchmarkStack(args: {
           ...(run.implementation === "shin" && git.subject ? { subject: git.subject } : {}),
           region: options.region,
           implementation: run.implementation,
-          profile: run.profile,
+          assetProfile: run.assetProfile,
           memoryMb: run.memoryMb,
           parallel: run.parallel,
-          state: phase.state,
+          state: phase.assetState,
           cleanup: "all benchmark stacks destroyed",
         },
       });
@@ -268,7 +270,12 @@ async function runBenchmarkStack(args: {
       ],
       env: benchmarkEnv({
         options,
-        phase: { phase: "destroy", state: options.phases.at(-1)?.state ?? "baseline", wait: true },
+        phase: {
+          assetState: options.phases.at(-1)?.assetState ?? "baseline",
+          cloudfrontWait: false,
+          phase: "destroy",
+          prune: options.phases.at(-1)?.prune ?? true,
+        },
         run,
         stackSuffix,
       }),
@@ -297,7 +304,7 @@ async function runBenchmarkStack(args: {
 function benchmarkEnv(args: {
   readonly run: LambdaConfig & {
     readonly implementation: BenchmarkImplementation;
-    readonly profile: string;
+    readonly assetProfile: string;
   };
   readonly options: RunOptions;
   readonly phase: PhaseConfig;
@@ -306,16 +313,17 @@ function benchmarkEnv(args: {
   const { options, phase, run, stackSuffix } = args;
   return {
     ...process.env,
-    AWS_REGION: options.region,
     AWS_DEFAULT_REGION: options.region,
-    SHIN_BENCH_IMPLEMENTATION: run.implementation,
-    SHIN_BENCH_PROFILE: run.profile,
-    SHIN_BENCH_STATE: phase.state,
-    SHIN_BENCH_STACK_SUFFIX: stackSuffix,
-    SHIN_BENCH_MEMORY_LIMIT_MB: String(run.memoryMb),
-    SHIN_BENCH_MAX_PARALLEL_TRANSFERS: String(run.parallel),
+    AWS_REGION: options.region,
     SHIN_BENCH_DESTINATION_PREFIX: options.destinationPrefix,
-    SHIN_BENCH_WAIT: String(phase.wait),
+    SHIN_BENCH_IMPLEMENTATION: run.implementation,
+    SHIN_BENCH_LAMBDA_MAX_PARALLEL_TRANSFERS: String(run.parallel),
+    SHIN_BENCH_LAMBDA_MEMORY_MB: String(run.memoryMb),
+    SHIN_BENCH_ASSET_STATE: phase.assetState,
+    SHIN_BENCH_ASSET_PROFILE: run.assetProfile,
+    SHIN_BENCH_PRUNE: String(phase.prune),
+    SHIN_BENCH_STACK_SUFFIX: stackSuffix,
+    SHIN_BENCH_WAIT_FOR_CLOUDFRONT: String(phase.cloudfrontWait),
   };
 }
 
@@ -549,9 +557,9 @@ function parseArgs(args: string[]): RunOptions {
   }
 
   const config = readConfigFile(values.get("config"));
-  const profiles = values.has("profiles")
-    ? listValue(required(values, "profiles")).map(parseProfile)
-    : config.profiles;
+  const assetProfiles = values.has("asset-profiles")
+    ? listValue(required(values, "asset-profiles")).map(parseAssetProfile)
+    : config.assetProfiles;
   const lambdaConfigs = values.has("lambda-configs")
     ? listValue(required(values, "lambda-configs")).map(parseLambdaConfig)
     : config.lambdaConfigs;
@@ -563,7 +571,7 @@ function parseArgs(args: string[]): RunOptions {
   const runToken =
     values.get("run-token") ??
     config.runToken ??
-    defaultRunToken(snapshotDate, profiles, lambdaConfigs);
+    defaultRunToken(snapshotDate, assetProfiles, lambdaConfigs);
   const scratchRoot = resolve(
     values.get("scratch-root") ??
       config.scratchRoot ??
@@ -578,7 +586,7 @@ function parseArgs(args: string[]): RunOptions {
   const phases = config.phases;
 
   return {
-    profiles,
+    assetProfiles,
     lambdaConfigs,
     implementations,
     region,
@@ -602,7 +610,7 @@ function readConfigFile(configPath: string | undefined): RunnerConfig {
   const defaults = defaultConfig();
   const fileConfig = {
     ...defaults,
-    ...(parsed.profiles === undefined ? {} : { profiles: parsed.profiles }),
+    ...(parsed.assetProfiles === undefined ? {} : { assetProfiles: parsed.assetProfiles }),
     ...(parsed.lambdaConfigs === undefined ? {} : { lambdaConfigs: parsed.lambdaConfigs }),
     ...(parsed.implementations === undefined ? {} : { implementations: parsed.implementations }),
     ...(parsed.region === undefined ? {} : { region: parsed.region }),
@@ -620,17 +628,22 @@ function readConfigFile(configPath: string | undefined): RunnerConfig {
 }
 
 function configPhaseToRunPhase(phase: NonNullable<BenchmarkConfig["phases"]>[number]): PhaseConfig {
-  return { phase: phase.name, state: phase.state, wait: phase.wait };
+  return {
+    assetState: phase.assetState,
+    cloudfrontWait: phase.cloudfrontWait,
+    phase: phase.name,
+    prune: phase.prune,
+  };
 }
 
 function defaultConfig(): RunnerConfig {
-  const profiles: BenchmarkProfile[] = ["tiny-many"];
+  const assetProfiles: BenchmarkAssetProfile[] = ["tiny-many"];
   const lambdaConfigs = [
     { memoryMb: 2048, parallel: 64 },
     { memoryMb: 4096, parallel: 128 },
   ];
   return {
-    profiles,
+    assetProfiles,
     lambdaConfigs,
     implementations: ["shin", "aws"],
     region: process.env.AWS_REGION ?? "ap-southeast-2",
@@ -680,7 +693,7 @@ function parseImplementation(value: string): BenchmarkImplementation {
   usage();
 }
 
-function parseProfile(value: string): BenchmarkProfile {
+function parseAssetProfile(value: string): BenchmarkAssetProfile {
   if (value === "tiny-many" || value === "mixed" || value === "large-few") {
     return value;
   }
@@ -697,10 +710,10 @@ function positiveInteger(value: string, name: string): number {
 
 function defaultRunToken(
   snapshotDate: string,
-  profiles: BenchmarkProfile[],
+  assetProfiles: BenchmarkAssetProfile[],
   lambdaConfigs: LambdaConfig[],
 ): string {
-  return `${snapshotDate}-shin-aws-${profiles.join("-")}-${lambdaConfigs
+  return `${snapshotDate}-shin-aws-${assetProfiles.join("-")}-${lambdaConfigs
     .map((lambdaConfig) => `${lambdaConfig.memoryMb}-${lambdaConfig.parallel}`)
     .join("-")}`;
 }
@@ -728,13 +741,13 @@ function rowBenchmarkKey(line: string): string | null {
 function stackSuffixFor(args: {
   readonly run: LambdaConfig & {
     readonly implementation: BenchmarkImplementation;
-    readonly profile: string;
+    readonly assetProfile: string;
   };
   readonly options: RunOptions;
 }): string {
   const dateToken = safeName(args.options.snapshotDate).replace(/-/g, "");
   const runToken = `${dateToken}-${shortHash(args.options.runToken)}`;
-  return `-${runToken}-${safeName(args.run.profile)}-${args.run.implementation}-${args.run.memoryMb}-${args.run.parallel}`;
+  return `-${runToken}-${safeName(args.run.assetProfile)}-${args.run.implementation}-${args.run.memoryMb}-${args.run.parallel}`;
 }
 
 function today(): string {
@@ -764,7 +777,7 @@ function sleep(milliseconds: number): Promise<void> {
 
 function usage(): never {
   console.error(
-    "Usage: node dist/benchmarks/src/run-assets-comparison.js --config benchmarks/configs/tiny-many-shin-aws-2048-4096.json [--lambda-configs 2048:64,4096:128] [--run-token <id>] [--snapshot-date <YYYY-MM-DD>] [--scratch-root <outside-repo>] [--concurrency 1]",
+    "Usage: node dist/benchmarks/src/run-assets-comparison.js --config benchmarks/configs/shin-aws-2048-64-4096-128.json [--asset-profiles tiny-many,large-few] [--lambda-configs 2048:64,4096:128] [--run-token <id>] [--snapshot-date <YYYY-MM-DD>] [--scratch-root <outside-repo>] [--concurrency 1]",
   );
   process.exit(1);
 }
