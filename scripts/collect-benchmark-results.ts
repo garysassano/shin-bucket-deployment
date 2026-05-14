@@ -232,7 +232,9 @@ function readCloudWatchSummaryJson(text: string): unknown | undefined {
   const summaries = parsed.events
     .filter(isRecord)
     .sort((left, right) => optionalTimestamp(left) - optionalTimestamp(right))
-    .map((event) => (typeof event.message === "string" ? summaryFromMessage(event.message) : undefined))
+    .map((event) =>
+      typeof event.message === "string" ? summaryFromMessage(event.message) : undefined,
+    )
     .filter((summary) => summary !== undefined);
   return summaries.at(-1);
 }
@@ -290,7 +292,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function stripAnsi(value: string): string {
-  return value.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
+  const escapeCharacter = String.fromCharCode(27);
+  return value.replace(new RegExp(`${escapeCharacter}\\[[0-?]*[ -/]*[@-~]`, "g"), "");
 }
 
 function outputString(logText: string, outputName: string): string | null {

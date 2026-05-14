@@ -5,7 +5,7 @@ import {
   Source as AwsSource,
 } from "aws-cdk-lib/aws-s3-deployment";
 import { ensureBenchmarkAssets } from "../scripts/benchmark-assets";
-import { Source as ShinSource, ShinBucketDeployment } from "../src";
+import { ShinBucketDeployment, Source as ShinSource } from "../src";
 
 type BenchmarkImplementation = "shin" | "aws";
 

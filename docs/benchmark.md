@@ -81,11 +81,24 @@ Variants:
 | `v2` | Same file set and sizes, with a few changed files. | Sparse same-size update behavior. |
 | `pruned` | Removes about ten percent of files. | Delete planning and prune behavior. |
 
+## Advised Runtime Settings
+
+The construct default remains `memoryLimit: 1024` with `maxParallelTransfers: 8` because it is conservative, broadly tested, and already faster than 512 MiB for large-file create work. For deployments dominated by many small file uploads, the 2026-05-10 `tiny-many` cold-create sweep shows that higher transfer parallelism is the main tuning lever, and 2048 MiB only pays off once parallelism reaches 64.
+
+| Workload signal | Advised setting | Evidence baseline | Why |
+| --- | --- | --- | --- |
+| General static-site deployment, unknown shape, or low tuning appetite | `memoryLimit: 1024`, `maxParallelTransfers: 8` | Default and paired Shin-vs-AWS runs | Conservative memory budget with low observed RSS and no retry/throttle pressure in committed benchmark rows. |
+| Large-few assets where transfer throughput matters but file count is modest | `memoryLimit: 1024`, `maxParallelTransfers: 8` | 2026-05-02 `large-few` memory matrix | 1024 MiB cut cold-create provider duration from 1.876 s at 512 MiB to 0.941 s, while 2048 MiB improved further to 0.674 s only for a smaller absolute gain. |
+| Many-small-file cold create with higher throughput needs | `memoryLimit: 1024`, `maxParallelTransfers: 32` | 2026-05-10 `tiny-many` 1024 MiB parallel sweep | Provider duration fell from 14.261 s at parallel 8 to 3.695 s at parallel 32; parallel 64 was only 3.530 s and introduced one source block refetch in that run. |
+| Many-small-file cold create where minimum provider duration is worth more Lambda memory | `memoryLimit: 2048`, `maxParallelTransfers: 64` | 2026-05-10 `tiny-many` 2048 MiB parallel sweep | Provider duration reached 2.120 s with no source refetches, no source capacity waits, and no destination `PutObject` retries or throttles. |
+
+Treat these as starting points, not universal limits. Re-run a sweep for unusually large archives, unusually high file counts, changed AWS regions, or any workload showing source `getRetries`/`getErrors`, source capacity waits, or destination `putObject` retries/throttles.
+
 ## Methodology Summary
 
 The benchmark harness measures deterministic static-site bundles across create, unchanged, sparse-update, and prune-update phases. Paired Shin-vs-AWS comparison runs must use the same region, profile, variants, destination prefix, memory setting, and repetition count. The latest full workflow is maintained in `.agents/skills/shin-benchmark/SKILL.md`.
 
-The 1024 MiB setting is the preferred default because earlier `large-few` runs showed much faster cold-create provider duration than 512 MiB while keeping billed compute cost in the same range. Memory comparison runs should still include 512, 1024, and 2048 MiB when measuring runtime tuning changes.
+The 1024 MiB setting is the preferred conservative default because earlier `large-few` runs showed much faster cold-create provider duration than 512 MiB while keeping billed compute cost in the same range. For many-small-file cold creates, benchmark `maxParallelTransfers` alongside memory because the best observed 1024 MiB setting was 32 transfers, while 2048 MiB was needed for a clear 64-transfer improvement. Memory comparison runs should still include 512, 1024, and 2048 MiB when measuring runtime tuning changes.
 
 ## Provider Telemetry
 
