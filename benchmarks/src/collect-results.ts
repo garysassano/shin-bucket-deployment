@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname } from "node:path";
 
 export type BenchmarkResultRecord = {
-  readonly lastUpdated: string;
+  readonly snapshotDate: string;
   readonly providerImplementationCommit: string | null;
   readonly providerImplementationSubject: string | null;
   readonly resultDocumentationCommit: string | null;
@@ -32,7 +32,7 @@ export type CollectBenchmarkOptions = {
   readonly reportFile?: string;
   readonly summaryFile?: string;
   readonly outputFile: string;
-  readonly lastUpdated?: string;
+  readonly snapshotDate?: string;
   readonly phase: string;
   readonly commit?: string;
   readonly subject?: string;
@@ -62,7 +62,7 @@ export function collectBenchmarkResult(options: CollectBenchmarkOptions): Benchm
   const report = options.reportFile ? readReportFile(options.reportFile) : undefined;
   const providerSummary = options.summaryFile ? readSummaryFile(options.summaryFile) : undefined;
   const record: BenchmarkResultRecord = {
-    lastUpdated: options.lastUpdated ?? today(),
+    snapshotDate: options.snapshotDate ?? today(),
     providerImplementationCommit: options.commit ?? null,
     providerImplementationSubject: options.subject ?? null,
     resultDocumentationCommit: options.resultCommit ?? null,
@@ -153,7 +153,7 @@ function parseArgs(args: string[]): CollectBenchmarkOptions {
     reportFile: values.get("report-file"),
     summaryFile: values.get("summary-file"),
     outputFile,
-    lastUpdated: values.get("last-updated"),
+    snapshotDate: values.get("snapshot-date"),
     phase,
     commit: values.get("commit"),
     subject: values.get("subject"),
@@ -200,7 +200,7 @@ function normalizeImplementation(value: string | null | undefined): string | nul
 
 function usage(): never {
   console.error(
-    "Usage: node dist/benchmarks/src/collect-results.js --log-file <path> --phase <name> [--last-updated <YYYY-MM-DD>] [--report-file <path>] [--summary-file <path>] [--output-file benchmarks/results.jsonl] [--implementation <shin|aws>] [--profile <name>] [--memory-mb <n>] [--parallel <n>] [--state <name>]",
+    "Usage: node dist/benchmarks/src/collect-results.js --log-file <path> --phase <name> [--snapshot-date <YYYY-MM-DD>] [--report-file <path>] [--summary-file <path>] [--output-file benchmarks/results.jsonl] [--implementation <shin|aws>] [--profile <name>] [--memory-mb <n>] [--parallel <n>] [--state <name>]",
   );
   process.exit(1);
 }

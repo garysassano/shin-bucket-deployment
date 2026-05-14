@@ -44,7 +44,7 @@ describe("benchmark result collector", () => {
       logFile,
       reportFile,
       outputFile,
-      lastUpdated: "2026-05-02",
+      snapshotDate: "2026-05-02",
       phase: "forced-unchanged",
       commit: "abc1234",
       region: "ap-southeast-2",
@@ -53,7 +53,7 @@ describe("benchmark result collector", () => {
     const record = JSON.parse(readFileSync(outputFile, "utf8"));
     expect(collected).toEqual(record);
     expect(record).toMatchObject({
-      lastUpdated: "2026-05-02",
+      snapshotDate: "2026-05-02",
       providerImplementationCommit: "abc1234",
       region: "ap-southeast-2",
       implementation: "shin",
@@ -84,7 +84,7 @@ describe("benchmark result collector", () => {
     const collected = collectBenchmarkResult({
       logFile,
       outputFile,
-      lastUpdated: "2026-05-02",
+      snapshotDate: "2026-05-02",
       phase: "destroy",
       profile: "large-few",
       memoryMb: 2048,
@@ -164,7 +164,7 @@ describe("benchmark result collector", () => {
       reportFile,
       summaryFile,
       outputFile,
-      lastUpdated: "2026-05-10",
+      snapshotDate: "2026-05-10",
       phase: "cold-create-parallel-32",
       parallel: 32,
       region: "ap-southeast-2",
@@ -188,7 +188,7 @@ describe("benchmark result collector", () => {
       inputFile,
       `${[
         {
-          lastUpdated: "2026-05-08",
+          snapshotDate: "2026-05-08",
           providerImplementationCommit: "abc1234",
           providerImplementationSubject: "test",
           resultDocumentationCommit: null,
@@ -212,7 +212,7 @@ describe("benchmark result collector", () => {
           notes: null,
         },
         {
-          lastUpdated: "2026-05-08",
+          snapshotDate: "2026-05-08",
           providerImplementationCommit: null,
           providerImplementationSubject: null,
           resultDocumentationCommit: null,
