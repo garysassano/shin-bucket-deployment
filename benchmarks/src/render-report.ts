@@ -2,15 +2,15 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, join, relative } from "node:path";
 
 type BenchmarkRecord = {
-  readonly schemaVersion?: number;
-  readonly runId?: string;
-  readonly runDate?: string;
+  readonly lastUpdated?: string;
   readonly providerImplementationCommit?: string | null;
+  readonly providerImplementationSubject?: string | null;
+  readonly resultDocumentationCommit?: string | null;
   readonly region?: string | null;
   readonly implementation?: string | null;
   readonly profile?: string | null;
-  readonly series?: string | null;
   readonly memoryMb?: number | null;
+  readonly parallel?: number | null;
   readonly phase?: string;
   readonly state?: string | null;
   readonly fileCount?: number | null;
@@ -40,8 +40,9 @@ type RenderOptions = {
   readonly chartReference?: string;
   readonly chartLayout?: ChartLayoutName;
   readonly chartTheme?: ChartThemeName;
-  readonly runId?: string;
-  readonly series?: string;
+  readonly profile?: string;
+  readonly memoryMb?: number;
+  readonly parallel?: number;
 };
 
 type ChartThemeName = "signal" | "forge" | "circuit";
@@ -68,7 +69,6 @@ type ChartTheme = {
 
 type BenchmarkChartContext = {
   readonly profile: string;
-  readonly runDate: string;
   readonly memory: string;
   readonly fileCount: string;
   readonly totalBytes: string;
@@ -160,8 +160,9 @@ function main(): void {
 
 export function renderBenchmarkReport(options: RenderOptions): string {
   const records = readRecords(options.inputFile)
-    .filter((record) => (options.runId ? record.runId === options.runId : true))
-    .filter((record) => (options.series ? record.series === options.series : true));
+    .filter((record) => (options.profile ? record.profile === options.profile : true))
+    .filter((record) => (options.memoryMb ? record.memoryMb === options.memoryMb : true))
+    .filter((record) => (options.parallel ? record.parallel === options.parallel : true));
   const comparisonRows = buildPhaseComparisonRows(
     records.filter((record) => record.phase && record.profile),
   );
@@ -188,8 +189,7 @@ function renderReport(
   comparisonChartPath: string | undefined,
 ): string {
   const comparable = records.filter((record) => record.phase && record.profile);
-  const latestRun = [...new Set(comparable.map((record) => record.runId).filter(Boolean))].at(-1);
-  const title = options.runId ?? options.series ?? latestRun ?? "all benchmark records";
+  const title = reportTitle(options);
 
   return [
     `# Benchmark Report: ${title}`,
@@ -217,19 +217,32 @@ function renderScope(records: BenchmarkRecord[]): string {
     return "No benchmark records matched the selected filters.";
   }
 
-  const runIds = unique(records.map((record) => record.runId));
+  const lastUpdated = unique(records.map((record) => record.lastUpdated));
   const implementations = unique(records.map((record) => implementationLabel(record)));
   const profiles = unique(records.map((record) => record.profile));
+  const memoryValues = unique(records.map((record) => record.memoryMb));
+  const parallelValues = unique(records.map((record) => record.parallel));
   const phases = unique(records.map((record) => record.phase));
 
   return [
     "## Scope",
     "",
-    `- Runs: ${runIds.join(", ")}`,
+    `- Last updated: ${lastUpdated.join(", ")}`,
     `- Implementations: ${implementations.join(", ")}`,
     `- Profiles: ${profiles.join(", ")}`,
+    `- Memory MiB: ${memoryValues.join(", ")}`,
+    `- Parallel transfers: ${parallelValues.join(", ")}`,
     `- Phases: ${phases.join(", ")}`,
   ].join("\n");
+}
+
+function reportTitle(options: RenderOptions): string {
+  const filters = [
+    options.profile,
+    options.memoryMb === undefined ? undefined : `${options.memoryMb} MiB`,
+    options.parallel === undefined ? undefined : `parallel ${options.parallel}`,
+  ].filter((value) => value !== undefined);
+  return filters.length === 0 ? "benchmark results" : filters.join(" / ");
 }
 
 function renderMetricSection(
@@ -253,11 +266,11 @@ function renderMetricSection(
 
 function renderMetricTable(rows: AggregatedRow[], unit: string): string {
   return [
-    `| Profile | Phase | Memory MiB | Implementation | n | median (${unit}) | p90 (${unit}) | min (${unit}) | max (${unit}) |`,
-    "| --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: |",
+    `| Profile | Phase | Memory MiB | Parallel | Implementation | n | median (${unit}) | p90 (${unit}) | min (${unit}) | max (${unit}) |`,
+    "| --- | --- | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: |",
     ...rows.map(
       (row) =>
-        `| ${row.profile} | ${row.phase} | ${row.memoryMb ?? ""} | ${row.implementation} | ${row.count} | ${formatNumber(row.median)} | ${formatNumber(row.p90)} | ${formatNumber(row.min)} | ${formatNumber(row.max)} |`,
+        `| ${row.profile} | ${row.phase} | ${row.memoryMb ?? ""} | ${row.parallel ?? ""} | ${row.implementation} | ${row.count} | ${formatNumber(row.median)} | ${formatNumber(row.p90)} | ${formatNumber(row.min)} | ${formatNumber(row.max)} |`,
     ),
   ].join("\n");
 }
@@ -267,7 +280,7 @@ function renderBarChart(rows: AggregatedRow[], unit: string): string {
   const lines = rows.map((row) => {
     const width = max === 0 ? 0 : Math.max(1, Math.round((row.median / max) * 30));
     const bar = "#".repeat(width);
-    const label = `${row.profile} ${row.phase} ${row.memoryMb ?? ""} ${row.implementation}`;
+    const label = `${row.profile} ${row.phase} ${row.memoryMb ?? ""}/${row.parallel ?? ""} ${row.implementation}`;
     return `${label.padEnd(48)} | ${bar} ${formatNumber(row.median)} ${unit}`;
   });
 
@@ -281,10 +294,10 @@ function renderComparisonSummaryTable(records: BenchmarkRecord[]): string {
   }
 
   return [
-    "| Profile | Phase | Memory MiB | Provider duration | Local wall time | CDK deploy time | Max memory |",
-    "| --- | --- | ---: | ---: | ---: | ---: | ---: |",
+    "| Profile | Phase | Memory MiB | Parallel | Provider duration | Local wall time | CDK deploy time | Max memory |",
+    "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
     ...rows.map((row) => {
-      return `| ${row.profile} | ${row.phase} | ${row.memoryMb ?? ""} | ${formatOptionalComparisonCell(row.metrics.providerDurationSeconds)} | ${formatOptionalComparisonCell(row.metrics.localWallSeconds)} | ${formatOptionalComparisonCell(row.metrics.cdkDeploySeconds)} | ${formatOptionalMemoryCell(row.metrics.maxMemoryMb)} |`;
+      return `| ${row.profile} | ${row.phase} | ${row.memoryMb ?? ""} | ${row.parallel ?? ""} | ${formatOptionalComparisonCell(row.metrics.providerDurationSeconds)} | ${formatOptionalComparisonCell(row.metrics.localWallSeconds)} | ${formatOptionalComparisonCell(row.metrics.cdkDeploySeconds)} | ${formatOptionalMemoryCell(row.metrics.maxMemoryMb)} |`;
     }),
   ].join("\n");
 }
@@ -831,7 +844,7 @@ function renderDeltaChart(
     const width = max === 0 ? 0 : Math.max(1, Math.round((Math.abs(row.diff) / max) * 30));
     const symbol = row.diff >= 0 ? "#" : "<";
     const direction = row.diff >= 0 ? positiveLabel : negativeLabel;
-    const label = `${row.phase}${row.memoryMb === null ? "" : ` ${row.memoryMb}`}`;
+    const label = `${row.phase}${row.memoryMb === null ? "" : ` ${row.memoryMb}`}${row.parallel === null ? "" : `/${row.parallel}`}`;
     return `${label.padEnd(26)} | ${symbol.repeat(width).padEnd(30)} ${formatValue(Math.abs(row.diff), row.unit)} ${direction} (${formatRatio(row.ratio)} AWS/Shin)`;
   });
 
@@ -844,6 +857,7 @@ function buildMetricComparisonRows(records: BenchmarkRecord[]): MetricComparison
       profile: pair.profile,
       phase: pair.phase,
       memoryMb: pair.memoryMb,
+      parallel: pair.parallel,
       metricName: metric.name,
       metricLabel: metric.label,
       metricIndex,
@@ -865,6 +879,7 @@ function buildPhaseComparisonRows(records: BenchmarkRecord[]): PhaseComparisonRo
       profile: metricRow.profile,
       phase: metricRow.phase,
       memoryMb: metricRow.memoryMb,
+      parallel: metricRow.parallel,
       metrics: {},
     };
     row.metrics[metricRow.metricName] = metricRow;
@@ -875,15 +890,18 @@ function buildPhaseComparisonRows(records: BenchmarkRecord[]): PhaseComparisonRo
 
 function phaseTitle(row: PhaseComparisonRow): string {
   const memory = row.memoryMb === null ? "" : ` at ${row.memoryMb} MiB`;
-  return `${row.profile} ${row.phase}${memory}`;
+  const parallel = row.parallel === null ? "" : ` / parallel ${row.parallel}`;
+  return `${row.profile} ${row.phase}${memory}${parallel}`;
 }
 
 function svgBenchmarkLabel(rows: PhaseComparisonRow[]): string {
   const memoryValues = unique(rows.map((row) => row.memoryMb));
+  const parallelValues = unique(rows.map((row) => row.parallel));
   if (memoryValues.length === 0) {
     return "Lambda benchmark";
   }
-  return `${memoryValues.join("/")} MiB Lambda benchmark`;
+  const parallel = parallelValues.length === 0 ? "" : `, parallel ${parallelValues.join("/")}`;
+  return `${memoryValues.join("/")} MiB${parallel} Lambda benchmark`;
 }
 
 function buildBenchmarkChartContext(
@@ -912,7 +930,6 @@ function buildBenchmarkChartContext(
 
   return {
     profile: unique(comparableRecords.map((record) => record.profile)).join("/") || "unknown",
-    runDate: unique(comparableRecords.map((record) => record.runDate)).join("/") || "unknown",
     memory: svgBenchmarkLabel(rows).replace(" Lambda benchmark", ""),
     fileCount: formatOptionalInteger(baseline?.fileCount),
     totalBytes: formatOptionalBytes(baseline?.totalBytes),
@@ -950,7 +967,7 @@ function metricPairs(records: BenchmarkRecord[], metric: MetricName): MetricPair
   const rows = aggregateRows(records, metric);
   const grouped = new Map<string, AggregatedRow[]>();
   for (const row of rows) {
-    const key = `${row.profile}\u0000${row.phase}\u0000${row.memoryMb ?? ""}`;
+    const key = `${row.profile}\u0000${row.phase}\u0000${row.memoryMb ?? ""}\u0000${row.parallel ?? ""}`;
     const group = grouped.get(key) ?? [];
     group.push(row);
     grouped.set(key, group);
@@ -968,6 +985,7 @@ function metricPairs(records: BenchmarkRecord[], metric: MetricName): MetricPair
         profile: shin.profile,
         phase: shin.phase,
         memoryMb: shin.memoryMb,
+        parallel: shin.parallel,
         shin: shin.median,
         aws: aws.median,
         ratio: aws.median / shin.median,
@@ -981,6 +999,7 @@ type MetricComparisonRow = {
   readonly profile: string;
   readonly phase: string;
   readonly memoryMb: number | null;
+  readonly parallel: number | null;
   readonly metricName: MetricName;
   readonly metricLabel: string;
   readonly metricIndex: number;
@@ -996,6 +1015,7 @@ type PhaseComparisonRow = {
   readonly profile: string;
   readonly phase: string;
   readonly memoryMb: number | null;
+  readonly parallel: number | null;
   readonly metrics: Partial<Record<MetricName, MetricComparisonRow>>;
 };
 
@@ -1004,6 +1024,7 @@ type MetricPair = {
   readonly profile: string;
   readonly phase: string;
   readonly memoryMb: number | null;
+  readonly parallel: number | null;
   readonly shin: number;
   readonly aws: number;
   readonly ratio: number;
@@ -1014,6 +1035,7 @@ type AggregatedRow = {
   readonly phase: string;
   readonly implementation: string;
   readonly memoryMb: number | null;
+  readonly parallel: number | null;
   readonly count: number;
   readonly median: number;
   readonly p90: number;
@@ -1028,9 +1050,13 @@ function aggregateRows(records: BenchmarkRecord[], metric: MetricName): Aggregat
     if (typeof value !== "number" || !Number.isFinite(value)) {
       continue;
     }
-    const key = [record.profile, record.phase, implementationLabel(record), record.memoryMb].join(
-      "\u0000",
-    );
+    const key = [
+      record.profile,
+      record.phase,
+      implementationLabel(record),
+      record.memoryMb,
+      record.parallel,
+    ].join("\u0000");
     const group = groups.get(key) ?? { record, values: [] };
     group.values.push(value);
     groups.set(key, group);
@@ -1044,6 +1070,7 @@ function aggregateRows(records: BenchmarkRecord[], metric: MetricName): Aggregat
         phase: record.phase ?? "unknown",
         implementation: implementationLabel(record),
         memoryMb: record.memoryMb ?? null,
+        parallel: record.parallel ?? null,
         count: sorted.length,
         median: percentile(sorted, 0.5),
         p90: percentile(sorted, 0.9),
@@ -1054,8 +1081,13 @@ function aggregateRows(records: BenchmarkRecord[], metric: MetricName): Aggregat
     .sort(compareAggregatedRows);
 }
 
-function comparisonKey(row: { profile: string; phase: string; memoryMb: number | null }): string {
-  return [row.profile, row.phase, row.memoryMb ?? ""].join("\u0000");
+function comparisonKey(row: {
+  profile: string;
+  phase: string;
+  memoryMb: number | null;
+  parallel: number | null;
+}): string {
+  return [row.profile, row.phase, row.memoryMb ?? "", row.parallel ?? ""].join("\u0000");
 }
 
 function compareMetricPairs(left: MetricPair, right: MetricPair): number {
@@ -1074,12 +1106,13 @@ function compareAggregatedRows(left: AggregatedRow, right: AggregatedRow): numbe
 }
 
 function comparePhaseGroups(
-  left: { profile: string; phase: string; memoryMb: number | null },
-  right: { profile: string; phase: string; memoryMb: number | null },
+  left: { profile: string; phase: string; memoryMb: number | null; parallel: number | null },
+  right: { profile: string; phase: string; memoryMb: number | null; parallel: number | null },
 ): number {
   return (
     left.profile.localeCompare(right.profile) ||
     (left.memoryMb ?? 0) - (right.memoryMb ?? 0) ||
+    (left.parallel ?? 0) - (right.parallel ?? 0) ||
     phaseRank(left.phase) - phaseRank(right.phase) ||
     left.phase.localeCompare(right.phase)
   );
@@ -1252,9 +1285,21 @@ function parseArgs(args: string[]): RenderOptions {
     chartReference: values.get("chart-reference"),
     chartLayout: parseChartLayout(values.get("chart-layout")),
     chartTheme: parseChartTheme(values.get("chart-theme")),
-    runId: values.get("run-id"),
-    series: values.get("series"),
+    profile: values.get("profile"),
+    memoryMb: parsePositiveInteger(values.get("memory-mb")),
+    parallel: parsePositiveInteger(values.get("parallel")),
   };
+}
+
+function parsePositiveInteger(value: string | undefined): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const parsed = Number(value);
+  if (Number.isInteger(parsed) && parsed > 0) {
+    return parsed;
+  }
+  usage();
 }
 
 function parseChartLayout(value: string | undefined): ChartLayoutName | undefined {
@@ -1279,7 +1324,7 @@ function parseChartTheme(value: string | undefined): ChartThemeName | undefined 
 
 function usage(): never {
   console.error(
-    "Usage: node dist/benchmarks/src/render-report.js [--input-file benchmarks/results.jsonl] [--output-file benchmarks/report.md] [--chart-output-file <path>] [--chart-reference <markdown-path>] [--chart-layout split|scorecard|cards] [--chart-theme signal|forge|circuit] [--run-id <id>] [--series <name>]",
+    "Usage: node dist/benchmarks/src/render-report.js [--input-file benchmarks/results.jsonl] [--output-file benchmarks/report.md] [--chart-output-file <path>] [--chart-reference <markdown-path>] [--chart-layout split|scorecard|cards] [--chart-theme signal|forge|circuit] [--profile <name>] [--memory-mb <n>] [--parallel <n>]",
   );
   process.exit(1);
 }

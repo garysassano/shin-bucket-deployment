@@ -4,7 +4,7 @@ This folder contains committed benchmark support assets, sanitized current resul
 
 Deployable benchmark CDK apps live in `benchmarks/apps/**`. Curated benchmark matrices live in `benchmarks/configs/**`, shared JSON Schemas live in `benchmarks/schemas/**`, and benchmark configs are run through `pnpm benchmark:run-assets -- --config <path>`.
 
-README benchmark snapshots use sanitized tiny-many records from `benchmarks/results.jsonl`. The default snapshot keeps the four-phase 1024 MiB `maxParallelTransfers=8` Shin/AWS comparison from `2026-05-09-shin-aws-tiny-many-1024`. The parallel 64 and parallel 128 snapshots use the paired Shin/AWS run from `2026-05-14-shin-aws-tiny-many-2048-64-4096-128`.
+README benchmark snapshots use sanitized tiny-many records from `benchmarks/results.jsonl`. The default snapshot keeps the four-phase 1024 MiB `maxParallelTransfers=8` Shin/AWS comparison last updated on 2026-05-09. The parallel 64 and parallel 128 snapshots use the paired Shin/AWS rows last updated on 2026-05-14.
 
 Only README-linked snapshot SVGs are committed under `benchmarks/snapshots`. Temporary alternate layouts can be regenerated locally with `benchmarks/src/render/readme-snapshot.ts`, but should not be kept as committed design history. Generated report charts live beside the report output by default.
 

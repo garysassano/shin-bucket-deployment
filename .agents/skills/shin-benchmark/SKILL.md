@@ -93,11 +93,11 @@ Choose benchmark configs deliberately. Paired Shin vs AWS comparisons should use
 - same states and phase sequence
 - same destination prefix
 - same memory setting
-- same parallel setting for Shin records, encoded in `series` and phase notes
+- same parallel setting, recorded in the top-level `parallel` field
 - same repetition count
 - same stack suffix family
 
-For parameter sweeps, keep all non-swept inputs identical and encode the swept value in the record so rows remain distinguishable. For `maxParallelTransfers` sweeps, use distinct phase names such as `cold-create-parallel-8`, `cold-create-parallel-16`, and include the provider summary field `maxParallelTransfers`. Use a distinct `runId` and `series` for each memory or configuration sweep so generated reports can be scoped cleanly.
+For parameter sweeps, keep all non-swept inputs identical and encode the swept value in the row identity. For `maxParallelTransfers` sweeps, include the top-level `parallel` field and the provider summary field `maxParallelTransfers`; distinct phase names such as `cold-create-parallel-8` are acceptable when the phase itself represents the sweep point. Use `--run-token` only for scratch paths and stack suffixes, not as committed result identity.
 
 Always collect telemetry first, then destroy benchmark stacks, then verify they are absent before finalizing records.
 
@@ -131,7 +131,7 @@ aws logs filter-log-events \
   --output json > <scratch>/summary.json
 ```
 
-Then append or rebuild result rows with:
+Then upsert result rows with:
 
 ```bash
 pnpm benchmark:collect -- \
@@ -139,16 +139,15 @@ pnpm benchmark:collect -- \
   --report-file <scratch>/report.json \
   --summary-file <scratch>/summary.json \
   --output-file benchmarks/results.jsonl \
-  --run-id <run-id> \
-  --run-date <YYYY-MM-DD> \
+  --last-updated <YYYY-MM-DD> \
   --phase <phase> \
-  --series <series> \
   --commit <short-sha> \
   --subject "<commit subject>" \
   --region <region> \
   --implementation shin \
   --profile <benchmark-profile> \
   --memory-mb <memory> \
+  --parallel <parallel> \
   --state <state> \
   --cleanup "all benchmark stacks destroyed" \
   --notes "<sanitized note>"
@@ -158,21 +157,19 @@ Do not parse `summary=...` tracing lines by hand. If parsing fails, fix `benchma
 
 ## Benchmark Records
 
-Write one JSON object per measured phase to `benchmarks/results.jsonl`. This file is current-result data for reports and charts, not append-only history.
+Write one JSON object per measured phase to `benchmarks/results.jsonl`. This file is current-result data for reports and charts, not append-only history. Rows are upserted by `profile`, `memoryMb`, `parallel`, `implementation`, `phase`, and `state`.
 
 Required fields:
 
-- `schemaVersion`: current value `2`
-- `runId`
-- `runDate`
+- `lastUpdated`
 - `providerImplementationCommit`
 - `providerImplementationSubject`
 - `resultDocumentationCommit`
 - `region`
 - `implementation`: `shin` or `aws`
 - `profile`
-- `series`
 - `memoryMb`
+- `parallel`
 - `phase`
 - `state`
 - `fileCount`
@@ -188,7 +185,7 @@ Required fields:
 - `notes`
 - `providerSummary` for Shin records when a sanitized summary is available
 
-Use `null` for unavailable values. Do not invent data.
+Use `null` for unavailable values. Do not invent data. Keep `notes` as `null` for normal successful rows; populate it only for runner-detected factual anomalies or caveats. Put narrative interpretation in `docs/benchmark.md`.
 
 For Shin records with provider invocation, prefer a record with both CloudWatch `REPORT` metrics and `providerSummary`. Missing provider telemetry is acceptable only when the provider was not invoked or when the record notes why capture was impossible.
 
@@ -229,7 +226,7 @@ The comparison table should show, per phase and metric:
 Generate reports with:
 
 ```bash
-pnpm benchmark:report -- --input-file benchmarks/results.jsonl --run-id <run-id>
+pnpm benchmark:report -- --input-file benchmarks/results.jsonl --profile tiny-many --memory-mb 2048 --parallel 64
 ```
 
 ## Final Checks
@@ -237,7 +234,7 @@ pnpm benchmark:report -- --input-file benchmarks/results.jsonl --run-id <run-id>
 Before committing benchmark updates:
 
 ```bash
-pnpm benchmark:report -- --input-file benchmarks/results.jsonl --run-id <run-id> --output-file /tmp/benchmark-report-check.md
+pnpm benchmark:report -- --input-file benchmarks/results.jsonl --output-file /tmp/benchmark-report-check.md
 git diff --check
 pnpm test -- test/benchmarks/collector.test.ts
 ```
