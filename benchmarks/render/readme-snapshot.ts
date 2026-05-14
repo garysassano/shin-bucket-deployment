@@ -70,7 +70,7 @@ const requestedRunId = parseStringArg(process.argv.slice(2), "--run-id");
 const requestedShinParallel = parseNumberArg(process.argv.slice(2), "--shin-parallel");
 const inputFile = resolve(
   process.cwd(),
-  parseStringArg(process.argv.slice(2), "--input-file") ?? "docs/benchmark-history.jsonl",
+  parseStringArg(process.argv.slice(2), "--input-file") ?? "benchmarks/results.jsonl",
 );
 
 // ═══ LAYOUT CONSTANTS ═══

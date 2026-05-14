@@ -5,8 +5,8 @@ description: |
 
   Use this skill when:
   1. Running AWS benchmark scenarios for this repository
-  2. Comparing ShinBucketDeployment with AWS CDK BucketDeployment
-  3. Updating docs/benchmark.md or docs/benchmark-history.jsonl
+  2. Comparing ShinBucketDeployment configs with each other or with AWS CDK BucketDeployment
+  3. Updating docs/benchmark.md or benchmarks/results.jsonl
   4. Reviewing whether benchmark evidence is safe to commit
 ---
 
@@ -17,8 +17,9 @@ This skill is for performance and efficiency evidence only. It does not establis
 ## Source Of Truth
 
 - `docs/benchmark.md` is the human benchmark page.
-- `docs/benchmark-history.jsonl` is the append-only full benchmark history.
-- `docs/verification.md` and `docs/verification-history.jsonl` own correctness verification and must not use benchmark rows as verification evidence.
+- `benchmarks/results.jsonl` contains sanitized current benchmark result rows used by report/chart tooling.
+- `docs/verification.md` owns correctness verification and must not use benchmark rows as verification evidence.
+- Deployable benchmark apps live in `benchmarks/apps/**` and are run through `pnpm benchmark`.
 - Raw AWS logs, CloudWatch extracts, and scratch outputs must stay outside git.
 
 ## Sanitization Rules
@@ -41,47 +42,49 @@ Committed benchmark records may include:
 
 - region
 - commit SHA and subject
-- scenario, profile, variant, and phase names
+- scenario, profile, state, implementation, and phase names
+- selected config values such as memory and `maxParallelTransfers`
 - sanitized durations and memory
 - sanitized aggregate counters
 - cleanup status
 - notes without resource identifiers
 
+## Benchmark Runner
+
+Benchmark mode runs only the selected benchmark scenario and expands the requested config matrix:
+
+```bash
+pnpm benchmark deploy assets \
+  --profiles tiny-many,mixed \
+  --states baseline \
+  --memory-mb 1024,2048 \
+  --parallel 8,32 \
+  --implementations shin,aws
+```
+
+Supported runner options:
+
+- `--profiles`: benchmark asset profiles such as `tiny-many`, `mixed`, or `large-few`.
+- `--states`: benchmark asset states such as `baseline`, `changed`, or `pruned`.
+- `--memory-mb`: provider Lambda memory values.
+- `--parallel`: Shin `maxParallelTransfers` values.
+- `--implementations`: `shin`, `aws`, or both.
+
+When the matrix has multiple configs and `SHIN_BENCH_STACK_SUFFIX` is not already set, the runner adds a deterministic suffix per config so stacks can coexist.
+
 ## Benchmark Workflow
 
 Do not finalize timing-only benchmark rows when provider telemetry is expected. For every provider-invoking deploy/update/delete phase, capture the Lambda CloudWatch `REPORT` line and the sanitized `shin_deployment_summary` line before destroying the stack or otherwise deleting provider log groups. If telemetry cannot be captured, either rerun the phase or clearly mark the record as incomplete with `null` provider fields and explain why.
 
-Use paired inputs for Shin vs AWS comparisons:
+Choose benchmark configs deliberately. Paired Shin vs AWS comparisons should use:
 
 - same region and account
 - same profile
-- same variants
+- same states
 - same destination prefix
 - same memory setting
 - same repetition count
 - same stack suffix family
-
-Standard focused Shin sequence:
-
-```bash
-AWS_PROFILE=<profile> AWS_REGION=ap-southeast-2 AWS_DEFAULT_REGION=ap-southeast-2 \
-SHIN_BENCH_PROFILE=mixed SHIN_BENCH_VARIANT=v1 SHIN_BENCH_STACK_SUFFIX=<suffix> SHIN_BENCH_MEMORY_LIMIT_MB=1024 \
-pnpm example deploy benchmark-assets -- --profile <profile>
-
-AWS_PROFILE=<profile> AWS_REGION=ap-southeast-2 AWS_DEFAULT_REGION=ap-southeast-2 \
-SHIN_BENCH_PROFILE=mixed SHIN_BENCH_VARIANT=v1 SHIN_BENCH_STACK_SUFFIX=<suffix> SHIN_BENCH_MEMORY_LIMIT_MB=1024 SHIN_BENCH_WAIT=false \
-pnpm example deploy benchmark-assets -- --profile <profile>
-
-AWS_PROFILE=<profile> AWS_REGION=ap-southeast-2 AWS_DEFAULT_REGION=ap-southeast-2 \
-SHIN_BENCH_PROFILE=mixed SHIN_BENCH_VARIANT=v2 SHIN_BENCH_STACK_SUFFIX=<suffix> SHIN_BENCH_MEMORY_LIMIT_MB=1024 \
-pnpm example deploy benchmark-assets -- --profile <profile>
-
-AWS_PROFILE=<profile> AWS_REGION=ap-southeast-2 AWS_DEFAULT_REGION=ap-southeast-2 \
-SHIN_BENCH_PROFILE=mixed SHIN_BENCH_VARIANT=pruned SHIN_BENCH_STACK_SUFFIX=<suffix> SHIN_BENCH_MEMORY_LIMIT_MB=1024 \
-pnpm example deploy benchmark-assets -- --profile <profile>
-```
-
-Repeat the same sequence with `benchmark-assets-aws` for upstream AWS CDK `BucketDeployment`.
 
 For parameter sweeps, keep all non-swept inputs identical and encode the swept value in the record so rows remain distinguishable. For `maxParallelTransfers` sweeps, use distinct phase names such as `cold-create-parallel-8`, `cold-create-parallel-16`, and include the provider summary field `maxParallelTransfers`. Use a distinct `runId` and `series` for each memory or configuration sweep so generated reports can be scoped cleanly.
 
@@ -117,14 +120,14 @@ aws logs filter-log-events \
   --output json > <scratch>/summary.json
 ```
 
-Then append the record with:
+Then append or rebuild result rows with:
 
 ```bash
 pnpm benchmark:collect -- \
   --log-file <scratch>/deploy.log \
   --report-file <scratch>/report.json \
   --summary-file <scratch>/summary.json \
-  --output-file docs/benchmark-history.jsonl \
+  --output-file benchmarks/results.jsonl \
   --run-id <run-id> \
   --run-date <YYYY-MM-DD> \
   --phase <phase> \
@@ -135,16 +138,16 @@ pnpm benchmark:collect -- \
   --implementation shin \
   --profile <benchmark-profile> \
   --memory-mb <memory> \
-  --variant <variant> \
+  --state <state> \
   --cleanup "all benchmark stacks destroyed" \
   --notes "<sanitized note>"
 ```
 
-Do not parse `summary=...` tracing lines by hand. If parsing fails, fix `scripts/collect-benchmark-results.ts` and add a test in `test/benchmark-collector.test.ts`.
+Do not parse `summary=...` tracing lines by hand. If parsing fails, fix `benchmarks/collect-results.ts` and add a test in `test/benchmarks/collector.test.ts`.
 
 ## Benchmark Records
 
-Append one JSON object per measured phase to `docs/benchmark-history.jsonl`.
+Write one JSON object per measured phase to `benchmarks/results.jsonl`. This file is current-result data for reports and charts, not append-only history.
 
 Required fields:
 
@@ -160,7 +163,7 @@ Required fields:
 - `series`
 - `memoryMb`
 - `phase`
-- `variant`
+- `state`
 - `fileCount`
 - `totalBytes`
 - `cdkDeploySeconds`
@@ -193,13 +196,13 @@ For parameter sweeps, report both performance and pressure counters. For `maxPar
 
 ## Benchmark Human Page
 
-After appending JSONL records, update `docs/benchmark.md` `Current Results` for humans.
+After updating JSONL records, update `docs/benchmark.md` `Current Results` for humans.
 
 The human page should include:
 
 - metadata table
-- detailed Shin vs AWS comparison table for every comparable metric when the current run has paired implementations
-- parameter-sweep comparison tables when the current run is Shin-only, including the swept value, baseline-relative speedup, memory, end-to-end timings, and telemetry counters
+- detailed Shin vs AWS comparison table for every comparable metric when the current result set has paired implementations
+- parameter-sweep comparison tables when the current result set is Shin-only, including the swept value, baseline-relative speedup, memory, end-to-end timings, and telemetry counters
 - generated charts from committed JSONL data when applicable
 - provider summary highlights for Shin aggregate counters
 - short caveats and cleanup status
@@ -215,7 +218,7 @@ The comparison table should show, per phase and metric:
 Generate reports with:
 
 ```bash
-pnpm benchmark:report -- --input-file docs/benchmark-history.jsonl --run-id <run-id>
+pnpm benchmark:report -- --input-file benchmarks/results.jsonl --run-id <run-id>
 ```
 
 ## Final Checks
@@ -223,11 +226,11 @@ pnpm benchmark:report -- --input-file docs/benchmark-history.jsonl --run-id <run
 Before committing benchmark updates:
 
 ```bash
-pnpm benchmark:report -- --input-file docs/benchmark-history.jsonl --run-id <run-id> --output-file /tmp/benchmark-report-check.md
+pnpm benchmark:report -- --input-file benchmarks/results.jsonl --run-id <run-id> --output-file /tmp/benchmark-report-check.md
 git diff --check
-pnpm test -- test/benchmark-collector.test.ts
+pnpm test -- test/benchmarks/collector.test.ts
 ```
 
 Run broader `pnpm typecheck`, `pnpm lint`, and `pnpm test` if report scripts, collector scripts, or validation-sensitive source changed.
 
-Only commit sanitized docs, JSONL histories, scripts, and tests. Never commit scratch raw output.
+Only commit sanitized docs, JSONL result rows, source, tests, and scenarios. Never commit scratch raw output.

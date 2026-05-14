@@ -7,8 +7,8 @@ Use the repo-local skill files before benchmark or verification work:
 
 Keep benchmark evidence and verification evidence separate:
 
-- `docs/benchmark.md` and `docs/benchmark-history.jsonl` are for performance, efficiency, and upstream AWS CDK `BucketDeployment` comparisons.
-- `docs/verification.md` and `docs/verification-history.jsonl` are for `ShinBucketDeployment` correctness only.
+- `docs/benchmark.md` and `benchmarks/results.jsonl` are for performance, efficiency, and upstream AWS CDK `BucketDeployment` comparisons.
+- `docs/verification.md` is the latest `ShinBucketDeployment` correctness snapshot.
 - Do not use benchmark rows or upstream AWS `BucketDeployment` comparison rows as verification evidence.
 
 Never commit raw AWS evidence or identifiers:
@@ -24,6 +24,6 @@ Never commit raw AWS evidence or identifiers:
 - raw CloudWatch log exports
 - AWS profile names
 
-Keep raw AWS output in scratch directories outside the repo. Commit only sanitized docs, JSONL histories, source, tests, and examples.
+Keep raw AWS output in scratch directories outside the repo. Commit only sanitized docs, benchmark result rows, source, tests, and scenarios.
 
 For benchmark telemetry interpretation, use the `docs/architecture.md` Diagnostics field reference. Do not infer S3 throttling from source block refetches or waits unless the provider summary also shows source `getRetries`/`getErrors` or destination `putObject.throttledAttempts`/`retryAttempts`.
