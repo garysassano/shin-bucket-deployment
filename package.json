@@ -18,9 +18,9 @@
     "scenario": "pnpm build && node dist/scenarios/runner.js",
     "verify": "pnpm build && node dist/scenarios/runner.js verify",
     "benchmark": "pnpm build && node dist/scenarios/runner.js benchmark",
-    "benchmark:collect": "pnpm build && node dist/benchmarks/collect-results.js",
-    "benchmark:report": "pnpm build && node dist/benchmarks/render-report.js",
-    "benchmark:run-assets": "pnpm build && node dist/benchmarks/run-assets-comparison.js"
+    "benchmark:collect": "pnpm build && node dist/benchmarks/src/collect-results.js",
+    "benchmark:report": "pnpm build && node dist/benchmarks/src/render-report.js",
+    "benchmark:run-assets": "pnpm build && node dist/benchmarks/src/run-assets-comparison.js"
   },
   "dependencies": {
     "aws-cdk-lib": "2.254.0",

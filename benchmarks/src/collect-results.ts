@@ -169,7 +169,7 @@ function normalizeImplementation(value: string | null | undefined): string | nul
 
 function usage(): never {
   console.error(
-    "Usage: node dist/benchmarks/collect-results.js --log-file <path> --run-id <id> --run-date <YYYY-MM-DD> --phase <name> [--report-file <path>] [--summary-file <path>] [--output-file benchmarks/results.jsonl] [--implementation <shin|aws>] [--profile <name>] [--memory-mb <n>] [--state <name>]",
+    "Usage: node dist/benchmarks/src/collect-results.js --log-file <path> --run-id <id> --run-date <YYYY-MM-DD> --phase <name> [--report-file <path>] [--summary-file <path>] [--output-file benchmarks/results.jsonl] [--implementation <shin|aws>] [--profile <name>] [--memory-mb <n>] [--state <name>]",
   );
   process.exit(1);
 }

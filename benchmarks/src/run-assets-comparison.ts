@@ -748,7 +748,7 @@ function sleep(milliseconds: number): Promise<void> {
 
 function usage(): never {
   console.error(
-    "Usage: node dist/benchmarks/run-assets-comparison.js --config benchmarks/configs/tiny-many-shin-aws-2048-4096.json [--run-id <id>] [--run-date <YYYY-MM-DD>] [--scratch-root <outside-repo>] [--concurrency 1]",
+    "Usage: node dist/benchmarks/src/run-assets-comparison.js --config benchmarks/configs/tiny-many-shin-aws-2048-4096.json [--run-id <id>] [--run-date <YYYY-MM-DD>] [--scratch-root <outside-repo>] [--concurrency 1]",
   );
   process.exit(1);
 }
