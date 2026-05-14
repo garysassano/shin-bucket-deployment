@@ -1,6 +1,6 @@
 # Benchmark
 
-This page is the human-readable benchmark snapshot for `ShinBucketDeployment`. Benchmarks measure efficiency and compare with upstream AWS CDK `BucketDeployment`; correctness verification lives in `docs/verification.md`. Full sanitized benchmark history is append-only JSONL in `docs/benchmark-history.jsonl`.
+This page is the human-readable benchmark snapshot for `ShinBucketDeployment`. Benchmarks measure efficiency across selected configs and, when useful, compare with upstream AWS CDK `BucketDeployment`; correctness verification lives in `docs/verification.md`. Sanitized benchmark result rows for the current curated benchmark set live in `benchmarks/results.jsonl`.
 
 Runbooks, evidence collection rules, schema guidance, and sanitization rules live in the repo-local agent skill at `.agents/skills/shin-benchmark/SKILL.md`.
 
@@ -8,11 +8,11 @@ Runbooks, evidence collection rules, schema guidance, and sanitization rules liv
 
 This file owns benchmark context and the latest sanitized human-readable performance snapshot.
 
-`docs/benchmark-history.jsonl` owns the append-only sanitized benchmark record across runs. Before replacing the `Current Results` section here, make sure the previous and new run records are present there.
+`benchmarks/results.jsonl` owns the sanitized benchmark records used by reports and charts. It is not append-only history; replace or prune it when the benchmark snapshot changes.
 
-`docs/verification.md` owns correctness verification status. Benchmark records may inform investigation, but they are not correctness verification evidence; benchmark timing and memory data belongs here or in `docs/benchmark-history.jsonl`.
+`docs/verification.md` owns correctness verification status. Benchmark records may inform investigation, but they are not correctness verification evidence; benchmark timing and memory data belongs here or in `benchmarks/results.jsonl`.
 
-README benchmark snapshot SVGs and local snapshot render tooling live under `benchmarks/`. Keep the human benchmark page and sanitized append-only history in `docs/` so they stay next to the rest of the documentation; treat `benchmarks/` as generated benchmark support assets and tooling, not as the source of truth for sanitized evidence.
+README benchmark snapshot SVGs, result rows, report rendering, and local snapshot render tooling live under `benchmarks/`. Treat `docs/benchmark.md` as the narrative page and `benchmarks/results.jsonl` as structured chart/report input.
 
 ## Goals
 
@@ -44,13 +44,13 @@ Benchmark runs should answer these questions:
 
 ## Current Harness
 
-The `benchmark-assets` example generates deterministic static-site bundles under `.benchmark-assets/`, which is ignored by git. The same stack definition can instantiate either this construct or the upstream AWS CDK `BucketDeployment`; the benchmark implementation is the only intended comparison dimension. Shin uses its normal `Source.asset` path, including the embedded catalog optimization, while AWS uses upstream `Source.asset`.
+The `assets` benchmark scenario generates deterministic static-site bundles under `.benchmark-assets/`, which is ignored by git. The same stack definition can instantiate either this construct or the upstream AWS CDK `BucketDeployment`; the benchmark implementation is the only intended comparison dimension. Shin uses its normal `Source.asset` path, including the embedded catalog optimization, while AWS uses upstream `Source.asset`.
 
 ```bash
-SHIN_BENCH_PROFILE=mixed SHIN_BENCH_VARIANT=v1 SHIN_BENCH_STACK_SUFFIX=RunA pnpm example deploy benchmark-assets
-SHIN_BENCH_STACK_SUFFIX=RunA pnpm example destroy benchmark-assets
-SHIN_BENCH_PROFILE=mixed SHIN_BENCH_VARIANT=v1 SHIN_BENCH_STACK_SUFFIX=RunA pnpm example deploy benchmark-assets-aws
-SHIN_BENCH_STACK_SUFFIX=RunA pnpm example destroy benchmark-assets-aws
+pnpm benchmark deploy assets --profiles mixed --states baseline --memory-mb 1024 --parallel 8 --implementations shin
+pnpm benchmark destroy assets --profiles mixed --states baseline --memory-mb 1024 --parallel 8 --implementations shin
+pnpm benchmark deploy assets --profiles mixed --states baseline --memory-mb 1024 --parallel 8 --implementations aws
+pnpm benchmark destroy assets --profiles mixed --states baseline --memory-mb 1024 --parallel 8 --implementations aws
 ```
 
 Environment variables:
@@ -58,8 +58,8 @@ Environment variables:
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `SHIN_BENCH_PROFILE` | `mixed` | Asset shape: `tiny-many`, `mixed`, or `large-few`. |
-| `SHIN_BENCH_VARIANT` | `v1` | Asset variant: `v1`, `v2`, or `pruned`. |
-| `SHIN_BENCH_IMPLEMENTATION` | `shin` | Deployment implementation: `shin` or `aws`. The `benchmark-assets-aws` example sets this to `aws`. |
+| `SHIN_BENCH_STATE` | `baseline` | Asset state: `baseline`, `changed`, or `pruned`. |
+| `SHIN_BENCH_IMPLEMENTATION` | `shin` | Deployment implementation: `shin` or `aws`. The benchmark runner sets this from `--implementations`. |
 | `SHIN_BENCH_STACK_SUFFIX` | none | Adds a suffix to the benchmark stack name so multiple runs can coexist. |
 | `SHIN_BENCH_DESTINATION_PREFIX` | `benchmark-site` | Destination prefix inside the generated bucket. |
 | `SHIN_BENCH_MEMORY_LIMIT_MB` | `1024` | Provider Lambda memory size in MiB. Use distinct stack suffixes when comparing memory sizes. |
@@ -75,12 +75,12 @@ Asset profiles:
 | `mixed` | SPA-like bundle with chunks, source maps, JSON, media, and fonts. | Default realistic static-site profile. |
 | `large-few` | Fewer large JS, source map, and media files. | Range reads, decompression, hash, upload streaming, block coalescing. |
 
-Variants:
+States:
 
-| Variant | Behavior | Signal |
+| State | Behavior | Signal |
 | --- | --- | --- |
-| `v1` | Baseline bundle. | Cold create and unchanged redeploy baseline. |
-| `v2` | Same file set and sizes, with a few changed files. | Sparse same-size update behavior. |
+| `baseline` | Baseline bundle. | Cold create and unchanged redeploy baseline. |
+| `changed` | Same file set and sizes, with a few changed files. | Sparse same-size update behavior. |
 | `pruned` | Removes about ten percent of files. | Delete planning and prune behavior. |
 
 ## Advised Runtime Settings
@@ -98,7 +98,7 @@ Treat these as starting points, not universal limits. Re-run a sweep for unusual
 
 ## Methodology Summary
 
-The benchmark harness measures deterministic static-site bundles across create, unchanged, sparse-update, and prune-update phases. Paired Shin-vs-AWS comparison runs must use the same region, profile, variants, destination prefix, memory setting, and repetition count. The latest full workflow is maintained in `.agents/skills/shin-benchmark/SKILL.md`.
+The benchmark harness measures deterministic static-site bundles across create, unchanged, sparse-update, and prune-update phases. Paired Shin-vs-AWS comparison runs must use the same region, profile, states, destination prefix, memory setting, and repetition count. The latest full workflow is maintained in `.agents/skills/shin-benchmark/SKILL.md`.
 
 The 1024 MiB setting is the preferred conservative default because earlier `large-few` runs showed much faster cold-create provider duration than 512 MiB while keeping billed compute cost in the same range. For many-small-file cold creates, benchmark `maxParallelTransfers` alongside memory because the best observed 1024 MiB setting was 32 transfers, while 2048 MiB was needed for a clear 64-transfer improvement. Memory comparison runs should still include 512, 1024, and 2048 MiB when measuring runtime tuning changes.
 
@@ -118,9 +118,9 @@ The report groups records by profile, phase, implementation, and memory size. It
 
 Do not commit `.benchmark-runs/` raw output. Commit only curated aggregate results that do not include sensitive resource identifiers.
 
-## History
+## Result Rows
 
-Every committed benchmark result is represented as sanitized records in `docs/benchmark-history.jsonl`. Use `null` for unavailable JSONL fields and do not invent values. The latest collection and documentation workflow is maintained in `.agents/skills/shin-benchmark/SKILL.md`.
+Committed benchmark results are represented as sanitized records in `benchmarks/results.jsonl`. Use `null` for unavailable JSONL fields and do not invent values. The latest collection and documentation workflow is maintained in `.agents/skills/shin-benchmark/SKILL.md`.
 
 ## Current Results
 
@@ -132,12 +132,12 @@ Every committed benchmark result is represented as sanitized records in `docs/be
 | Region | `ap-southeast-2` |
 | Implementation | `shin` |
 | Profile | `tiny-many` |
-| Baseline variant | `v1` |
+| Baseline state | `baseline` |
 | Bundle | 2,584 files, 8,178,618 bytes |
 | Provider memory | 1024 and 2048 MiB |
 | Swept setting | `maxParallelTransfers`: 8, 16, 32, 64 |
 | Cleanup | All benchmark stacks destroyed after telemetry collection |
-| Notes | Shin-only cold-create tuning sweep for the many-small-files profile. The latest 2048 MiB run held all inputs constant except `maxParallelTransfers` and is compared with the earlier 1024 MiB sweep. Rows include CloudWatch REPORT metrics and sanitized `shin_deployment_summary` counters in `docs/benchmark-history.jsonl`. |
+| Notes | Shin-only cold-create tuning sweep for the many-small-files profile. The latest 2048 MiB run held all inputs constant except `maxParallelTransfers` and is compared with the earlier 1024 MiB sweep. Rows include CloudWatch REPORT metrics and sanitized `shin_deployment_summary` counters in `benchmarks/results.jsonl`. |
 
 2048 MiB parallel transfer score table:
 

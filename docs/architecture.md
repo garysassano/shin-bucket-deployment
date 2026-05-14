@@ -82,27 +82,37 @@ sourceWindowBytes = max(sourceWindowBytes, min(sourceBlockBytes, sourceZipBytes)
 
 `memoryBudgetBytes` defaults to `memoryLimit` but can be isolated with `advancedRuntimeTuning.sourceWindowMemoryBudgetMb`. The final `max` ensures at least one source block can be admitted, while the `min(sourceZipBytes)` clamp avoids reserving more resident source data than the archive can contain.
 
-## Supported Examples
+## Supported Scenarios
 
-Examples are driven through the repository runner:
+Scenarios are driven through the repository runner. Verification mode runs every default correctness scenario when no name is provided; benchmark mode runs the selected benchmark scenario across the requested config matrix.
 
 ```bash
-pnpm example list
-pnpm example synth simple
-pnpm example deploy cloudfront-sync
-pnpm example destroy retain-on-delete
+pnpm verify list
+pnpm verify synth
+pnpm verify deploy --concurrency 4
+pnpm verify deploy cloudfront-wait
+pnpm benchmark deploy assets --profiles tiny-many --states baseline --memory-mb 1024 --parallel 32 --implementations shin,aws
 ```
 
-| Example | File | Purpose |
+Verification deploy/destroy can run independent scenario chains concurrently with `--concurrency`; ordered update chains still run in sequence within each chain.
+
+| Scenario | File | Purpose |
 | --- | --- | --- |
-| `simple` | `examples/simple-app.ts` | Plain deployment under a destination prefix. |
-| `replacement` | `examples/replacement-behavior-app.ts` | Deploy-time marker replacement across asset, data, JSON, and YAML sources. |
-| `cloudfront-sync` | `examples/cloudfront-invalidation-sync-app.ts` | CloudFront invalidation with stack wait. |
-| `cloudfront-async` | `examples/cloudfront-invalidation-async-app.ts` | CloudFront invalidation without stack wait. |
-| `metadata-filters` | `examples/metadata-filters-app.ts` | Include/exclude filters and S3 metadata mapping. |
-| `prune-update-v1` / `prune-update-v2` | `examples/prune-update-v1-app.ts`, `examples/prune-update-v2-app.ts` | Update path that removes destination objects absent from the new source plan. |
-| `retain-on-delete-v1` / `retain-on-delete-v2` | `examples/retain-on-delete-v1-app.ts`, `examples/retain-on-delete-v2-app.ts` | Update/delete behavior when `retainOnDelete=true`. |
-| `benchmark-assets` | `examples/benchmark-assets-app.ts` | Deterministic benchmark asset bundles. |
+| `simple` | `scenarios/apps/basic/simple-app.ts` | Plain deployment under a destination prefix. |
+| `root-prefix` | `scenarios/apps/basic/root-prefix-app.ts` | Deployment without `destinationKeyPrefix`, writing at bucket root. |
+| `marker-replacement` | `scenarios/apps/metadata/marker-replacement-app.ts` | Deploy-time marker replacement across asset, data, JSON, and YAML sources. |
+| `metadata-and-filters` | `scenarios/apps/metadata/metadata-and-filters-app.ts` | Include/exclude filters and S3 metadata mapping. |
+| `source-overwrite-order` | `scenarios/apps/metadata/source-overwrite-order-app.ts` | Duplicate source keys where later sources win. |
+| `prune-update-v1` / `prune-update-v2` | `scenarios/apps/updates/prune-update-v1-app.ts`, `scenarios/apps/updates/prune-update-v2-app.ts` | Update path that removes destination objects absent from the new source plan. |
+| `prune-disabled-v1` / `prune-disabled-v2` | `scenarios/apps/updates/prune-disabled-v1-app.ts`, `scenarios/apps/updates/prune-disabled-v2-app.ts` | Update path with `prune=false`, preserving destination objects absent from the new source plan. |
+| `retain-on-delete-v1` / `retain-on-delete-v2` | `scenarios/apps/retention/retain-on-delete-v1-app.ts`, `scenarios/apps/retention/retain-on-delete-v2-app.ts` | Update/delete behavior when `retainOnDelete=true`. |
+| `delete-cleanup-v1` / `delete-cleanup-v2` / `delete-cleanup-bucket-only` | `scenarios/apps/retention/delete-cleanup-v1-app.ts`, `scenarios/apps/retention/delete-cleanup-v2-app.ts`, `scenarios/apps/retention/delete-cleanup-bucket-only-app.ts` | Update/delete behavior when `retainOnDelete=false`. |
+| `extract-false` | `scenarios/apps/basic/extract-false-app.ts` | Archive copy mode with `extract=false`. |
+| `large-archive` | `scenarios/apps/scale/large-archive-app.ts` | Larger archive ranged-read path. |
+| `kms-destination` | `scenarios/apps/security/kms-destination-app.ts` | KMS-encrypted destination bucket. |
+| `cloudfront-wait` | `scenarios/apps/cloudfront/cloudfront-wait-app.ts` | CloudFront invalidation with explicit paths and stack wait. |
+| `cloudfront-no-wait` | `scenarios/apps/cloudfront/cloudfront-no-wait-app.ts` | CloudFront invalidation with default paths and no stack wait. |
+| `assets` | `benchmarks/apps/assets-app.ts` | Deterministic benchmark asset bundles. |
 
 ## Handler Flow
 

@@ -1,24 +1,24 @@
 ---
 name: shin-verification
 description: |
-  Run, collect, sanitize, document, and commit ShinBucketDeployment correctness verification evidence.
+  Run, sanitize, document, and commit the latest ShinBucketDeployment correctness verification snapshot.
 
   Use this skill when:
   1. Running local correctness gates for this repository
   2. Running AWS end-to-end verification scenarios where the provider Lambda runs in AWS
-  3. Updating docs/verification.md or docs/verification-history.jsonl
+  3. Updating docs/verification.md
   4. Reviewing whether verification evidence is safe to commit
 ---
 
 # Shin Verification Workflow
 
-This skill is for correctness evidence only. Benchmarks and AWS CDK `BucketDeployment` comparisons are tracked separately in `docs/benchmark.md` and `docs/benchmark-history.jsonl`.
+This skill is for correctness evidence only. Benchmarks and AWS CDK `BucketDeployment` comparisons are tracked separately in `docs/benchmark.md` and `benchmarks/results.jsonl`.
 
 ## Source Of Truth
 
-- `docs/verification.md` is the human verification page.
-- `docs/verification-history.jsonl` is the append-only full verification history.
-- `docs/benchmark.md` and `docs/benchmark-history.jsonl` own performance and comparison evidence.
+- `docs/verification.md` is the latest human verification snapshot.
+- Verification does not keep append-only committed history.
+- Deployable correctness apps live in `scenarios/apps/**` and are run through `pnpm verify`.
 - Raw AWS logs, CloudWatch extracts, and scratch outputs must stay outside git.
 
 ## Sanitization Rules
@@ -37,7 +37,7 @@ Never commit:
 - raw CloudWatch log exports
 - profile names
 
-Committed verification records may include:
+Committed verification docs may include:
 
 - region
 - commit SHA and subject
@@ -56,7 +56,7 @@ Use these categories:
 - `local`: unit tests, static checks, build/typecheck/lint, and local synthesis.
 - `aws`: deployed AWS end-to-end checks where the custom resource Lambda runs in AWS.
 
-Benchmark records and AWS `BucketDeployment` comparison records belong in `docs/benchmark-history.jsonl`, not verification history.
+Benchmark rows and AWS `BucketDeployment` comparison rows belong in `benchmarks/results.jsonl`, not in verification docs.
 
 ## Local Verification
 
@@ -72,69 +72,43 @@ pnpm lint
 pnpm test
 ```
 
-Local synthesis should cover public ShinBucketDeployment examples:
+Local synthesis should cover every default verification scenario:
 
 ```bash
-pnpm example list
-pnpm example synth simple
-pnpm example synth replacement
-pnpm example synth metadata-filters
-pnpm example synth prune-update-v1
-pnpm example synth prune-update-v2
-pnpm example synth retain-on-delete-v1
-pnpm example synth retain-on-delete-v2
-pnpm example synth extract-false
-pnpm example synth retain-on-delete-false-v1
-pnpm example synth retain-on-delete-false-v2
-pnpm example synth retain-on-delete-false-bucket-only
-pnpm example synth multi-source-overwrite
-pnpm example synth large-archive
-pnpm example synth kms-destination
-pnpm example synth cloudfront-sync
-pnpm example synth cloudfront-async
+pnpm verify list
+pnpm verify synth
 ```
 
-Do not include `benchmark-assets` or `benchmark-assets-aws` in correctness verification synthesis unless the task is explicitly about benchmark harness health.
+Do not include benchmark configs in correctness verification unless the task is explicitly about benchmark harness health.
 
 ## AWS End-To-End Verification
 
-AWS end-to-end scenarios deploy real stacks and must verify S3, KMS, CloudFormation, and CloudFront state where applicable. They include:
+AWS end-to-end verification deploys real stacks and must verify S3, KMS, CloudFormation, and CloudFront state where applicable. The shared scenario runner runs all default correctness scenarios when no scenario name is supplied:
+
+```bash
+pnpm verify deploy --concurrency 4
+pnpm verify destroy --concurrency 4
+```
+
+The runner preserves ordered update chains such as `*-v1` before `*-v2`, while running independent chains concurrently. Use `--concurrency 1` for serial debugging.
+
+The default suite includes:
 
 - simple create/update/destroy
+- root-prefix deployment without `destinationKeyPrefix`
 - metadata and include/exclude filters
 - marker replacement
 - prune update
+- `prune=false` update preservation
 - retain-on-delete update/delete
 - `extract=false`
 - `retainOnDelete=false` cleanup
-- duplicate multi-source overwrite order
+- duplicate source overwrite order
 - larger archive ranged-read path
 - KMS-encrypted destination bucket
-- CloudFront sync and async invalidation
+- CloudFront wait/no-wait invalidation with explicit and default invalidation paths
 
-Always destroy AWS verification stacks and verify they are absent before finalizing records. Raw AWS logs and resource identifiers stay in scratch only.
-
-## Verification Records
-
-Append one JSON object per verification scenario to `docs/verification-history.jsonl`.
-
-Recommended fields:
-
-- `schemaVersion`: current value `1`
-- `runId`
-- `runDate`
-- `commit`
-- `subject`
-- `region`
-- `category`: `local` or `aws`
-- `scenario`
-- `command`
-- `status`: `pass`, `fail`, `known-limitation`, or `not-run`
-- `evidence`
-- `cleanup`
-- `notes`
-
-Keep verification records sanitized. Do not include raw output or identifiers.
+Always destroy AWS verification stacks and verify they are absent before finalizing `docs/verification.md`. Raw AWS logs and resource identifiers stay in scratch only.
 
 ## Verification Human Page
 
@@ -145,17 +119,18 @@ The human page should include:
 - current coverage table
 - latest verification run summary
 - known limitations
-- pointers to `docs/verification-history.jsonl` for full history
+- cleanup status
+- raw-evidence exclusion note
 
 ## Final Checks
 
 Before committing verification updates:
 
 ```bash
-node -e "const fs=require('fs'); const f='docs/verification-history.jsonl'; const lines=fs.readFileSync(f,'utf8').trimEnd().split(/\\n/); lines.forEach((line)=>JSON.parse(line)); console.log(f+': '+lines.length+' JSONL rows ok');"
 git diff --check
+pnpm verify synth
 ```
 
-Run broader `pnpm typecheck`, `pnpm lint`, and `pnpm test` if source, scripts, or validation-sensitive examples changed.
+Run broader `pnpm typecheck`, `pnpm lint`, and `pnpm test` if source, scripts, or validation-sensitive scenarios changed.
 
-Only commit sanitized docs, JSONL histories, scripts, and tests. Never commit scratch raw output.
+Only commit sanitized docs, source, tests, and scenarios. Never commit scratch raw output.
