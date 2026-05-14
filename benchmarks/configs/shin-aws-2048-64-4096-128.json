@@ -2,7 +2,7 @@
   "$schema": "../schemas/asset-benchmark-config.schema.json",
   "region": "ap-southeast-2",
   "concurrency": 4,
-  "profiles": ["tiny-many"],
+  "assetProfiles": ["tiny-many"],
   "implementations": ["shin", "aws"],
   "lambdaConfigs": [
     {
@@ -17,23 +17,27 @@
   "phases": [
     {
       "name": "cold-create",
-      "state": "baseline",
-      "wait": true
+      "assetState": "baseline",
+      "cloudfrontWait": false,
+      "prune": true
     },
     {
       "name": "forced-unchanged",
-      "state": "baseline",
-      "wait": false
+      "assetState": "baseline",
+      "cloudfrontWait": false,
+      "prune": true
     },
     {
       "name": "sparse-update",
-      "state": "changed",
-      "wait": true
+      "assetState": "changed",
+      "cloudfrontWait": false,
+      "prune": true
     },
     {
       "name": "prune-update",
-      "state": "pruned",
-      "wait": true
+      "assetState": "pruned",
+      "cloudfrontWait": false,
+      "prune": true
     }
   ]
 }
