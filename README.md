@@ -22,7 +22,9 @@ The official `BucketDeployment` is a good default for many stacks, but its provi
 
 <img src="./benchmarks/snapshots/benchmark-snapshot.svg" alt="ShinBucketDeployment vs AWS BucketDeployment benchmark" width="100%">
 
-<img src="./benchmarks/snapshots/parallel-32-snapshot.svg" alt="ShinBucketDeployment parallel 32 cold-create benchmark" width="100%">
+<img src="./benchmarks/snapshots/parallel-64-snapshot.svg" alt="ShinBucketDeployment 2048 MiB parallel 64 benchmark" width="100%">
+
+<img src="./benchmarks/snapshots/parallel-128-snapshot.svg" alt="ShinBucketDeployment 4096 MiB parallel 128 benchmark" width="100%">
 
 ## Quick Start
 
