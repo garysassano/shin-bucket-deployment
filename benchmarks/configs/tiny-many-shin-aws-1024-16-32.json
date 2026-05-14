@@ -6,12 +6,12 @@
   "implementations": ["shin", "aws"],
   "lambdaConfigs": [
     {
-      "memoryMb": 2048,
-      "parallel": 64
+      "memoryMb": 1024,
+      "parallel": 16
     },
     {
-      "memoryMb": 4096,
-      "parallel": 128
+      "memoryMb": 1024,
+      "parallel": 32
     }
   ],
   "phases": [

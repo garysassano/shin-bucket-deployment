@@ -1,6 +1,6 @@
 # Benchmark
 
-This page is the human-readable benchmark snapshot for `ShinBucketDeployment`. Benchmarks measure efficiency across selected configs and, when useful, compare with upstream AWS CDK `BucketDeployment`; correctness verification lives in `docs/verification.md`. Sanitized benchmark result rows for the current curated benchmark set live in `benchmarks/results.jsonl`.
+This page is the human-readable benchmark snapshot for `ShinBucketDeployment`. Benchmarks measure efficiency across selected Lambda configs and, when useful, compare with upstream AWS CDK `BucketDeployment`; correctness verification lives in `docs/verification.md`. Sanitized benchmark result rows for the current curated benchmark set live in `benchmarks/results.jsonl`.
 
 Runbooks, evidence collection rules, schema guidance, and sanitization rules live in the repo-local agent skill at `.agents/skills/shin-benchmark/SKILL.md`.
 
@@ -52,7 +52,7 @@ pnpm benchmark:run-assets -- \
   --config benchmarks/configs/tiny-many-shin-aws-2048-4096.json
 ```
 
-Curated benchmark matrices should live as committed JSON files under `benchmarks/configs/`. The runner accepts CLI overrides such as `--run-token`, `--last-updated`, `--scratch-root`, and `--concurrency`, but the config file is the source of truth for profile, memory/parallel families, implementations, phases, region, output file, and destination prefix. `runToken` is only for scratch paths and stack suffixes; committed result rows are upserted by benchmark dimensions.
+Curated benchmark matrices should live as committed JSON files under `benchmarks/configs/`. The runner accepts CLI overrides such as `--lambda-configs`, `--run-token`, `--last-updated`, `--scratch-root`, and `--concurrency`, but the config file is the source of truth for profile, Lambda configs, implementations, phases, region, output file, and destination prefix. `runToken` is only for scratch paths and stack suffixes; committed result rows are upserted by benchmark dimensions.
 
 Environment variables:
 

@@ -340,14 +340,17 @@ function buildBenchmarkData(records: BenchmarkRecord[]): BenchmarkData {
   const parallelTransfers = shinRows.find(
     (record) => record.providerSummary?.maxParallelTransfers !== undefined,
   )?.providerSummary?.maxParallelTransfers;
+  const lambdaConfig =
+    metadataRecord.memoryMb === null || metadataRecord.memoryMb === undefined
+      ? undefined
+      : `Lambda: ${metadataRecord.memoryMb} MiB${
+          parallelTransfers === undefined ? "" : ` / ${parallelTransfers} parallel`
+        }`;
   const metadataParts = [
     metadataRecord.profile === null || metadataRecord.profile === undefined
       ? undefined
       : `Profile: ${metadataRecord.profile}`,
-    metadataRecord.memoryMb === null || metadataRecord.memoryMb === undefined
-      ? undefined
-      : `Lambda: ${metadataRecord.memoryMb} MiB`,
-    parallelTransfers === undefined ? undefined : `Parallel: ${parallelTransfers}`,
+    lambdaConfig,
     metadataRecord.fileCount === null ||
     metadataRecord.fileCount === undefined ||
     metadataRecord.totalBytes === null ||

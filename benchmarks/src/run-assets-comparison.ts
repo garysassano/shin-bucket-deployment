@@ -14,7 +14,7 @@ import {
 type BenchmarkImplementation = "shin" | "aws";
 type BenchmarkState = "baseline" | "changed" | "pruned";
 
-type MemoryParallelConfig = {
+type LambdaConfig = {
   readonly memoryMb: number;
   readonly parallel: number;
 };
@@ -27,7 +27,7 @@ type PhaseConfig = {
 
 type RunnerConfig = {
   readonly profiles: string[];
-  readonly configs: MemoryParallelConfig[];
+  readonly lambdaConfigs: LambdaConfig[];
   readonly implementations: BenchmarkImplementation[];
   readonly region: string;
   readonly outputFile: string;
@@ -43,7 +43,7 @@ type BenchmarkConfig = z.infer<typeof benchmarkConfigSchema>;
 
 type RunOptions = {
   readonly profiles: string[];
-  readonly configs: MemoryParallelConfig[];
+  readonly lambdaConfigs: LambdaConfig[];
   readonly implementations: BenchmarkImplementation[];
   readonly region: string;
   readonly outputFile: string;
@@ -75,7 +75,7 @@ const DEFAULT_PHASES: PhaseConfig[] = [
 const CLI_OPTIONS = new Set([
   "config",
   "profiles",
-  "memory-parallel",
+  "lambda-configs",
   "implementations",
   "region",
   "output-file",
@@ -90,7 +90,7 @@ const nonEmptyStringSchema = z.string().min(1);
 const positiveIntegerSchema = z.number().int().positive();
 const implementationSchema = z.enum(["shin", "aws"]);
 const stateSchema = z.enum(["baseline", "changed", "pruned"]);
-const familySchema = z.object({
+const lambdaConfigSchema = z.object({
   memoryMb: positiveIntegerSchema,
   parallel: positiveIntegerSchema,
 });
@@ -102,7 +102,6 @@ const phaseSchema = z.object({
 const benchmarkConfigSchema = z
   .object({
     $schema: nonEmptyStringSchema.optional(),
-    name: nonEmptyStringSchema.optional(),
     runToken: nonEmptyStringSchema.optional(),
     lastUpdated: nonEmptyStringSchema.optional(),
     region: nonEmptyStringSchema.optional(),
@@ -111,16 +110,11 @@ const benchmarkConfigSchema = z
     concurrency: positiveIntegerSchema.optional(),
     destinationPrefix: nonEmptyStringSchema.optional(),
     profiles: z.array(nonEmptyStringSchema).nonempty().optional(),
-    families: z.array(familySchema).nonempty().optional(),
-    configs: z.array(familySchema).nonempty().optional(),
+    lambdaConfigs: z.array(lambdaConfigSchema).nonempty().optional(),
     implementations: z.array(implementationSchema).nonempty().optional(),
     phases: z.array(phaseSchema).nonempty().optional(),
   })
-  .strict()
-  .refine((config) => !(config.families && config.configs), {
-    message: 'Use either "families" or "configs", not both.',
-    path: ["families"],
-  });
+  .strict();
 
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
@@ -129,9 +123,13 @@ async function main(): Promise<void> {
   writeFileSync(rowsFile, "");
 
   const git = await gitMetadata();
-  const families = options.profiles.flatMap((profile) =>
-    options.configs.flatMap((config) =>
-      options.implementations.map((implementation) => ({ implementation, profile, ...config })),
+  const runs = options.profiles.flatMap((profile) =>
+    options.lambdaConfigs.flatMap((lambdaConfig) =>
+      options.implementations.map((implementation) => ({
+        implementation,
+        profile,
+        ...lambdaConfig,
+      })),
     ),
   );
   const states = [...new Set(options.phases.map((phase) => phase.state))];
@@ -141,8 +139,8 @@ async function main(): Promise<void> {
     }
   }
 
-  await runWithConcurrency(families, options.concurrency, async (family) => {
-    const evidence = await runFamily({ family, git, options });
+  await runWithConcurrency(runs, options.concurrency, async (run) => {
+    const evidence = await runBenchmarkStack({ git, options, run });
     for (const item of evidence) {
       collectBenchmarkResult({ ...item.options, outputFile: rowsFile });
     }
@@ -155,19 +153,19 @@ async function main(): Promise<void> {
   console.log(`wrote sanitized benchmark rows to ${options.outputFile}`);
 }
 
-async function runFamily(args: {
-  readonly family: MemoryParallelConfig & {
+async function runBenchmarkStack(args: {
+  readonly run: LambdaConfig & {
     readonly implementation: BenchmarkImplementation;
     readonly profile: string;
   };
   readonly git: { readonly commit: string | null; readonly subject: string | null };
   readonly options: RunOptions;
 }): Promise<PhaseEvidence[]> {
-  const { family, git, options } = args;
-  const label = `${family.implementation}-${family.profile}-${family.memoryMb}-${family.parallel}`;
-  const stackSuffix = stackSuffixFor({ family, options });
+  const { git, options, run } = args;
+  const label = `${run.implementation}-${run.profile}-${run.memoryMb}-${run.parallel}`;
+  const stackSuffix = stackSuffixFor({ options, run });
   const stackName = `${
-    family.implementation === "shin"
+    run.implementation === "shin"
       ? "ShinBucketDeploymentBenchmarkAssetsDemo"
       : "AwsBucketDeploymentBenchmarkAssetsDemo"
   }${stackSuffix}`;
@@ -195,7 +193,7 @@ async function runFamily(args: {
           "--require-approval",
           "never",
         ],
-        env: benchmarkEnv({ family, options, phase, stackSuffix }),
+        env: benchmarkEnv({ options, phase, run, stackSuffix }),
         logFile: deployLog,
         quiet: true,
       });
@@ -203,7 +201,7 @@ async function runFamily(args: {
       const reportFile = join(scratch, `${phase.phase}.report.json`);
       const summaryFile = join(scratch, `${phase.phase}.summary.json`);
       const handler = await benchmarkHandlerName({
-        implementation: family.implementation,
+        implementation: run.implementation,
         region: options.region,
         stackName,
         scratchFile: join(scratch, `${phase.phase}.resources.json`),
@@ -216,7 +214,7 @@ async function runFamily(args: {
         requireEvents: true,
         startTimeMs: phaseStartedAt,
       });
-      if (family.implementation === "shin") {
+      if (run.implementation === "shin") {
         await writeLogEvents({
           filterPattern: "shin_deployment_summary",
           outputFile: summaryFile,
@@ -231,17 +229,17 @@ async function runFamily(args: {
         options: {
           logFile: deployLog,
           reportFile,
-          ...(family.implementation === "shin" ? { summaryFile } : {}),
+          ...(run.implementation === "shin" ? { summaryFile } : {}),
           outputFile: "",
           lastUpdated: options.lastUpdated,
           phase: phase.phase,
-          ...(family.implementation === "shin" && git.commit ? { commit: git.commit } : {}),
-          ...(family.implementation === "shin" && git.subject ? { subject: git.subject } : {}),
+          ...(run.implementation === "shin" && git.commit ? { commit: git.commit } : {}),
+          ...(run.implementation === "shin" && git.subject ? { subject: git.subject } : {}),
           region: options.region,
-          implementation: family.implementation,
-          profile: family.profile,
-          memoryMb: family.memoryMb,
-          parallel: family.parallel,
+          implementation: run.implementation,
+          profile: run.profile,
+          memoryMb: run.memoryMb,
+          parallel: run.parallel,
           state: phase.state,
           cleanup: "all benchmark stacks destroyed",
         },
@@ -267,9 +265,9 @@ async function runFamily(args: {
         "--force",
       ],
       env: benchmarkEnv({
-        family,
         options,
         phase: { phase: "destroy", state: options.phases.at(-1)?.state ?? "baseline", wait: true },
+        run,
         stackSuffix,
       }),
       logFile: join(scratch, "destroy.log"),
@@ -295,7 +293,7 @@ async function runFamily(args: {
 }
 
 function benchmarkEnv(args: {
-  readonly family: MemoryParallelConfig & {
+  readonly run: LambdaConfig & {
     readonly implementation: BenchmarkImplementation;
     readonly profile: string;
   };
@@ -303,17 +301,17 @@ function benchmarkEnv(args: {
   readonly phase: PhaseConfig;
   readonly stackSuffix: string;
 }): NodeJS.ProcessEnv {
-  const { family, options, phase, stackSuffix } = args;
+  const { options, phase, run, stackSuffix } = args;
   return {
     ...process.env,
     AWS_REGION: options.region,
     AWS_DEFAULT_REGION: options.region,
-    SHIN_BENCH_IMPLEMENTATION: family.implementation,
-    SHIN_BENCH_PROFILE: family.profile,
+    SHIN_BENCH_IMPLEMENTATION: run.implementation,
+    SHIN_BENCH_PROFILE: run.profile,
     SHIN_BENCH_STATE: phase.state,
     SHIN_BENCH_STACK_SUFFIX: stackSuffix,
-    SHIN_BENCH_MEMORY_LIMIT_MB: String(family.memoryMb),
-    SHIN_BENCH_MAX_PARALLEL_TRANSFERS: String(family.parallel),
+    SHIN_BENCH_MEMORY_LIMIT_MB: String(run.memoryMb),
+    SHIN_BENCH_MAX_PARALLEL_TRANSFERS: String(run.parallel),
     SHIN_BENCH_DESTINATION_PREFIX: options.destinationPrefix,
     SHIN_BENCH_WAIT: String(phase.wait),
   };
@@ -552,16 +550,18 @@ function parseArgs(args: string[]): RunOptions {
   const profiles = values.has("profiles")
     ? listValue(required(values, "profiles"))
     : config.profiles;
-  const configs = values.has("memory-parallel")
-    ? listValue(required(values, "memory-parallel")).map(parseMemoryParallel)
-    : config.configs;
+  const lambdaConfigs = values.has("lambda-configs")
+    ? listValue(required(values, "lambda-configs")).map(parseLambdaConfig)
+    : config.lambdaConfigs;
   const implementations = values.has("implementations")
     ? listValue(required(values, "implementations")).map(parseImplementation)
     : config.implementations;
   const region = values.get("region") ?? config.region;
   const lastUpdated = values.get("last-updated") ?? config.lastUpdated ?? today();
   const runToken =
-    values.get("run-token") ?? config.runToken ?? defaultRunToken(lastUpdated, profiles, configs);
+    values.get("run-token") ??
+    config.runToken ??
+    defaultRunToken(lastUpdated, profiles, lambdaConfigs);
   const scratchRoot = resolve(
     values.get("scratch-root") ??
       config.scratchRoot ??
@@ -577,7 +577,7 @@ function parseArgs(args: string[]): RunOptions {
 
   return {
     profiles,
-    configs,
+    lambdaConfigs,
     implementations,
     region,
     outputFile,
@@ -598,11 +598,10 @@ function readConfigFile(configPath: string | undefined): RunnerConfig {
   const filePath = resolve(process.cwd(), configPath);
   const parsed = benchmarkConfigSchema.parse(JSON.parse(readFileSync(filePath, "utf8")));
   const defaults = defaultConfig();
-  const configFamily = parsed.families ?? parsed.configs;
   const fileConfig = {
     ...defaults,
     ...(parsed.profiles === undefined ? {} : { profiles: parsed.profiles }),
-    ...(configFamily === undefined ? {} : { configs: configFamily }),
+    ...(parsed.lambdaConfigs === undefined ? {} : { lambdaConfigs: parsed.lambdaConfigs }),
     ...(parsed.implementations === undefined ? {} : { implementations: parsed.implementations }),
     ...(parsed.region === undefined ? {} : { region: parsed.region }),
     ...(parsed.outputFile === undefined ? {} : { outputFile: parsed.outputFile }),
@@ -624,13 +623,13 @@ function configPhaseToRunPhase(phase: NonNullable<BenchmarkConfig["phases"]>[num
 
 function defaultConfig(): RunnerConfig {
   const profiles = ["tiny-many"];
-  const configs = [
+  const lambdaConfigs = [
     { memoryMb: 2048, parallel: 64 },
     { memoryMb: 4096, parallel: 128 },
   ];
   return {
     profiles,
-    configs,
+    lambdaConfigs,
     implementations: ["shin", "aws"],
     region: process.env.AWS_REGION ?? "ap-southeast-2",
     outputFile: "benchmarks/results.jsonl",
@@ -661,7 +660,7 @@ function assertCliOption(name: string): void {
   }
 }
 
-function parseMemoryParallel(value: string): MemoryParallelConfig {
+function parseLambdaConfig(value: string): LambdaConfig {
   const [memory, parallel] = value.split(":");
   if (!memory || !parallel) {
     usage();
@@ -690,10 +689,10 @@ function positiveInteger(value: string, name: string): number {
 function defaultRunToken(
   lastUpdated: string,
   profiles: string[],
-  configs: MemoryParallelConfig[],
+  lambdaConfigs: LambdaConfig[],
 ): string {
-  return `${lastUpdated}-shin-aws-${profiles.join("-")}-${configs
-    .map((config) => `${config.memoryMb}-${config.parallel}`)
+  return `${lastUpdated}-shin-aws-${profiles.join("-")}-${lambdaConfigs
+    .map((lambdaConfig) => `${lambdaConfig.memoryMb}-${lambdaConfig.parallel}`)
     .join("-")}`;
 }
 
@@ -718,7 +717,7 @@ function rowBenchmarkKey(line: string): string | null {
 }
 
 function stackSuffixFor(args: {
-  readonly family: MemoryParallelConfig & {
+  readonly run: LambdaConfig & {
     readonly implementation: BenchmarkImplementation;
     readonly profile: string;
   };
@@ -726,7 +725,7 @@ function stackSuffixFor(args: {
 }): string {
   const dateToken = safeName(args.options.lastUpdated).replace(/-/g, "");
   const runToken = `${dateToken}-${shortHash(args.options.runToken)}`;
-  return `-${runToken}-${safeName(args.family.profile)}-${args.family.implementation}-${args.family.memoryMb}-${args.family.parallel}`;
+  return `-${runToken}-${safeName(args.run.profile)}-${args.run.implementation}-${args.run.memoryMb}-${args.run.parallel}`;
 }
 
 function today(): string {
@@ -756,7 +755,7 @@ function sleep(milliseconds: number): Promise<void> {
 
 function usage(): never {
   console.error(
-    "Usage: node dist/benchmarks/src/run-assets-comparison.js --config benchmarks/configs/tiny-many-shin-aws-2048-4096.json [--run-token <id>] [--last-updated <YYYY-MM-DD>] [--scratch-root <outside-repo>] [--concurrency 1]",
+    "Usage: node dist/benchmarks/src/run-assets-comparison.js --config benchmarks/configs/tiny-many-shin-aws-2048-4096.json [--lambda-configs 2048:64,4096:128] [--run-token <id>] [--last-updated <YYYY-MM-DD>] [--scratch-root <outside-repo>] [--concurrency 1]",
   );
   process.exit(1);
 }
