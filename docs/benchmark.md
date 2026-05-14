@@ -52,7 +52,7 @@ pnpm benchmark:run-assets -- \
   --config benchmarks/configs/tiny-many-shin-aws-2048-4096.json
 ```
 
-Curated benchmark matrices should live as committed JSON files under `benchmarks/configs/`. The runner accepts CLI overrides such as `--lambda-configs`, `--run-token`, `--last-updated`, `--scratch-root`, and `--concurrency`, but the config file is the source of truth for profile, Lambda configs, implementations, phases, region, output file, and destination prefix. `runToken` is only for scratch paths and stack suffixes; committed result rows are upserted by benchmark dimensions.
+Curated benchmark matrices should live as committed JSON files under `benchmarks/configs/`. The runner accepts CLI overrides such as `--lambda-configs`, `--run-token`, `--snapshot-date`, `--scratch-root`, and `--concurrency`, but the config file is the source of truth for profile, Lambda configs, implementations, phases, region, output file, and destination prefix. `runToken` is only for scratch paths and stack suffixes; committed result rows are upserted by benchmark dimensions.
 
 Environment variables:
 
@@ -121,13 +121,13 @@ Do not commit `.benchmark-runs/` raw output. Commit only curated aggregate resul
 
 ## Result Rows
 
-Committed benchmark results are represented as sanitized current-result records in `benchmarks/results.jsonl`. Rows are upserted by `profile`, `memoryMb`, `parallel`, `implementation`, `phase`, and `state`; use `lastUpdated` for the row refresh date. Use `null` for unavailable JSONL fields and do not invent values. The latest collection and documentation workflow is maintained in `.agents/skills/shin-benchmark/SKILL.md`.
+Committed benchmark results are represented as sanitized current-result records in `benchmarks/results.jsonl`. Rows are upserted by `profile`, `memoryMb`, `parallel`, `implementation`, `phase`, and `state`; use `snapshotDate` for the current-result snapshot date. Use `null` for unavailable JSONL fields and do not invent values. The latest collection and documentation workflow is maintained in `.agents/skills/shin-benchmark/SKILL.md`.
 
 ## Current Results
 
 | Field | Value |
 | --- | --- |
-| Run date | 2026-05-14 |
+| Snapshot date | 2026-05-14 |
 | Run ID | `2026-05-14-shin-aws-tiny-many-2048-64-4096-128` |
 | Provider implementation commit | `1dbf9a7` (`rework scenario and benchmark workflows`) |
 | Result documentation commit | Pending |

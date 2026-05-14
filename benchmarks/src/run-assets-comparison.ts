@@ -33,7 +33,7 @@ type RunnerConfig = {
   readonly outputFile: string;
   readonly scratchRoot?: string;
   readonly runToken?: string;
-  readonly lastUpdated?: string;
+  readonly snapshotDate?: string;
   readonly concurrency: number;
   readonly destinationPrefix: string;
   readonly phases: PhaseConfig[];
@@ -49,7 +49,7 @@ type RunOptions = {
   readonly outputFile: string;
   readonly scratchRoot: string;
   readonly runToken: string;
-  readonly lastUpdated: string;
+  readonly snapshotDate: string;
   readonly concurrency: number;
   readonly destinationPrefix: string;
   readonly phases: PhaseConfig[];
@@ -80,7 +80,7 @@ const CLI_OPTIONS = new Set([
   "region",
   "output-file",
   "run-token",
-  "last-updated",
+  "snapshot-date",
   "scratch-root",
   "concurrency",
   "destination-prefix",
@@ -103,7 +103,7 @@ const benchmarkConfigSchema = z
   .object({
     $schema: nonEmptyStringSchema.optional(),
     runToken: nonEmptyStringSchema.optional(),
-    lastUpdated: nonEmptyStringSchema.optional(),
+    snapshotDate: nonEmptyStringSchema.optional(),
     region: nonEmptyStringSchema.optional(),
     outputFile: nonEmptyStringSchema.optional(),
     scratchRoot: nonEmptyStringSchema.optional(),
@@ -231,7 +231,7 @@ async function runBenchmarkStack(args: {
           reportFile,
           ...(run.implementation === "shin" ? { summaryFile } : {}),
           outputFile: "",
-          lastUpdated: options.lastUpdated,
+          snapshotDate: options.snapshotDate,
           phase: phase.phase,
           ...(run.implementation === "shin" && git.commit ? { commit: git.commit } : {}),
           ...(run.implementation === "shin" && git.subject ? { subject: git.subject } : {}),
@@ -557,11 +557,11 @@ function parseArgs(args: string[]): RunOptions {
     ? listValue(required(values, "implementations")).map(parseImplementation)
     : config.implementations;
   const region = values.get("region") ?? config.region;
-  const lastUpdated = values.get("last-updated") ?? config.lastUpdated ?? today();
+  const snapshotDate = values.get("snapshot-date") ?? config.snapshotDate ?? today();
   const runToken =
     values.get("run-token") ??
     config.runToken ??
-    defaultRunToken(lastUpdated, profiles, lambdaConfigs);
+    defaultRunToken(snapshotDate, profiles, lambdaConfigs);
   const scratchRoot = resolve(
     values.get("scratch-root") ??
       config.scratchRoot ??
@@ -583,7 +583,7 @@ function parseArgs(args: string[]): RunOptions {
     outputFile,
     scratchRoot,
     runToken,
-    lastUpdated,
+    snapshotDate,
     concurrency,
     destinationPrefix,
     phases,
@@ -607,7 +607,7 @@ function readConfigFile(configPath: string | undefined): RunnerConfig {
     ...(parsed.outputFile === undefined ? {} : { outputFile: parsed.outputFile }),
     ...(parsed.scratchRoot === undefined ? {} : { scratchRoot: parsed.scratchRoot }),
     ...(parsed.runToken === undefined ? {} : { runToken: parsed.runToken }),
-    ...(parsed.lastUpdated === undefined ? {} : { lastUpdated: parsed.lastUpdated }),
+    ...(parsed.snapshotDate === undefined ? {} : { snapshotDate: parsed.snapshotDate }),
     ...(parsed.destinationPrefix === undefined
       ? {}
       : { destinationPrefix: parsed.destinationPrefix }),
@@ -687,11 +687,11 @@ function positiveInteger(value: string, name: string): number {
 }
 
 function defaultRunToken(
-  lastUpdated: string,
+  snapshotDate: string,
   profiles: string[],
   lambdaConfigs: LambdaConfig[],
 ): string {
-  return `${lastUpdated}-shin-aws-${profiles.join("-")}-${lambdaConfigs
+  return `${snapshotDate}-shin-aws-${profiles.join("-")}-${lambdaConfigs
     .map((lambdaConfig) => `${lambdaConfig.memoryMb}-${lambdaConfig.parallel}`)
     .join("-")}`;
 }
@@ -723,7 +723,7 @@ function stackSuffixFor(args: {
   };
   readonly options: RunOptions;
 }): string {
-  const dateToken = safeName(args.options.lastUpdated).replace(/-/g, "");
+  const dateToken = safeName(args.options.snapshotDate).replace(/-/g, "");
   const runToken = `${dateToken}-${shortHash(args.options.runToken)}`;
   return `-${runToken}-${safeName(args.run.profile)}-${args.run.implementation}-${args.run.memoryMb}-${args.run.parallel}`;
 }
@@ -755,7 +755,7 @@ function sleep(milliseconds: number): Promise<void> {
 
 function usage(): never {
   console.error(
-    "Usage: node dist/benchmarks/src/run-assets-comparison.js --config benchmarks/configs/tiny-many-shin-aws-2048-4096.json [--lambda-configs 2048:64,4096:128] [--run-token <id>] [--last-updated <YYYY-MM-DD>] [--scratch-root <outside-repo>] [--concurrency 1]",
+    "Usage: node dist/benchmarks/src/run-assets-comparison.js --config benchmarks/configs/tiny-many-shin-aws-2048-4096.json [--lambda-configs 2048:64,4096:128] [--run-token <id>] [--snapshot-date <YYYY-MM-DD>] [--scratch-root <outside-repo>] [--concurrency 1]",
   );
   process.exit(1);
 }

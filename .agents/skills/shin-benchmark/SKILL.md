@@ -139,7 +139,7 @@ pnpm benchmark:collect -- \
   --report-file <scratch>/report.json \
   --summary-file <scratch>/summary.json \
   --output-file benchmarks/results.jsonl \
-  --last-updated <YYYY-MM-DD> \
+  --snapshot-date <YYYY-MM-DD> \
   --phase <phase> \
   --commit <short-sha> \
   --subject "<commit subject>" \
@@ -161,7 +161,7 @@ Write one JSON object per measured phase to `benchmarks/results.jsonl`. This fil
 
 Required fields:
 
-- `lastUpdated`
+- `snapshotDate`
 - `providerImplementationCommit`
 - `providerImplementationSubject`
 - `resultDocumentationCommit`
