@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, join, relative } from "node:path";
 
 type BenchmarkRecord = {
-  readonly lastUpdated?: string;
+  readonly snapshotDate?: string;
   readonly providerImplementationCommit?: string | null;
   readonly providerImplementationSubject?: string | null;
   readonly resultDocumentationCommit?: string | null;
@@ -217,7 +217,7 @@ function renderScope(records: BenchmarkRecord[]): string {
     return "No benchmark records matched the selected filters.";
   }
 
-  const lastUpdated = unique(records.map((record) => record.lastUpdated));
+  const snapshotDates = unique(records.map((record) => record.snapshotDate));
   const implementations = unique(records.map((record) => implementationLabel(record)));
   const profiles = unique(records.map((record) => record.profile));
   const memoryValues = unique(records.map((record) => record.memoryMb));
@@ -227,7 +227,7 @@ function renderScope(records: BenchmarkRecord[]): string {
   return [
     "## Scope",
     "",
-    `- Last updated: ${lastUpdated.join(", ")}`,
+    `- Snapshot date: ${snapshotDates.join(", ")}`,
     `- Implementations: ${implementations.join(", ")}`,
     `- Profiles: ${profiles.join(", ")}`,
     `- Memory MiB: ${memoryValues.join(", ")}`,
