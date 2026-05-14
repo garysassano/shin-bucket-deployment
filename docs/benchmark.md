@@ -12,6 +12,8 @@ This file owns benchmark context and the latest sanitized human-readable perform
 
 `docs/verification.md` owns correctness verification status. Benchmark records may inform investigation, but they are not correctness verification evidence; benchmark timing and memory data belongs here or in `docs/benchmark-history.jsonl`.
 
+README benchmark snapshot SVGs and local snapshot render tooling live under `benchmarks/`. Keep the human benchmark page and sanitized append-only history in `docs/` so they stay next to the rest of the documentation; treat `benchmarks/` as generated benchmark support assets and tooling, not as the source of truth for sanitized evidence.
+
 ## Goals
 
 Measure each deployment phase:
