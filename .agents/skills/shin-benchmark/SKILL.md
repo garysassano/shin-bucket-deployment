@@ -5,7 +5,7 @@ description: |
 
   Use this skill when:
   1. Running AWS benchmark scenarios for this repository
-  2. Comparing ShinBucketDeployment configs with each other or with AWS CDK BucketDeployment
+  2. Comparing ShinBucketDeployment Lambda configs with each other or with AWS CDK BucketDeployment
   3. Updating docs/benchmark.md or benchmarks/results.jsonl
   4. Reviewing whether benchmark evidence is safe to commit
 ---
@@ -70,7 +70,7 @@ Supported runner options:
 - `--parallel`: Shin `maxParallelTransfers` values.
 - `--implementations`: `shin`, `aws`, or both.
 
-When the matrix has multiple configs and `SHIN_BENCH_STACK_SUFFIX` is not already set, the runner adds a deterministic suffix per config so stacks can coexist.
+When the matrix has multiple Lambda configs and `SHIN_BENCH_STACK_SUFFIX` is not already set, the runner adds a deterministic suffix per config so stacks can coexist.
 
 ## Benchmark Workflow
 
@@ -84,7 +84,7 @@ pnpm benchmark:run-assets -- \
   --config benchmarks/configs/tiny-many-shin-aws-2048-4096.json
 ```
 
-The config file defines the profiles, memory/parallel families, implementations, phases, region, output file, and default concurrency. Prefer adding or editing a committed config under `benchmarks/configs/` over building long CLI invocations. The runner deploys each stack family through the configured phases, captures CloudWatch `REPORT` events and Shin `shin_deployment_summary` events before cleanup, destroys the stack, verifies cleanup, and writes sanitized result rows. Keep `concurrency` or `--concurrency` at `1` unless intentionally running multiple stack families in parallel; each family is stateful and its phases must stay ordered.
+The config file defines the profiles, Lambda configs, implementations, phases, region, output file, and default concurrency. Prefer adding or editing a committed config under `benchmarks/configs/` over building long CLI invocations. Use `lambdaConfigs` in JSON files and `--lambda-configs <memory>:<parallel>` for CLI overrides. The runner deploys each stack through the configured phases, captures CloudWatch `REPORT` events and Shin `shin_deployment_summary` events before cleanup, destroys the stack, verifies cleanup, and writes sanitized result rows. Keep `concurrency` or `--concurrency` at `1` unless intentionally running multiple stacks in parallel; each stack is stateful and its phases must stay ordered.
 
 Choose benchmark configs deliberately. Paired Shin vs AWS comparisons should use:
 
@@ -95,7 +95,7 @@ Choose benchmark configs deliberately. Paired Shin vs AWS comparisons should use
 - same memory setting
 - same parallel setting, recorded in the top-level `parallel` field
 - same repetition count
-- same stack suffix family
+- same stack suffix pattern
 
 For parameter sweeps, keep all non-swept inputs identical and encode the swept value in the row identity. For `maxParallelTransfers` sweeps, include the top-level `parallel` field and the provider summary field `maxParallelTransfers`; distinct phase names such as `cold-create-parallel-8` are acceptable when the phase itself represents the sweep point. Use `--run-token` only for scratch paths and stack suffixes, not as committed result identity.
 
