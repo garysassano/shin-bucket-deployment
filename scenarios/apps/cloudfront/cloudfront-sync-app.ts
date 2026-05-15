@@ -18,7 +18,7 @@ import { S3BucketOrigin } from "aws-cdk-lib/aws-cloudfront-origins";
 import { Bucket } from "aws-cdk-lib/aws-s3";
 import { CacheControl, ShinBucketDeployment, Source } from "../../../src";
 
-class CloudFrontWaitShinBucketDeploymentStack extends Stack {
+class CloudFrontSyncShinBucketDeploymentStack extends Stack {
   constructor(scope: App, id: string, props?: StackProps) {
     super(scope, id, props);
 
@@ -109,7 +109,7 @@ class CloudFrontWaitShinBucketDeploymentStack extends Stack {
 
     new CfnOutput(this, "RedeployWithNewTokenCommand", {
       value:
-        "pnpm verify deploy cloudfront-wait -- --parameters ShinBucketDeploymentCloudFrontWaitDemo:CacheProbeToken=<new-token-value>",
+        "pnpm verify deploy cloudfront-sync -- --parameters ShinBucketDeploymentCloudFrontSyncDemo:CacheProbeToken=<new-token-value>",
     });
   }
 }
@@ -123,6 +123,6 @@ const env =
       }
     : undefined;
 
-new CloudFrontWaitShinBucketDeploymentStack(app, "ShinBucketDeploymentCloudFrontWaitDemo", {
+new CloudFrontSyncShinBucketDeploymentStack(app, "ShinBucketDeploymentCloudFrontSyncDemo", {
   env,
 });
