@@ -25,6 +25,7 @@ type PhaseConfig = {
   readonly cloudfrontWait: boolean;
   readonly phase: string;
   readonly prune: boolean;
+  readonly retainOnDelete?: boolean;
 };
 
 type RunnerConfig = {
@@ -69,9 +70,15 @@ type StackResource = {
 
 const DEFAULT_PHASES: PhaseConfig[] = [
   { assetState: "baseline", cloudfrontWait: false, phase: "cold-create", prune: true },
-  { assetState: "baseline", cloudfrontWait: false, phase: "forced-unchanged", prune: true },
-  { assetState: "changed", cloudfrontWait: false, phase: "sparse-update", prune: true },
-  { assetState: "pruned", cloudfrontWait: false, phase: "prune-update", prune: true },
+  {
+    assetState: "baseline",
+    cloudfrontWait: false,
+    phase: "unchanged-update",
+    prune: true,
+    retainOnDelete: true,
+  },
+  { assetState: "changed", cloudfrontWait: false, phase: "changed-update", prune: true },
+  { assetState: "pruned", cloudfrontWait: false, phase: "pruned-update", prune: true },
 ];
 
 const CLI_OPTIONS = new Set([
@@ -99,9 +106,10 @@ const lambdaConfigSchema = z.object({
 });
 const phaseSchema = z.object({
   assetState: stateSchema,
-  cloudfrontWait: z.boolean(),
+  cloudfrontWait: z.boolean().optional(),
   name: nonEmptyStringSchema,
-  prune: z.boolean(),
+  prune: z.boolean().optional(),
+  retainOnDelete: z.boolean().optional(),
 });
 const benchmarkConfigSchema = z
   .object({
@@ -322,6 +330,9 @@ function benchmarkEnv(args: {
     SHIN_BENCH_ASSET_STATE: phase.assetState,
     SHIN_BENCH_ASSET_PROFILE: run.assetProfile,
     SHIN_BENCH_PRUNE: String(phase.prune),
+    ...(phase.retainOnDelete === undefined
+      ? {}
+      : { SHIN_BENCH_RETAIN_ON_DELETE: String(phase.retainOnDelete) }),
     SHIN_BENCH_STACK_SUFFIX: stackSuffix,
     SHIN_BENCH_WAIT_FOR_CLOUDFRONT: String(phase.cloudfrontWait),
   };
@@ -606,7 +617,7 @@ function readConfigFile(configPath: string | undefined): RunnerConfig {
   }
 
   const filePath = resolve(process.cwd(), configPath);
-  const parsed = benchmarkConfigSchema.parse(JSON.parse(readFileSync(filePath, "utf8")));
+  const parsed = benchmarkConfigSchema.parse(parseJsonc(readFileSync(filePath, "utf8")));
   const defaults = defaultConfig();
   const fileConfig = {
     ...defaults,
@@ -627,12 +638,61 @@ function readConfigFile(configPath: string | undefined): RunnerConfig {
   return fileConfig;
 }
 
+function parseJsonc(text: string): unknown {
+  return JSON.parse(stripJsonComments(text));
+}
+
+function stripJsonComments(text: string): string {
+  let output = "";
+  let inString = false;
+  let escaped = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    const next = text[index + 1];
+    if (inString) {
+      output += char;
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+      output += char;
+      continue;
+    }
+    if (char === "/" && next === "/") {
+      while (index < text.length && text[index] !== "\n") {
+        index += 1;
+      }
+      output += "\n";
+      continue;
+    }
+    if (char === "/" && next === "*") {
+      index += 2;
+      while (index < text.length && !(text[index] === "*" && text[index + 1] === "/")) {
+        output += text[index] === "\n" ? "\n" : " ";
+        index += 1;
+      }
+      index += 1;
+      continue;
+    }
+    output += char;
+  }
+  return output;
+}
+
 function configPhaseToRunPhase(phase: NonNullable<BenchmarkConfig["phases"]>[number]): PhaseConfig {
   return {
     assetState: phase.assetState,
-    cloudfrontWait: phase.cloudfrontWait,
+    cloudfrontWait: phase.cloudfrontWait ?? false,
     phase: phase.name,
-    prune: phase.prune,
+    prune: phase.prune ?? true,
+    retainOnDelete: phase.retainOnDelete,
   };
 }
 
@@ -777,7 +837,7 @@ function sleep(milliseconds: number): Promise<void> {
 
 function usage(): never {
   console.error(
-    "Usage: node dist/benchmarks/src/run-assets-comparison.js --config benchmarks/configs/shin-aws-2048-64-4096-128.json [--asset-profiles tiny-many,large-few] [--lambda-configs 2048:64,4096:128] [--run-token <id>] [--snapshot-date <YYYY-MM-DD>] [--scratch-root <outside-repo>] [--concurrency 1]",
+    "Usage: node dist/benchmarks/src/run-assets-comparison.js --config benchmarks/configs/shin-aws-2048-64-4096-128.jsonc [--asset-profiles tiny-many,large-few] [--lambda-configs 2048:64,4096:128] [--run-token <id>] [--snapshot-date <YYYY-MM-DD>] [--scratch-root <outside-repo>] [--concurrency 1]",
   );
   process.exit(1);
 }

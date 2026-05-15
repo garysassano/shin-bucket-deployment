@@ -56,7 +56,7 @@
 <rect x="700" y="110" width="60" height="22" rx="5" fill="#082b35" stroke="#18d4f8" stroke-width="0.5" filter="url(#badgeShadow)"/>
 <text x="730" y="125" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" font-weight="800" fill="#6ef0d0">5.4×</text>
 <rect x="24" y="144" width="736" height="1" fill="#142230"/>
-<text x="24" y="174" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="600" fill="#d8edf8">forced-unchanged</text>
+<text x="24" y="174" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="600" fill="#d8edf8">unchanged-update</text>
 <rect x="180" y="156" width="320" height="11" rx="5.5" fill="#12202c"/>
 <rect x="180" y="156" width="4.66225165562914" height="11" rx="5.5" fill="url(#shin)"/>
 <rect x="180" y="173" width="320" height="11" rx="5.5" fill="#12202c"/>
@@ -67,7 +67,7 @@
 <rect x="700" y="160" width="60" height="22" rx="5" fill="#082b35" stroke="#18d4f8" stroke-width="0.5" filter="url(#badgeShadow)"/>
 <text x="730" y="175" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" font-weight="800" fill="#6ef0d0">68.2×</text>
 <rect x="24" y="194" width="736" height="1" fill="#142230"/>
-<text x="24" y="224" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="600" fill="#d8edf8">sparse-update</text>
+<text x="24" y="224" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="600" fill="#d8edf8">changed-update</text>
 <rect x="180" y="206" width="320" height="11" rx="5.5" fill="#12202c"/>
 <rect x="180" y="206" width="5.7218543046357615" height="11" rx="5.5" fill="url(#shin)"/>
 <rect x="180" y="223" width="320" height="11" rx="5.5" fill="#12202c"/>
@@ -78,7 +78,7 @@
 <rect x="700" y="210" width="60" height="22" rx="5" fill="#082b35" stroke="#18d4f8" stroke-width="0.5" filter="url(#badgeShadow)"/>
 <text x="730" y="225" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" font-weight="800" fill="#6ef0d0">55.9×</text>
 <rect x="24" y="244" width="736" height="1" fill="#142230"/>
-<text x="24" y="274" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="600" fill="#d8edf8">prune-update</text>
+<text x="24" y="274" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="600" fill="#d8edf8">pruned-update</text>
 <rect x="180" y="256" width="320" height="11" rx="5.5" fill="#12202c"/>
 <rect x="180" y="256" width="70.25165562913907" height="11" rx="5.5" fill="url(#shin)" filter="url(#gS)" opacity="0.5"/>
 <rect x="180" y="256" width="70.25165562913907" height="11" rx="5.5" fill="url(#shin)"/>
@@ -108,7 +108,7 @@
 <rect x="700" y="333" width="60" height="22" rx="5" fill="#082b35" stroke="#18d4f8" stroke-width="0.5" filter="url(#badgeShadow)"/>
 <text x="730" y="348" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" font-weight="800" fill="#6ef0d0">61%</text>
 <rect x="24" y="367" width="736" height="1" fill="#142230"/>
-<text x="24" y="397" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="600" fill="#d8edf8">forced-unchanged</text>
+<text x="24" y="397" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="600" fill="#d8edf8">unchanged-update</text>
 <rect x="180" y="379" width="320" height="11" rx="5.5" fill="#12202c"/>
 <rect x="180" y="379" width="158.5185185185185" height="11" rx="5.5" fill="url(#shin)" filter="url(#gS)" opacity="0.5"/>
 <rect x="180" y="379" width="158.5185185185185" height="11" rx="5.5" fill="url(#shin)"/>
@@ -120,7 +120,7 @@
 <rect x="700" y="383" width="60" height="22" rx="5" fill="#082b35" stroke="#18d4f8" stroke-width="0.5" filter="url(#badgeShadow)"/>
 <text x="730" y="398" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" font-weight="800" fill="#6ef0d0">50%</text>
 <rect x="24" y="417" width="736" height="1" fill="#142230"/>
-<text x="24" y="447" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="600" fill="#d8edf8">sparse-update</text>
+<text x="24" y="447" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="600" fill="#d8edf8">changed-update</text>
 <rect x="180" y="429" width="320" height="11" rx="5.5" fill="#12202c"/>
 <rect x="180" y="429" width="158.5185185185185" height="11" rx="5.5" fill="url(#shin)" filter="url(#gS)" opacity="0.5"/>
 <rect x="180" y="429" width="158.5185185185185" height="11" rx="5.5" fill="url(#shin)"/>
@@ -132,7 +132,7 @@
 <rect x="700" y="433" width="60" height="22" rx="5" fill="#082b35" stroke="#18d4f8" stroke-width="0.5" filter="url(#badgeShadow)"/>
 <text x="730" y="448" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" font-weight="800" fill="#6ef0d0">50%</text>
 <rect x="24" y="467" width="736" height="1" fill="#142230"/>
-<text x="24" y="497" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="600" fill="#d8edf8">prune-update</text>
+<text x="24" y="497" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="600" fill="#d8edf8">pruned-update</text>
 <rect x="180" y="479" width="320" height="11" rx="5.5" fill="#12202c"/>
 <rect x="180" y="479" width="160" height="11" rx="5.5" fill="url(#shin)" filter="url(#gS)" opacity="0.5"/>
 <rect x="180" y="479" width="160" height="11" rx="5.5" fill="url(#shin)"/>

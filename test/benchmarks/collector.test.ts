@@ -46,7 +46,7 @@ describe("benchmark result collector", () => {
       reportFile,
       outputFile,
       snapshotDate: "2026-05-02",
-      phase: "forced-unchanged",
+      phase: "unchanged-update",
       commit: "abc1234",
       region: "ap-southeast-2",
     });
@@ -61,7 +61,7 @@ describe("benchmark result collector", () => {
       profile: "mixed",
       memoryMb: 512,
       parallel: null,
-      phase: "forced-unchanged",
+      phase: "unchanged-update",
       state: "baseline",
       fileCount: 442,
       totalBytes: 52904649,

@@ -1,6 +1,5 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://example.local/shin-bucket-deployment/benchmark-config.schema.json",
   "title": "ShinBucketDeployment Asset Benchmark Config",
   "type": "object",
   "additionalProperties": false,
@@ -59,7 +58,7 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["assetState", "cloudfrontWait", "name", "prune"],
+        "required": ["assetState", "name"],
         "properties": {
           "assetState": {
             "enum": ["baseline", "changed", "pruned"]
@@ -72,6 +71,9 @@
             "minLength": 1
           },
           "prune": {
+            "type": "boolean"
+          },
+          "retainOnDelete": {
             "type": "boolean"
           }
         }

@@ -20,6 +20,7 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
       "SHIN_BENCH_LAMBDA_MAX_PARALLEL_TRANSFERS",
     );
     const implementation = parseImplementation(process.env.SHIN_BENCH_IMPLEMENTATION);
+    const retainOnDelete = parseOptionalBooleanEnv("SHIN_BENCH_RETAIN_ON_DELETE");
 
     const websiteBucket = new Bucket(this, "WebsiteBucket", {
       autoDeleteObjects: true,
@@ -31,6 +32,7 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
       destinationKeyPrefix: destinationPrefix,
       memoryLimit: memoryLimitMb,
       prune: process.env.SHIN_BENCH_PRUNE !== "false",
+      ...(retainOnDelete === undefined ? {} : { retainOnDelete }),
       waitForDistributionInvalidation: process.env.SHIN_BENCH_WAIT_FOR_CLOUDFRONT === "true",
     };
 
@@ -109,6 +111,20 @@ function parseOptionalPositiveIntegerEnv(name: string): number | undefined {
     throw new Error(`${name} must be a positive integer.`);
   }
   return value;
+}
+
+function parseOptionalBooleanEnv(name: string): boolean | undefined {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") {
+    return undefined;
+  }
+  if (raw === "true") {
+    return true;
+  }
+  if (raw === "false") {
+    return false;
+  }
+  throw new Error(`${name} must be either "true" or "false".`);
 }
 
 const app = new App();

@@ -17,27 +17,21 @@
   "phases": [
     {
       "name": "cold-create",
+      "assetState": "baseline"
+    },
+    {
+      "name": "unchanged-update",
       "assetState": "baseline",
-      "cloudfrontWait": false,
-      "prune": true
+      // Explicitly changes the custom resource input so the unchanged phase retriggers telemetry.
+      "retainOnDelete": true
     },
     {
-      "name": "forced-unchanged",
-      "assetState": "baseline",
-      "cloudfrontWait": false,
-      "prune": true
+      "name": "changed-update",
+      "assetState": "changed"
     },
     {
-      "name": "sparse-update",
-      "assetState": "changed",
-      "cloudfrontWait": false,
-      "prune": true
-    },
-    {
-      "name": "prune-update",
-      "assetState": "pruned",
-      "cloudfrontWait": false,
-      "prune": true
+      "name": "pruned-update",
+      "assetState": "pruned"
     }
   ]
 }
