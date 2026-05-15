@@ -18,10 +18,10 @@ Runbooks, evidence collection rules, schema guidance, and sanitization rules liv
 
 | Field | Value |
 | --- | --- |
-| Snapshot date | 2026-05-14 |
+| Snapshot date | 2026-05-15 |
 | Region | `ap-southeast-2` |
 | Implementations | `shin` and upstream AWS CDK `BucketDeployment` |
-| Asset profiles | `tiny-many`, `large-few` |
+| Asset profiles | `tiny-many`, `large-few`, `mixed` |
 | Phases | `cold-create`, `unchanged-update`, `changed-update`, `pruned-update` |
 | Cleanup | All benchmark stacks destroyed after telemetry collection |
 | Raw evidence | Not committed; raw AWS output remains in scratch only |

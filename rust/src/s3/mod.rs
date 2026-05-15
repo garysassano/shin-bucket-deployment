@@ -13,7 +13,7 @@ mod transfer;
 
 pub(crate) use destination::{bucket_owned, delete_prefix};
 
-pub(crate) const DEFAULT_MAX_PARALLEL_TRANSFERS: usize = 16;
+pub(crate) const DEFAULT_MAX_PARALLEL_TRANSFERS: usize = 32;
 pub(crate) const DEFAULT_SOURCE_BLOCK_BYTES: usize = 8 * 1024 * 1024;
 pub(crate) const DEFAULT_SOURCE_BLOCK_MERGE_GAP_BYTES: usize = 256 * 1024;
 pub(crate) const DEFAULT_SOURCE_WINDOW_MEMORY_BUDGET_MB: u64 = 256;

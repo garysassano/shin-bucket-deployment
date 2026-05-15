@@ -23,7 +23,7 @@ Runtime tuning defaults:
 
 | Setting | Default | Purpose |
 | --- | ---: | --- |
-| `maxParallelTransfers` | 16 | Bounds copy, hash, upload, and related transfer work. |
+| `maxParallelTransfers` | 32 | Bounds copy, hash, upload, and related transfer work. |
 | `ephemeralStorageSize` | CDK Lambda default | Accepted for upstream API compatibility, but usually not useful because the provider avoids Lambda `/tmp`. |
 
 Most deployments should tune only `memoryLimit` and, when needed, `maxParallelTransfers`. Source block/window and `PutObject` retry settings remain available under `advancedRuntimeTuning` as support and benchmark escape hatches:
@@ -53,12 +53,12 @@ The default provider Lambda memory is 1024 MiB. That default is sized around the
 | Budget item at default settings | Approximate budget |
 | --- | ---: |
 | Runtime/base reserve | 64 MiB |
-| Transfer worker reserve, `16 * 12 MiB` | 192 MiB |
+| Transfer worker reserve, `32 * 12 MiB` | 384 MiB |
 | Source ranged `GetObject` in-flight reserve, `4 * 8 MiB` | 32 MiB |
 | ZIP entry metadata reserve | 2 KiB per file |
-| Remaining source block window | About 352 MiB minus the file reserve for large enough archives, clamped to the source ZIP size |
+| Remaining source block window | About 160 MiB minus the file reserve for large enough archives, clamped to the source ZIP size |
 
-The explicit streaming buffers are small enough to fit inside the transfer worker reserve: each active marker-free upload stream uses about 64 KiB read buffer, 64 KiB held-back validation buffer, 256 KiB body assembly buffer, and up to 1 MiB of queued body frames. At sixteen active transfers that is roughly 22 MiB of entry stream buffering. For 2,500 ZIP entries, the file reserve is about 5 MiB and the adaptive source window can grow to about 347 MiB when the source ZIP is large enough. For small archives, the source window is clamped down to the actual source ZIP size, so observed RSS is much lower than the worst-case budget.
+The explicit streaming buffers are small enough to fit inside the transfer worker reserve: each active marker-free upload stream uses about 64 KiB read buffer, 64 KiB held-back validation buffer, 256 KiB body assembly buffer, and up to 1 MiB of queued body frames. At 32 active transfers that is roughly 44 MiB of entry stream buffering. For 2,500 ZIP entries, the file reserve is about 5 MiB and the adaptive source window can grow to about 155 MiB when the source ZIP is large enough. For small archives, the source window is clamped down to the actual source ZIP size, so observed RSS is much lower than the worst-case budget.
 
 Adaptive source window formula:
 

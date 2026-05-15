@@ -78,7 +78,7 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
     });
 
     new CfnOutput(this, "BenchmarkMaxParallelTransfers", {
-      value: String(maxParallelTransfers ?? 16),
+      value: String(maxParallelTransfers ?? 32),
     });
 
     new CfnOutput(this, "BenchmarkImplementation", {
