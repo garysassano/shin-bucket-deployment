@@ -4,16 +4,20 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { z } from "zod";
 import { ensureBenchmarkAssets } from "./assets";
+import { parseCliOptions } from "./cli";
+import { type CollectBenchmarkOptions, collectBenchmarkResult } from "./collect-results";
 import {
+  BENCHMARK_ASSET_PROFILES,
+  BENCHMARK_ASSET_STATES,
+  BENCHMARK_IMPLEMENTATIONS,
+  type BenchmarkAssetProfile,
+  type BenchmarkAssetState,
+  type BenchmarkImplementation,
   type BenchmarkResultRecord,
-  type CollectBenchmarkOptions,
   benchmarkResultKey,
-  collectBenchmarkResult,
-} from "./collect-results";
-
-type BenchmarkImplementation = "shin" | "aws";
-type BenchmarkAssetProfile = "tiny-many" | "mixed" | "large-few";
-type BenchmarkState = "baseline" | "changed" | "pruned";
+  isBenchmarkAssetProfile,
+  isBenchmarkImplementation,
+} from "./model";
 
 type LambdaConfig = {
   readonly memoryMb: number;
@@ -21,9 +25,9 @@ type LambdaConfig = {
 };
 
 type PhaseConfig = {
-  readonly assetState: BenchmarkState;
+  readonly assetState: BenchmarkAssetState;
   readonly cloudfrontWait: boolean;
-  readonly phase: string;
+  readonly name: string;
   readonly prune: boolean;
   readonly retainOnDelete?: boolean;
 };
@@ -69,19 +73,19 @@ type StackResource = {
 };
 
 const DEFAULT_PHASES: PhaseConfig[] = [
-  { assetState: "baseline", cloudfrontWait: false, phase: "cold-create", prune: true },
+  { assetState: "baseline", cloudfrontWait: false, name: "cold-create", prune: true },
   {
     assetState: "baseline",
     cloudfrontWait: false,
-    phase: "unchanged-update",
+    name: "unchanged-update",
     prune: true,
     retainOnDelete: true,
   },
-  { assetState: "changed", cloudfrontWait: false, phase: "changed-update", prune: true },
-  { assetState: "pruned", cloudfrontWait: false, phase: "pruned-update", prune: true },
+  { assetState: "changed", cloudfrontWait: false, name: "changed-update", prune: true },
+  { assetState: "pruned", cloudfrontWait: false, name: "pruned-update", prune: true },
 ];
 
-const CLI_OPTIONS = new Set([
+const CLI_OPTIONS = [
   "config",
   "asset-profiles",
   "lambda-configs",
@@ -93,13 +97,13 @@ const CLI_OPTIONS = new Set([
   "scratch-root",
   "concurrency",
   "destination-prefix",
-]);
+];
 
 const nonEmptyStringSchema = z.string().min(1);
 const positiveIntegerSchema = z.number().int().positive();
-const implementationSchema = z.enum(["shin", "aws"]);
-const assetProfileSchema = z.enum(["tiny-many", "mixed", "large-few"]);
-const stateSchema = z.enum(["baseline", "changed", "pruned"]);
+const implementationSchema = z.enum(BENCHMARK_IMPLEMENTATIONS);
+const assetProfileSchema = z.enum(BENCHMARK_ASSET_PROFILES);
+const stateSchema = z.enum(BENCHMARK_ASSET_STATES);
 const lambdaConfigSchema = z.object({
   memoryMb: positiveIntegerSchema,
   parallel: positiveIntegerSchema,
@@ -189,9 +193,9 @@ async function runBenchmarkStack(args: {
   let runError: unknown;
   try {
     for (const phase of options.phases) {
-      console.log(`${label}: ${phase.phase}`);
+      console.log(`${label}: ${phase.name}`);
       const phaseStartedAt = Date.now();
-      const deployLog = join(scratch, `${phase.phase}.deploy.log`);
+      const deployLog = join(scratch, `${phase.name}.deploy.log`);
       await runCommand({
         command: "pnpm",
         args: [
@@ -210,13 +214,13 @@ async function runBenchmarkStack(args: {
         quiet: true,
       });
 
-      const reportFile = join(scratch, `${phase.phase}.report.json`);
-      const summaryFile = join(scratch, `${phase.phase}.summary.json`);
+      const reportFile = join(scratch, `${phase.name}.report.json`);
+      const summaryFile = join(scratch, `${phase.name}.summary.json`);
       const handler = await benchmarkHandlerName({
         implementation: run.implementation,
         region: options.region,
         stackName,
-        scratchFile: join(scratch, `${phase.phase}.resources.json`),
+        scratchFile: join(scratch, `${phase.name}.resources.json`),
       });
       await writeLogEvents({
         filterPattern: "REPORT",
@@ -244,7 +248,7 @@ async function runBenchmarkStack(args: {
           ...(run.implementation === "shin" ? { summaryFile } : {}),
           outputFile: "",
           snapshotDate: options.snapshotDate,
-          phase: phase.phase,
+          phase: phase.name,
           ...(run.implementation === "shin" && git.commit ? { commit: git.commit } : {}),
           ...(run.implementation === "shin" && git.subject ? { subject: git.subject } : {}),
           region: options.region,
@@ -281,7 +285,7 @@ async function runBenchmarkStack(args: {
         phase: {
           assetState: options.phases.at(-1)?.assetState ?? "baseline",
           cloudfrontWait: false,
-          phase: "destroy",
+          name: "destroy",
           prune: options.phases.at(-1)?.prune ?? true,
         },
         run,
@@ -543,29 +547,7 @@ async function runWithConcurrency<T>(
 }
 
 function parseArgs(args: string[]): RunOptions {
-  const values = new Map<string, string>();
-  const normalizedArgs = args.filter((arg) => arg !== "--");
-  for (let index = 0; index < normalizedArgs.length; index += 1) {
-    const key = normalizedArgs[index];
-    if (!key?.startsWith("--")) {
-      usage();
-    }
-    const inlineIndex = key.indexOf("=");
-    if (inlineIndex !== -1) {
-      const name = key.slice(2, inlineIndex);
-      assertCliOption(name);
-      values.set(name, key.slice(inlineIndex + 1));
-      continue;
-    }
-    const value = normalizedArgs[index + 1];
-    if (value === undefined || value.startsWith("--")) {
-      usage();
-    }
-    const name = key.slice(2);
-    assertCliOption(name);
-    values.set(name, value);
-    index += 1;
-  }
+  const values = parseCliOptions(args, CLI_OPTIONS, usage);
 
   const config = readConfigFile(values.get("config"));
   const assetProfiles = values.has("asset-profiles")
@@ -642,7 +624,7 @@ function configPhaseToRunPhase(phase: NonNullable<BenchmarkConfig["phases"]>[num
   return {
     assetState: phase.assetState,
     cloudfrontWait: phase.cloudfrontWait ?? false,
-    phase: phase.name,
+    name: phase.name,
     prune: phase.prune ?? true,
     retainOnDelete: phase.retainOnDelete,
   };
@@ -681,12 +663,6 @@ function required(values: Map<string, string>, name: string): string {
   return value;
 }
 
-function assertCliOption(name: string): void {
-  if (!CLI_OPTIONS.has(name)) {
-    throw new Error(`Unknown option --${name}.`);
-  }
-}
-
 function parseLambdaConfig(value: string): LambdaConfig {
   const [memory, parallel] = value.split(":");
   if (!memory || !parallel) {
@@ -699,14 +675,14 @@ function parseLambdaConfig(value: string): LambdaConfig {
 }
 
 function parseImplementation(value: string): BenchmarkImplementation {
-  if (value === "shin" || value === "aws") {
+  if (isBenchmarkImplementation(value)) {
     return value;
   }
   usage();
 }
 
 function parseAssetProfile(value: string): BenchmarkAssetProfile {
-  if (value === "tiny-many" || value === "mixed" || value === "large-few") {
+  if (isBenchmarkAssetProfile(value)) {
     return value;
   }
   usage();

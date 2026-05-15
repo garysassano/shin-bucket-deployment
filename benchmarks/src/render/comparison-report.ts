@@ -1,29 +1,14 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, join, relative } from "node:path";
+import { parseCliOptions } from "../cli";
+import {
+  type BenchmarkResultRecord,
+  implementationLabel,
+  phaseRank,
+  readBenchmarkResultRecords,
+} from "../model";
 
-type BenchmarkRecord = {
-  readonly snapshotDate?: string;
-  readonly providerImplementationCommit?: string | null;
-  readonly providerImplementationSubject?: string | null;
-  readonly resultDocumentationCommit?: string | null;
-  readonly region?: string | null;
-  readonly implementation?: string | null;
-  readonly profile?: string | null;
-  readonly memoryMb?: number | null;
-  readonly parallel?: number | null;
-  readonly phase?: string;
-  readonly state?: string | null;
-  readonly fileCount?: number | null;
-  readonly totalBytes?: number | null;
-  readonly cdkDeploySeconds?: number | null;
-  readonly localWallSeconds?: number | null;
-  readonly providerDurationSeconds?: number | null;
-  readonly billedDurationSeconds?: number | null;
-  readonly initDurationSeconds?: number | null;
-  readonly maxMemoryMb?: number | null;
-  readonly providerInvoked?: boolean;
-  readonly providerSummary?: unknown;
-};
+type BenchmarkRecord = BenchmarkResultRecord;
 
 type MetricName =
   | "providerDurationSeconds"
@@ -86,14 +71,17 @@ const METRICS: Array<{ name: MetricName; label: string; unit: string }> = [
   { name: "maxMemoryMb", label: "Max memory", unit: "MiB" },
 ];
 
-const PHASE_ORDER = new Map([
-  ["cold-create", 0],
-  ["unchanged-update", 1],
-  ["no-change-redeploy", 2],
-  ["changed-update", 3],
-  ["pruned-update", 4],
-  ["destroy", 5],
-]);
+const CLI_OPTIONS = [
+  "asset-profile",
+  "chart-layout",
+  "chart-output-file",
+  "chart-reference",
+  "chart-theme",
+  "input-file",
+  "lambda-max-parallel-transfers",
+  "lambda-memory-mb",
+  "output-file",
+] as const;
 
 const CHART_THEMES: Record<ChartThemeName, ChartTheme> = {
   signal: {
@@ -159,7 +147,7 @@ function main(): void {
 }
 
 export function renderBenchmarkReport(options: RenderOptions): string {
-  const records = readRecords(options.inputFile)
+  const records = readBenchmarkResultRecords(options.inputFile)
     .filter((record) => (options.assetProfile ? record.profile === options.assetProfile : true))
     .filter((record) => (options.memoryMb ? record.memoryMb === options.memoryMb : true))
     .filter((record) => (options.parallel ? record.parallel === options.parallel : true));
@@ -1118,38 +1106,12 @@ function comparePhaseGroups(
   );
 }
 
-function phaseRank(phase: string): number {
-  return PHASE_ORDER.get(phase) ?? Number.MAX_SAFE_INTEGER;
-}
-
 function percentile(sorted: number[], quantile: number): number {
   if (sorted.length === 0) {
     return 0;
   }
   const index = Math.ceil(sorted.length * quantile) - 1;
   return sorted[Math.max(0, Math.min(sorted.length - 1, index))];
-}
-
-function implementationLabel(record: BenchmarkRecord): string {
-  const implementation = record.implementation ?? inferImplementation(record);
-  if (implementation === "rust") {
-    return "shin";
-  }
-  return implementation ?? "unknown";
-}
-
-function inferImplementation(record: BenchmarkRecord): string | null {
-  if (record.providerImplementationCommit || record.providerSummary) {
-    return "shin";
-  }
-  return null;
-}
-
-function readRecords(path: string): BenchmarkRecord[] {
-  return readFileSync(path, "utf8")
-    .split(/\n/)
-    .filter(Boolean)
-    .map((line) => JSON.parse(line) as BenchmarkRecord);
 }
 
 function unique<T>(values: Array<T | null | undefined>): T[] {
@@ -1267,16 +1229,7 @@ function normalizeMarkdownPath(path: string): string {
 }
 
 function parseArgs(args: string[]): RenderOptions {
-  const values = new Map<string, string>();
-  const normalizedArgs = args.filter((arg) => arg !== "--");
-  for (let index = 0; index < normalizedArgs.length; index += 2) {
-    const key = normalizedArgs[index];
-    const value = normalizedArgs[index + 1];
-    if (!key?.startsWith("--") || value === undefined) {
-      usage();
-    }
-    values.set(key.slice(2), value);
-  }
+  const values = parseCliOptions(args, CLI_OPTIONS, usage);
 
   return {
     inputFile: values.get("input-file") ?? "benchmarks/results.jsonl",
@@ -1324,7 +1277,7 @@ function parseChartTheme(value: string | undefined): ChartThemeName | undefined 
 
 function usage(): never {
   console.error(
-    "Usage: node dist/benchmarks/src/render-report.js [--input-file benchmarks/results.jsonl] [--output-file benchmarks/report.md] [--chart-output-file <path>] [--chart-reference <markdown-path>] [--chart-layout split|scorecard|cards] [--chart-theme signal|forge|circuit] [--asset-profile <name>] [--lambda-max-parallel-transfers <n>] [--lambda-memory-mb <n>]",
+    "Usage: node dist/benchmarks/src/render/comparison-report.js [--input-file benchmarks/results.jsonl] [--output-file benchmarks/report.md] [--chart-output-file <path>] [--chart-reference <markdown-path>] [--chart-layout split|scorecard|cards] [--chart-theme signal|forge|circuit] [--asset-profile <name>] [--lambda-max-parallel-transfers <n>] [--lambda-memory-mb <n>]",
   );
   process.exit(1);
 }

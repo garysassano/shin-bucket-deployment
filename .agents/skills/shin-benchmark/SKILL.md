@@ -224,7 +224,7 @@ The comparison table should show, per phase and metric:
 Generate reports with:
 
 ```bash
-pnpm benchmark:report -- --input-file benchmarks/results.jsonl --asset-profile tiny-many --lambda-memory-mb 2048 --lambda-max-parallel-transfers 64
+pnpm benchmark:comparison-report -- --input-file benchmarks/results.jsonl --asset-profile tiny-many --lambda-memory-mb 2048 --lambda-max-parallel-transfers 64
 ```
 
 ## Final Checks
@@ -232,7 +232,7 @@ pnpm benchmark:report -- --input-file benchmarks/results.jsonl --asset-profile t
 Before committing benchmark updates:
 
 ```bash
-pnpm benchmark:report -- --input-file benchmarks/results.jsonl --output-file /tmp/benchmark-report-check.md
+pnpm benchmark:comparison-report -- --input-file benchmarks/results.jsonl --output-file /tmp/benchmark-report-check.md
 git diff --check
 pnpm test -- test/benchmarks/collector.test.ts
 ```

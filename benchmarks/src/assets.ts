@@ -1,8 +1,11 @@
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-
-export type BenchmarkAssetProfile = "tiny-many" | "mixed" | "large-few";
-export type BenchmarkAssetState = "baseline" | "changed" | "pruned";
+import {
+  type BenchmarkAssetProfile,
+  type BenchmarkAssetState,
+  isBenchmarkAssetProfile,
+  isBenchmarkAssetState,
+} from "./model";
 
 type FileSpec = {
   readonly path: string;
@@ -224,17 +227,23 @@ function nextState(state: number): number {
 }
 
 function parseProfile(value: string | undefined): BenchmarkAssetProfile {
-  if (value === "tiny-many" || value === "mixed" || value === "large-few") {
+  if (value === undefined || value === "") {
+    return DEFAULT_PROFILE;
+  }
+  if (isBenchmarkAssetProfile(value)) {
     return value;
   }
-  return DEFAULT_PROFILE;
+  throw new Error(`Unknown benchmark asset profile: ${value}`);
 }
 
 function parseState(value: string | undefined): BenchmarkAssetState {
-  if (value === "baseline" || value === "changed" || value === "pruned") {
+  if (value === undefined || value === "") {
+    return DEFAULT_STATE;
+  }
+  if (isBenchmarkAssetState(value)) {
     return value;
   }
-  return DEFAULT_STATE;
+  throw new Error(`Unknown benchmark asset state: ${value}`);
 }
 
 if (require.main === module) {

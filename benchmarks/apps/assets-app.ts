@@ -6,8 +6,7 @@ import {
 } from "aws-cdk-lib/aws-s3-deployment";
 import { ShinBucketDeployment, Source as ShinSource } from "../../src";
 import { ensureBenchmarkAssets } from "../src/assets";
-
-type BenchmarkImplementation = "shin" | "aws";
+import { type BenchmarkImplementation, isBenchmarkImplementation } from "../src/model";
 
 class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
   constructor(scope: App, id: string, props?: StackProps) {
@@ -94,8 +93,8 @@ function parseImplementation(value: string | undefined): BenchmarkImplementation
   if (value === "rust") {
     throw new Error('SHIN_BENCH_IMPLEMENTATION value "rust" was renamed to "shin".');
   }
-  if (value === "aws") {
-    return "aws";
+  if (isBenchmarkImplementation(value)) {
+    return value;
   }
   throw new Error('SHIN_BENCH_IMPLEMENTATION must be either "shin" or "aws".');
 }

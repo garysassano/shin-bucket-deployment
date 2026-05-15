@@ -3,24 +3,28 @@
  * All positions derived from layout constants — change one value and everything adapts.
  */
 
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { parseCliOptions } from "../cli";
+import { type BenchmarkResultRecord, phaseRank, readBenchmarkResultRecords } from "../model";
 
 type ChartVariant = "default" | "aws";
 type HeaderLayout = "two-line" | "three-line";
+const CLI_OPTIONS = [
+  "asset-profile",
+  "header",
+  "input-file",
+  "lambda-max-parallel-transfers",
+  "lambda-memory-mb",
+  "variant",
+] as const;
+
+const cliArgs = process.argv.slice(2);
+const snapshotArgCache = new WeakMap<string[], Map<string, string>>();
 
 function parseVariant(argv: string[]): ChartVariant {
-  const variantIndex = argv.indexOf("--variant");
-  const variantValue = variantIndex === -1 ? undefined : argv[variantIndex + 1];
-  const inlineVariant = argv
-    .find((arg) => arg.startsWith("--variant="))
-    ?.slice("--variant=".length);
-
-  if (argv.includes("--aws")) {
-    return "aws";
-  }
-
-  const requestedVariant = inlineVariant ?? variantValue;
+  const values = parseSnapshotArgs(argv);
+  const requestedVariant = values.get("variant");
   if (requestedVariant === undefined || requestedVariant === "default") {
     return "default";
   }
@@ -31,13 +35,10 @@ function parseVariant(argv: string[]): ChartVariant {
   throw new Error(`Unknown chart variant "${requestedVariant}". Use "default" or "aws".`);
 }
 
-const chartVariant = parseVariant(process.argv.slice(2));
+const chartVariant = parseVariant(cliArgs);
 
 function parseStringArg(argv: string[], name: string): string | undefined {
-  const valueIndex = argv.indexOf(name);
-  const value = valueIndex === -1 ? undefined : argv[valueIndex + 1];
-  const inlineValue = argv.find((arg) => arg.startsWith(`${name}=`))?.slice(name.length + 1);
-  return inlineValue ?? value;
+  return parseSnapshotArgs(argv).get(name.slice(2));
 }
 
 function parseNumberArg(argv: string[], name: string): number | undefined {
@@ -65,16 +66,13 @@ function parseHeaderLayout(argv: string[]): HeaderLayout {
   throw new Error(`Unknown header layout "${requestedHeader}". Use "two-line" or "three-line".`);
 }
 
-const headerLayout = parseHeaderLayout(process.argv.slice(2));
-const requestedProfile = parseStringArg(process.argv.slice(2), "--asset-profile");
-const requestedMemoryMb = parseNumberArg(process.argv.slice(2), "--lambda-memory-mb");
-const requestedShinParallel = parseNumberArg(
-  process.argv.slice(2),
-  "--lambda-max-parallel-transfers",
-);
+const headerLayout = parseHeaderLayout(cliArgs);
+const requestedProfile = parseStringArg(cliArgs, "--asset-profile");
+const requestedMemoryMb = parseNumberArg(cliArgs, "--lambda-memory-mb");
+const requestedShinParallel = parseNumberArg(cliArgs, "--lambda-max-parallel-transfers");
 const inputFile = resolve(
   process.cwd(),
-  parseStringArg(process.argv.slice(2), "--input-file") ?? "benchmarks/results.jsonl",
+  parseStringArg(cliArgs, "--input-file") ?? "benchmarks/results.jsonl",
 );
 
 // ═══ LAYOUT CONSTANTS ═══
@@ -131,22 +129,7 @@ interface Row {
   aws: number;
 }
 
-interface ProviderSummary {
-  maxParallelTransfers?: number;
-}
-
-interface BenchmarkRecord {
-  implementation?: string | null;
-  profile?: string | null;
-  memoryMb?: number | null;
-  parallel?: number | null;
-  phase?: string;
-  fileCount?: number | null;
-  totalBytes?: number | null;
-  providerDurationSeconds?: number | null;
-  maxMemoryMb?: number | null;
-  providerSummary?: ProviderSummary;
-}
+type BenchmarkRecord = BenchmarkResultRecord;
 
 interface BenchmarkData {
   duration: Row[];
@@ -166,24 +149,22 @@ interface DataSelection {
   parallel: number;
 }
 
-const PHASE_ORDER = new Map([
-  ["cold-create", 0],
-  ["unchanged-update", 1],
-  ["changed-update", 2],
-  ["pruned-update", 3],
-]);
+function parseSnapshotArgs(argv: string[]): Map<string, string> {
+  const cached = snapshotArgCache.get(argv);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const normalizedArgs = argv.flatMap((arg) => (arg === "--aws" ? ["--variant", "aws"] : [arg]));
+  const values = parseCliOptions(normalizedArgs, CLI_OPTIONS, usage);
+  snapshotArgCache.set(argv, values);
+  return values;
+}
 
-function readRecords(filePath: string): BenchmarkRecord[] {
-  return readFileSync(filePath, "utf8")
-    .split(/\r?\n/)
-    .filter((line) => line.trim().length > 0)
-    .map((line, index) => {
-      try {
-        return JSON.parse(line) as BenchmarkRecord;
-      } catch (cause) {
-        throw new Error(`Invalid JSONL record at ${filePath}:${index + 1}`, { cause });
-      }
-    });
+function usage(): never {
+  console.error(
+    "Usage: node dist/benchmarks/src/render/readme-snapshot.js [--input-file benchmarks/results.jsonl] [--asset-profile <name>] [--lambda-memory-mb <n>] [--lambda-max-parallel-transfers <n>] [--variant default|aws] [--header three-line|two-line]",
+  );
+  process.exit(1);
 }
 
 function comparablePhases(records: BenchmarkRecord[]): string[] {
@@ -198,7 +179,7 @@ function comparablePhases(records: BenchmarkRecord[]): string[] {
         ),
       ),
     )
-    .sort((left, right) => (PHASE_ORDER.get(left) ?? 999) - (PHASE_ORDER.get(right) ?? 999));
+    .sort((left, right) => phaseRank(left) - phaseRank(right));
 }
 
 function requireNumber(value: number | null | undefined, label: string): number {
@@ -308,7 +289,7 @@ function findSelections(records: BenchmarkRecord[]): DataSelection[] {
 function buildBenchmarkData(selection: DataSelection): BenchmarkData {
   const phases = [...selection.shinRecords.keys()]
     .filter((phase) => selection.awsRecords.has(phase))
-    .sort((left, right) => (PHASE_ORDER.get(left) ?? 999) - (PHASE_ORDER.get(right) ?? 999));
+    .sort((left, right) => phaseRank(left) - phaseRank(right));
   if (phases.length === 0) {
     throw new Error(
       `No paired AWS rows match profile=${selection.profile}, memory=${selection.memoryMb}, parallel=${selection.parallel}`,
@@ -600,7 +581,9 @@ ${renderHeader(benchmarkData)}
 }
 
 // ═══ OUTPUT ═══
-const benchmarkDataItems = findSelections(readRecords(inputFile)).map(buildBenchmarkData);
+const benchmarkDataItems = findSelections(readBenchmarkResultRecords(inputFile)).map(
+  buildBenchmarkData,
+);
 if (benchmarkDataItems.length === 0) {
   throw new Error("No complete Shin/AWS benchmark pairs matched the selected filters");
 }

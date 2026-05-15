@@ -10,10 +10,10 @@ Only README-linked snapshot SVGs are committed under `benchmarks/snapshots`. Tem
 
 ## Shin Provider Telemetry
 
-- In-depth Shin provider telemetry: [`results.md`](results.md)
+- In-depth Shin provider telemetry: [`telemetry.md`](telemetry.md)
 - Structured JSONL source: [`results.jsonl`](results.jsonl)
 
-Regenerate the telemetry tables with `pnpm benchmark:results`.
+Regenerate the telemetry tables with `pnpm benchmark:telemetry-table`.
 
 ## 1024 MiB / 16 Snapshot
 

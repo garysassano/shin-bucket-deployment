@@ -3,8 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { collectBenchmarkResult } from "../../benchmarks/src/collect-results";
-import { renderBenchmarkReport } from "../../benchmarks/src/render-report";
-import { renderBenchmarkResultsTable } from "../../benchmarks/src/render-results-table";
+import { renderBenchmarkReport } from "../../benchmarks/src/render/comparison-report";
+import { renderBenchmarkResultsTable } from "../../benchmarks/src/render/telemetry-table";
 
 describe("benchmark result collector", () => {
   test("upserts sanitized benchmark result records", () => {
@@ -273,7 +273,7 @@ describe("benchmark result collector", () => {
   test("renders grouped Shin provider telemetry tables", () => {
     const dir = mkdtempSync(join(tmpdir(), "shin-bench-results-table-"));
     const inputFile = join(dir, "results.jsonl");
-    const outputFile = join(dir, "results.md");
+    const outputFile = join(dir, "telemetry.md");
     writeFileSync(
       inputFile,
       `${[

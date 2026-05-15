@@ -28,8 +28,8 @@
     "verify": "pnpm build && node dist/scenarios/runner.js verify",
     "benchmark": "pnpm build && node dist/scenarios/runner.js benchmark",
     "benchmark:collect": "pnpm build && node dist/benchmarks/src/collect-results.js",
-    "benchmark:report": "pnpm build && node dist/benchmarks/src/render-report.js",
-    "benchmark:results": "pnpm build && node dist/benchmarks/src/render-results-table.js",
+    "benchmark:comparison-report": "pnpm build && node dist/benchmarks/src/render/comparison-report.js",
+    "benchmark:telemetry-table": "pnpm build && node dist/benchmarks/src/render/telemetry-table.js",
     "benchmark:run-assets": "pnpm build && node dist/benchmarks/src/run-assets-comparison.js"
   },
   "dependencies": {
