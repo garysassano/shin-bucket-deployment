@@ -442,7 +442,7 @@ mod tests {
         assert_eq!(request.runtime.available_memory_mb, 1024);
         assert_eq!(request.runtime.source_window_memory_budget_mb, 1024);
         assert_eq!(request.runtime.source_get_concurrency, 4);
-        assert_eq!(request.runtime.max_parallel_transfers, 16);
+        assert_eq!(request.runtime.max_parallel_transfers, 32);
         assert_eq!(
             request.runtime.put_object_retry.jitter,
             PutObjectRetryJitter::Full

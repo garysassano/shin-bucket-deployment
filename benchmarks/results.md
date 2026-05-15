@@ -6,11 +6,11 @@ Generated from Shin rows in `benchmarks/results.jsonl`. Raw benchmark evidence s
 
 | Field | Value |
 | --- | --- |
-| Shin telemetry rows | 36 |
-| Config groups | 9 |
+| Shin telemetry rows | 52 |
+| Config groups | 13 |
 | Snapshot dates | 2026-05-14, 2026-05-15 |
 | Regions | ap-southeast-2 |
-| Profiles | tiny-many, large-few |
+| Profiles | tiny-many, large-few, mixed |
 
 ## large-few / 2048 MiB / parallel 32
 
@@ -114,6 +114,118 @@ Generated from Shin rows in `benchmarks/results.jsonl`. Raw benchmark evidence s
 | unchanged-update | 1 | 1 | 2 | 0 | 0 | 2 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1 |
 | changed-update | 1 | 2 | 3 | 0 | 0 | 42 | 1 | 0 | 46 | 46 | 0 | 16 | 0 | 0 | 9 |
 | pruned-update | 1 | 2 | 3 | 0 | 0 | 292 | 1 | 0 | 323 | 323 | 0 | 116 | 0 | 0 | 97 |
+
+### PutObject Pressure
+
+| Phase | Failed attempts | Retry attempts | Throttled attempts | Retry wait ms | Throttle cooldown waits | Throttle cooldown ms |
+| --- | --- | --- | --- | --- | --- | --- |
+| cold-create | 0 | 0 | 0 | 0 | 0 | 0 |
+| unchanged-update | 0 | 0 | 0 | 0 | 0 | 0 |
+| changed-update | 0 | 0 | 0 | 0 | 0 | 0 |
+| pruned-update | 0 | 0 | 0 | 0 | 0 | 0 |
+
+## mixed / 5120 MiB / parallel 256
+
+### Runtime
+
+| Phase | State | Request | Status | Files | Bytes | CDK deploy s | Local wall s | CloudWatch provider s | Summary duration ms | Billed s | Init s | Max memory MiB | Available MiB | Max transfers | Row |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| cold-create | baseline | Create | success | 442 | 52904649 | 74.4 | 278.612 | 1.016 | 974 | 1.149 | 0.132 | 384 | 5120 | 256 | 93 |
+| unchanged-update | baseline | Update | success | 442 | 52904649 | 31.07 | 117.369 | 0.244 | 196 | 0.245 | null | 441 | 5120 | 256 | 94 |
+| changed-update | changed | Update | success | 442 | 52904649 | 30.4 | 177.187 | 0.424 | 384 | 0.424 | null | 544 | 5120 | 256 | 95 |
+| pruned-update | pruned | Update | success | 397 | 48185955 | 38.6 | 182.584 | 1.3 | 1252 | 1.301 | null | 623 | 5120 | 256 | 96 |
+
+### Provider Phase Timing
+
+| Phase | Plan ms | Destination list ms | Transfer ms | Delete ms | CloudFront ms | Old prefix delete ms |
+| --- | --- | --- | --- | --- | --- | --- |
+| cold-create | 275 | 32 | 666 | 0 | 0 | 0 |
+| unchanged-update | 116 | 79 | 0 | 0 | 0 | 0 |
+| changed-update | 231 | 60 | 91 | 0 | 0 | 0 |
+| pruned-update | 115 | 75 | 341 | 721 | 0 | 0 |
+
+### Object Work
+
+| Phase | Planned | Filtered | Markers | Destination objects | Uploaded | Skipped | Deleted | Delete batches | Conditional conflicts | Copied | MD5 hash attempts | MD5 skips | Catalog skips |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| cold-create | 443 | 0 | 0 | 0 | 443 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| unchanged-update | 443 | 0 | 0 | 443 | 0 | 443 | 0 | 0 | 0 | 0 | 0 | 0 | 443 |
+| changed-update | 443 | 0 | 0 | 443 | 7 | 436 | 0 | 0 | 0 | 0 | 0 | 0 | 436 |
+| pruned-update | 398 | 0 | 0 | 443 | 398 | 0 | 45 | 1 | 0 | 0 | 0 | 0 | 0 |
+
+### Bytes And Memory Window
+
+| Phase | Source zip bytes | Uploaded bytes | Copied bytes | Source planned bytes | Source fetched bytes | Resident bytes high |
+| --- | --- | --- | --- | --- | --- | --- |
+| cold-create | 424388 | 52904743 | 0 | 375581 | 388709 | 375581 |
+| unchanged-update | 424388 | 0 | 0 | 13128 | 13128 | 13128 |
+| changed-update | 424378 | 1379283 | 0 | 294601 | 307725 | 294601 |
+| pruned-update | 383743 | 48186047 | 0 | 339836 | 351663 | 339836 |
+
+### Source Range Reads
+
+| Phase | Planned blocks | Fetched blocks | Get attempts | Get retries | Get errors | Block hits | Block misses | Block refetches | Block waits | Waits fetching | Waits capacity | Replay claims | Replay after release | Replay after failure | Active readers high |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| cold-create | 1 | 2 | 3 | 0 | 0 | 4432 | 1 | 0 | 1748 | 1748 | 0 | 1772 | 0 | 0 | 21 |
+| unchanged-update | 1 | 1 | 2 | 0 | 0 | 2 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1 |
+| changed-update | 1 | 2 | 3 | 0 | 0 | 72 | 1 | 0 | 96 | 96 | 0 | 28 | 0 | 0 | 3 |
+| pruned-update | 1 | 2 | 3 | 0 | 0 | 3982 | 1 | 0 | 1568 | 1568 | 0 | 1592 | 0 | 0 | 21 |
+
+### PutObject Pressure
+
+| Phase | Failed attempts | Retry attempts | Throttled attempts | Retry wait ms | Throttle cooldown waits | Throttle cooldown ms |
+| --- | --- | --- | --- | --- | --- | --- |
+| cold-create | 0 | 0 | 0 | 0 | 0 | 0 |
+| unchanged-update | 0 | 0 | 0 | 0 | 0 | 0 |
+| changed-update | 0 | 0 | 0 | 0 | 0 | 0 |
+| pruned-update | 0 | 0 | 0 | 0 | 0 | 0 |
+
+## mixed / 6144 MiB / parallel 256
+
+### Runtime
+
+| Phase | State | Request | Status | Files | Bytes | CDK deploy s | Local wall s | CloudWatch provider s | Summary duration ms | Billed s | Init s | Max memory MiB | Available MiB | Max transfers | Row |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| cold-create | baseline | Create | success | 442 | 52904649 | 70.42 | 302.637 | 0.981 | 932 | 1.148 | 0.167 | 378 | 6144 | 256 | 89 |
+| unchanged-update | baseline | Update | success | 442 | 52904649 | 33.32 | 133.789 | 0.252 | 203 | 0.253 | null | 449 | 6144 | 256 | 90 |
+| changed-update | changed | Update | success | 442 | 52904649 | 30.13 | 171.867 | 0.285 | 247 | 0.285 | null | 561 | 6144 | 256 | 91 |
+| pruned-update | pruned | Update | success | 397 | 48185955 | 40.7 | 145.282 | 1.429 | 1378 | 1.43 | null | 625 | 6144 | 256 | 92 |
+
+### Provider Phase Timing
+
+| Phase | Plan ms | Destination list ms | Transfer ms | Delete ms | CloudFront ms | Old prefix delete ms |
+| --- | --- | --- | --- | --- | --- | --- |
+| cold-create | 165 | 38 | 728 | 0 | 0 | 0 |
+| unchanged-update | 130 | 71 | 0 | 0 | 0 | 0 |
+| changed-update | 95 | 64 | 87 | 0 | 0 | 0 |
+| pruned-update | 249 | 74 | 353 | 700 | 0 | 0 |
+
+### Object Work
+
+| Phase | Planned | Filtered | Markers | Destination objects | Uploaded | Skipped | Deleted | Delete batches | Conditional conflicts | Copied | MD5 hash attempts | MD5 skips | Catalog skips |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| cold-create | 443 | 0 | 0 | 0 | 443 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| unchanged-update | 443 | 0 | 0 | 443 | 0 | 443 | 0 | 0 | 0 | 0 | 0 | 0 | 443 |
+| changed-update | 443 | 0 | 0 | 443 | 7 | 436 | 0 | 0 | 0 | 0 | 0 | 0 | 436 |
+| pruned-update | 398 | 0 | 0 | 443 | 398 | 0 | 45 | 1 | 0 | 0 | 0 | 0 | 0 |
+
+### Bytes And Memory Window
+
+| Phase | Source zip bytes | Uploaded bytes | Copied bytes | Source planned bytes | Source fetched bytes | Resident bytes high |
+| --- | --- | --- | --- | --- | --- | --- |
+| cold-create | 424388 | 52904743 | 0 | 375581 | 388709 | 375581 |
+| unchanged-update | 424388 | 0 | 0 | 13128 | 13128 | 13128 |
+| changed-update | 424378 | 1379283 | 0 | 294601 | 307725 | 294601 |
+| pruned-update | 383743 | 48186047 | 0 | 339836 | 351663 | 339836 |
+
+### Source Range Reads
+
+| Phase | Planned blocks | Fetched blocks | Get attempts | Get retries | Get errors | Block hits | Block misses | Block refetches | Block waits | Waits fetching | Waits capacity | Replay claims | Replay after release | Replay after failure | Active readers high |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| cold-create | 1 | 2 | 3 | 0 | 0 | 4432 | 1 | 0 | 1792 | 1792 | 0 | 1772 | 0 | 0 | 22 |
+| unchanged-update | 1 | 1 | 2 | 0 | 0 | 2 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1 |
+| changed-update | 1 | 2 | 3 | 0 | 0 | 72 | 1 | 0 | 83 | 83 | 0 | 28 | 0 | 0 | 4 |
+| pruned-update | 1 | 2 | 3 | 0 | 0 | 3982 | 1 | 0 | 1063 | 1063 | 0 | 1592 | 0 | 0 | 27 |
 
 ### PutObject Pressure
 
@@ -450,6 +562,118 @@ Generated from Shin rows in `benchmarks/results.jsonl`. Raw benchmark evidence s
 | unchanged-update | 1 | 1 | 2 | 0 | 0 | 2 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1 |
 | changed-update | 2 | 3 | 4 | 0 | 0 | 32 | 1 | 0 | 53 | 53 | 0 | 12 | 0 | 0 | 2 |
 | pruned-update | 1 | 2 | 3 | 0 | 0 | 23262 | 1 | 0 | 592 | 592 | 0 | 9304 | 0 | 0 | 3 |
+
+### PutObject Pressure
+
+| Phase | Failed attempts | Retry attempts | Throttled attempts | Retry wait ms | Throttle cooldown waits | Throttle cooldown ms |
+| --- | --- | --- | --- | --- | --- | --- |
+| cold-create | 0 | 0 | 0 | 0 | 0 | 0 |
+| unchanged-update | 0 | 0 | 0 | 0 | 0 | 0 |
+| changed-update | 0 | 0 | 0 | 0 | 0 | 0 |
+| pruned-update | 0 | 0 | 0 | 0 | 0 | 0 |
+
+## tiny-many / 5120 MiB / parallel 256
+
+### Runtime
+
+| Phase | State | Request | Status | Files | Bytes | CDK deploy s | Local wall s | CloudWatch provider s | Summary duration ms | Billed s | Init s | Max memory MiB | Available MiB | Max transfers | Row |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| cold-create | baseline | Create | success | 2584 | 8178618 | 82.19 | 149.125 | 1.394 | 1353 | 1.528 | 0.133 | 265 | 5120 | 256 | 77 |
+| unchanged-update | baseline | Update | success | 2584 | 8178618 | 34.72 | 116.075 | 0.384 | 323 | 0.385 | null | 332 | 5120 | 256 | 78 |
+| changed-update | changed | Update | success | 2584 | 8178618 | 39.28 | 137.317 | 0.524 | 477 | 0.525 | null | 493 | 5120 | 256 | 79 |
+| pruned-update | pruned | Update | success | 2325 | 7332858 | 41.46 | 142.043 | 1.997 | 1951 | 1.998 | null | 648 | 5120 | 256 | 80 |
+
+### Provider Phase Timing
+
+| Phase | Plan ms | Destination list ms | Transfer ms | Delete ms | CloudFront ms | Old prefix delete ms |
+| --- | --- | --- | --- | --- | --- | --- |
+| cold-create | 218 | 39 | 1096 | 0 | 0 | 0 |
+| unchanged-update | 118 | 202 | 1 | 0 | 0 | 0 |
+| changed-update | 119 | 241 | 116 | 0 | 0 | 0 |
+| pruned-update | 129 | 295 | 710 | 815 | 0 | 0 |
+
+### Object Work
+
+| Phase | Planned | Filtered | Markers | Destination objects | Uploaded | Skipped | Deleted | Delete batches | Conditional conflicts | Copied | MD5 hash attempts | MD5 skips | Catalog skips |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| cold-create | 2585 | 0 | 0 | 0 | 2585 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| unchanged-update | 2585 | 0 | 0 | 2585 | 0 | 2585 | 0 | 0 | 0 | 0 | 0 | 0 | 2585 |
+| changed-update | 2585 | 0 | 0 | 2585 | 3 | 2582 | 0 | 0 | 0 | 0 | 0 | 0 | 2582 |
+| pruned-update | 2326 | 0 | 0 | 2585 | 2326 | 0 | 259 | 1 | 0 | 0 | 0 | 0 | 0 |
+
+### Bytes And Memory Window
+
+| Phase | Source zip bytes | Uploaded bytes | Copied bytes | Source planned bytes | Source fetched bytes | Resident bytes high |
+| --- | --- | --- | --- | --- | --- | --- |
+| cold-create | 1063994 | 8178716 | 0 | 782630 | 856774 | 782630 |
+| unchanged-update | 1063994 | 0 | 0 | 74144 | 74144 | 74144 |
+| changed-update | 1063981 | 20809 | 0 | 803 | 74938 | 74135 |
+| pruned-update | 957275 | 7332954 | 0 | 703941 | 770797 | 703941 |
+
+### Source Range Reads
+
+| Phase | Planned blocks | Fetched blocks | Get attempts | Get retries | Get errors | Block hits | Block misses | Block refetches | Block waits | Waits fetching | Waits capacity | Replay claims | Replay after release | Replay after failure | Active readers high |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| cold-create | 1 | 2 | 3 | 0 | 0 | 25852 | 1 | 0 | 1786 | 1786 | 0 | 10340 | 0 | 0 | 3 |
+| unchanged-update | 1 | 1 | 2 | 0 | 0 | 2 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1 |
+| changed-update | 2 | 3 | 4 | 0 | 0 | 32 | 1 | 0 | 25 | 25 | 0 | 12 | 0 | 0 | 3 |
+| pruned-update | 1 | 2 | 3 | 0 | 0 | 23262 | 1 | 0 | 1434 | 1434 | 0 | 9304 | 0 | 0 | 3 |
+
+### PutObject Pressure
+
+| Phase | Failed attempts | Retry attempts | Throttled attempts | Retry wait ms | Throttle cooldown waits | Throttle cooldown ms |
+| --- | --- | --- | --- | --- | --- | --- |
+| cold-create | 0 | 0 | 0 | 0 | 0 | 0 |
+| unchanged-update | 0 | 0 | 0 | 0 | 0 | 0 |
+| changed-update | 0 | 0 | 0 | 0 | 0 | 0 |
+| pruned-update | 0 | 0 | 0 | 0 | 0 | 0 |
+
+## tiny-many / 6144 MiB / parallel 256
+
+### Runtime
+
+| Phase | State | Request | Status | Files | Bytes | CDK deploy s | Local wall s | CloudWatch provider s | Summary duration ms | Billed s | Init s | Max memory MiB | Available MiB | Max transfers | Row |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| cold-create | baseline | Create | success | 2584 | 8178618 | 73.08 | 152.468 | 1.501 | 1387 | 1.672 | 0.171 | 265 | 6144 | 256 | 73 |
+| unchanged-update | baseline | Update | success | 2584 | 8178618 | 32.54 | 109.784 | 0.371 | 326 | 0.371 | null | 321 | 6144 | 256 | 74 |
+| changed-update | changed | Update | success | 2584 | 8178618 | 26.29 | 122.842 | 0.648 | 608 | 0.648 | null | 456 | 6144 | 256 | 75 |
+| pruned-update | pruned | Update | success | 2325 | 7332858 | 45.72 | 127.765 | 2.278 | 2228 | 2.278 | null | 658 | 6144 | 256 | 76 |
+
+### Provider Phase Timing
+
+| Phase | Plan ms | Destination list ms | Transfer ms | Delete ms | CloudFront ms | Old prefix delete ms |
+| --- | --- | --- | --- | --- | --- | --- |
+| cold-create | 187 | 34 | 1165 | 0 | 0 | 0 |
+| unchanged-update | 109 | 214 | 1 | 0 | 0 | 0 |
+| changed-update | 226 | 266 | 114 | 0 | 0 | 0 |
+| pruned-update | 190 | 267 | 858 | 910 | 0 | 0 |
+
+### Object Work
+
+| Phase | Planned | Filtered | Markers | Destination objects | Uploaded | Skipped | Deleted | Delete batches | Conditional conflicts | Copied | MD5 hash attempts | MD5 skips | Catalog skips |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| cold-create | 2585 | 0 | 0 | 0 | 2585 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| unchanged-update | 2585 | 0 | 0 | 2585 | 0 | 2585 | 0 | 0 | 0 | 0 | 0 | 0 | 2585 |
+| changed-update | 2585 | 0 | 0 | 2585 | 3 | 2582 | 0 | 0 | 0 | 0 | 0 | 0 | 2582 |
+| pruned-update | 2326 | 0 | 0 | 2585 | 2326 | 0 | 259 | 1 | 0 | 0 | 0 | 0 | 0 |
+
+### Bytes And Memory Window
+
+| Phase | Source zip bytes | Uploaded bytes | Copied bytes | Source planned bytes | Source fetched bytes | Resident bytes high |
+| --- | --- | --- | --- | --- | --- | --- |
+| cold-create | 1063994 | 8178716 | 0 | 782630 | 856774 | 782630 |
+| unchanged-update | 1063994 | 0 | 0 | 74144 | 74144 | 74144 |
+| changed-update | 1063981 | 20809 | 0 | 803 | 74938 | 74135 |
+| pruned-update | 957275 | 7332954 | 0 | 703941 | 770797 | 703941 |
+
+### Source Range Reads
+
+| Phase | Planned blocks | Fetched blocks | Get attempts | Get retries | Get errors | Block hits | Block misses | Block refetches | Block waits | Waits fetching | Waits capacity | Replay claims | Replay after release | Replay after failure | Active readers high |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| cold-create | 1 | 2 | 3 | 0 | 0 | 25852 | 1 | 0 | 1961 | 1961 | 0 | 10340 | 0 | 0 | 4 |
+| unchanged-update | 1 | 1 | 2 | 0 | 0 | 2 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 1 |
+| changed-update | 2 | 3 | 4 | 0 | 0 | 32 | 1 | 0 | 30 | 30 | 0 | 12 | 0 | 0 | 3 |
+| pruned-update | 1 | 2 | 3 | 0 | 0 | 23262 | 1 | 0 | 1847 | 1847 | 0 | 9304 | 0 | 0 | 4 |
 
 ### PutObject Pressure
 

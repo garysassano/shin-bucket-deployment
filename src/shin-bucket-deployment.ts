@@ -129,11 +129,11 @@ export interface ShinBucketDeploymentProps
    */
   readonly bundling?: CargoLambdaBundlingOptions;
 
-  /**
-   * Maximum concurrent object transfers run by the provider.
-   * @default 16
-   */
-  readonly maxParallelTransfers?: number;
+   /**
+    * Maximum concurrent object transfers run by the provider.
+    * @default 32
+    */
+   readonly maxParallelTransfers?: number;
 
   /**
    * Advanced provider runtime tuning. Most deployments should leave this unset
