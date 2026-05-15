@@ -131,7 +131,7 @@ export interface ShinBucketDeploymentProps
 
   /**
    * Maximum concurrent object transfers run by the provider.
-   * @default 8
+   * @default 16
    */
   readonly maxParallelTransfers?: number;
 
