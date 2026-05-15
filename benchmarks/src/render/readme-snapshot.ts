@@ -168,9 +168,9 @@ interface DataSelection {
 
 const PHASE_ORDER = new Map([
   ["cold-create", 0],
-  ["forced-unchanged", 1],
-  ["sparse-update", 2],
-  ["prune-update", 3],
+  ["unchanged-update", 1],
+  ["changed-update", 2],
+  ["pruned-update", 3],
 ]);
 
 function readRecords(filePath: string): BenchmarkRecord[] {
