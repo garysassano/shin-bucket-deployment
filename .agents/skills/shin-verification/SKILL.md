@@ -106,7 +106,7 @@ The default suite includes:
 - duplicate source overwrite order
 - larger archive ranged-read path
 - KMS-encrypted destination bucket
-- CloudFront wait/no-wait invalidation with explicit and default invalidation paths
+- CloudFront sync/async invalidation with explicit and default invalidation paths
 
 Always destroy AWS verification stacks and verify they are absent before finalizing `docs/verification.md`. Raw AWS logs and resource identifiers stay in scratch only.
 

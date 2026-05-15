@@ -90,7 +90,7 @@ Scenarios are driven through the repository runner. Verification mode runs every
 pnpm verify list
 pnpm verify synth
 pnpm verify deploy --concurrency 4
-pnpm verify deploy cloudfront-wait
+pnpm verify deploy cloudfront-sync
 pnpm benchmark deploy assets --asset-profiles tiny-many --implementations shin,aws --lambda-max-parallel-transfers 32 --lambda-memory-mb 1024
 ```
 
@@ -110,8 +110,8 @@ Verification deploy/destroy can run independent scenario chains concurrently wit
 | `extract-false` | `scenarios/apps/basic/extract-false-app.ts` | Archive copy mode with `extract=false`. |
 | `large-archive` | `scenarios/apps/scale/large-archive-app.ts` | Larger archive ranged-read path. |
 | `kms-destination` | `scenarios/apps/security/kms-destination-app.ts` | KMS-encrypted destination bucket. |
-| `cloudfront-wait` | `scenarios/apps/cloudfront/cloudfront-wait-app.ts` | CloudFront invalidation with explicit paths and stack wait. |
-| `cloudfront-no-wait` | `scenarios/apps/cloudfront/cloudfront-no-wait-app.ts` | CloudFront invalidation with default paths and no stack wait. |
+| `cloudfront-sync` | `scenarios/apps/cloudfront/cloudfront-sync-app.ts` | CloudFront invalidation with explicit paths and synchronous stack wait. |
+| `cloudfront-async` | `scenarios/apps/cloudfront/cloudfront-async-app.ts` | CloudFront invalidation with default paths and asynchronous stack completion. |
 | `assets` | `benchmarks/apps/assets-app.ts` | Deterministic benchmark asset bundles. |
 
 ## Handler Flow

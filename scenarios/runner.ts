@@ -48,8 +48,8 @@ const VERIFY_SCENARIOS = {
   },
   "large-archive": { file: "scale/large-archive-app.js" },
   "kms-destination": { file: "security/kms-destination-app.js" },
-  "cloudfront-wait": { file: "cloudfront/cloudfront-wait-app.js" },
-  "cloudfront-no-wait": { file: "cloudfront/cloudfront-no-wait-app.js" },
+  "cloudfront-sync": { file: "cloudfront/cloudfront-sync-app.js" },
+  "cloudfront-async": { file: "cloudfront/cloudfront-async-app.js" },
 } as const satisfies Record<string, ScenarioDefinition>;
 
 const BENCHMARK_SCENARIOS = {
@@ -70,8 +70,8 @@ const VERIFY_DEFAULT_GROUPS = [
   ["delete-cleanup-v1", "delete-cleanup-v2", "delete-cleanup-bucket-only"],
   ["large-archive"],
   ["kms-destination"],
-  ["cloudfront-wait"],
-  ["cloudfront-no-wait"],
+  ["cloudfront-sync"],
+  ["cloudfront-async"],
 ] as const satisfies ReadonlyArray<ReadonlyArray<keyof typeof VERIFY_SCENARIOS>>;
 const VERIFY_DESTROY_ORDER = [
   "simple",
@@ -86,8 +86,8 @@ const VERIFY_DESTROY_ORDER = [
   "source-overwrite-order",
   "large-archive",
   "kms-destination",
-  "cloudfront-wait",
-  "cloudfront-no-wait",
+  "cloudfront-sync",
+  "cloudfront-async",
 ];
 const DEFAULT_VERIFY_CONCURRENCY = 4;
 
@@ -100,7 +100,7 @@ function printUsage(): void {
   console.error("  pnpm verify synth");
   console.error("  pnpm verify deploy --concurrency 4");
   console.error("  pnpm verify destroy --concurrency 4");
-  console.error("  pnpm verify deploy cloudfront-wait -- --parameters Stack:Name=value");
+  console.error("  pnpm verify deploy cloudfront-sync -- --parameters Stack:Name=value");
   console.error("");
   console.error("Benchmarks run selected configs for the named benchmark scenario:");
   console.error(
@@ -277,6 +277,15 @@ function benchmarkLabel(name: string, config: BenchmarkConfig): string {
     .join("/");
 }
 
+function cdkOutputDir(mode: ScenarioMode, name: string): string {
+  const scratchRoot = mode === "verify" ? ".verification-assets" : ".benchmark-assets";
+  return join(process.cwd(), scratchRoot, "cdk.out", mode, safePathPart(name));
+}
+
+function safePathPart(value: string): string {
+  return value.replace(/[^A-Za-z0-9-]/g, "-");
+}
+
 function benchmarkRunConfigs(
   action: Exclude<ScenarioAction, "list">,
   configs: BenchmarkConfig[],
@@ -321,7 +330,7 @@ async function runScenario(
   }
 
   console.error(`${action} ${mode} scenario ${name}`);
-  const args = ["exec", "cdk", action, "--app", appCommand];
+  const args = ["exec", "cdk", action, "--app", appCommand, "--output", cdkOutputDir(mode, name)];
   if (action === "deploy") {
     args.push("--require-approval", "never");
   }
