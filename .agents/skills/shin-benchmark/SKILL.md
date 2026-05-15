@@ -79,10 +79,10 @@ Prefer the automated asset comparison runner for Shin-vs-AWS asset benchmarks:
 ```bash
 AWS_PROFILE=<profile> AWS_REGION=ap-southeast-2 AWS_DEFAULT_REGION=ap-southeast-2 \
 pnpm benchmark:run-assets -- \
-  --config benchmarks/configs/shin-aws-2048-64-4096-128.json
+  --config benchmarks/configs/shin-aws-2048-64-4096-128.jsonc
 ```
 
-The config file defines the asset profiles, Lambda configs, implementations, phases, region, output file, and default concurrency. Prefer adding or editing a committed config under `benchmarks/configs/` over building long CLI invocations. Use `assetProfiles` in JSON files and `--asset-profiles <name>` for CLI overrides. Use `lambdaConfigs` in JSON files and `--lambda-configs <memory>:<parallel>` for Lambda config CLI overrides. The runner deploys each stack through the configured phases, captures CloudWatch `REPORT` events and Shin `shin_deployment_summary` events before cleanup, destroys the stack, verifies cleanup, and writes sanitized result rows. Keep `concurrency` or `--concurrency` at `1` unless intentionally running multiple stacks in parallel; each stack is stateful and its phases must stay ordered.
+The config file defines the asset profiles, Lambda configs, implementations, phases, region, output file, and default concurrency. Prefer adding or editing a committed JSONC config under `benchmarks/configs/` over building long CLI invocations. Use `assetProfiles` in JSONC files and `--asset-profiles <name>` for CLI overrides. Use `lambdaConfigs` in JSONC files and `--lambda-configs <memory>:<parallel>` for Lambda config CLI overrides. The runner deploys each stack through the configured phases, captures CloudWatch `REPORT` events and Shin `shin_deployment_summary` events before cleanup, destroys the stack, verifies cleanup, and writes sanitized result rows. Keep `concurrency` or `--concurrency` at `1` unless intentionally running multiple stacks in parallel; each stack is stateful and its phases must stay ordered.
 
 Choose benchmark configs deliberately. Paired Shin vs AWS comparisons should use:
 

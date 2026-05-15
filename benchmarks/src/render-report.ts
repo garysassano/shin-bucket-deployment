@@ -88,10 +88,10 @@ const METRICS: Array<{ name: MetricName; label: string; unit: string }> = [
 
 const PHASE_ORDER = new Map([
   ["cold-create", 0],
-  ["forced-unchanged", 1],
+  ["unchanged-update", 1],
   ["no-change-redeploy", 2],
-  ["sparse-update", 3],
-  ["prune-update", 4],
+  ["changed-update", 3],
+  ["pruned-update", 4],
   ["destroy", 5],
 ]);
 

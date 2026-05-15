@@ -22,7 +22,7 @@ Runbooks, evidence collection rules, schema guidance, and sanitization rules liv
 | Region | `ap-southeast-2` |
 | Implementations | `shin` and upstream AWS CDK `BucketDeployment` |
 | Asset profiles | `tiny-many`, `large-few` |
-| Phases | `cold-create`, `forced-unchanged`, `sparse-update`, `prune-update` |
+| Phases | `cold-create`, `unchanged-update`, `changed-update`, `pruned-update` |
 | Cleanup | All benchmark stacks destroyed after telemetry collection |
 | Raw evidence | Not committed; raw AWS output remains in scratch only |
 
@@ -44,7 +44,7 @@ pnpm benchmark:report -- --asset-profile tiny-many --lambda-memory-mb 2048 --lam
 
 ## Methodology Summary
 
-The benchmark harness measures deterministic static-site bundles across create, unchanged, sparse-update, and prune-update phases. Paired Shin-vs-AWS comparison runs must use the same region, asset profile, states, destination prefix, memory setting, and repetition count.
+The benchmark harness measures deterministic static-site bundles across create, unchanged, changed-update, and pruned-update phases. Paired Shin-vs-AWS comparison runs must use the same region, asset profile, states, destination prefix, memory setting, and repetition count.
 
 The `assets` benchmark scenario generates deterministic bundles under `.benchmark-assets/`, which is ignored by git. The same stack definition can instantiate either `ShinBucketDeployment` or upstream AWS CDK `BucketDeployment`; the implementation is the intended comparison dimension.
 
