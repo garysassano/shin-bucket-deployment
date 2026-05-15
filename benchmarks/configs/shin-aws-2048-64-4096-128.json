@@ -1,17 +1,17 @@
 {
   "$schema": "../schemas/asset-benchmark-config.schema.json",
   "region": "ap-southeast-2",
-  "concurrency": 8,
-  "assetProfiles": ["tiny-many", "mixed"],
+  "concurrency": 4,
+  "assetProfiles": ["tiny-many"],
   "implementations": ["shin", "aws"],
   "lambdaConfigs": [
     {
-      "memoryMb": 5120,
-      "parallel": 256
+      "memoryMb": 2048,
+      "parallel": 64
     },
     {
-      "memoryMb": 6144,
-      "parallel": 256
+      "memoryMb": 4096,
+      "parallel": 128
     }
   ],
   "phases": [
@@ -22,7 +22,6 @@
     {
       "name": "unchanged-update",
       "assetState": "baseline",
-      // Explicitly changes the custom resource input so the unchanged phase retriggers telemetry.
       "retainOnDelete": true
     },
     {
