@@ -83,7 +83,7 @@ Unsupported upstream props:
 | `expires`                               | Prefer `cacheControl` for deployment-time cache behavior.                       |
 | `serverSideEncryptionCustomerAlgorithm` | SSE-C is intentionally not implemented; use SSE-S3 or SSE-KMS.                  |
 | `signContent`                           | The provider uses AWS SDK calls directly, not the upstream AWS CLI upload path. |
-| `useEfs`                                | The provider reads source archives with S3 ranges and does not use EFS.         |
+| `useEfs`                                | EFS is not needed because the provider streams data with bounded memory instead of staging archives or extracted files on disk. |
 
 ## How It Works
 
