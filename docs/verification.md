@@ -14,7 +14,7 @@ Runbooks, evidence collection rules, and sanitization rules live in the repo-loc
 | Latest verification runs | `2026-05-15-aws-end-to-end-verification` and `2026-05-15-local-unit-synth-verification` |
 | Cleanup | All AWS end-to-end verification stacks destroyed and confirmed absent |
 | Raw evidence | Not committed; raw AWS output remains in scratch only |
-| Scenario runner | `pnpm verify <list|synth|deploy|destroy>`; concurrent runs isolate CDK output per scenario |
+| Scenario runner | `pnpm verify list`, `pnpm verify synth`, `pnpm verify deploy`, or `pnpm verify destroy`; concurrent runs isolate CDK output per scenario |
 
 ## Current Coverage
 

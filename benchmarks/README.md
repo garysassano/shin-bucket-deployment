@@ -8,6 +8,13 @@ README benchmark snapshots use sanitized tiny-many records from `benchmarks/resu
 
 Only README-linked snapshot SVGs are committed under `benchmarks/snapshots`. Temporary alternate layouts can be regenerated locally with `benchmarks/src/render/readme-snapshot.ts`, but should not be kept as committed design history. Generated report charts live beside the report output by default.
 
+## Shin Provider Telemetry
+
+- In-depth Shin provider telemetry: [`results.md`](results.md)
+- Structured JSONL source: [`results.jsonl`](results.jsonl)
+
+Regenerate the telemetry tables with `pnpm benchmark:results`.
+
 ## 1024 MiB / 16 Snapshot
 
 Four-phase snapshot using the latest tiny-many 1024 MiB Shin `maxParallelTransfers=16` rows.

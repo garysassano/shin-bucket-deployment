@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { collectBenchmarkResult } from "../../benchmarks/src/collect-results";
 import { renderBenchmarkReport } from "../../benchmarks/src/render-report";
+import { renderBenchmarkResultsTable } from "../../benchmarks/src/render-results-table";
 
 describe("benchmark result collector", () => {
   test("upserts sanitized benchmark result records", () => {
@@ -267,5 +268,62 @@ describe("benchmark result collector", () => {
     expect(svg).toContain("4x faster");
     expect(svg).toContain("55.6% lower");
     expect(report).not.toContain("xychart-beta");
+  });
+
+  test("renders grouped Shin provider telemetry tables", () => {
+    const dir = mkdtempSync(join(tmpdir(), "shin-bench-results-table-"));
+    const inputFile = join(dir, "results.jsonl");
+    const outputFile = join(dir, "results.md");
+    writeFileSync(
+      inputFile,
+      `${[
+        {
+          snapshotDate: "2026-05-14",
+          region: "ap-southeast-2",
+          implementation: "shin",
+          profile: "tiny-many",
+          memoryMb: 1024,
+          parallel: 32,
+          phase: "cold-create",
+          state: "baseline",
+          fileCount: 2584,
+          totalBytes: 8178618,
+          cdkDeploySeconds: 66.1,
+          localWallSeconds: 120.069,
+          providerDurationSeconds: 3.261,
+          billedDurationSeconds: 3.386,
+          initDurationSeconds: 0.124,
+          maxMemoryMb: 97,
+          providerInvoked: true,
+          cleanup: "all benchmark stacks destroyed",
+          notes: null,
+          providerSummary: {
+            requestType: "Create",
+            status: "success",
+            durationMs: 3207,
+            phaseMs: { plan: 328, destinationList: 34, transfer: 2843, delete: 0 },
+            counts: { uploadedObjects: 2585, skippedObjects: 0, catalogSkips: 0 },
+            source: { fetchedBytes: 856774, getRetries: 0 },
+            putObject: { retryAttempts: 0, throttledAttempts: 0 },
+          },
+        },
+      ]
+        .map((record) => JSON.stringify(record))
+        .join("\n")}\n`,
+    );
+
+    const table = renderBenchmarkResultsTable({ inputFile, outputFile });
+
+    expect(readFileSync(outputFile, "utf8")).toEqual(table);
+    expect(table).toContain("# Shin Provider Benchmark Telemetry");
+    expect(table).toContain("## tiny-many / 1024 MiB / parallel 32");
+    expect(table).toContain("### Runtime");
+    expect(table).toContain(
+      "| cold-create | baseline | Create | success | 2584 | 8178618 | 66.1 | 120.069 | 3.261 | 3207 | 3.386 | 0.124 | 97 | null | null | 1 |",
+    );
+    expect(table).toContain("### Provider Phase Timing");
+    expect(table).toContain("| cold-create | 328 | 34 | 2843 | 0 | null | null |");
+    expect(table).toContain("### Source Range Reads");
+    expect(table).toContain("| Shin telemetry rows | 1 |");
   });
 });
