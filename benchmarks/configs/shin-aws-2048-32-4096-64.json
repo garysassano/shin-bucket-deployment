@@ -22,7 +22,6 @@
     {
       "name": "unchanged-update",
       "assetState": "baseline",
-      // Explicitly changes the custom resource input so the unchanged phase retriggers telemetry.
       "retainOnDelete": true
     },
     {

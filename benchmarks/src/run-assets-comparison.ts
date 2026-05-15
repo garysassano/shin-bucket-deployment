@@ -617,7 +617,7 @@ function readConfigFile(configPath: string | undefined): RunnerConfig {
   }
 
   const filePath = resolve(process.cwd(), configPath);
-  const parsed = benchmarkConfigSchema.parse(parseJsonc(readFileSync(filePath, "utf8")));
+  const parsed = benchmarkConfigSchema.parse(JSON.parse(readFileSync(filePath, "utf8")));
   const defaults = defaultConfig();
   const fileConfig = {
     ...defaults,
@@ -636,54 +636,6 @@ function readConfigFile(configPath: string | undefined): RunnerConfig {
     ...(parsed.phases === undefined ? {} : { phases: parsed.phases.map(configPhaseToRunPhase) }),
   };
   return fileConfig;
-}
-
-function parseJsonc(text: string): unknown {
-  return JSON.parse(stripJsonComments(text));
-}
-
-function stripJsonComments(text: string): string {
-  let output = "";
-  let inString = false;
-  let escaped = false;
-  for (let index = 0; index < text.length; index += 1) {
-    const char = text[index];
-    const next = text[index + 1];
-    if (inString) {
-      output += char;
-      if (escaped) {
-        escaped = false;
-      } else if (char === "\\") {
-        escaped = true;
-      } else if (char === '"') {
-        inString = false;
-      }
-      continue;
-    }
-    if (char === '"') {
-      inString = true;
-      output += char;
-      continue;
-    }
-    if (char === "/" && next === "/") {
-      while (index < text.length && text[index] !== "\n") {
-        index += 1;
-      }
-      output += "\n";
-      continue;
-    }
-    if (char === "/" && next === "*") {
-      index += 2;
-      while (index < text.length && !(text[index] === "*" && text[index + 1] === "/")) {
-        output += text[index] === "\n" ? "\n" : " ";
-        index += 1;
-      }
-      index += 1;
-      continue;
-    }
-    output += char;
-  }
-  return output;
 }
 
 function configPhaseToRunPhase(phase: NonNullable<BenchmarkConfig["phases"]>[number]): PhaseConfig {
@@ -837,7 +789,7 @@ function sleep(milliseconds: number): Promise<void> {
 
 function usage(): never {
   console.error(
-    "Usage: node dist/benchmarks/src/run-assets-comparison.js --config benchmarks/configs/shin-aws-2048-64-4096-128.jsonc [--asset-profiles tiny-many,large-few] [--lambda-configs 2048:64,4096:128] [--run-token <id>] [--snapshot-date <YYYY-MM-DD>] [--scratch-root <outside-repo>] [--concurrency 1]",
+    "Usage: node dist/benchmarks/src/run-assets-comparison.js --config benchmarks/configs/shin-aws-2048-64-4096-128.json [--asset-profiles tiny-many,large-few] [--lambda-configs 2048:64,4096:128] [--run-token <id>] [--snapshot-date <YYYY-MM-DD>] [--scratch-root <outside-repo>] [--concurrency 1]",
   );
   process.exit(1);
 }
