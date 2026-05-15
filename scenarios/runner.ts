@@ -1,10 +1,14 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import {
+  type BenchmarkImplementation,
+  isBenchmarkAssetProfile,
+  isBenchmarkImplementation,
+} from "../benchmarks/src/model";
 
 type ScenarioMode = "verify" | "benchmark";
 type ScenarioAction = "list" | "synth" | "deploy" | "destroy";
-type BenchmarkImplementation = "shin" | "aws";
 
 type ScenarioDefinition = {
   readonly file: string;
@@ -221,10 +225,13 @@ function benchmarkConfigs(options: Map<string, string>): BenchmarkConfig[] {
   const configs: BenchmarkConfig[] = [];
 
   for (const implementation of implementations) {
-    if (implementation !== "shin" && implementation !== "aws") {
+    if (!isBenchmarkImplementation(implementation)) {
       throw new Error(`Unsupported benchmark implementation: ${implementation}`);
     }
     for (const assetProfile of assetProfiles) {
+      if (assetProfile !== undefined && !isBenchmarkAssetProfile(assetProfile)) {
+        throw new Error(`Unsupported benchmark asset profile: ${assetProfile}`);
+      }
       for (const memoryMb of lambdaMemoryMb) {
         for (const parallel of lambdaMaxParallelTransfers) {
           configs.push({ assetProfile, implementation, memoryMb, parallel });

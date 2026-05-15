@@ -1,45 +1,12 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-
-type BenchmarkRecord = {
-  readonly snapshotDate?: string | null;
-  readonly providerImplementationCommit?: string | null;
-  readonly providerImplementationSubject?: string | null;
-  readonly resultDocumentationCommit?: string | null;
-  readonly region?: string | null;
-  readonly implementation?: string | null;
-  readonly profile?: string | null;
-  readonly memoryMb?: number | null;
-  readonly parallel?: number | null;
-  readonly phase?: string | null;
-  readonly state?: string | null;
-  readonly fileCount?: number | null;
-  readonly totalBytes?: number | null;
-  readonly cdkDeploySeconds?: number | null;
-  readonly localWallSeconds?: number | null;
-  readonly providerDurationSeconds?: number | null;
-  readonly billedDurationSeconds?: number | null;
-  readonly initDurationSeconds?: number | null;
-  readonly maxMemoryMb?: number | null;
-  readonly cleanup?: string | null;
-  readonly notes?: string | null;
-  readonly providerSummary?: ProviderSummary | null;
-};
-
-type ProviderSummary = {
-  readonly requestType?: string | null;
-  readonly status?: string | null;
-  readonly extract?: boolean | null;
-  readonly prune?: boolean | null;
-  readonly availableMemoryMb?: number | null;
-  readonly maxParallelTransfers?: number | null;
-  readonly durationMs?: number | null;
-  readonly phaseMs?: Record<string, number | null> | null;
-  readonly counts?: Record<string, number | null> | null;
-  readonly bytes?: Record<string, number | null> | null;
-  readonly source?: Record<string, number | null> | null;
-  readonly putObject?: Record<string, number | null> | null;
-};
+import { parseCliOptions } from "../cli";
+import {
+  type BenchmarkResultRecord,
+  type ProviderSummary,
+  phaseRank,
+  readBenchmarkResultRows,
+} from "../model";
 
 type RenderOptions = {
   readonly inputFile: string;
@@ -48,7 +15,7 @@ type RenderOptions = {
 
 type TelemetryRow = {
   readonly line: number;
-  readonly record: BenchmarkRecord;
+  readonly record: BenchmarkResultRecord;
   readonly summary: ProviderSummary;
 };
 
@@ -64,12 +31,7 @@ type Column<T> = {
   readonly value: (row: T) => unknown;
 };
 
-const PHASE_ORDER = new Map([
-  ["cold-create", 0],
-  ["unchanged-update", 1],
-  ["changed-update", 2],
-  ["pruned-update", 3],
-]);
+const CLI_OPTIONS = ["input-file", "output-file"] as const;
 
 const RUNTIME_COLUMNS: Array<Column<TelemetryRow>> = [
   { header: "Phase", value: phase },
@@ -289,10 +251,6 @@ function phase(row: TelemetryRow): string {
   return row.record.phase ?? "unknown";
 }
 
-function phaseRank(value: string): number {
-  return PHASE_ORDER.get(value) ?? Number.MAX_SAFE_INTEGER;
-}
-
 function nested(
   row: TelemetryRow,
   section: "phaseMs" | "counts" | "bytes" | "source" | "putObject",
@@ -312,17 +270,7 @@ function renderMarkdownTable<T>(rows: T[], columns: Array<Column<T>>): string {
 }
 
 function readTelemetryRows(filePath: string): TelemetryRow[] {
-  return readFileSync(filePath, "utf8")
-    .split(/\r?\n/)
-    .map((line, index) => ({ line, lineNumber: index + 1 }))
-    .filter(({ line }) => line.trim().length > 0)
-    .map(({ line, lineNumber }) => {
-      try {
-        return { line: lineNumber, record: JSON.parse(line) as BenchmarkRecord };
-      } catch (cause) {
-        throw new Error(`Invalid JSONL record at ${filePath}:${lineNumber}`, { cause });
-      }
-    })
+  return readBenchmarkResultRows(filePath)
     .filter(({ record }) => record.providerSummary !== undefined && record.providerSummary !== null)
     .map(({ line, record }) => ({
       line,
@@ -356,26 +304,17 @@ function escapeTableCell(value: string): string {
 }
 
 function parseArgs(args: string[]): RenderOptions {
-  const values = new Map<string, string>();
-  const normalizedArgs = args.filter((arg) => arg !== "--");
-  for (let index = 0; index < normalizedArgs.length; index += 2) {
-    const key = normalizedArgs[index];
-    const value = normalizedArgs[index + 1];
-    if (!key?.startsWith("--") || value === undefined) {
-      usage();
-    }
-    values.set(key.slice(2), value);
-  }
+  const values = parseCliOptions(args, CLI_OPTIONS, usage);
 
   return {
     inputFile: values.get("input-file") ?? "benchmarks/results.jsonl",
-    outputFile: values.get("output-file") ?? "benchmarks/results.md",
+    outputFile: values.get("output-file") ?? "benchmarks/telemetry.md",
   };
 }
 
 function usage(): never {
   console.error(
-    "Usage: node dist/benchmarks/src/render-results-table.js [--input-file benchmarks/results.jsonl] [--output-file benchmarks/results.md]",
+    "Usage: node dist/benchmarks/src/render/telemetry-table.js [--input-file benchmarks/results.jsonl] [--output-file benchmarks/telemetry.md]",
   );
   process.exit(1);
 }

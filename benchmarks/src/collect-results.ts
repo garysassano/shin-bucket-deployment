@@ -1,31 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname } from "node:path";
-
-export type BenchmarkResultRecord = {
-  readonly snapshotDate: string;
-  readonly providerImplementationCommit: string | null;
-  readonly providerImplementationSubject: string | null;
-  readonly resultDocumentationCommit: string | null;
-  readonly region: string | null;
-  readonly implementation: string | null;
-  readonly profile: string | null;
-  readonly memoryMb: number | null;
-  readonly parallel: number | null;
-  readonly phase: string;
-  readonly state: string | null;
-  readonly fileCount: number | null;
-  readonly totalBytes: number | null;
-  readonly cdkDeploySeconds: number | null;
-  readonly localWallSeconds: number | null;
-  readonly providerDurationSeconds: number | null;
-  readonly billedDurationSeconds: number | null;
-  readonly initDurationSeconds: number | null;
-  readonly maxMemoryMb: number | null;
-  readonly providerInvoked: boolean;
-  readonly cleanup: string | null;
-  readonly notes: string | null;
-  readonly providerSummary?: unknown;
-};
+import { parseCliOptions } from "./cli";
+import { type BenchmarkResultRecord, benchmarkResultKey, normalizeImplementation } from "./model";
 
 export type CollectBenchmarkOptions = {
   readonly assetProfile?: string;
@@ -48,6 +24,28 @@ export type CollectBenchmarkOptions = {
   readonly summaryFile?: string;
   readonly totalBytes?: number;
 };
+
+const CLI_OPTIONS = [
+  "asset-profile",
+  "asset-state",
+  "cleanup",
+  "commit",
+  "file-count",
+  "implementation",
+  "lambda-max-parallel-transfers",
+  "lambda-memory-mb",
+  "log-file",
+  "notes",
+  "output-file",
+  "phase",
+  "region",
+  "report-file",
+  "result-commit",
+  "snapshot-date",
+  "subject",
+  "summary-file",
+  "total-bytes",
+] as const;
 
 function main(): void {
   const options = parseArgs(process.argv.slice(2));
@@ -93,24 +91,6 @@ export function collectBenchmarkResult(options: CollectBenchmarkOptions): Benchm
   return record;
 }
 
-export function benchmarkResultKey(
-  record: Pick<
-    BenchmarkResultRecord,
-    "profile" | "memoryMb" | "parallel" | "implementation" | "phase" | "state"
-  >,
-): string {
-  return [
-    record.profile,
-    record.memoryMb,
-    record.parallel,
-    normalizeImplementation(record.implementation),
-    record.phase,
-    record.state,
-  ]
-    .map((part) => part ?? "")
-    .join("\u0000");
-}
-
 function upsertBenchmarkResult(outputFile: string, record: BenchmarkResultRecord): void {
   const key = benchmarkResultKey(record);
   const retainedRows = existsSync(outputFile)
@@ -133,16 +113,7 @@ function rowKey(line: string): string | null {
 }
 
 function parseArgs(args: string[]): CollectBenchmarkOptions {
-  const values = new Map<string, string>();
-  const normalizedArgs = args.filter((arg) => arg !== "--");
-  for (let index = 0; index < normalizedArgs.length; index += 2) {
-    const key = normalizedArgs[index];
-    const value = normalizedArgs[index + 1];
-    if (!key?.startsWith("--") || value === undefined) {
-      usage();
-    }
-    values.set(key.slice(2), value);
-  }
+  const values = parseCliOptions(args, CLI_OPTIONS, usage);
 
   const logFile = required(values, "log-file");
   const outputFile = values.get("output-file") ?? "benchmarks/results.jsonl";
@@ -189,13 +160,6 @@ function optionalNumber(values: Map<string, string>, name: string): number | und
     usage();
   }
   return parsed;
-}
-
-function normalizeImplementation(value: string | null | undefined): string | null {
-  if (value === "rust") {
-    return "shin";
-  }
-  return value ?? null;
 }
 
 function usage(): never {

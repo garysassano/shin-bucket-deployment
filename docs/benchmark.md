@@ -9,7 +9,7 @@ Runbooks, evidence collection rules, schema guidance, and sanitization rules liv
 | Artifact | Purpose |
 | --- | --- |
 | `benchmarks/README.md` | Human-viewable benchmark snapshots and links to committed SVG charts. |
-| `benchmarks/results.md` | In-depth Markdown view of Shin provider telemetry grouped by profile, memory, parallelism, and phase. |
+| `benchmarks/telemetry.md` | In-depth Markdown view of Shin provider telemetry grouped by profile, memory, parallelism, and phase. |
 | `benchmarks/results.jsonl` | Structured sanitized benchmark result rows used by reports and charts. |
 | `benchmarks/configs/` | Curated benchmark run matrices. |
 | `benchmarks/src/` | Benchmark runner, collector, table renderer, and report/chart renderers. |
@@ -28,18 +28,18 @@ Runbooks, evidence collection rules, schema guidance, and sanitization rules liv
 
 ## Reading Results
 
-Use `benchmarks/README.md` first for visual snapshots. Use `benchmarks/results.md` when you need detailed Shin provider telemetry, including runtime timings, provider phase timing, object work, source range-read diagnostics, bytes/memory windows, and `PutObject` pressure.
+Use `benchmarks/README.md` first for visual snapshots. Use `benchmarks/telemetry.md` when you need detailed Shin provider telemetry, including runtime timings, provider phase timing, object work, source range-read diagnostics, bytes/memory windows, and `PutObject` pressure.
 
 Regenerate the Shin telemetry Markdown tables from the JSONL source with:
 
 ```bash
-pnpm benchmark:results
+pnpm benchmark:telemetry-table
 ```
 
 Generate filtered comparison reports and SVG charts with:
 
 ```bash
-pnpm benchmark:report -- --asset-profile tiny-many --lambda-memory-mb 2048 --lambda-max-parallel-transfers 64
+pnpm benchmark:comparison-report -- --asset-profile tiny-many --lambda-memory-mb 2048 --lambda-max-parallel-transfers 64
 ```
 
 ## Methodology Summary
