@@ -32,9 +32,11 @@ test("renders a Rust-backed custom resource", () => {
     Handler: "bootstrap",
     Architectures: ["arm64"],
     MemorySize: 1024,
+    Timeout: 900,
   });
 
   template.hasResourceProperties("Custom::ShinBucketDeployment", {
+    ServiceTimeout: "900",
     DestinationBucketName: {
       Ref: Match.anyValue(),
     },
