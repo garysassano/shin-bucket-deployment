@@ -362,7 +362,7 @@ export class ShinBucketDeployment extends Construct {
     });
 
     /**
-     * Match CloudFormation's custom resource `ServiceTimeout` to Lambda's maximum
+     * The custom resource `ServiceTimeout` matches Lambda's maximum
      * runtime so CloudFormation fails when the provider can no longer respond.
      *
      * @see https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-cloudformation-customresource.html#cfn-cloudformation-customresource-servicetimeout
