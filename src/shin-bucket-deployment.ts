@@ -363,7 +363,7 @@ export class ShinBucketDeployment extends Construct {
 
     this.cr = new CustomResource(this, "CustomResource", {
       serviceToken: this.handlerFunction.functionArn,
-      // Match CloudFormation's custom resource ServiceTimeout to Lambda's maximum runtime:
+      // Match CloudFormation's custom resource `ServiceTimeout` to Lambda's maximum runtime:
       // https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-cloudformation-customresource.html#cfn-cloudformation-customresource-servicetimeout
       serviceTimeout: PROVIDER_TIMEOUT,
       resourceType: "Custom::ShinBucketDeployment",
