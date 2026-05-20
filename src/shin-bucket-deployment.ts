@@ -20,6 +20,12 @@ const CUSTOM_RESOURCE_OWNER_TAG = "aws-cdk:cr-owned";
 const HANDLER_BINARY_NAME = "shin-bucket-deployment-handler";
 const SHARED_HANDLER_ID_PREFIX = "ShinBucketDeploymentHandler";
 const DEFAULT_MEMORY_LIMIT_MB = 1024;
+/**
+ * Match CloudFormation's custom resource ServiceTimeout to Lambda's maximum
+ * runtime so CloudFormation fails when the provider can no longer respond.
+ *
+ * @see https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-cloudformation-customresource.html#cfn-cloudformation-customresource-servicetimeout
+ */
 const PROVIDER_TIMEOUT = Duration.minutes(15);
 const DEFAULT_PUT_OBJECT_RETRY_BASE_DELAY_MS = 250;
 const DEFAULT_PUT_OBJECT_RETRY_MAX_DELAY_MS = 5_000;
