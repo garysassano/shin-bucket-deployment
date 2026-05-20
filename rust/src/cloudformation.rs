@@ -16,6 +16,8 @@ use crate::types::{AppState, DeploymentStats, ResponsePayload, duration_ms};
 
 const MAX_FAILURE_REASON_BYTES: usize = 1024;
 
+type RequestEnvelope = CloudFormationCustomResourceRequest<Value, Value>;
+
 #[derive(Clone, Copy)]
 struct RequestIdentity<'a> {
     stack_id: &'a str,
@@ -23,79 +25,20 @@ struct RequestIdentity<'a> {
     logical_resource_id: &'a str,
 }
 
+struct DecodedRequest<'a> {
+    request_type: &'static str,
+    identity: RequestIdentity<'a>,
+    physical_resource_id: Option<&'a str>,
+    resource_properties: RawDeploymentRequest,
+    old_resource_properties: Option<RawDeploymentRequest>,
+}
+
 pub(crate) async fn handle_event(
     state: Arc<AppState>,
     event: lambda_runtime::LambdaEvent<Value>,
 ) -> Result<Value, Error> {
-    let request: CloudFormationCustomResourceRequest<RawDeploymentRequest, RawDeploymentRequest> =
-        serde_json::from_value(event.payload)
-            .context("failed to deserialize CloudFormation event")?;
-
-    let response = match &request {
-        CloudFormationCustomResourceRequest::Create(request) => {
-            tracing::info!(
-                request_type = "Create",
-                logical_resource_id = request.logical_resource_id,
-                "processing request"
-            );
-            process_request(
-                &state,
-                "Create",
-                RequestIdentity {
-                    stack_id: &request.stack_id,
-                    request_id: &request.request_id,
-                    logical_resource_id: &request.logical_resource_id,
-                },
-                None,
-                &request.resource_properties,
-                None,
-            )
-            .await
-        }
-        CloudFormationCustomResourceRequest::Update(request) => {
-            tracing::info!(
-                request_type = "Update",
-                logical_resource_id = request.logical_resource_id,
-                "processing request"
-            );
-            process_request(
-                &state,
-                "Update",
-                RequestIdentity {
-                    stack_id: &request.stack_id,
-                    request_id: &request.request_id,
-                    logical_resource_id: &request.logical_resource_id,
-                },
-                Some(&request.physical_resource_id),
-                &request.resource_properties,
-                Some(&request.old_resource_properties),
-            )
-            .await
-        }
-        CloudFormationCustomResourceRequest::Delete(request) => {
-            tracing::info!(
-                request_type = "Delete",
-                logical_resource_id = request.logical_resource_id,
-                "processing request"
-            );
-            process_request(
-                &state,
-                "Delete",
-                RequestIdentity {
-                    stack_id: &request.stack_id,
-                    request_id: &request.request_id,
-                    logical_resource_id: &request.logical_resource_id,
-                },
-                Some(&request.physical_resource_id),
-                &request.resource_properties,
-                None,
-            )
-            .await
-        }
-        _ => Err(anyhow!(
-            "unsupported CloudFormation custom resource request type"
-        )),
-    };
+    let request = decode_request_envelope(event.payload)?;
+    let response = process_request_envelope(&state, &request).await;
 
     let Some((response_url, stack_id, request_id, logical_resource_id)) = response_target(&request)
     else {
@@ -143,6 +86,88 @@ pub(crate) async fn handle_event(
     }
 
     Ok(json!({}))
+}
+
+fn decode_request_envelope(payload: Value) -> Result<RequestEnvelope> {
+    serde_json::from_value(payload).context("failed to deserialize CloudFormation request envelope")
+}
+
+fn decode_resource_properties(value: &Value, label: &str) -> Result<RawDeploymentRequest> {
+    serde_json::from_value(value.clone()).with_context(|| format!("failed to deserialize {label}"))
+}
+
+async fn process_request_envelope(
+    state: &AppState,
+    request: &RequestEnvelope,
+) -> Result<ResponsePayload> {
+    let decoded = decode_deployment_request(request)?;
+    tracing::info!(
+        request_type = decoded.request_type,
+        logical_resource_id = decoded.identity.logical_resource_id,
+        "processing request"
+    );
+    process_request(
+        state,
+        decoded.request_type,
+        decoded.identity,
+        decoded.physical_resource_id,
+        &decoded.resource_properties,
+        decoded.old_resource_properties.as_ref(),
+    )
+    .await
+}
+
+fn decode_deployment_request(request: &RequestEnvelope) -> Result<DecodedRequest<'_>> {
+    match request {
+        CloudFormationCustomResourceRequest::Create(request) => Ok(DecodedRequest {
+            request_type: "Create",
+            identity: RequestIdentity {
+                stack_id: &request.stack_id,
+                request_id: &request.request_id,
+                logical_resource_id: &request.logical_resource_id,
+            },
+            physical_resource_id: None,
+            resource_properties: decode_resource_properties(
+                &request.resource_properties,
+                "ResourceProperties",
+            )?,
+            old_resource_properties: None,
+        }),
+        CloudFormationCustomResourceRequest::Update(request) => Ok(DecodedRequest {
+            request_type: "Update",
+            identity: RequestIdentity {
+                stack_id: &request.stack_id,
+                request_id: &request.request_id,
+                logical_resource_id: &request.logical_resource_id,
+            },
+            physical_resource_id: Some(&request.physical_resource_id),
+            resource_properties: decode_resource_properties(
+                &request.resource_properties,
+                "ResourceProperties",
+            )?,
+            old_resource_properties: Some(decode_resource_properties(
+                &request.old_resource_properties,
+                "OldResourceProperties",
+            )?),
+        }),
+        CloudFormationCustomResourceRequest::Delete(request) => Ok(DecodedRequest {
+            request_type: "Delete",
+            identity: RequestIdentity {
+                stack_id: &request.stack_id,
+                request_id: &request.request_id,
+                logical_resource_id: &request.logical_resource_id,
+            },
+            physical_resource_id: Some(&request.physical_resource_id),
+            resource_properties: decode_resource_properties(
+                &request.resource_properties,
+                "ResourceProperties",
+            )?,
+            old_resource_properties: None,
+        }),
+        _ => Err(anyhow!(
+            "unsupported CloudFormation custom resource request type"
+        )),
+    }
 }
 
 async fn process_request(
@@ -338,9 +363,7 @@ fn log_deployment_summary(
     }
 }
 
-fn response_target(
-    request: &CloudFormationCustomResourceRequest<RawDeploymentRequest, RawDeploymentRequest>,
-) -> Option<(&str, &str, &str, &str)> {
+fn response_target(request: &RequestEnvelope) -> Option<(&str, &str, &str, &str)> {
     match request {
         CloudFormationCustomResourceRequest::Create(request) => Some((
             &request.response_url,
@@ -364,9 +387,7 @@ fn response_target(
     }
 }
 
-fn physical_resource_id(
-    request: &CloudFormationCustomResourceRequest<RawDeploymentRequest, RawDeploymentRequest>,
-) -> Option<&str> {
+fn physical_resource_id(request: &RequestEnvelope) -> Option<&str> {
     match request {
         CloudFormationCustomResourceRequest::Create(_) => None,
         CloudFormationCustomResourceRequest::Update(request) => Some(&request.physical_resource_id),
@@ -408,7 +429,13 @@ async fn send_response(
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_FAILURE_REASON_BYTES, cloudfront_caller_reference, truncate_failure_reason};
+    use aws_lambda_events::event::cloudformation::CloudFormationCustomResourceRequest;
+    use serde_json::json;
+
+    use super::{
+        MAX_FAILURE_REASON_BYTES, cloudfront_caller_reference, decode_request_envelope,
+        decode_resource_properties, truncate_failure_reason,
+    };
 
     #[test]
     fn cloudfront_caller_reference_is_stable_and_bounded() {
@@ -470,5 +497,30 @@ mod tests {
 
         assert!(truncated.len() <= MAX_FAILURE_REASON_BYTES);
         assert!(truncated.ends_with(" ... [truncated]"));
+    }
+
+    #[test]
+    fn request_envelope_decodes_before_resource_properties() {
+        let payload = json!({
+            "RequestType": "Create",
+            "RequestId": "request-123",
+            "ResponseURL": "https://example.com/response",
+            "StackId": "stack-123",
+            "ResourceType": "Custom::ShinBucketDeployment",
+            "LogicalResourceId": "Deploy",
+            "ResourceProperties": {
+                "DestinationBucketName": "dest"
+            }
+        });
+
+        let request = decode_request_envelope(payload).expect("envelope should decode");
+        let CloudFormationCustomResourceRequest::Create(create) = request else {
+            panic!("expected create request");
+        };
+
+        assert_eq!(create.response_url, "https://example.com/response");
+        assert!(
+            decode_resource_properties(&create.resource_properties, "ResourceProperties").is_err()
+        );
     }
 }
