@@ -20,6 +20,7 @@ const CUSTOM_RESOURCE_OWNER_TAG = "aws-cdk:cr-owned";
 const HANDLER_BINARY_NAME = "shin-bucket-deployment-handler";
 const SHARED_HANDLER_ID_PREFIX = "ShinBucketDeploymentHandler";
 const DEFAULT_MEMORY_LIMIT_MB = 1024;
+const PROVIDER_TIMEOUT = Duration.minutes(15);
 const DEFAULT_PUT_OBJECT_RETRY_BASE_DELAY_MS = 250;
 const DEFAULT_PUT_OBJECT_RETRY_MAX_DELAY_MS = 5_000;
 const DEFAULT_PUT_OBJECT_SLOWDOWN_RETRY_BASE_DELAY_MS = 1_000;
@@ -362,6 +363,7 @@ export class ShinBucketDeployment extends Construct {
 
     this.cr = new CustomResource(this, "CustomResource", {
       serviceToken: this.handlerFunction.functionArn,
+      serviceTimeout: PROVIDER_TIMEOUT,
       resourceType: "Custom::ShinBucketDeployment",
       properties: {
         SourceBucketNames: Lazy.uncachedList({
@@ -528,7 +530,7 @@ function getOrCreateHandler(
     binaryName: HANDLER_BINARY_NAME,
     manifestPath,
     bundling: props.bundling,
-    timeout: Duration.minutes(15),
+    timeout: PROVIDER_TIMEOUT,
     memorySize: props.memoryLimit ?? DEFAULT_MEMORY_LIMIT_MB,
     ephemeralStorageSize: props.ephemeralStorageSize,
     role: props.role,
