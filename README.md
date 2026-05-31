@@ -18,9 +18,7 @@ The official `BucketDeployment` is a good default for many stacks, but its provi
 | `ETag`-based skip decisions | The provider lists the destination prefix once and compares planned content MD5 values with destination `ETag` values to skip unchanged single-part static objects.                                                                                                                                                                                         |
 | Marker-free streaming path  | Missing sources without deploy-time markers stream directly from archive entries; replacement buffers are only used for sources that declare markers.                                                                                                                                                                                                       |
 
-## Benchmark Snapshot
-
-<img src="./benchmarks/snapshots/tiny-many-1024mib-16.svg" alt="ShinBucketDeployment tiny-many 1024 MiB parallel 16 benchmark" width="100%">
+## Benchmark Snapshots
 
 <img src="./benchmarks/snapshots/tiny-many-1024mib-32.svg" alt="ShinBucketDeployment tiny-many 1024 MiB parallel 32 benchmark" width="100%">
 
@@ -78,11 +76,11 @@ The construct follows the upstream `BucketDeployment` API where the behavior map
 
 Unsupported upstream props:
 
-| Prop                                    | Reason                                                                          |
-| --------------------------------------- | ------------------------------------------------------------------------------- |
-| `expires`                               | Prefer `cacheControl` for deployment-time cache behavior.                       |
-| `serverSideEncryptionCustomerAlgorithm` | SSE-C is intentionally not implemented; use SSE-S3 or SSE-KMS.                  |
-| `signContent`                           | The provider uses AWS SDK calls directly, not the upstream AWS CLI upload path. |
+| Prop                                    | Reason                                                                                                                          |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `expires`                               | Prefer `cacheControl` for deployment-time cache behavior.                                                                       |
+| `serverSideEncryptionCustomerAlgorithm` | SSE-C is intentionally not implemented; use SSE-S3 or SSE-KMS.                                                                  |
+| `signContent`                           | The provider uses AWS SDK calls directly, not the upstream AWS CLI upload path.                                                 |
 | `useEfs`                                | EFS is not needed because the provider streams data with bounded memory instead of staging archives or extracted files on disk. |
 
 ## How It Works
