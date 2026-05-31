@@ -2,6 +2,8 @@
 name = "shin-bucket-deployment-handler"
 version = "0.1.0"
 edition = "2024"
+license = "Apache-2.0"
+publish = false
 
 [[bin]]
 name = "shin-bucket-deployment-handler"
@@ -11,10 +13,10 @@ path = "src/main.rs"
 anyhow = "1"
 async-compression = { version = "0.4", default-features = false, features = ["tokio", "deflate"] }
 async_zip = { version = "0.0.18", features = ["tokio", "deflate"] }
-aws-config = "1"
+aws-config = { version = "1", default-features = false, features = ["behavior-version-latest", "default-https-client", "rt-tokio"] }
 aws_lambda_events = { version = "1", default-features = false, features = ["cloudformation"] }
-aws-sdk-cloudfront = "1"
-aws-sdk-s3 = "1"
+aws-sdk-cloudfront = { version = "1", default-features = false, features = ["behavior-version-latest", "default-https-client", "rt-tokio"] }
+aws-sdk-s3 = { version = "1", default-features = false, features = ["behavior-version-latest", "default-https-client", "http-1x", "rt-tokio", "sigv4a"] }
 bytes = "1"
 crc32fast = "1"
 fastrand = "2"
@@ -28,7 +30,6 @@ reqwest = { version = "0.13", default-features = false, features = ["json", "rus
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["fs", "io-util", "macros", "rt-multi-thread", "sync", "time"] }
-tokio-util = { version = "0.7", features = ["io"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 urlencoding = "2"

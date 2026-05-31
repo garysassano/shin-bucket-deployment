@@ -94,6 +94,7 @@ const VERIFY_DESTROY_ORDER = [
   "cloudfront-async",
 ];
 const DEFAULT_VERIFY_CONCURRENCY = 4;
+const DEFAULT_VERIFY_SYNTH_CONCURRENCY = 1;
 
 function printUsage(): void {
   console.error(
@@ -400,10 +401,13 @@ async function runScenarioGroups(
   return firstFailure;
 }
 
-function parseVerifyConcurrency(options: Map<string, string>): number {
+function parseVerifyConcurrency(
+  action: Exclude<ScenarioAction, "list">,
+  options: Map<string, string>,
+): number {
   const raw = options.get("concurrency") ?? process.env.SHIN_VERIFY_CONCURRENCY;
   if (raw === undefined || raw === "") {
-    return DEFAULT_VERIFY_CONCURRENCY;
+    return action === "synth" ? DEFAULT_VERIFY_SYNTH_CONCURRENCY : DEFAULT_VERIFY_CONCURRENCY;
   }
 
   const value = Number(raw);
@@ -427,7 +431,7 @@ async function main(): Promise<void> {
       action,
       verificationScenarioGroups(action, name),
       cdkArgs,
-      parseVerifyConcurrency(runnerOptions),
+      parseVerifyConcurrency(action, runnerOptions),
     );
     if (status !== 0) {
       process.exit(status);

@@ -1215,6 +1215,16 @@ async fn open_entry_data_reader(
         .slice_from(plan.source_offset, header_end)
         .await?
         .bytes;
+    // `slice_from` is block-local. The span check above proves the ZIP contains
+    // 30 logical header bytes, but a small block size or unlucky boundary can
+    // still make this slice short. Guard the fixed-index reads below so that
+    // degrades to a clean error instead of a panic.
+    if header.len() < LOCAL_FILE_HEADER_LEN {
+        return Err(invalid_entry(
+            &plan,
+            "local file header was not fully readable from a single source block",
+        ));
+    }
     let signature = u32::from_le_bytes([header[0], header[1], header[2], header[3]]);
     if signature != LOCAL_FILE_HEADER_SIGNATURE {
         return Err(invalid_entry(
@@ -1632,7 +1642,10 @@ mod tests {
     use tokio::sync::Semaphore;
     use zip::write::{SimpleFileOptions, ZipWriter};
 
-    use super::{SourceDiagnostics, plan_source_blocks, send_zip_entry_chunks, zip_entry_reader};
+    use super::{
+        LOCAL_FILE_HEADER_LEN, SourceDiagnostics, plan_source_blocks, send_zip_entry_chunks,
+        zip_entry_reader,
+    };
     use crate::s3::archive::{
         SourceBlockOptions, SourceBlockRange, SourceBlockSlot, SourceBlockState, SourceBlockStatus,
     };
@@ -1688,6 +1701,63 @@ mod tests {
             .unwrap_err();
 
         assert!(error.to_string().contains("CRC32"));
+    }
+
+    #[tokio::test]
+    async fn open_entry_data_reader_rejects_short_local_header() {
+        // Simulate a block boundary splitting the 30-byte local header; the
+        // parser should return a clean error instead of indexing past the slice.
+        let short_len: u64 = (LOCAL_FILE_HEADER_LEN as u64) - 1;
+        let block = SourceBlockRange {
+            start: 0,
+            end: short_len - 1,
+        };
+        let store = Arc::new(super::SourceBlockStore {
+            source: Arc::new(super::SourceClient {
+                client: dummy_s3_client(),
+                bucket: "bucket".to_string(),
+                key: "archive.zip".to_string(),
+                len: 1024,
+                etag: None,
+                diagnostics: Arc::new(SourceDiagnostics::new(1024)),
+            }),
+            blocks: vec![block],
+            state: std::sync::Mutex::new(SourceBlockState {
+                slots: vec![SourceBlockSlot {
+                    remaining_claims: 1,
+                    live_claims: 0,
+                    status: SourceBlockStatus::Ready(bytes::Bytes::from(vec![
+                        0u8;
+                        short_len as usize
+                    ])),
+                }],
+                resident_bytes: block.len(),
+            }),
+            notify: Arc::new(tokio::sync::Notify::new()),
+            capacity_notify: Arc::new(tokio::sync::Notify::new()),
+            source_get_concurrency: 1,
+            window_bytes: block.len(),
+            fetch_semaphore: Semaphore::new(1),
+        });
+        let plan = ZipEntryPlan {
+            source_index: 0,
+            relative_key: "entry.txt".to_string(),
+            destination_key: "entry.txt".to_string(),
+            size: 1,
+            compressed_size: 1,
+            compression_code: 0,
+            crc32: 0,
+            catalog_md5: None,
+            source_offset: 0,
+            source_span_end: 64,
+        };
+
+        let error = match super::open_entry_data_reader(store, plan).await {
+            Ok(_) => panic!("expected short local header to be rejected"),
+            Err(error) => error,
+        };
+
+        assert!(error.to_string().contains("local file header"));
     }
 
     #[test]
