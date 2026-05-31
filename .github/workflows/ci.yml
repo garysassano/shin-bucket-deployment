@@ -55,6 +55,8 @@ jobs:
 
       - name: Install Zig
         uses: mlugg/setup-zig@v2
+        with:
+          use-cache: false # Disables Zig global cache (but not Zig compiler tarball cache) since cargo-lambda uses cargo-zigbuild to compile
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
