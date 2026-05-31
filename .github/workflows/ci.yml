@@ -16,6 +16,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   node:
@@ -56,7 +57,8 @@ jobs:
       - name: Install Zig
         uses: mlugg/setup-zig@v2
         with:
-          use-cache: false # Disables Zig global cache (but not Zig compiler tarball cache) since cargo-lambda uses cargo-zigbuild to compile
+          # Disable Zig's global cache; cargo-lambda uses cargo-zigbuild here.
+          use-cache: false
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
