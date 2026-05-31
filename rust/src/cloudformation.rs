@@ -405,6 +405,8 @@ async fn send_response(
     status: &str,
     payload: &ResponsePayload,
 ) -> Result<()> {
+    validate_response_url(response_url)?;
+
     let body = serde_json::to_string(&json!({
         "Status": status,
         "Reason": payload.reason.clone().unwrap_or_else(|| format!("See the details in CloudWatch Logs for RequestId {}", request_id)),
@@ -427,6 +429,29 @@ async fn send_response(
     Ok(())
 }
 
+/// Validates the CloudFormation `ResponseURL` before PUTing the response.
+///
+/// The URL comes from the CloudFormation event envelope, not
+/// `ResourceProperties`, so this is defense-in-depth. Validate only scheme and
+/// host: response URL hosts vary by AWS partition, and a false rejection would
+/// prevent the provider from reporting failure. HTTPS keeps the response body,
+/// including any `Data`, off plaintext transport.
+fn validate_response_url(response_url: &str) -> Result<()> {
+    let parsed =
+        reqwest::Url::parse(response_url).context("CloudFormation response URL is invalid")?;
+    if parsed.scheme() != "https" {
+        return Err(anyhow!(
+            "CloudFormation response URL must use https, got {}",
+            parsed.scheme()
+        ));
+    }
+    if parsed.host_str().is_none() {
+        return Err(anyhow!("CloudFormation response URL must include a host"));
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use aws_lambda_events::event::cloudformation::CloudFormationCustomResourceRequest;
@@ -434,7 +459,7 @@ mod tests {
 
     use super::{
         MAX_FAILURE_REASON_BYTES, cloudfront_caller_reference, decode_request_envelope,
-        decode_resource_properties, truncate_failure_reason,
+        decode_resource_properties, truncate_failure_reason, validate_response_url,
     };
 
     #[test]
@@ -522,5 +547,22 @@ mod tests {
         assert!(
             decode_resource_properties(&create.resource_properties, "ResourceProperties").is_err()
         );
+    }
+
+    #[test]
+    fn response_url_must_be_https() {
+        // Realistic CloudFormation signed S3 PUT target.
+        assert!(
+            validate_response_url(
+                "https://cloudformation-custom-resource-response-useast1.s3.us-east-1.amazonaws.com/abc?signature=x"
+            )
+            .is_ok()
+        );
+        assert!(validate_response_url("https://example.com/response").is_ok());
+        // Reject plaintext, malformed input, and non-network schemes.
+        assert!(validate_response_url("http://example.com/response").is_err());
+        assert!(validate_response_url("not a url").is_err());
+        assert!(validate_response_url("file:///etc/passwd").is_err());
+        assert!(validate_response_url("data:text/plain,hello").is_err());
     }
 }
