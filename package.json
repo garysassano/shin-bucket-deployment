@@ -1,9 +1,47 @@
 {
-  "name": "shin-bucket-deployment-prototype",
-  "private": true,
-  "version": "0.0.0",
-  "description": "Local prototype of a Rust-backed CDK bucket deployment construct",
+  "name": "shin-bucket-deployment",
+  "version": "0.1.0",
+  "description": "Rust-backed drop-in alternative to the AWS CDK BucketDeployment construct",
   "license": "Apache-2.0",
+  "keywords": [
+    "aws",
+    "cdk",
+    "aws-cdk",
+    "s3",
+    "bucket-deployment",
+    "rust",
+    "lambda",
+    "static-site"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/anomalyco/shin-bucket-deployment.git"
+  },
+  "homepage": "https://github.com/anomalyco/shin-bucket-deployment#readme",
+  "bugs": {
+    "url": "https://github.com/anomalyco/shin-bucket-deployment/issues"
+  },
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/**/*.js",
+    "lib/**/*.d.ts",
+    "lib/**/*.d.ts.map",
+    "assets/bootstrap-arm64/bootstrap",
+    "assets/bootstrap-x86_64/bootstrap",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "devEngines": {
     "runtime": {
       "name": "node",
@@ -22,6 +60,8 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
+    "build:package": "tsc -p tsconfig.package.json",
+    "prebuild:bootstrap": "node scripts/build-bootstrap.mjs",
     "typecheck": "tsc --noEmit",
     "format": "biome format --write .",
     "lint": "biome check .",
@@ -37,17 +77,26 @@
     "benchmark:collect": "pnpm build && node dist/benchmarks/src/collect-results.js",
     "benchmark:comparison-report": "pnpm build && node dist/benchmarks/src/render/comparison-report.js",
     "benchmark:telemetry-table": "pnpm build && node dist/benchmarks/src/render/telemetry-table.js",
-    "benchmark:run-assets": "pnpm build && node dist/benchmarks/src/run-assets-comparison.js"
+    "benchmark:run-assets": "pnpm build && node dist/benchmarks/src/run-assets-comparison.js",
+    "prepack": "pnpm build:package"
   },
-  "dependencies": {
-    "aws-cdk-lib": "2.257.0",
-    "cargo-lambda-cdk": "0.0.36",
-    "constructs": "10.6.0"
+  "peerDependencies": {
+    "aws-cdk-lib": "^2.257.0",
+    "cargo-lambda-cdk": "^0.0.36",
+    "constructs": "^10.0.0"
+  },
+  "peerDependenciesMeta": {
+    "cargo-lambda-cdk": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.15",
     "@types/node": "24.12.4",
     "aws-cdk": "2.1124.1",
+    "aws-cdk-lib": "2.257.0",
+    "cargo-lambda-cdk": "0.0.36",
+    "constructs": "10.6.0",
     "typescript": "6.0.3",
     "vitest": "4.1.7",
     "zod": "^4.4.3"

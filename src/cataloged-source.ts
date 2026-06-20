@@ -23,9 +23,8 @@ import {
   type MarkersConfig,
   type SourceConfig,
 } from "aws-cdk-lib/aws-s3-deployment";
-import { ValidationError } from "aws-cdk-lib/core/lib/errors";
-import type { lit } from "aws-cdk-lib/core/lib/private/literal-string";
 import type { Construct } from "constructs";
+import { ValidationError } from "./errors";
 
 const CATALOG_PATH = ".shin/catalog.v1.json";
 const CATALOG_VERSION = 1;
@@ -358,6 +357,6 @@ function buildCrc32Table(): Uint32Array {
   return table;
 }
 
-function literalString(value: string): ReturnType<typeof lit> {
-  return value as ReturnType<typeof lit>;
+function literalString(value: string): string {
+  return value;
 }

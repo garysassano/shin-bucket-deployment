@@ -1,0 +1,131 @@
+name: Release
+
+# Publishes the construct to npm with prebuilt Rust provider binaries baked in.
+# Triggered by pushing a semver tag (e.g. v0.1.0) or manually via workflow_dispatch.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: "Build and pack only; do not publish to npm"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Cross-compile the Rust provider once per architecture and upload the
+  # bootstrap binaries as artifacts for the publish job to assemble.
+  build-bootstrap:
+    name: Build bootstrap (${{ matrix.arch }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - arch: arm64
+            target: aarch64-unknown-linux-gnu
+          - arch: x86_64
+            target: x86_64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          use-cache: false
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
+      - name: Install cargo-lambda
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-lambda
+
+      - name: Build bootstrap
+        run: node scripts/build-bootstrap.mjs ${{ matrix.arch }}
+
+      - name: Upload bootstrap artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bootstrap-${{ matrix.arch }}
+          path: assets/bootstrap-${{ matrix.arch }}/bootstrap
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish to npm
+    needs: build-bootstrap
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # npm provenance
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 11
+
+      - name: Install Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Download arm64 bootstrap
+        uses: actions/download-artifact@v4
+        with:
+          name: bootstrap-arm64
+          path: assets/bootstrap-arm64
+
+      - name: Download x86_64 bootstrap
+        uses: actions/download-artifact@v4
+        with:
+          name: bootstrap-x86_64
+          path: assets/bootstrap-x86_64
+
+      - name: Verify bootstrap binaries are present
+        run: |
+          test -f assets/bootstrap-arm64/bootstrap
+          test -f assets/bootstrap-x86_64/bootstrap
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Test
+        run: pnpm test
+
+      - name: Build package
+        run: pnpm build:package
+
+      - name: Pack
+        run: pnpm pack
+
+      - name: Publish (dry run)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run }}
+        run: pnpm publish --no-git-checks --dry-run
+
+      - name: Publish
+        if: ${{ github.event_name == 'push' || !inputs.dry-run }}
+        run: pnpm publish --no-git-checks --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
