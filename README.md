@@ -2,9 +2,18 @@
 
 Rust-backed alternative to AWS CDK's official [`BucketDeployment`](https://docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.aws_s3_deployment.BucketDeployment.html) construct.
 
-This repository is currently a local prototype, not a published construct library. The construct API and Rust provider Lambda are working and tracked through AWS validation runs.
+`ShinBucketDeployment` is a near drop-in replacement for `BucketDeployment`, intended for S3 static asset deployment when you want faster deployments, a leaner custom resource, and fewer full-archive extraction costs than the upstream construct.
 
-`ShinBucketDeployment` is intended for S3 static asset deployment when you want faster deployments, a leaner custom resource, and fewer full-archive extraction costs than the upstream construct.
+The published package ships prebuilt Rust provider binaries for both Lambda architectures (`arm64` and `x86_64`), so consumers do not need a Rust toolchain. Swapping from the upstream construct is a one-line import change.
+
+## Install
+
+```sh
+npm install shin-bucket-deployment
+# or: pnpm add shin-bucket-deployment
+```
+
+`aws-cdk-lib` and `constructs` are peer dependencies, so use the versions already in your CDK app. The `cargo-lambda-cdk` package is an optional peer dependency only needed if you opt into compiling the provider locally (see [Building the provider locally](#building-the-provider-locally)).
 
 ## Why Build This
 
@@ -34,7 +43,7 @@ import { S3BucketOrigin } from "aws-cdk-lib/aws-cloudfront-origins";
 import { Bucket } from "aws-cdk-lib/aws-s3";
 import { Stack } from "aws-cdk-lib";
 import { Construct } from "constructs";
-import { ShinBucketDeployment, Source } from "./src";
+import { ShinBucketDeployment, Source } from "shin-bucket-deployment";
 
 export class DemoStack extends Stack {
   constructor(scope: Construct, id: string) {
@@ -57,6 +66,27 @@ export class DemoStack extends Stack {
     });
   }
 }
+```
+
+### Migrating from `BucketDeployment`
+
+The props map closely to the upstream construct, so migration is usually a one-line import change:
+
+```diff
+-import { BucketDeployment, Source } from "aws-cdk-lib/aws-s3-deployment";
++import { ShinBucketDeployment as BucketDeployment, Source } from "shin-bucket-deployment";
+```
+
+See [What It Supports](#what-it-supports) for the small set of upstream props that are intentionally unsupported.
+
+## Building the provider locally
+
+By default the construct uses the prebuilt Rust `bootstrap` binary shipped inside the package, matched to the requested `architecture`. No Rust toolchain is required.
+
+If you are iterating on the Rust provider itself, you can opt into compiling it locally by passing `bundling` or `rustProjectPath`. That path requires a Rust toolchain plus the optional `cargo-lambda-cdk` dependency:
+
+```sh
+pnpm add -D cargo-lambda-cdk
 ```
 
 ## What It Supports

@@ -1,5 +1,7 @@
 node_modules
 dist
+lib
+assets
 cdk.out
 cdk.out.*
 target

@@ -206,16 +206,6 @@ settings:
 importers:
 
   .:
-    dependencies:
-      aws-cdk-lib:
-        specifier: 2.257.0
-        version: 2.257.0(constructs@10.6.0)
-      cargo-lambda-cdk:
-        specifier: 0.0.36
-        version: 0.0.36(aws-cdk-lib@2.257.0(constructs@10.6.0))(constructs@10.6.0)
-      constructs:
-        specifier: 10.6.0
-        version: 10.6.0
     devDependencies:
       '@biomejs/biome':
         specifier: 2.4.15
@@ -226,6 +216,15 @@ importers:
       aws-cdk:
         specifier: 2.1124.1
         version: 2.1124.1
+      aws-cdk-lib:
+        specifier: 2.257.0
+        version: 2.257.0(constructs@10.6.0)
+      cargo-lambda-cdk:
+        specifier: 0.0.36
+        version: 0.0.36(aws-cdk-lib@2.257.0(constructs@10.6.0))(constructs@10.6.0)
+      constructs:
+        specifier: 10.6.0
+        version: 10.6.0
       typescript:
         specifier: 6.0.3
         version: 6.0.3

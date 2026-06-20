@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { CustomResource, Duration, Lazy, Stack, Tags, Token } from "aws-cdk-lib";
 import { Effect, type IRole, PolicyStatement } from "aws-cdk-lib/aws-iam";
-import { Architecture, type Function as LambdaFunction } from "aws-cdk-lib/aws-lambda";
+import { Architecture, Code, Function as LambdaFunction, Runtime } from "aws-cdk-lib/aws-lambda";
 import { Bucket, BucketGrants, type IBucket } from "aws-cdk-lib/aws-s3";
 import type {
   BucketDeploymentProps,
@@ -11,10 +11,9 @@ import type {
   MarkersConfig,
   SourceConfig,
 } from "aws-cdk-lib/aws-s3-deployment";
-import { ValidationError } from "aws-cdk-lib/core/lib/errors";
-import type { lit } from "aws-cdk-lib/core/lib/private/literal-string";
-import { type BundlingOptions as CargoLambdaBundlingOptions, RustFunction } from "cargo-lambda-cdk";
+import type { BundlingOptions as CargoLambdaBundlingOptions } from "cargo-lambda-cdk";
 import { Construct } from "constructs";
+import { ValidationError } from "./errors";
 
 const CUSTOM_RESOURCE_OWNER_TAG = "aws-cdk:cr-owned";
 const HANDLER_BINARY_NAME = "shin-bucket-deployment-handler";
@@ -118,15 +117,24 @@ export interface ShinBucketDeploymentProps
   /**
    * Optional override for the Rust provider project directory.
    *
-   * This is mainly useful while iterating on the handler itself.
+   * Setting this opts into compiling the Rust provider locally with
+   * `cargo-lambda-cdk` instead of using the prebuilt binary shipped with the
+   * package. This requires a Rust toolchain plus the optional `cargo-lambda-cdk`
+   * dependency and is mainly useful while iterating on the handler itself.
    *
-   * @default - `<projectRoot>/rust`
+   * @default - the prebuilt provider binary shipped with the package, or
+   * `<projectRoot>/rust` when no prebuilt binary is available
    */
   readonly rustProjectPath?: string;
 
   /**
    * Bundling options passed through to `cargo-lambda-cdk`.
-   * @default - local cargo-lambda bundling with the current process environment
+   *
+   * Setting this opts into compiling the Rust provider locally instead of using
+   * the prebuilt binary shipped with the package, and requires the optional
+   * `cargo-lambda-cdk` dependency plus a Rust toolchain.
+   *
+   * @default - the prebuilt provider binary shipped with the package
    */
   readonly bundling?: CargoLambdaBundlingOptions;
 
@@ -146,7 +154,12 @@ export interface ShinBucketDeploymentProps
 }
 
 /**
- * Prototype Rust-backed alternative to `BucketDeployment`.
+ * Rust-backed alternative to `BucketDeployment`.
+ *
+ * By default the provider runs a prebuilt Rust `bootstrap` binary shipped with
+ * the package, so consumers do not need a Rust toolchain. Passing `bundling` or
+ * `rustProjectPath` opts into compiling the provider locally with the optional
+ * `cargo-lambda-cdk` dependency.
  */
 export class ShinBucketDeployment extends Construct {
   private readonly cr: CustomResource;
@@ -277,8 +290,7 @@ export class ShinBucketDeployment extends Construct {
     }
 
     const architecture = props.architecture ?? Architecture.ARM_64;
-    const rustProjectPath = props.rustProjectPath ?? resolveDefaultRustProjectPath(this);
-    this.handlerFunction = getOrCreateHandler(this, props, architecture, rustProjectPath);
+    this.handlerFunction = getOrCreateHandler(this, props, architecture);
 
     const handlerRole = this.handlerFunction.role;
     if (!handlerRole) {
@@ -503,39 +515,90 @@ function resolveDefaultRustProjectPath(scope: Construct): string {
   );
 }
 
+/**
+ * Locate the prebuilt Lambda `bootstrap` binary shipped inside the published
+ * package for the requested architecture, if present. Published tarballs
+ * include `assets/bootstrap-<arch>/bootstrap`; local checkouts that have not
+ * run the prebuild step will not, in which case the construct falls back to the
+ * local cargo-lambda compile path.
+ */
+function resolvePrebuiltBootstrapDir(architecture: Architecture): string | undefined {
+  const dirName = `bootstrap-${architecture.name}`;
+  const candidates = [
+    join(__dirname, "..", "..", "assets", dirName),
+    join(__dirname, "..", "assets", dirName),
+  ];
+
+  for (const candidate of candidates) {
+    if (existsSync(join(candidate, "bootstrap"))) {
+      return candidate;
+    }
+  }
+
+  return undefined;
+}
+
+interface SharedHandlerOptions {
+  readonly architecture: Architecture;
+  readonly timeout: Duration;
+  readonly memorySize: number;
+  readonly ephemeralStorageSize: ShinBucketDeploymentProps["ephemeralStorageSize"];
+  readonly role: ShinBucketDeploymentProps["role"];
+  readonly vpc: ShinBucketDeploymentProps["vpc"];
+  readonly vpcSubnets: ShinBucketDeploymentProps["vpcSubnets"];
+  readonly securityGroups: ShinBucketDeploymentProps["securityGroups"];
+  readonly environment: Record<string, string>;
+  readonly logRetention: ShinBucketDeploymentProps["logRetention"];
+  readonly logGroup: ShinBucketDeploymentProps["logGroup"];
+}
+
 function getOrCreateHandler(
   scope: Construct,
   props: ShinBucketDeploymentProps,
   architecture: Architecture,
-  rustProjectPath: string,
-): RustFunction {
+): LambdaFunction {
   const stack = Stack.of(scope);
-  const manifestPath = join(rustProjectPath, "Cargo.toml");
+
+  // A developer is iterating on the handler when they point at a Rust project or
+  // pass bundling options; otherwise prefer a prebuilt binary so consumers do not
+  // need a Rust toolchain. When neither a prebuilt binary nor an explicit compile
+  // request is available (e.g. a local checkout before prebuild), fall back to the
+  // local cargo-lambda compile path.
+  const wantsCompile = props.rustProjectPath !== undefined || props.bundling !== undefined;
+  const prebuiltBootstrapDir = wantsCompile ? undefined : resolvePrebuiltBootstrapDir(architecture);
+  const useCompilePath = wantsCompile || prebuiltBootstrapDir === undefined;
+
+  const rustProjectPath = useCompilePath
+    ? (props.rustProjectPath ?? resolveDefaultRustProjectPath(scope))
+    : undefined;
+  const manifestPath =
+    rustProjectPath !== undefined ? join(rustProjectPath, "Cargo.toml") : undefined;
+
+  const handlerSource = useCompilePath
+    ? `compile:${manifestPath}`
+    : `prebuilt:${prebuiltBootstrapDir}`;
+
   const handlerId = `${SHARED_HANDLER_ID_PREFIX}${renderHandlerConfigHash(
     stack,
     props,
     architecture,
-    manifestPath,
+    handlerSource,
   )}`;
 
   const existing = stack.node.tryFindChild(handlerId);
   if (existing) {
-    if (!(existing instanceof RustFunction)) {
+    if (!(existing instanceof LambdaFunction)) {
       throw new ValidationError(
         literalString("ShinBucketDeploymentHandlerCollision"),
-        `Found non-RustFunction child for shared handler id ${handlerId}.`,
+        `Found non-Function child for shared handler id ${handlerId}.`,
         scope,
       );
     }
     return existing;
   }
 
-  return new RustFunction(stack, handlerId, {
-    runtime: "provided.al2023",
+  const shared: SharedHandlerOptions = {
     architecture,
-    binaryName: HANDLER_BINARY_NAME,
-    manifestPath,
-    bundling: props.bundling,
     timeout: PROVIDER_TIMEOUT,
     memorySize: props.memoryLimit ?? DEFAULT_MEMORY_LIMIT_MB,
     ephemeralStorageSize: props.ephemeralStorageSize,
@@ -547,24 +610,99 @@ function getOrCreateHandler(
     environment: {
       RUST_BACKTRACE: "1",
     },
-    ...(props.logRetention ? { logRetention: props.logRetention } : {}),
+    logRetention: props.logRetention,
     logGroup: props.logGroup,
+  };
+
+  if (useCompilePath) {
+    return createCompiledHandler(stack, handlerId, props, shared, manifestPath as string);
+  }
+
+  return createPrebuiltHandler(stack, handlerId, shared, prebuiltBootstrapDir as string);
+}
+
+function createPrebuiltHandler(
+  stack: Stack,
+  handlerId: string,
+  shared: SharedHandlerOptions,
+  bootstrapDir: string,
+): LambdaFunction {
+  return new LambdaFunction(stack, handlerId, {
+    runtime: Runtime.PROVIDED_AL2023,
+    handler: "bootstrap",
+    code: Code.fromAsset(bootstrapDir),
+    architecture: shared.architecture,
+    timeout: shared.timeout,
+    memorySize: shared.memorySize,
+    ephemeralStorageSize: shared.ephemeralStorageSize,
+    role: shared.role,
+    vpc: shared.vpc,
+    vpcSubnets: shared.vpcSubnets,
+    securityGroups: shared.securityGroups,
+    environment: shared.environment,
+    ...(shared.logRetention ? { logRetention: shared.logRetention } : {}),
+    logGroup: shared.logGroup,
   });
+}
+
+function createCompiledHandler(
+  stack: Stack,
+  handlerId: string,
+  props: ShinBucketDeploymentProps,
+  shared: SharedHandlerOptions,
+  manifestPath: string,
+): LambdaFunction {
+  // Lazily load cargo-lambda-cdk so it is only required when a developer opts
+  // into the local compile path. It is an optional peer dependency and is not
+  // installed for typical consumers using the prebuilt binary.
+  const { RustFunction } = loadCargoLambdaCdk(stack);
+
+  return new RustFunction(stack, handlerId, {
+    runtime: "provided.al2023",
+    architecture: shared.architecture,
+    binaryName: HANDLER_BINARY_NAME,
+    manifestPath,
+    bundling: props.bundling,
+    timeout: shared.timeout,
+    memorySize: shared.memorySize,
+    ephemeralStorageSize: shared.ephemeralStorageSize,
+    role: shared.role,
+    vpc: shared.vpc,
+    vpcSubnets: shared.vpcSubnets,
+    securityGroups: shared.securityGroups,
+    environment: shared.environment,
+    ...(shared.logRetention ? { logRetention: shared.logRetention } : {}),
+    logGroup: shared.logGroup,
+  });
+}
+
+function loadCargoLambdaCdk(scope: Construct): typeof import("cargo-lambda-cdk") {
+  try {
+    return require("cargo-lambda-cdk") as typeof import("cargo-lambda-cdk");
+  } catch (error) {
+    throw new ValidationError(
+      literalString("ShinBucketDeploymentCargoLambdaMissing"),
+      "The local Rust compile path requires the optional 'cargo-lambda-cdk' dependency. " +
+        "Install it as a devDependency, or omit 'bundling'/'rustProjectPath' to use the " +
+        `prebuilt provider binary. Underlying error: ${(error as Error).message}`,
+      scope,
+    );
+  }
 }
 
 function renderHandlerConfigHash(
   stack: Stack,
   props: ShinBucketDeploymentProps,
   architecture: Architecture,
-  manifestPath: string,
+  handlerSource: string,
 ): string {
   const config = {
     architecture: architecture.name,
     bundling: normalizeSingletonValue(props.bundling),
     ephemeralStorageSize: normalizeSingletonValue(props.ephemeralStorageSize),
+    handlerSource,
     logGroup: normalizeSingletonValue(props.logGroup),
     logRetention: normalizeSingletonValue(props.logRetention),
-    manifestPath,
     memoryLimit: normalizeSingletonValue(props.memoryLimit ?? DEFAULT_MEMORY_LIMIT_MB),
     role: normalizeSingletonValue(props.role),
     securityGroups:
@@ -661,8 +799,8 @@ function destinationListPrefix(prefix: string | undefined, retainOnDelete: boole
   return prefix.endsWith("/") ? prefix : `${prefix}/`;
 }
 
-function literalString(value: string): ReturnType<typeof lit> {
-  return value as ReturnType<typeof lit>;
+function literalString(value: string): string {
+  return value;
 }
 
 function validateIntegerProps(
