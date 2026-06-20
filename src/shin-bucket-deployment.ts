@@ -1,7 +1,20 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { CustomResource, Duration, Lazy, Stack, Tags, Token } from "aws-cdk-lib";
+import {
+  type AssetHashType,
+  type BundlingFileAccess,
+  type BundlingOutput,
+  CustomResource,
+  type DockerImage,
+  type DockerVolume,
+  Duration,
+  type ILocalBundling,
+  Lazy,
+  Stack,
+  Tags,
+  Token,
+} from "aws-cdk-lib";
 import { Effect, type IRole, PolicyStatement } from "aws-cdk-lib/aws-iam";
 import { Architecture, Code, Function as LambdaFunction, Runtime } from "aws-cdk-lib/aws-lambda";
 import { Bucket, BucketGrants, type IBucket } from "aws-cdk-lib/aws-s3";
@@ -11,7 +24,6 @@ import type {
   MarkersConfig,
   SourceConfig,
 } from "aws-cdk-lib/aws-s3-deployment";
-import type { BundlingOptions as CargoLambdaBundlingOptions } from "cargo-lambda-cdk";
 import { Construct } from "constructs";
 import { ValidationError } from "./errors";
 
@@ -26,6 +38,146 @@ const DEFAULT_PUT_OBJECT_SLOWDOWN_RETRY_BASE_DELAY_MS = 1_000;
 const DEFAULT_PUT_OBJECT_SLOWDOWN_RETRY_MAX_DELAY_MS = 30_000;
 
 export type PutObjectRetryJitter = "full" | "none";
+
+export interface ShinBucketDeploymentBundlingCommandHooks {
+  /**
+   * Returns commands to run before bundling.
+   */
+  beforeBundling(inputDir: string, outputDir: string): string[];
+
+  /**
+   * Returns commands to run after bundling.
+   */
+  afterBundling(inputDir: string, outputDir: string): string[];
+}
+
+export interface ShinBucketDeploymentBundlingDockerOptions {
+  /**
+   * The entrypoint to run in the Docker container.
+   * @default - run the entrypoint defined in the image
+   */
+  readonly entrypoint?: string[];
+
+  /**
+   * The command to run in the Docker container.
+   * @default - a cargo lambda compilation
+   */
+  readonly command?: string[];
+
+  /**
+   * Additional Docker volumes to mount.
+   * @default - no additional volumes are mounted
+   */
+  readonly volumes?: DockerVolume[];
+
+  /**
+   * Where to mount the specified volumes from.
+   * @default - no containers are specified to mount volumes from
+   */
+  readonly volumesFrom?: string[];
+
+  /**
+   * Working directory inside the Docker container.
+   * @default /asset-input
+   */
+  readonly workingDirectory?: string;
+
+  /**
+   * The user to use when running the Docker container.
+   * @default - uid:gid of the current user or 1000:1000 on Windows
+   */
+  readonly user?: string;
+
+  /**
+   * Local bundling provider.
+   * @default - local cargo-lambda when available, otherwise Docker
+   */
+  readonly local?: ILocalBundling;
+
+  /**
+   * The type of output that this bundling operation is producing.
+   * @default BundlingOutput.AUTO_DISCOVER
+   */
+  readonly outputType?: BundlingOutput;
+
+  /**
+   * Security configuration when running the Docker container.
+   * @default - no security options
+   */
+  readonly securityOpt?: string;
+
+  /**
+   * Docker networking options.
+   * @default - no networking options
+   */
+  readonly network?: string;
+
+  /**
+   * The access mechanism used to exchange files with the bundling container.
+   * @default BundlingFileAccess.BIND_MOUNT
+   */
+  readonly bundlingFileAccess?: BundlingFileAccess;
+}
+
+export interface ShinBucketDeploymentBundlingOptions {
+  /**
+   * Environment variables defined when Cargo runs.
+   * @default - no environment variables are defined
+   */
+  readonly environment?: Record<string, string>;
+
+  /**
+   * Force bundling in a Docker container even if local bundling is possible.
+   * @default false
+   */
+  readonly forcedDockerBundling?: boolean;
+
+  /**
+   * A custom bundling Docker image.
+   * @default - local compile helper default image
+   */
+  readonly dockerImage?: DockerImage;
+
+  /**
+   * Additional options when using Docker bundling.
+   * @default - local compile helper defaults
+   */
+  readonly dockerOptions?: ShinBucketDeploymentBundlingDockerOptions;
+
+  /**
+   * Determines how the asset hash is calculated.
+   * @default AssetHashType.OUTPUT
+   */
+  readonly assetHashType?: AssetHashType;
+
+  /**
+   * Specify a custom hash for this asset.
+   */
+  readonly assetHash?: string;
+
+  /**
+   * Command hooks.
+   * @default - do not run additional commands
+   */
+  readonly commandHooks?: ShinBucketDeploymentBundlingCommandHooks;
+
+  /**
+   * The system architecture of the Lambda function.
+   * @default Architecture.X86_64
+   */
+  readonly architecture?: Architecture;
+
+  /**
+   * Additional flags to pass to `cargo lambda build`.
+   */
+  readonly cargoLambdaFlags?: string[];
+
+  /**
+   * Cargo build profile.
+   * @default "release"
+   */
+  readonly profile?: string;
+}
 
 export interface ShinBucketDeploymentPutObjectRetryTuning {
   /**
@@ -117,10 +269,10 @@ export interface ShinBucketDeploymentProps
   /**
    * Optional override for the Rust provider project directory.
    *
-   * Setting this opts into compiling the Rust provider locally with
-   * `cargo-lambda-cdk` instead of using the prebuilt binary shipped with the
-   * package. This requires a Rust toolchain plus the optional `cargo-lambda-cdk`
-   * dependency and is mainly useful while iterating on the handler itself.
+   * Setting this opts into compiling the Rust provider locally instead of using
+   * the prebuilt binary shipped with the package. This requires a Rust toolchain
+   * plus the optional local compile dependency and is mainly useful while
+   * iterating on the handler itself.
    *
    * @default - the prebuilt provider binary shipped with the package, or
    * `<projectRoot>/rust` when no prebuilt binary is available
@@ -128,15 +280,15 @@ export interface ShinBucketDeploymentProps
   readonly rustProjectPath?: string;
 
   /**
-   * Bundling options passed through to `cargo-lambda-cdk`.
+   * Bundling options passed through to the local provider compile path.
    *
    * Setting this opts into compiling the Rust provider locally instead of using
-   * the prebuilt binary shipped with the package, and requires the optional
-   * `cargo-lambda-cdk` dependency plus a Rust toolchain.
+   * the prebuilt binary shipped with the package, and requires the optional local
+   * compile dependency plus a Rust toolchain.
    *
    * @default - the prebuilt provider binary shipped with the package
    */
-  readonly bundling?: CargoLambdaBundlingOptions;
+  readonly bundling?: ShinBucketDeploymentBundlingOptions;
 
   /**
    * Maximum concurrent object transfers run by the provider.
@@ -158,8 +310,7 @@ export interface ShinBucketDeploymentProps
  *
  * By default the provider runs a prebuilt Rust `bootstrap` binary shipped with
  * the package, so consumers do not need a Rust toolchain. Passing `bundling` or
- * `rustProjectPath` opts into compiling the provider locally with the optional
- * `cargo-lambda-cdk` dependency.
+ * `rustProjectPath` opts into compiling the provider locally.
  */
 export class ShinBucketDeployment extends Construct {
   private readonly cr: CustomResource;
@@ -576,7 +727,7 @@ function getOrCreateHandler(
 
   const handlerSource = useCompilePath
     ? `compile:${manifestPath}`
-    : `prebuilt:${prebuiltBootstrapDir}`;
+    : `prebuilt:${architecture.name}`;
 
   const handlerId = `${SHARED_HANDLER_ID_PREFIX}${renderHandlerConfigHash(
     stack,

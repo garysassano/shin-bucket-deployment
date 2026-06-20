@@ -102,8 +102,15 @@ jobs:
 
       - name: Verify bootstrap binaries are present
         run: |
+          chmod 755 assets/bootstrap-arm64/bootstrap assets/bootstrap-x86_64/bootstrap
           test -f assets/bootstrap-arm64/bootstrap
           test -f assets/bootstrap-x86_64/bootstrap
+          test -x assets/bootstrap-arm64/bootstrap
+          test -x assets/bootstrap-x86_64/bootstrap
+
+      - name: Verify tag matches package version
+        if: ${{ github.event_name == 'push' }}
+        run: test "v$(node -p "require('./package.json').version")" = "$GITHUB_REF_NAME"
 
       - name: Typecheck
         run: pnpm typecheck
@@ -114,18 +121,24 @@ jobs:
       - name: Test
         run: pnpm test
 
+      - name: Verify package
+        run: pnpm verify:package
+
       - name: Build package
         run: pnpm build:package
 
       - name: Pack
-        run: pnpm pack
+        run: |
+          mkdir -p /tmp/npm-pack
+          pnpm pack --pack-destination /tmp/npm-pack
+          echo "TARBALL=$(ls /tmp/npm-pack/*.tgz)" >> "$GITHUB_ENV"
 
       - name: Publish (dry run)
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run }}
-        run: pnpm publish --no-git-checks --dry-run
+        run: npm publish "$TARBALL" --dry-run
 
       - name: Publish
         if: ${{ github.event_name == 'push' || !inputs.dry-run }}
-        run: pnpm publish --no-git-checks --provenance
+        run: npm publish "$TARBALL" --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
