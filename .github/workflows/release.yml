@@ -34,7 +34,7 @@ jobs:
       MISE_RUSTUP_HOME: ${{ github.workspace }}/.mise/rustup
       CARGO_TARGET_DIR: ${{ github.workspace }}/rust/target
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Setup Rust toolchain and tools
         uses: jdx/mise-action@v4
@@ -61,7 +61,7 @@ jobs:
         run: node scripts/build-bootstrap.mjs ${{ matrix.arch }}
 
       - name: Upload bootstrap artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: bootstrap-${{ matrix.arch }}
           path: assets/bootstrap-${{ matrix.arch }}/bootstrap
@@ -76,7 +76,7 @@ jobs:
       contents: read
       id-token: write # npm provenance
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install pnpm
         uses: pnpm/action-setup@v6
@@ -92,13 +92,13 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Download arm64 bootstrap
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: bootstrap-arm64
           path: assets/bootstrap-arm64
 
       - name: Download x86_64 bootstrap
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: bootstrap-x86_64
           path: assets/bootstrap-x86_64
