@@ -651,6 +651,29 @@ export class ShinBucketDeployment extends Construct {
 }
 
 function resolveDefaultRustProjectPath(scope: Construct): string {
+  const candidate = findRustProjectPath();
+  if (candidate !== undefined) {
+    return candidate;
+  }
+
+  throw new ValidationError(
+    literalString("ShinBucketDeploymentRustProjectPath"),
+    "Unable to locate rust/Cargo.toml. Pass rustProjectPath explicitly.",
+    scope,
+  );
+}
+
+/**
+ * Whether a Rust provider project is available to compile from. This is only
+ * true in a repository checkout (where `rust/Cargo.toml` sits next to the
+ * compiled sources), not in the published package, which ships prebuilt
+ * binaries instead of Rust sources.
+ */
+function canResolveRustProject(): boolean {
+  return findRustProjectPath() !== undefined;
+}
+
+function findRustProjectPath(): string | undefined {
   const candidates = [join(__dirname, "..", "rust"), join(__dirname, "..", "..", "rust")];
 
   for (const candidate of candidates) {
@@ -659,11 +682,7 @@ function resolveDefaultRustProjectPath(scope: Construct): string {
     }
   }
 
-  throw new ValidationError(
-    literalString("ShinBucketDeploymentRustProjectPath"),
-    "Unable to locate rust/Cargo.toml. Pass rustProjectPath explicitly.",
-    scope,
-  );
+  return undefined;
 }
 
 /**
@@ -711,13 +730,28 @@ function getOrCreateHandler(
   const stack = Stack.of(scope);
 
   // A developer is iterating on the handler when they point at a Rust project or
-  // pass bundling options; otherwise prefer a prebuilt binary so consumers do not
-  // need a Rust toolchain. When neither a prebuilt binary nor an explicit compile
-  // request is available (e.g. a local checkout before prebuild), fall back to the
-  // local cargo-lambda compile path.
+  // pass bundling options; otherwise prefer the prebuilt binary shipped with the
+  // package so consumers do not need a Rust toolchain.
   const wantsCompile = props.rustProjectPath !== undefined || props.bundling !== undefined;
   const prebuiltBootstrapDir = wantsCompile ? undefined : resolvePrebuiltBootstrapDir(architecture);
   const useCompilePath = wantsCompile || prebuiltBootstrapDir === undefined;
+
+  // No prebuilt binary and no explicit compile request: this is almost always a
+  // broken or incomplete install (the published package always ships prebuilt
+  // binaries). Only a repo checkout has `rust/Cargo.toml` available to compile
+  // from, so fall back to that when present and otherwise fail with a clear
+  // message rather than a confusing missing-Cargo.toml error.
+  if (!wantsCompile && prebuiltBootstrapDir === undefined && !canResolveRustProject()) {
+    throw new ValidationError(
+      literalString("ShinBucketDeploymentMissingProviderBinary"),
+      `No prebuilt provider binary was found for architecture '${architecture.name}'. ` +
+        "The published package ships binaries for arm64 and x86_64, so this usually means " +
+        "an incomplete install. Try reinstalling shin-bucket-deployment. If you are developing " +
+        "the provider from a repository checkout, run the bootstrap prebuild or pass " +
+        "'bundling'/'rustProjectPath' to compile it locally.",
+      scope,
+    );
+  }
 
   const rustProjectPath = useCompilePath
     ? (props.rustProjectPath ?? resolveDefaultRustProjectPath(scope))
