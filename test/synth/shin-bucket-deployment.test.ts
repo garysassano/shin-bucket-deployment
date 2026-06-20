@@ -3,10 +3,12 @@ import { join } from "node:path";
 import { App, Stack } from "aws-cdk-lib";
 import { Match, Template } from "aws-cdk-lib/assertions";
 import { Key } from "aws-cdk-lib/aws-kms";
+import { Architecture } from "aws-cdk-lib/aws-lambda";
 import { Bucket, BucketEncryption } from "aws-cdk-lib/aws-s3";
 import { expect, test } from "vitest";
 import { ShinBucketDeployment, Source } from "../../src";
 import { testBundling } from "../support/bundling";
+import { ensurePrebuiltBootstrapAssets } from "../support/prebuilt-assets";
 
 interface FileAssetManifestEntry {
   displayName?: string;
@@ -45,6 +47,79 @@ test("renders a Rust-backed custom resource", () => {
     AvailableMemoryMb: 1024,
   });
 }, 120_000);
+
+test("uses the packaged arm64 prebuilt provider by default", () => {
+  const cleanup = ensurePrebuiltBootstrapAssets();
+  try {
+    const stack = new Stack();
+    const destinationBucket = new Bucket(stack, "Dest");
+
+    new ShinBucketDeployment(stack, "Deploy", {
+      sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
+      destinationBucket,
+    });
+
+    const template = Template.fromStack(stack);
+
+    template.hasResourceProperties("AWS::Lambda::Function", {
+      Runtime: "provided.al2023",
+      Handler: "bootstrap",
+      Architectures: ["arm64"],
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+test("uses the packaged x86_64 prebuilt provider when requested", () => {
+  const cleanup = ensurePrebuiltBootstrapAssets();
+  try {
+    const stack = new Stack();
+    const destinationBucket = new Bucket(stack, "Dest");
+
+    new ShinBucketDeployment(stack, "Deploy", {
+      sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
+      destinationBucket,
+      architecture: Architecture.X86_64,
+    });
+
+    const template = Template.fromStack(stack);
+
+    template.hasResourceProperties("AWS::Lambda::Function", {
+      Runtime: "provided.al2023",
+      Handler: "bootstrap",
+      Architectures: ["x86_64"],
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+test("reuses a shared prebuilt handler for compatible deployments", () => {
+  const cleanup = ensurePrebuiltBootstrapAssets();
+  try {
+    const stack = new Stack();
+    const firstBucket = new Bucket(stack, "FirstDest");
+    const secondBucket = new Bucket(stack, "SecondDest");
+
+    const first = new ShinBucketDeployment(stack, "FirstDeploy", {
+      sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
+      destinationBucket: firstBucket,
+    });
+
+    const second = new ShinBucketDeployment(stack, "SecondDeploy", {
+      sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
+      destinationBucket: secondBucket,
+    });
+
+    expect(first.handlerFunction).toBe(second.handlerFunction);
+
+    const lambdaFunctions = Template.fromStack(stack).findResources("AWS::Lambda::Function");
+    expect(Object.keys(lambdaFunctions)).toHaveLength(1);
+  } finally {
+    cleanup();
+  }
+});
 
 test("Source.asset emits an embedded catalog for directory assets", () => {
   const app = new App({ outdir: join(__dirname, "..", "cdk.out.test-catalog") });

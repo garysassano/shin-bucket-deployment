@@ -15,11 +15,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/anomalyco/shin-bucket-deployment.git"
+    "url": "git+https://github.com/garysassano/shin-bucket-deployment.git"
   },
-  "homepage": "https://github.com/anomalyco/shin-bucket-deployment#readme",
+  "homepage": "https://github.com/garysassano/shin-bucket-deployment#readme",
   "bugs": {
-    "url": "https://github.com/anomalyco/shin-bucket-deployment/issues"
+    "url": "https://github.com/garysassano/shin-bucket-deployment/issues"
   },
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
@@ -33,30 +33,18 @@
   "files": [
     "lib/**/*.js",
     "lib/**/*.d.ts",
-    "lib/**/*.d.ts.map",
     "assets/bootstrap-arm64/bootstrap",
     "assets/bootstrap-x86_64/bootstrap",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "NOTICE"
   ],
   "publishConfig": {
     "access": "public"
   },
-  "devEngines": {
-    "runtime": {
-      "name": "node",
-      "version": ">=24",
-      "onFail": "error"
-    },
-    "packageManager": {
-      "name": "pnpm",
-      "version": ">=11",
-      "onFail": "warn"
-    }
-  },
+  "packageManager": "pnpm@11.6.0",
   "engines": {
-    "node": ">=24 <25",
-    "pnpm": ">=11"
+    "node": ">=20.0.0"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
@@ -71,6 +59,7 @@
     "rust:audit": "cargo audit --file rust/Cargo.lock",
     "rust:deny": "cargo deny --manifest-path rust/Cargo.toml check",
     "test": "vitest run",
+    "verify:package": "node scripts/verify-package.mjs",
     "scenario": "pnpm build && node dist/scenarios/runner.js",
     "verify": "pnpm build && node dist/scenarios/runner.js verify",
     "benchmark": "pnpm build && node dist/scenarios/runner.js benchmark",
