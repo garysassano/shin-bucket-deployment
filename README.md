@@ -6,15 +6,6 @@ Rust-backed alternative to AWS CDK's official [`BucketDeployment`](https://docs.
 
 The published package ships prebuilt Rust provider binaries for both Lambda architectures (`arm64` and `x86_64`), so consumers do not need a Rust toolchain. Swapping from the upstream construct is a one-line import change.
 
-## Install
-
-```sh
-npm install shin-bucket-deployment
-# or: pnpm add shin-bucket-deployment
-```
-
-`aws-cdk-lib` and `constructs` are peer dependencies, so use the versions already in your CDK app. The `cargo-lambda-cdk` package is an optional peer dependency only needed if you opt into compiling the provider locally (see [Building the provider locally](#building-the-provider-locally)).
-
 ## Why Build This
 
 The official `BucketDeployment` is a good default for many stacks, but its provider is built around AWS CLI copy/sync orchestration. This construct keeps the familiar CDK surface while using a purpose-built Rust Lambda function for static asset deployment.
@@ -36,6 +27,16 @@ The official `BucketDeployment` is a good default for many stacks, but its provi
 <img src="https://raw.githubusercontent.com/garysassano/shin-bucket-deployment/main/benchmarks/snapshots/tiny-many-4096mib-128.svg" alt="ShinBucketDeployment tiny-many 4096 MiB parallel 128 benchmark" width="100%">
 
 ## Quick Start
+
+Install the package:
+
+```sh
+npm install shin-bucket-deployment
+```
+
+`aws-cdk-lib` and `constructs` are peer dependencies, so use the versions already in your CDK app. The `cargo-lambda-cdk` package is an optional peer dependency only needed if you opt into compiling the provider locally (see [Building the provider locally](#building-the-provider-locally)).
+
+Then use the construct like the upstream `BucketDeployment`:
 
 ```ts
 import { Distribution } from "aws-cdk-lib/aws-cloudfront";
@@ -86,7 +87,7 @@ By default the construct uses the prebuilt Rust `bootstrap` binary shipped insid
 If you are iterating on the Rust provider itself, you can opt into compiling it locally by passing `bundling` or `rustProjectPath`. That path requires a Rust toolchain plus the optional `cargo-lambda-cdk` dependency:
 
 ```sh
-pnpm add -D cargo-lambda-cdk
+npm install --save-dev cargo-lambda-cdk
 ```
 
 ## What It Supports
