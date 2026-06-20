@@ -28,7 +28,7 @@ The official `BucketDeployment` is a good default for many stacks, but its provi
 
 ## Quick Start
 
-Install the package:
+### Install
 
 ```sh
 npm install shin-bucket-deployment
@@ -36,7 +36,18 @@ npm install shin-bucket-deployment
 
 `aws-cdk-lib` and `constructs` are peer dependencies, so use the versions already in your CDK app. The `cargo-lambda-cdk` package is an optional peer dependency only needed if you opt into compiling the provider locally (see [Building the provider locally](#building-the-provider-locally)).
 
-Then use the construct like the upstream `BucketDeployment`:
+### Migrating from `BucketDeployment`
+
+The props map closely to the upstream construct, so migration is usually a one-line import change:
+
+```diff
+-import { BucketDeployment, Source } from "aws-cdk-lib/aws-s3-deployment";
++import { ShinBucketDeployment as BucketDeployment, Source } from "shin-bucket-deployment";
+```
+
+See [What It Supports](#what-it-supports) for the small set of upstream props that are intentionally unsupported.
+
+### Example
 
 ```ts
 import { Distribution } from "aws-cdk-lib/aws-cloudfront";
@@ -68,17 +79,6 @@ export class DemoStack extends Stack {
   }
 }
 ```
-
-### Migrating from `BucketDeployment`
-
-The props map closely to the upstream construct, so migration is usually a one-line import change:
-
-```diff
--import { BucketDeployment, Source } from "aws-cdk-lib/aws-s3-deployment";
-+import { ShinBucketDeployment as BucketDeployment, Source } from "shin-bucket-deployment";
-```
-
-See [What It Supports](#what-it-supports) for the small set of upstream props that are intentionally unsupported.
 
 ## Building the provider locally
 
