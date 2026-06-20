@@ -19,8 +19,8 @@ env:
 
 jobs:
   node:
-    name: Node (build, typecheck, lint, test, synth)
-    runs-on: ubuntu-latest
+    name: Node (build, typecheck, lint, test)
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
 
@@ -50,43 +50,32 @@ jobs:
       - name: Test
         run: pnpm test
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install Zig
-        uses: mlugg/setup-zig@v2
-        with:
-          # Disable Zig's global cache; cargo-lambda uses cargo-zigbuild here.
-          use-cache: false
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: rust
-
-      - name: Install cargo-lambda
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-lambda
-
-      - name: Synthesize verification scenarios
-        run: pnpm verify synth
-
   rust:
     name: Rust (fmt, clippy, test)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    env:
+      MISE_DATA_DIR: ${{ github.workspace }}/.mise
+      MISE_RUSTUP_HOME: ${{ github.workspace }}/.mise/rustup
+      CARGO_TARGET_DIR: ${{ github.workspace }}/rust/target
     steps:
       - uses: actions/checkout@v6
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - name: Setup Rust toolchain
+        uses: jdx/mise-action@v4
         with:
-          components: rustfmt, clippy
+          cache: true
+          mise_toml: |
+            [tools]
+            rust = { version = "stable", components = "rustfmt,clippy" }
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: rust
+          workspaces: rust -> target
+          cache-targets: true
+          cache-workspace-crates: true
+          cache-all-crates: false
+          cache-bin: false
 
       - name: Format check
         run: cargo fmt --manifest-path rust/Cargo.toml --all --check
@@ -99,25 +88,119 @@ jobs:
 
   supply-chain:
     name: Supply chain (audit, deny)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    env:
+      MISE_DATA_DIR: ${{ github.workspace }}/.mise
+      MISE_RUSTUP_HOME: ${{ github.workspace }}/.mise/rustup
     steps:
       - uses: actions/checkout@v6
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install cargo-audit
-        uses: taiki-e/install-action@v2
+      - name: Setup Rust supply chain tools
+        uses: jdx/mise-action@v4
         with:
-          tool: cargo-audit
-
-      - name: Install cargo-deny
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-deny
+          cache: true
+          mise_toml: |
+            [tools]
+            rust = "stable"
+            cargo-binstall = "latest"
+            "cargo:cargo-audit" = "0.22.2"
+            "cargo:cargo-deny" = "0.19.9"
 
       - name: cargo audit
         run: cargo audit --file rust/Cargo.lock
 
       - name: cargo deny
         run: cargo deny --manifest-path rust/Cargo.toml check
+
+  bootstrap:
+    name: Bootstrap (${{ matrix.arch }})
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        include:
+          - arch: arm64
+            target: aarch64-unknown-linux-gnu
+          - arch: x86_64
+            target: x86_64-unknown-linux-gnu
+    env:
+      MISE_DATA_DIR: ${{ github.workspace }}/.mise
+      MISE_RUSTUP_HOME: ${{ github.workspace }}/.mise/rustup
+      CARGO_TARGET_DIR: ${{ github.workspace }}/rust/target
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Rust toolchain and tools
+        uses: jdx/mise-action@v4
+        with:
+          cache: true
+          mise_toml: |
+            [tools]
+            zig = "0.16.0"
+            rust = { version = "stable", targets = "${{ matrix.target }}" }
+            cargo-binstall = "latest"
+            "cargo:cargo-lambda" = "1.9.1"
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust -> target
+          cache-targets: true
+          cache-workspace-crates: true
+          cache-all-crates: false
+          cache-bin: false
+          key: bootstrap-${{ matrix.target }}
+
+      - name: Build bootstrap
+        run: node scripts/build-bootstrap.mjs ${{ matrix.arch }}
+
+      - name: Upload bootstrap artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bootstrap-${{ matrix.arch }}
+          path: assets/bootstrap-${{ matrix.arch }}/bootstrap
+          if-no-files-found: error
+          retention-days: 1
+
+  synth:
+    name: Synth verification scenarios
+    needs: bootstrap
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 11
+
+      - name: Install Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Download arm64 bootstrap
+        uses: actions/download-artifact@v4
+        with:
+          name: bootstrap-arm64
+          path: assets/bootstrap-arm64
+
+      - name: Download x86_64 bootstrap
+        uses: actions/download-artifact@v4
+        with:
+          name: bootstrap-x86_64
+          path: assets/bootstrap-x86_64
+
+      - name: Verify bootstrap binaries are present
+        run: |
+          chmod 755 assets/bootstrap-arm64/bootstrap assets/bootstrap-x86_64/bootstrap
+          test -f assets/bootstrap-arm64/bootstrap
+          test -f assets/bootstrap-x86_64/bootstrap
+          test -x assets/bootstrap-arm64/bootstrap
+          test -x assets/bootstrap-x86_64/bootstrap
+
+      - name: Synthesize verification scenarios
+        run: pnpm verify synth
