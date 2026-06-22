@@ -6,35 +6,13 @@ Rust-backed alternative to AWS CDK's official [`BucketDeployment`](https://docs.
 
 The published package ships prebuilt Rust provider binaries for both Lambda architectures (`arm64` and `x86_64`), so consumers do not need a Rust toolchain. Swapping from the upstream construct is a one-line import change.
 
-## Why Build This
-
-The official `BucketDeployment` is a good default for many stacks, but its provider is built around AWS CLI copy/sync orchestration. This construct keeps the familiar CDK surface while using a purpose-built Rust Lambda function for static asset deployment.
-
-| Advantage                   | What changes                                                                                                                                                                                                                                                                                                                                                |
-| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Leaner runtime              | This custom resource provider runs on the [Lambda Rust runtime](https://github.com/aws/aws-lambda-rust-runtime) (`provided.al2023`) rather than the Python runtime used by the upstream provider. In practice, the lower runtime overhead can mean faster cold starts and lower memory footprint; see [lambda-perf](https://maxday.github.io/lambda-perf/). |
-| Direct AWS SDK operations   | Copy, upload, delete, and CloudFront invalidation are executed through SDK calls instead of shelling out to `aws s3 cp` / `aws s3 sync`.                                                                                                                                                                                                                    |
-| Archive-aware planning      | For extracted assets, the provider plans directly from the zip archive instead of extracting the whole archive to a working directory before syncing.                                                                                                                                                                                                       |
-| `ETag`-based skip decisions | The provider lists the destination prefix once and compares planned content MD5 values with destination `ETag` values to skip unchanged single-part static objects.                                                                                                                                                                                         |
-| Marker-free streaming path  | Missing sources without deploy-time markers stream directly from archive entries; replacement buffers are only used for sources that declare markers.                                                                                                                                                                                                       |
-
-## Benchmark Snapshots
-
-<img src="https://raw.githubusercontent.com/garysassano/shin-bucket-deployment/main/benchmarks/snapshots/tiny-many-1024mib-32.svg" alt="ShinBucketDeployment tiny-many 1024 MiB parallel 32 benchmark" width="100%">
-
-<img src="https://raw.githubusercontent.com/garysassano/shin-bucket-deployment/main/benchmarks/snapshots/tiny-many-2048mib-64.svg" alt="ShinBucketDeployment tiny-many 2048 MiB parallel 64 benchmark" width="100%">
-
-<img src="https://raw.githubusercontent.com/garysassano/shin-bucket-deployment/main/benchmarks/snapshots/tiny-many-4096mib-128.svg" alt="ShinBucketDeployment tiny-many 4096 MiB parallel 128 benchmark" width="100%">
-
 ## Quick Start
 
-### Install
+Install the package in an existing CDK v2 app, then swap the import you already use for `BucketDeployment`. The package includes prebuilt provider binaries, so application code does not need a Rust toolchain or a provider build step.
 
 ```sh
 npm install shin-bucket-deployment
 ```
-
-`aws-cdk-lib` and `constructs` are peer dependencies, so use the versions already in your CDK app. The `cargo-lambda-cdk` package is an optional peer dependency only needed if you opt into compiling the provider locally (see [Building the provider locally](#building-the-provider-locally)).
 
 ### Migrating from `BucketDeployment`
 
@@ -80,15 +58,25 @@ export class DemoStack extends Stack {
 }
 ```
 
-## Building the provider locally
+## Why Build This
 
-By default the construct uses the prebuilt Rust `bootstrap` binary shipped inside the package, matched to the requested `architecture`. No Rust toolchain is required.
+The official `BucketDeployment` is a good default for many stacks, but its provider is built around AWS CLI copy/sync orchestration. This construct keeps the familiar CDK surface while using a purpose-built Rust Lambda function for static asset deployment.
 
-If you are iterating on the Rust provider itself, you can opt into compiling it locally by passing `bundling` or `rustProjectPath`. That path requires a Rust toolchain plus the optional `cargo-lambda-cdk` dependency:
+| Advantage                   | What changes                                                                                                                                                                                                                                                                                                                                                |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Leaner runtime              | This custom resource provider runs on the [Lambda Rust runtime](https://github.com/aws/aws-lambda-rust-runtime) (`provided.al2023`) rather than the Python runtime used by the upstream provider. In practice, the lower runtime overhead can mean faster cold starts and lower memory footprint; see [lambda-perf](https://maxday.github.io/lambda-perf/). |
+| Direct AWS SDK operations   | Copy, upload, delete, and CloudFront invalidation are executed through SDK calls instead of shelling out to `aws s3 cp` / `aws s3 sync`.                                                                                                                                                                                                                    |
+| Archive-aware planning      | For extracted assets, the provider plans directly from the zip archive instead of extracting the whole archive to a working directory before syncing.                                                                                                                                                                                                       |
+| `ETag`-based skip decisions | The provider lists the destination prefix once and compares planned content MD5 values with destination `ETag` values to skip unchanged single-part static objects.                                                                                                                                                                                         |
+| Marker-free streaming path  | Missing sources without deploy-time markers stream directly from archive entries; replacement buffers are only used for sources that declare markers.                                                                                                                                                                                                       |
 
-```sh
-npm install --save-dev cargo-lambda-cdk
-```
+## Benchmark Snapshots
+
+<img src="https://raw.githubusercontent.com/garysassano/shin-bucket-deployment/main/benchmarks/snapshots/tiny-many-1024mib-32.svg" alt="ShinBucketDeployment tiny-many 1024 MiB parallel 32 benchmark" width="100%">
+
+<img src="https://raw.githubusercontent.com/garysassano/shin-bucket-deployment/main/benchmarks/snapshots/tiny-many-2048mib-64.svg" alt="ShinBucketDeployment tiny-many 2048 MiB parallel 64 benchmark" width="100%">
+
+<img src="https://raw.githubusercontent.com/garysassano/shin-bucket-deployment/main/benchmarks/snapshots/tiny-many-4096mib-128.svg" alt="ShinBucketDeployment tiny-many 4096 MiB parallel 128 benchmark" width="100%">
 
 ## What It Supports
 
@@ -154,3 +142,13 @@ Cataloged `Source.asset` packaging limitations:
 Source archives are read with S3 ranges and do not need to fit in Lambda memory or ephemeral storage. Individual files inside the asset ZIP must be <= 5 GiB because extracted uploads currently use S3 `PutObject`, not multipart upload.
 
 This construct targets static asset deployment to S3. It is not a general-purpose sync engine and does not provide byte-range diffing, persistent manifests, or non-S3 backend behavior.
+
+## Building the provider locally
+
+By default the construct uses the prebuilt Rust `bootstrap` binary shipped inside the package, matched to the requested `architecture`. No Rust toolchain is required.
+
+If you are iterating on the Rust provider itself, you can opt into compiling it locally by passing `bundling` or `rustProjectPath`. That path requires a Rust toolchain plus the optional `cargo-lambda-cdk` dependency:
+
+```sh
+npm install --save-dev cargo-lambda-cdk
+```
