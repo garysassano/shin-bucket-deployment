@@ -104,19 +104,27 @@ Unsupported upstream props:
 
 ## How It Works
 
+### Archive Planning
+
 For `extract=true`, the provider reads each source zip's central directory with ranged S3 `GetObject` requests, walks the archive entries, applies filters, and builds the deployment plan from the archive contents. Directory `Source.asset` inputs are packaged with an embedded `.shin/catalog.v1.json` MD5 catalog so unchanged marker-free files can be skipped from destination metadata. Entry data is read through coalesced source blocks with a bounded resident window. Source GET concurrency and the source window are derived from `memoryLimit` by default and can be overridden through `advancedRuntimeTuning` when diagnosing unusual workloads. It does not download the whole archive and does not write the archive or extracted entries to Lambda `/tmp`.
 
 `ephemeralStorageSize` is accepted for upstream `BucketDeployment` API compatibility, but it is rarely useful for this provider because ZIP planning, extraction, hashing, and uploads avoid Lambda `/tmp`.
 
 For `extract=false`, each source object is copied directly with S3 `CopyObject`.
 
+### Change Detection
+
 Before uploading or copying, the provider lists the destination prefix. Destination keys are used for `prune=true`, and destination `ETag` values are used to skip unchanged objects.
 
 For existing marker-free zip entries with catalog MD5s, the provider compares destination size and `ETag` before reading entry bytes. Without a usable catalog match, it reads and decompresses the entry from ranged source blocks, validates size and CRC32, computes MD5, and compares it with the destination `ETag`. Missing marker-free objects stream directly to S3 without pre-hashing. Entries with deploy-time markers are materialized after decompression and replacement so the final bytes can be hashed and uploaded when changed.
 
+### Memory Model
+
 Marker-free ZIP entry streaming uses the same small-buffer defaults as the local `s3-unspool` extraction path: 64 KiB entry read buffers, 256 KiB S3 body chunks, and a 1 MiB body pipe between entry production and the SDK upload body. With the default 32 parallel transfers, this keeps entry stream buffering around 44 MiB, leaving the 1024 MiB default provider Lambda memory for the Rust runtime, AWS SDK, source block window, and ZIP metadata.
 
 At the default 1024 MiB memory limit, adaptive source scheduling reserves about 64 MiB for runtime/base overhead, 384 MiB for 32 transfer workers, 32 MiB for four in-flight source range requests, and 2 KiB per ZIP entry for metadata. The remaining source block window is clamped to the actual source ZIP size and capped by the adaptive model; for large enough archives it is about 160 MiB minus the file reserve after large-archive RSS slack. The default moved from 512 MiB to 1024 MiB because the `large-few` benchmark made cold-create provider duration roughly 2x faster while billed compute cost stayed in the same range; current benchmark comparisons use 512, 1024, and 2048 MiB.
+
+### Invalidation and Logs
 
 CloudFront invalidation is created after S3 changes when `distribution` is provided. If `distributionPaths` is omitted, the default path is the destination prefix plus `*`, for example `/site/*`.
 
@@ -124,13 +132,15 @@ The provider logs one sanitized `shin_deployment_summary` JSON line per custom-r
 
 ## Limits
 
+### `ETag`-based Skips
+
 The unchanged-object optimization depends on S3 `ETag` values behaving like MD5 content hashes. That is generally true for simple single-part static objects, but not for all S3 configurations.
 
 Uploads or copies may not be skipped correctly for metadata-only changes, multipart objects, SSE-KMS or SSE-C objects, or any case where MD5-like `ETag` metadata is unavailable.
 
-Zip entries with deploy-time marker replacements are fully materialized in memory after replacement so the final bytes can be hashed and uploaded. Plain zip entries are read and uploaded in chunks. Cataloged directory assets currently do not support CDK asset `bundling` or symlink-following options; pass `embeddedCatalog: false` to `Source.asset` to use the upstream CDK asset path for those cases.
+### Cataloged `Source.asset` Assets
 
-Cataloged `Source.asset` packaging limitations:
+Zip entries with deploy-time marker replacements are fully materialized in memory after replacement so the final bytes can be hashed and uploaded. Plain zip entries are read and uploaded in chunks. Cataloged directory assets currently do not support CDK asset `bundling` or symlink-following options; pass `embeddedCatalog: false` to `Source.asset` to use the upstream CDK asset path for those cases.
 
 - It applies to local directory assets only. Local `.zip` files and `Source.bucket` archives are consumed as provided and only benefit from a catalog if they already contain one.
 - It does not run CDK asset `bundling`. Use your own pre-bundled directory, or pass `embeddedCatalog: false` to delegate packaging to CDK.
@@ -138,6 +148,8 @@ Cataloged `Source.asset` packaging limitations:
 - It creates a temporary ZIP during synth/package time on the local machine, not inside the provider Lambda.
 - It changes the staged ZIP bytes compared with upstream CDK packaging because the catalog entry is added.
 - Catalog MD5s are only valid for marker-free files. Deploy-time marker replacement still requires reading and materializing final bytes.
+
+### Object Size and Scope
 
 Source archives are read with S3 ranges and do not need to fit in Lambda memory or ephemeral storage. Individual files inside the asset ZIP must be <= 5 GiB because extracted uploads currently use S3 `PutObject`, not multipart upload.
 
