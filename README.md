@@ -155,12 +155,6 @@ Source archives are read with S3 ranges and do not need to fit in Lambda memory 
 
 This construct targets static asset deployment to S3. It is not a general-purpose sync engine and does not provide byte-range diffing, persistent manifests, or non-S3 backend behavior.
 
-## Building the provider locally
+## Development
 
-By default the construct uses the prebuilt Rust `bootstrap` binary shipped inside the package, matched to the requested `architecture`. No Rust toolchain is required.
-
-If you are iterating on the Rust provider itself, you can opt into compiling it locally by passing `bundling` or `rustProjectPath`. That path requires a Rust toolchain plus the optional `cargo-lambda-cdk` dependency:
-
-```sh
-npm install --save-dev cargo-lambda-cdk
-```
+To rebuild the Rust provider binaries or use a local checkout in your CDK app, see [Building from source](docs/building-from-source.md).
