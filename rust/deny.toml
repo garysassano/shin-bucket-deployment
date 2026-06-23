@@ -54,7 +54,7 @@ allow = [
 confidence-threshold = 0.9
 # Some allowed licenses are absent from the target-filtered graph by design.
 unused-allowed-license = "allow"
-# The handler crate already declares `license = "Apache-2.0"`.
+# The handler crate already declares `license = "MIT"`.
 private = { ignore = true }
 
 [sources]

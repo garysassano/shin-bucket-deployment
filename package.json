@@ -2,7 +2,7 @@
   "name": "shin-bucket-deployment",
   "version": "0.1.0",
   "description": "Rust-backed drop-in alternative to the AWS CDK BucketDeployment construct",
-  "license": "Apache-2.0",
+  "license": "MIT",
   "keywords": [
     "aws",
     "cdk",
@@ -36,8 +36,7 @@
     "assets/bootstrap-arm64/bootstrap",
     "assets/bootstrap-x86_64/bootstrap",
     "README.md",
-    "LICENSE",
-    "NOTICE"
+    "LICENSE"
   ],
   "publishConfig": {
     "access": "public"

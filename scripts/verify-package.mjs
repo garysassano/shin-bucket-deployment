@@ -28,7 +28,6 @@ const requiredFiles = [
   "package/assets/bootstrap-x86_64/bootstrap",
   "package/README.md",
   "package/LICENSE",
-  "package/NOTICE",
   "package/package.json",
 ];
 const forbiddenTarballPrefixes = [
