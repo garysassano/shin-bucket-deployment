@@ -145,3 +145,20 @@ jobs:
         run: npm publish "$TARBALL" --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  # Create a GitHub Release for the tag after a successful npm publish.
+  # Only runs on tag pushes (workflow_dispatch has no release tag to target).
+  github-release:
+    name: Create GitHub release
+    needs: publish
+    if: ${{ github.event_name == 'push' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write # create the GitHub Release
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --generate-notes --verify-tag
