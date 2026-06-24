@@ -79,14 +79,14 @@
     }
   },
   "devDependencies": {
-    "@biomejs/biome": "2.4.15",
+    "@biomejs/biome": "2.5.0",
     "@types/node": "24.12.4",
-    "aws-cdk": "2.1124.1",
-    "aws-cdk-lib": "2.257.0",
+    "aws-cdk": "2.1127.0",
+    "aws-cdk-lib": "2.260.0",
     "cargo-lambda-cdk": "0.0.36",
     "constructs": "10.6.0",
     "typescript": "6.0.3",
-    "vitest": "4.1.7",
+    "vitest": "4.1.9",
     "zod": "^4.4.3"
   }
 }
