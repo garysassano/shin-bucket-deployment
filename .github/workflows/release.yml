@@ -74,7 +74,7 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
-      id-token: write # OIDC trusted publishing + automatic provenance
+      id-token: write # npm provenance
     steps:
       - uses: actions/checkout@v7
 
@@ -142,9 +142,12 @@ jobs:
 
       - name: Publish
         if: ${{ github.event_name == 'push' || !inputs.dry-run }}
-        # OIDC trusted publishing: npm authenticates via the id-token (no NPM_TOKEN),
-        # and provenance is generated automatically for a public repo + package.
-        run: npm publish "$TARBALL" --access public
+        # Token auth: OIDC trusted publishing can't create a package that doesn't
+        # exist yet, so the (re)create publish uses NPM_TOKEN. Provenance still
+        # generated via id-token. Switch back to OIDC once the package exists again.
+        run: npm publish "$TARBALL" --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   # Create a GitHub Release for the tag after a successful npm publish.
   # Only runs on tag pushes (workflow_dispatch has no release tag to target).
