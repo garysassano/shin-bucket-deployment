@@ -30,7 +30,7 @@ Most deployments should tune only `memoryLimit` and, when needed, `maxParallelTr
 
 | Advanced setting | Default | Purpose |
 | --- | ---: | --- |
-| `advancedRuntimeTuning.sourceBlockBytes` | 8 MiB | Source range block size for ZIP entry reads. |
+| `advancedRuntimeTuning.sourceBlockBytes` | 8 MiB | Source range block size for ZIP entry reads. Must be at least 30 bytes. |
 | `advancedRuntimeTuning.sourceBlockMergeGapBytes` | 256 KiB | Maximum gap for coalescing adjacent source spans. |
 | `advancedRuntimeTuning.sourceGetConcurrency` | derived from Lambda memory, 1 to 8 | Maximum concurrent source ranged `GetObject` block fetches per archive. |
 | `advancedRuntimeTuning.sourceWindowBytes` | derived from Lambda memory and ZIP file count | Maximum resident source block data per ZIP archive; a single larger block can still be admitted. |
@@ -320,6 +320,7 @@ Destination upload diagnostics field reference:
 - Source ZIP archives do not need to fit in Lambda memory or ephemeral storage; marker-free ZIP entries stream in chunks.
 - Marker-replaced entries must fit in Lambda memory after replacement.
 - Each extracted ZIP entry must fit S3's single-request `PutObject` limit.
+- `advancedRuntimeTuning.sourceBlockBytes` must be at least 30 bytes so ZIP local file headers can fit in one source block.
 - Very small Lambda memory settings reduce source GET concurrency and source window capacity unless explicitly overridden.
 - Cataloged asset packaging currently rejects bundled directory assets and symlinks.
 - The provider is a static asset deployment engine, not a general-purpose sync engine with byte-range diffs or persistent manifests.

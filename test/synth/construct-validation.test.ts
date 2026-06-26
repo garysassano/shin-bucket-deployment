@@ -249,6 +249,16 @@ describe("ShinBucketDeployment validation and option coverage", () => {
         },
       });
     }).toThrow(/jitter/);
+
+    expect(() => {
+      new ShinBucketDeployment(stack, "SmallSourceBlock", {
+        sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
+        destinationBucket,
+        advancedRuntimeTuning: {
+          sourceBlockBytes: 29,
+        },
+      });
+    }).toThrow(/sourceBlockBytes must be an integer greater than or equal to 30/);
   });
 
   test("requests DestinationBucketArn when deployedBucket is accessed", () => {

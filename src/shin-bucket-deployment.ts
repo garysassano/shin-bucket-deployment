@@ -32,6 +32,7 @@ const HANDLER_BINARY_NAME = "shin-bucket-deployment-handler";
 const SHARED_HANDLER_ID_PREFIX = "ShinBucketDeploymentHandler";
 const DEFAULT_MEMORY_LIMIT_MB = 1024;
 const PROVIDER_TIMEOUT = Duration.minutes(15);
+const MIN_SOURCE_BLOCK_BYTES = 30;
 const DEFAULT_PUT_OBJECT_RETRY_BASE_DELAY_MS = 250;
 const DEFAULT_PUT_OBJECT_RETRY_MAX_DELAY_MS = 5_000;
 const DEFAULT_PUT_OBJECT_SLOWDOWN_RETRY_BASE_DELAY_MS = 1_000;
@@ -220,6 +221,10 @@ export interface ShinBucketDeploymentPutObjectRetryTuning {
 export interface ShinBucketDeploymentAdvancedRuntimeTuning {
   /**
    * Source ranged-read block size in bytes.
+   *
+   * Must be at least 30 bytes so ZIP local file headers can fit in one source
+   * block.
+   *
    * @default 8 MiB
    */
   readonly sourceBlockBytes?: number;
@@ -402,13 +407,15 @@ export class ShinBucketDeployment extends Construct {
     validateIntegerProps(
       this,
       advancedRuntimeTuning,
-      [
-        "sourceBlockBytes",
-        "sourceGetConcurrency",
-        "sourceWindowBytes",
-        "sourceWindowMemoryBudgetMb",
-      ],
+      ["sourceGetConcurrency", "sourceWindowBytes", "sourceWindowMemoryBudgetMb"],
       1,
+      "advancedRuntimeTuning.",
+    );
+    validateIntegerProps(
+      this,
+      advancedRuntimeTuning,
+      ["sourceBlockBytes"],
+      MIN_SOURCE_BLOCK_BYTES,
       "advancedRuntimeTuning.",
     );
     validateIntegerProps(
