@@ -4,7 +4,7 @@ import { App, Stack } from "aws-cdk-lib";
 import { Match, Template } from "aws-cdk-lib/assertions";
 import { Key } from "aws-cdk-lib/aws-kms";
 import { Architecture } from "aws-cdk-lib/aws-lambda";
-import { Bucket, BucketEncryption } from "aws-cdk-lib/aws-s3";
+import { Bucket, BucketEncryption, BucketNamespace } from "aws-cdk-lib/aws-s3";
 import { expect, test } from "vitest";
 import { ShinBucketDeployment, Source } from "../../src";
 import { testBundling } from "../support/bundling";
@@ -243,6 +243,50 @@ test("scopes destination object permissions to the destination prefix", () => {
           },
         }),
       ]),
+    },
+  });
+});
+
+test("supports account-regional destination buckets", () => {
+  const stack = new Stack();
+  const destinationBucket = new Bucket(stack, "Dest", {
+    bucketNamePrefix: "shin-regression",
+    bucketNamespace: BucketNamespace.ACCOUNT_REGIONAL,
+  });
+
+  new ShinBucketDeployment(stack, "Deploy", {
+    sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
+    destinationBucket,
+    bundling: testBundling(),
+  });
+
+  const template = Template.fromStack(stack).toJSON() as {
+    Resources: Record<string, { Type: string; Properties?: Record<string, unknown> }>;
+  };
+
+  const destinationBucketEntry = Object.entries(template.Resources).find(
+    ([, resource]) =>
+      resource.Type === "AWS::S3::Bucket" &&
+      resource.Properties?.BucketNamePrefix === "shin-regression",
+  );
+  expect(destinationBucketEntry).toBeDefined();
+
+  if (!destinationBucketEntry) {
+    throw new Error("Account-regional destination bucket not found");
+  }
+
+  const [destinationBucketLogicalId, destinationBucketResource] = destinationBucketEntry;
+  expect(destinationBucketResource.Properties).toMatchObject({
+    BucketNamePrefix: "shin-regression",
+    BucketNamespace: "account-regional",
+  });
+
+  const deploymentResource = Object.values(template.Resources).find(
+    (resource) => resource.Type === "Custom::ShinBucketDeployment",
+  );
+  expect(deploymentResource?.Properties).toMatchObject({
+    DestinationBucketName: {
+      Ref: destinationBucketLogicalId,
     },
   });
 });
