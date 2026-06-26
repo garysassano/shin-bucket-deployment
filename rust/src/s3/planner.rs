@@ -22,12 +22,14 @@ use super::{
     source_window_bytes_for_archive,
 };
 
+const S3_SINGLE_COPY_LIMIT: u64 = 5 * 1024 * 1024 * 1024;
 const S3_SINGLE_PUT_LIMIT: u64 = 5 * 1024 * 1024 * 1024;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(super) struct CopyPlan {
     pub(super) source_bucket: String,
     pub(super) source_key: String,
+    pub(super) expected_etag: Option<String>,
     pub(super) destination_key: String,
     pub(super) size: Option<u64>,
 }
@@ -142,29 +144,33 @@ pub(super) fn collect_copy_plans(
     manifest: &DeploymentManifest,
     request: &DeploymentRequest,
     destination_objects: &HashMap<String, DestinationObject>,
-) -> Vec<CopyPlan> {
-    manifest
-        .values()
-        .filter_map(|planned| match planned.action {
+) -> Result<Vec<CopyPlan>> {
+    let mut plans = Vec::new();
+
+    for planned in manifest.values() {
+        match planned.action {
             PlannedAction::CopyObject { source_index, size }
                 if planned.expected_etag.as_deref().is_none_or(|etag| {
                     !destination_etag_matches(destination_objects, &planned.relative_key, etag)
                 }) =>
             {
-                Some(CopyPlan {
+                validate_copy_object_size(&planned.relative_key, size)?;
+                plans.push(CopyPlan {
                     source_bucket: request.source_bucket_names[source_index].clone(),
                     source_key: request.source_object_keys[source_index].clone(),
+                    expected_etag: planned.expected_etag.clone(),
                     destination_key: join_s3_key(
                         &request.dest_bucket_prefix,
                         &planned.relative_key,
                     ),
                     size,
-                })
+                });
             }
-            PlannedAction::ZipEntry { .. } => None,
-            PlannedAction::CopyObject { .. } => None,
-        })
-        .collect()
+            PlannedAction::ZipEntry { .. } | PlannedAction::CopyObject { .. } => {}
+        }
+    }
+
+    Ok(plans)
 }
 
 pub(super) fn collect_zip_entry_plans(
@@ -505,6 +511,19 @@ fn validate_stored_file_entry(stored: &StoredZipEntry, path: &str) -> Result<()>
     Ok(())
 }
 
+fn validate_copy_object_size(path: &str, size: Option<u64>) -> Result<()> {
+    let Some(size) = size else {
+        return Ok(());
+    };
+    if size > S3_SINGLE_COPY_LIMIT {
+        return Err(anyhow!(
+            "source object `{path}` is {size} bytes, larger than the S3 single CopyObject limit"
+        ));
+    }
+
+    Ok(())
+}
+
 fn next_source_offset(sorted_offsets: &[u64], offset: u64) -> Option<u64> {
     let index = sorted_offsets.partition_point(|candidate| *candidate <= offset);
     sorted_offsets.get(index).copied()
@@ -512,15 +531,20 @@ fn next_source_offset(sorted_offsets: &[u64], offset: u64) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::io::{Cursor, Write};
 
     use zip::write::{SimpleFileOptions, ZipWriter};
 
     use super::{
-        EmbeddedCatalog, EmbeddedCatalogEntry, catalog_md5_by_path, collect_zip_entry_plans,
+        EmbeddedCatalog, EmbeddedCatalogEntry, S3_SINGLE_COPY_LIMIT, catalog_md5_by_path,
+        collect_copy_plans, collect_zip_entry_plans,
     };
     use crate::request::compile_filters;
-    use crate::types::{DeploymentManifest, PlannedAction, PlannedObject};
+    use crate::types::{
+        DeploymentManifest, DeploymentRequest, MarkerConfig, PlannedAction, PlannedObject,
+        PutObjectRetryJitter, PutObjectRetryOptions, RuntimeOptions,
+    };
 
     #[test]
     fn zip_entry_plans_are_grouped_and_sorted_by_source_offset() {
@@ -574,6 +598,54 @@ mod tests {
     }
 
     #[test]
+    fn copy_plans_carry_source_etag_for_conditional_copy() {
+        let mut manifest = DeploymentManifest::new();
+        manifest.insert(
+            "archive.zip".to_string(),
+            PlannedObject {
+                relative_key: "archive.zip".to_string(),
+                expected_etag: Some("abc123".to_string()),
+                action: PlannedAction::CopyObject {
+                    source_index: 0,
+                    size: Some(1024),
+                },
+            },
+        );
+
+        let plans =
+            collect_copy_plans(&manifest, &copy_request(), &HashMap::new()).expect("valid copy");
+
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].expected_etag.as_deref(), Some("abc123"));
+        assert_eq!(plans[0].destination_key, "site/archive.zip");
+    }
+
+    #[test]
+    fn copy_plans_reject_sources_larger_than_single_copy_limit() {
+        let mut manifest = DeploymentManifest::new();
+        manifest.insert(
+            "large.bin".to_string(),
+            PlannedObject {
+                relative_key: "large.bin".to_string(),
+                expected_etag: Some("abc123".to_string()),
+                action: PlannedAction::CopyObject {
+                    source_index: 0,
+                    size: Some(S3_SINGLE_COPY_LIMIT + 1),
+                },
+            },
+        );
+
+        let error = collect_copy_plans(&manifest, &copy_request(), &HashMap::new())
+            .expect_err("oversized source should be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("larger than the S3 single CopyObject limit")
+        );
+    }
+
+    #[test]
     fn compile_filters_keeps_existing_glob_behavior() {
         let filters = compile_filters(&["*.map".to_string()], &[]).unwrap();
 
@@ -611,6 +683,46 @@ mod tests {
             Some("abc123")
         );
         assert!(!catalog.contains_key(".shin/catalog.v1.json"));
+    }
+
+    fn copy_request() -> DeploymentRequest {
+        DeploymentRequest {
+            source_bucket_names: vec!["source-bucket".to_string()],
+            source_object_keys: vec!["assets/archive.zip".to_string()],
+            source_markers: vec![HashMap::new()],
+            source_markers_config: vec![MarkerConfig::default()],
+            dest_bucket_name: "destination-bucket".to_string(),
+            dest_bucket_prefix: "site".to_string(),
+            extract: false,
+            retain_on_delete: true,
+            distribution_id: None,
+            distribution_paths: vec!["/*".to_string()],
+            wait_for_distribution_invalidation: true,
+            user_metadata: HashMap::new(),
+            system_metadata: HashMap::new(),
+            prune: true,
+            exclude: Vec::new(),
+            include: Vec::new(),
+            output_object_keys: true,
+            destination_bucket_arn: None,
+            runtime: RuntimeOptions {
+                available_memory_mb: 1024,
+                max_parallel_transfers: 1,
+                source_block_bytes: 8 * 1024 * 1024,
+                source_block_merge_gap_bytes: 256 * 1024,
+                source_get_concurrency: 1,
+                source_window_bytes: None,
+                source_window_memory_budget_mb: 256,
+                put_object_retry: PutObjectRetryOptions {
+                    max_attempts: 1,
+                    retry_base_delay_ms: 1,
+                    retry_max_delay_ms: 1,
+                    slowdown_retry_base_delay_ms: 1,
+                    slowdown_retry_max_delay_ms: 1,
+                    jitter: PutObjectRetryJitter::None,
+                },
+            },
+        }
     }
 
     fn zip_from_entries(entries: &[(&str, &[u8])]) -> zip::ZipArchive<Cursor<Vec<u8>>> {

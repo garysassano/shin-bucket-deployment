@@ -152,7 +152,7 @@ pub(crate) async fn deploy(
         .await?;
     } else {
         let copy_plans =
-            planner::collect_copy_plans(&deployment_manifest, request, &destination_plan.objects);
+            planner::collect_copy_plans(&deployment_manifest, request, &destination_plan.objects)?;
         transfer::execute_copy_plans(
             state,
             &request.dest_bucket_name,

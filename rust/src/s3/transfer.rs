@@ -130,6 +130,7 @@ pub(super) async fn execute_copy_plans(
                 &destination_bucket,
                 &plan.source_bucket,
                 &plan.source_key,
+                plan.expected_etag.as_deref(),
                 &plan.destination_key,
                 &metadata,
             )
@@ -344,6 +345,7 @@ async fn copy_source_object(
     destination_bucket: &str,
     source_bucket: &str,
     source_key: &str,
+    expected_etag: Option<&str>,
     destination_key: &str,
     metadata: &ObjectMetadata,
 ) -> Result<()> {
@@ -360,13 +362,17 @@ async fn copy_source_object(
         "copying source object"
     );
 
-    let builder = state
+    let mut builder = state
         .destination_s3
         .copy_object()
         .bucket(destination_bucket)
         .key(destination_key)
         .copy_source(copy_source)
         .metadata_directive(MetadataDirective::Replace);
+
+    if let Some(etag) = expected_etag {
+        builder = builder.copy_source_if_match(quoted_etag(etag));
+    }
 
     apply_copy_metadata(builder, metadata, destination_key)
         .send()
@@ -376,6 +382,10 @@ async fn copy_source_object(
         })?;
 
     Ok(())
+}
+
+fn quoted_etag(etag: &str) -> String {
+    format!("\"{etag}\"")
 }
 
 async fn prepare_zip_entry_for_comparison(
@@ -911,7 +921,7 @@ mod tests {
 
     use super::{
         PutPrecondition, PutRetryCoordinator, duration_millis_u64, md5_hex,
-        put_precondition_for_destination, put_retry_cap_millis,
+        put_precondition_for_destination, put_retry_cap_millis, quoted_etag,
     };
 
     #[test]
@@ -951,6 +961,11 @@ mod tests {
         };
 
         assert_eq!(put_precondition_for_destination(Some(&object)), None);
+    }
+
+    #[test]
+    fn quoted_etag_wraps_normalized_copy_source_etag() {
+        assert_eq!(quoted_etag("abc123"), "\"abc123\"".to_string());
     }
 
     #[test]
