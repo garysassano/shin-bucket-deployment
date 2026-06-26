@@ -18,6 +18,7 @@ use crate::types::{
 };
 
 const DEFAULT_AVAILABLE_MEMORY_MB: u64 = 1024;
+const MIN_SOURCE_BLOCK_BYTES: usize = 30;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "PascalCase")]
@@ -158,7 +159,8 @@ fn runtime_options(raw: &RawDeploymentRequest) -> RuntimeOptions {
             raw.max_parallel_transfers,
             DEFAULT_MAX_PARALLEL_TRANSFERS,
         ),
-        source_block_bytes: non_zero_usize(raw.source_block_bytes, DEFAULT_SOURCE_BLOCK_BYTES),
+        source_block_bytes: non_zero_usize(raw.source_block_bytes, DEFAULT_SOURCE_BLOCK_BYTES)
+            .max(MIN_SOURCE_BLOCK_BYTES),
         source_block_merge_gap_bytes: raw
             .source_block_merge_gap_bytes
             .unwrap_or(DEFAULT_SOURCE_BLOCK_MERGE_GAP_BYTES),
@@ -559,5 +561,16 @@ mod tests {
             request.runtime.put_object_retry.jitter,
             PutObjectRetryJitter::None
         );
+    }
+
+    #[test]
+    fn clamps_source_block_bytes_to_zip_local_header_length() {
+        let mut props = minimal_request();
+        props["SourceBlockBytes"] = json!("1");
+
+        let raw: RawDeploymentRequest = serde_json::from_value(props).unwrap();
+        let request = parse_request(&raw);
+
+        assert_eq!(request.runtime.source_block_bytes, 30);
     }
 }
