@@ -8,7 +8,7 @@ The published package ships prebuilt Rust provider binaries for both Lambda arch
 
 ## Quick Start
 
-Install the package in an existing CDK v2 app, then swap the import you already use for `BucketDeployment`. The package includes prebuilt provider binaries, so application code does not need a Rust toolchain or a provider build step.
+Install the package in your CDK v2 project. It includes prebuilt provider binaries, so your app does not need a Rust toolchain or a provider build step.
 
 ```sh
 npm install shin-bucket-deployment
