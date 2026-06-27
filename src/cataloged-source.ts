@@ -340,7 +340,8 @@ const CRC32_TABLE = buildCrc32Table();
 function crc32Buffer(bytes: Buffer): number {
   let crc = 0xffffffff;
   for (const byte of bytes) {
-    crc = (crc >>> 8) ^ CRC32_TABLE[(crc ^ byte) & 0xff];
+    const tableValue = CRC32_TABLE[(crc ^ byte) & 0xff] as number;
+    crc = (crc >>> 8) ^ tableValue;
   }
   return (crc ^ 0xffffffff) >>> 0;
 }

@@ -22,6 +22,14 @@ function customResourceProperties(stack: Stack) {
   return resource.Properties;
 }
 
+function markerAt(markers: Array<Record<string, unknown>>, index: number): Record<string, unknown> {
+  const marker = markers[index];
+  if (marker === undefined) {
+    throw new Error(`Source marker ${index} not found`);
+  }
+  return marker;
+}
+
 test("renders plain markers for Source.data", () => {
   const stack = new Stack();
   const destinationBucket = new Bucket(stack, "Dest");
@@ -41,7 +49,7 @@ test("renders plain markers for Source.data", () => {
   const sourceMarkers = properties.SourceMarkers as Array<Record<string, unknown>>;
 
   expect(sourceMarkers).toHaveLength(1);
-  expect(Object.keys(sourceMarkers[0])).toHaveLength(3);
+  expect(Object.keys(markerAt(sourceMarkers, 0))).toHaveLength(3);
   expect(properties.SourceMarkersConfig).toBeUndefined();
 });
 
@@ -64,7 +72,7 @@ test("renders plain markers for Source.yamlData", () => {
   const sourceMarkers = properties.SourceMarkers as Array<Record<string, unknown>>;
 
   expect(sourceMarkers).toHaveLength(1);
-  expect(Object.keys(sourceMarkers[0])).toHaveLength(2);
+  expect(Object.keys(markerAt(sourceMarkers, 0))).toHaveLength(2);
   expect(properties.SourceMarkersConfig).toBeUndefined();
 });
 
@@ -135,7 +143,7 @@ test("keeps jsonData without escape on the plain replacement path", () => {
   const sourceMarkers = properties.SourceMarkers as Array<Record<string, unknown>>;
 
   expect(sourceMarkers).toHaveLength(1);
-  expect(Object.keys(sourceMarkers[0])).toHaveLength(1);
+  expect(Object.keys(markerAt(sourceMarkers, 0))).toHaveLength(1);
   expect(properties.SourceMarkersConfig).toEqual([{}]);
 });
 
@@ -173,10 +181,10 @@ test("keeps source marker config aligned across mixed source types", () => {
   const sourceMarkers = properties.SourceMarkers as Array<Record<string, unknown>>;
 
   expect(sourceMarkers).toHaveLength(5);
-  expect(sourceMarkers[0]).toEqual({});
-  expect(Object.keys(sourceMarkers[1])).toHaveLength(1);
-  expect(Object.keys(sourceMarkers[2])).toHaveLength(1);
-  expect(Object.keys(sourceMarkers[3])).toHaveLength(1);
-  expect(Object.keys(sourceMarkers[4])).toHaveLength(1);
+  expect(markerAt(sourceMarkers, 0)).toEqual({});
+  expect(Object.keys(markerAt(sourceMarkers, 1))).toHaveLength(1);
+  expect(Object.keys(markerAt(sourceMarkers, 2))).toHaveLength(1);
+  expect(Object.keys(markerAt(sourceMarkers, 3))).toHaveLength(1);
+  expect(Object.keys(markerAt(sourceMarkers, 4))).toHaveLength(1);
   expect(properties.SourceMarkersConfig).toEqual([{}, {}, {}, { jsonEscape: true }, {}]);
 });

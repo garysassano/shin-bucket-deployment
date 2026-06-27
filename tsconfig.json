@@ -13,7 +13,7 @@
     "noImplicitReturns": true,
     "noImplicitThis": true,
     "noFallthroughCasesInSwitch": false,
-    "noUncheckedIndexedAccess": false,
+    "noUncheckedIndexedAccess": true,
     "noUnusedLocals": false,
     "noUnusedParameters": false,
     "esModuleInterop": true,

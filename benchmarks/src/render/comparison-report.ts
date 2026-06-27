@@ -804,7 +804,7 @@ function renderHeaderStats(
     ["Bundle", context.totalBytes],
     ["Best", context.bestDurationSpeedup],
     ["Memory saved", context.peakMemorySaved],
-  ];
+  ] satisfies Array<readonly [string, string]>;
   return [
     `<g transform="translate(${x} ${y})" font-family="Liberation Sans, Arial, Helvetica, sans-serif">`,
     ...stats.map((stat, index) => {
@@ -1111,7 +1111,11 @@ function percentile(sorted: number[], quantile: number): number {
     return 0;
   }
   const index = Math.ceil(sorted.length * quantile) - 1;
-  return sorted[Math.max(0, Math.min(sorted.length - 1, index))];
+  const value = sorted[Math.max(0, Math.min(sorted.length - 1, index))];
+  if (value === undefined) {
+    throw new Error(`Unable to read percentile ${quantile} from ${sorted.length} values`);
+  }
+  return value;
 }
 
 function unique<T>(values: Array<T | null | undefined>): T[] {

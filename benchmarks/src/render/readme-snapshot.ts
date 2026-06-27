@@ -322,6 +322,11 @@ function buildBenchmarkData(selection: DataSelection): BenchmarkData {
   });
 
   const metadataRecord = selection.shinRecords.values().next().value ?? selection.runRecords[0];
+  if (metadataRecord === undefined) {
+    throw new Error(
+      `No benchmark metadata row found for profile=${selection.profile}, memory=${selection.memoryMb}, parallel=${selection.parallel}`,
+    );
+  }
   const lambdaConfig = `Lambda: ${selection.memoryMb} MiB / ${selection.parallel} parallel`;
   const metadataParts = [
     metadataRecord.profile === null || metadataRecord.profile === undefined
@@ -549,15 +554,8 @@ ${renderHeader(benchmarkData)}
 
   // Section A: Duration
   svg += renderSectionHeader(sectionATop, "HANDLER DURATION", "FASTER");
-  for (let i = 0; i < chartDuration.length; i++) {
-    svg += renderRow(
-      chartDuration[i],
-      i,
-      sectionARowsTop,
-      maxDuration,
-      false,
-      i === chartDuration.length - 1,
-    );
+  for (const [i, row] of chartDuration.entries()) {
+    svg += renderRow(row, i, sectionARowsTop, maxDuration, false, i === chartDuration.length - 1);
   }
 
   // Divider
@@ -565,15 +563,8 @@ ${renderHeader(benchmarkData)}
 
   // Section B: Memory
   svg += renderSectionHeader(sectionBTop, "MAX MEMORY", "SAVED");
-  for (let i = 0; i < chartMemory.length; i++) {
-    svg += renderRow(
-      chartMemory[i],
-      i,
-      sectionBRowsTop,
-      maxMemory,
-      true,
-      i === chartMemory.length - 1,
-    );
+  for (const [i, row] of chartMemory.entries()) {
+    svg += renderRow(row, i, sectionBRowsTop, maxMemory, true, i === chartMemory.length - 1);
   }
 
   svg += `</svg>`;

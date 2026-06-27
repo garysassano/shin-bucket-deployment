@@ -131,8 +131,12 @@ function parseArgs(argv: string[]): ParsedArgs {
 
 function parseRunnerOptions(args: string[]): Map<string, string> {
   const options = new Map<string, string>();
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
+  let skipNext = false;
+  for (const [index, arg] of args.entries()) {
+    if (skipNext) {
+      skipNext = false;
+      continue;
+    }
     if (!arg.startsWith("--")) {
       printUsage();
       process.exit(1);
@@ -150,7 +154,7 @@ function parseRunnerOptions(args: string[]): Map<string, string> {
       process.exit(1);
     }
     options.set(arg.slice(2), value);
-    index += 1;
+    skipNext = true;
   }
   return options;
 }
@@ -390,6 +394,9 @@ async function runScenarioGroups(
     while (firstFailure === 0 && nextGroupIndex < groups.length) {
       const group = groups[nextGroupIndex];
       nextGroupIndex += 1;
+      if (group === undefined) {
+        throw new Error(`Missing scenario group at index ${nextGroupIndex - 1}`);
+      }
       const status = await runScenarioGroup(mode, action, group, cdkArgs);
       if (status !== 0 && firstFailure === 0) {
         firstFailure = status;

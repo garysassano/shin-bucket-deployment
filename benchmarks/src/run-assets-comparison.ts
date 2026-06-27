@@ -540,6 +540,9 @@ async function runWithConcurrency<T>(
     while (nextIndex < items.length) {
       const item = items[nextIndex];
       nextIndex += 1;
+      if (item === undefined) {
+        throw new Error(`Missing work item at index ${nextIndex - 1}`);
+      }
       await run(item);
     }
   });
