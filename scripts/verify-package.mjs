@@ -139,7 +139,7 @@ function verifyTarball(tarball, workDir) {
     packedPackageJson.repository.url.includes("github.com/garysassano/shin-bucket-deployment"),
     "Packed package metadata does not point at the current repository.",
   );
-  assert(packedPackageJson.engines.node === ">=20.0.0", "Packed package has wrong Node engine.");
+  assert(packedPackageJson.engines.node === ">=22.0.0", "Packed package has wrong Node engine.");
 }
 
 function verifyConsumerInstall(tarball, workDir) {

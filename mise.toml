@@ -1,0 +1,8 @@
+[tools]
+node = "24"
+pnpm = "11"
+rust = "stable"
+zig = "0.16.0"
+"cargo:cargo-lambda" = "1.9.1"
+"cargo:cargo-audit" = "0.22.2"
+"cargo:cargo-deny" = "0.19.9"

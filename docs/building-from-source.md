@@ -14,10 +14,14 @@ This path rebuilds the bootstrap assets that are included in the npm package.
 
 Prerequisites:
 
-- Node.js 20 or newer and pnpm
+- Node.js 24 or newer and pnpm for source development
 - Rust stable
 - `cargo-lambda` on `PATH`
 - Zig for cross-architecture bootstrap builds
+
+The published npm package supports Node.js 22 or newer. Source development uses
+Node.js 24 or newer through `mise.toml` so the repo stays on an active LTS while
+still emitting a Node.js 22-compatible construct package.
 
 From a source checkout:
 
