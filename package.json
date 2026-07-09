@@ -85,7 +85,7 @@
     "aws-cdk-lib": "2.260.0",
     "cargo-lambda-cdk": "0.0.36",
     "constructs": "10.6.0",
-    "typescript": "6.0.3",
+    "typescript": "7.0.2",
     "vitest": "4.1.9",
     "zod": "^4.4.3"
   }
