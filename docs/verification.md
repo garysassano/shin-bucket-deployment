@@ -5,7 +5,7 @@ This page is the human-readable verification snapshot for `ShinBucketDeployment`
 Runbooks, evidence collection rules, and sanitization rules live in the repo-local agent skill at `.agents/skills/shin-verification/SKILL.md`.
 
 > [!IMPORTANT]
-> This snapshot predates the packaged prebuilt-provider path introduced after 2026-05-15. It does not verify that an npm-installed provider archive starts successfully in Lambda; that path must be refreshed before the package is treated as current verification evidence.
+> This snapshot predates both the packaged prebuilt-provider path and the exact-authorized previous-destination cleanup contract. It does not verify that an npm-installed provider archive starts successfully in Lambda or that previous-destination cleanup works in AWS; both paths must be refreshed before this page is treated as current verification evidence.
 
 ## Current Snapshot
 
@@ -29,7 +29,7 @@ Runbooks, evidence collection rules, and sanitization rules live in the repo-loc
 | P0 | Build and lint | TypeScript build/typecheck/lint and Rust checks. | Pass as of 2026-05-15 full verification suite |
 | P0 | Scenario synthesis | Public ShinBucketDeployment verification scenarios synthesize as part of deployment runs. | Pass as of 2026-05-15 full verification suite |
 | P0 | AWS end-to-end simple deployment | Create, root-prefix deployment, S3 object checks, and destroy with the provider Lambda running in AWS. | Pass as of 2026-05-15 AWS end-to-end suite |
-| P0 | AWS end-to-end update/delete behavior | Prune update, `prune=false` preservation update, retain-on-delete update/delete, `retainOnDelete=false` update/delete cleanup, `extract=false`, duplicate source overwrite order, and larger archive deployment. | Pass as of 2026-05-15 AWS end-to-end suite |
+| P0 | AWS end-to-end update/delete behavior | Historical prune, retention, delete-cleanup, copy, overwrite-order, and larger-archive scenarios. The exact-authorized previous-destination update path has not yet been rerun in AWS. | Refresh required |
 | P0 | AWS end-to-end metadata/replacement behavior | Include/exclude filters, system/user metadata, SSE-S3 metadata, deploy-time marker replacement, JSON/YAML/data sources, and JSON escaping. | Pass as of 2026-05-15 AWS end-to-end suite |
 | P0 | AWS end-to-end KMS destination | KMS-encrypted destination bucket deploys and stored objects report `aws:kms`. | Pass as of 2026-05-15 AWS end-to-end suite |
 | P0 | AWS end-to-end CloudFront invalidation | Sync and async invalidation examples create invalidations during token updates and destroy cleanly; sync uses explicit paths and async covers prefix-derived default invalidation paths. | Pass as of 2026-05-15 AWS end-to-end suite |
@@ -50,5 +50,5 @@ Historical verification rows were removed in favor of keeping only this latest h
 ## Known Limitations
 
 - Metadata-only updates remain a known limitation until metadata participates in skip identity or forces replacement.
-- For `retainOnDelete=false`, deleting the deployment and bucket together follows the upstream CDK ownership-tag lifecycle: the deployment does not clear objects while another ownership tag is still present. Validate delete cleanup by removing the deployment construct while keeping the bucket in the stack.
+- Exact-authorized namespace decisions, owner-tag boundaries, synthesized authorization, and scenario synthesis have local coverage; the corresponding AWS update/delete chain still needs a sanitized rerun.
 - Raw AWS evidence is intentionally excluded from git. Update this page with sanitized results after a new full verification run.

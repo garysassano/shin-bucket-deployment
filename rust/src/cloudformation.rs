@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -10,8 +11,12 @@ use tracing::error;
 use uuid::Uuid;
 
 use crate::cloudfront::invalidate as invalidate_cloudfront;
+use crate::lifecycle::{
+    UpdateCleanupDecision, destination_namespaces_overlap, plan_update_cleanup,
+    previous_distribution_authorized,
+};
 use crate::request::{RawDeploymentRequest, parse_old_destination, parse_request};
-use crate::s3::{bucket_owned, delete_prefix, deploy};
+use crate::s3::{bucket_has_competing_owner, delete_prefix, delete_prefix_excluding, deploy};
 use crate::types::{AppState, DeploymentStats, ResponsePayload, duration_ms};
 
 const MAX_FAILURE_REASON_BYTES: usize = 1024;
@@ -216,62 +221,156 @@ async fn process_request_inner(
         other => return Err(anyhow!("Unsupported request type: {other}")),
     };
 
-    if request_type == "Delete"
-        && !request.retain_on_delete
-        && !bucket_owned(
+    let previous_destination = old_resource_properties.map(parse_old_destination);
+    let mut deleted_current_destination = false;
+    let mut cleaned_previous_destination = None;
+
+    if request_type == "Delete" && !request.retain_on_delete {
+        if bucket_has_competing_owner(
             state,
             &request.dest_bucket_name,
             &request.dest_bucket_prefix,
+            None,
+            request.destination_owner_id.as_deref(),
         )
         .await?
-    {
-        let started = Instant::now();
-        delete_prefix(
-            state,
-            &request.dest_bucket_name,
-            &request.dest_bucket_prefix,
-            Some(&stats),
-        )
-        .await?;
-        stats.add_delete_millis(duration_ms(started.elapsed()));
+        {
+            tracing::warn!(
+                "destination cleanup retained because another custom resource owns an overlapping namespace"
+            );
+        } else {
+            let started = Instant::now();
+            deleted_current_destination = delete_prefix(
+                state,
+                &request.dest_bucket_name,
+                &request.dest_bucket_prefix,
+                Some(&stats),
+            )
+            .await?
+                > 0;
+            stats.add_delete_millis(duration_ms(started.elapsed()));
+        }
     }
 
     if matches!(request_type, "Create" | "Update") {
         deploy(state, request, Arc::clone(&stats)).await?;
     }
 
-    if let Some(distribution_id) = request.distribution_id.as_deref()
-        && !distribution_id.is_empty()
+    if request_type == "Update"
+        && let Some(previous) = previous_destination.as_ref()
     {
-        let started = Instant::now();
-        invalidate_cloudfront(
-            state,
-            distribution_id,
-            &request.distribution_paths,
-            request.wait_for_distribution_invalidation,
-            &cloudfront_caller_reference(
-                identity.stack_id,
-                identity.request_id,
-                identity.logical_resource_id,
-                distribution_id,
-                &request.distribution_paths,
-            ),
-        )
-        .await?;
-        stats.add_cloudfront_millis(duration_ms(started.elapsed()));
+        match plan_update_cleanup(request, previous) {
+            UpdateCleanupDecision::Delete(plan) => {
+                let competing_owner = bucket_has_competing_owner(
+                    state,
+                    &plan.previous.bucket_name,
+                    &plan.previous.bucket_prefix,
+                    plan.excluded_prefix.as_deref(),
+                    request.destination_owner_id.as_deref(),
+                )
+                .await?;
+
+                if competing_owner {
+                    tracing::warn!(
+                        "previous destination retained because another custom resource owns an overlapping namespace"
+                    );
+                } else {
+                    let started = Instant::now();
+                    let deleted = if let Some(excluded_prefix) = plan.excluded_prefix.as_deref() {
+                        delete_prefix_excluding(
+                            state,
+                            &plan.previous.bucket_name,
+                            &plan.previous.bucket_prefix,
+                            excluded_prefix,
+                            Some(&stats),
+                        )
+                        .await?
+                    } else {
+                        delete_prefix(
+                            state,
+                            &plan.previous.bucket_name,
+                            &plan.previous.bucket_prefix,
+                            Some(&stats),
+                        )
+                        .await?
+                    };
+                    stats.add_old_prefix_delete_millis(duration_ms(started.elapsed()));
+                    if deleted > 0 {
+                        cleaned_previous_destination = Some(plan.previous);
+                    }
+                }
+            }
+            UpdateCleanupDecision::Retain(reason) => {
+                tracing::warn!(?reason, "previous destination retained");
+            }
+            UpdateCleanupDecision::NotNeeded(_) => {}
+        }
     }
 
-    if request_type == "Update"
-        && !request.retain_on_delete
-        && let Some(old_props) = old_resource_properties
-    {
-        let (old_bucket, old_prefix) = parse_old_destination(old_props);
+    let should_invalidate_current = match request_type {
+        "Create" | "Update" => true,
+        "Delete" => deleted_current_destination,
+        _ => false,
+    };
 
-        if old_bucket != request.dest_bucket_name || old_prefix != request.dest_bucket_prefix {
-            let started = Instant::now();
-            delete_prefix(state, &old_bucket, &old_prefix, Some(&stats)).await?;
-            stats.add_old_prefix_delete_millis(duration_ms(started.elapsed()));
+    let previous_content_changed = previous_destination.as_ref().is_some_and(|previous| {
+        cleaned_previous_destination.is_some() || destination_namespaces_overlap(request, previous)
+    });
+
+    if previous_content_changed
+        && let Some(previous) = previous_destination.as_ref()
+        && previous.distribution_id != request.distribution_id
+        && let Some(distribution_id) = non_empty(previous.distribution_id.as_deref())
+    {
+        if cleaned_previous_destination.is_some()
+            || previous_distribution_authorized(request, previous)
+        {
+            invalidate_distribution(
+                state,
+                identity,
+                distribution_id,
+                &previous.distribution_paths,
+                request.wait_for_distribution_invalidation,
+                true,
+                &stats,
+            )
+            .await?;
+        } else {
+            tracing::warn!(
+                "previous distribution was not invalidated because it was not explicitly authorized"
+            );
         }
+    }
+
+    if should_invalidate_current
+        && let Some(distribution_id) = non_empty(request.distribution_id.as_deref())
+    {
+        let distribution_paths = if previous_content_changed
+            && previous_destination
+                .as_ref()
+                .is_some_and(|previous| previous.distribution_id == request.distribution_id)
+        {
+            merge_distribution_paths(
+                &request.distribution_paths,
+                &previous_destination
+                    .as_ref()
+                    .expect("checked above")
+                    .distribution_paths,
+            )
+        } else {
+            request.distribution_paths.clone()
+        };
+
+        invalidate_distribution(
+            state,
+            identity,
+            distribution_id,
+            &distribution_paths,
+            request.wait_for_distribution_invalidation,
+            request_type == "Delete",
+            &stats,
+        )
+        .await?;
     }
 
     let mut data = Map::new();
@@ -295,6 +394,49 @@ async fn process_request_inner(
         reason: None,
         data,
     })
+}
+
+async fn invalidate_distribution(
+    state: &AppState,
+    identity: RequestIdentity<'_>,
+    distribution_id: &str,
+    distribution_paths: &[String],
+    wait_for_completion: bool,
+    missing_distribution_is_success: bool,
+    stats: &DeploymentStats,
+) -> Result<()> {
+    let started = Instant::now();
+    invalidate_cloudfront(
+        state,
+        distribution_id,
+        distribution_paths,
+        wait_for_completion,
+        &cloudfront_caller_reference(
+            identity.stack_id,
+            identity.request_id,
+            identity.logical_resource_id,
+            distribution_id,
+            distribution_paths,
+        ),
+        missing_distribution_is_success,
+    )
+    .await?;
+    stats.add_cloudfront_millis(duration_ms(started.elapsed()));
+    Ok(())
+}
+
+fn non_empty(value: Option<&str>) -> Option<&str> {
+    value.filter(|value| !value.is_empty())
+}
+
+fn merge_distribution_paths(current: &[String], previous: &[String]) -> Vec<String> {
+    let mut seen = HashSet::new();
+    current
+        .iter()
+        .chain(previous)
+        .filter(|path| seen.insert(path.as_str()))
+        .cloned()
+        .collect()
 }
 
 fn cloudfront_caller_reference(
@@ -459,7 +601,8 @@ mod tests {
 
     use super::{
         MAX_FAILURE_REASON_BYTES, cloudfront_caller_reference, decode_request_envelope,
-        decode_resource_properties, truncate_failure_reason, validate_response_url,
+        decode_resource_properties, merge_distribution_paths, truncate_failure_reason,
+        validate_response_url,
     };
 
     #[test]
@@ -498,6 +641,21 @@ mod tests {
                 "distribution",
                 &["/other/*".to_string()],
             )
+        );
+    }
+
+    #[test]
+    fn distribution_paths_merge_in_stable_deduplicated_order() {
+        assert_eq!(
+            merge_distribution_paths(
+                &["/new/*".to_string(), "/shared/*".to_string()],
+                &["/old/*".to_string(), "/shared/*".to_string()],
+            ),
+            vec![
+                "/new/*".to_string(),
+                "/shared/*".to_string(),
+                "/old/*".to_string(),
+            ]
         );
     }
 

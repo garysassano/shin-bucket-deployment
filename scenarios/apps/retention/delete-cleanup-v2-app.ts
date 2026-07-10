@@ -14,8 +14,12 @@ class DeleteCleanupShinBucketDeploymentStack extends Stack {
     new ShinBucketDeployment(this, "DeployWebsite", {
       sources: [Source.data("runtime/current.txt", "version=v2\n")],
       destinationBucket: websiteBucket,
-      destinationKeyPrefix: "cleanup-v2",
+      destinationKeyPrefix: "cleanup/v2",
       retainOnDelete: false,
+      cleanupPreviousDestination: {
+        bucket: websiteBucket,
+        keyPrefix: "cleanup",
+      },
     });
 
     new CfnOutput(this, "BucketName", {
@@ -23,11 +27,11 @@ class DeleteCleanupShinBucketDeploymentStack extends Stack {
     });
 
     new CfnOutput(this, "FetchV2CurrentFileCommand", {
-      value: `aws s3 cp s3://${websiteBucket.bucketName}/cleanup-v2/runtime/current.txt -`,
+      value: `aws s3 cp s3://${websiteBucket.bucketName}/cleanup/v2/runtime/current.txt -`,
     });
 
     new CfnOutput(this, "ConfirmV1RemovedCommand", {
-      value: `aws s3api head-object --bucket ${websiteBucket.bucketName} --key cleanup-v1/runtime/current.txt`,
+      value: `aws s3api head-object --bucket ${websiteBucket.bucketName} --key cleanup/runtime/current.txt`,
     });
   }
 }

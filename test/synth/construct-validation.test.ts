@@ -25,6 +25,99 @@ function customResourceProperties(stack: Stack) {
 }
 
 describe("ShinBucketDeployment validation and option coverage", () => {
+  test("renders destination ownership without authorizing previous cleanup by default", () => {
+    const stack = new Stack();
+    const destinationBucket = new Bucket(stack, "Dest");
+
+    new ShinBucketDeployment(stack, "Deploy", {
+      sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
+      destinationBucket,
+      bundling: testBundling(),
+    });
+
+    expect(customResourceProperties(stack)).toMatchObject({
+      DestinationOwnerId: expect.stringMatching(/^[a-f0-9]{8}$/),
+    });
+    expect(customResourceProperties(stack).CleanupPreviousDestination).toBeUndefined();
+  });
+
+  test("renders and authorizes the exact previous destination", () => {
+    const stack = new Stack();
+    const destinationBucket = new Bucket(stack, "Dest");
+    const previousBucket = new Bucket(stack, "PreviousDest");
+    const previousDistribution = new Distribution(stack, "PreviousDistribution", {
+      defaultBehavior: {
+        origin: S3BucketOrigin.withOriginAccessControl(previousBucket),
+        viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+      },
+    });
+
+    new ShinBucketDeployment(stack, "Deploy", {
+      sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
+      destinationBucket,
+      destinationKeyPrefix: "new-site",
+      retainOnDelete: false,
+      cleanupPreviousDestination: {
+        bucket: previousBucket,
+        keyPrefix: "old-site",
+        distribution: previousDistribution,
+      },
+      bundling: testBundling(),
+    });
+
+    const cleanupPreviousDestination = customResourceProperties(stack)
+      .CleanupPreviousDestination as {
+      DestinationBucketName: { Ref: string };
+      DestinationBucketKeyPrefix: string;
+      DistributionId: { Ref: string };
+    };
+    expect(cleanupPreviousDestination).toMatchObject({
+      DestinationBucketName: {
+        Ref: expect.stringMatching(/^PreviousDest/),
+      },
+      DestinationBucketKeyPrefix: "old-site",
+      DistributionId: {
+        Ref: expect.stringMatching(/^PreviousDistribution/),
+      },
+    });
+
+    const template = Template.fromStack(stack);
+    template.hasResourceProperties("AWS::IAM::Policy", {
+      PolicyDocument: {
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Action: "s3:DeleteObject*",
+            Resource: {
+              "Fn::Join": [
+                "",
+                Match.arrayWith([
+                  Match.objectLike({
+                    "Fn::GetAtt": [cleanupPreviousDestination.DestinationBucketName.Ref, "Arn"],
+                  }),
+                  "/old-site/*",
+                ]),
+              ],
+            },
+          }),
+          Match.objectLike({
+            Action: "s3:ListBucket",
+            Condition: {
+              StringEquals: {
+                "s3:prefix": "old-site/",
+              },
+            },
+          }),
+          Match.objectLike({
+            Action: ["cloudfront:GetInvalidation", "cloudfront:CreateInvalidation"],
+            Resource: {
+              "Fn::Join": Match.anyValue(),
+            },
+          }),
+        ]),
+      },
+    });
+  });
+
   test("throws when distributionPaths are provided without a distribution", () => {
     const stack = new Stack();
     const destinationBucket = new Bucket(stack, "Dest");
