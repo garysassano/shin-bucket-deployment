@@ -15,7 +15,7 @@ Runbooks, evidence collection rules, and sanitization rules live in the repo-loc
 | Field | Value |
 | --- | --- |
 | Latest verification date | 2026-07-10 |
-| Latest verification baseline | `c73ac75` (`feat!: redesign destination lifecycle controls`) |
+| Latest verification baseline | `35ba5be` (`feat!: redesign destination lifecycle controls`) |
 | Region | Local release gates plus targeted AWS lifecycle verification in `eu-central-1`; previous full AWS suite in `ap-southeast-2` |
 | Latest verification runs | `2026-07-10-targeted-lifecycle-aws` and `2026-07-10-local-release-candidate` |
 | Cleanup | Targeted AWS lifecycle stack destroyed and confirmed absent; previous full-suite cleanup also confirmed |
