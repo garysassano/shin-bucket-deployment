@@ -119,7 +119,9 @@ function parseOptions(args) {
 }
 
 function verifyDeclarations() {
-  const declarationFiles = walkFiles(join(repoRoot, "lib")).filter((file) => file.endsWith(".d.ts"));
+  const declarationFiles = walkFiles(join(repoRoot, "lib")).filter((file) =>
+    file.endsWith(".d.ts"),
+  );
   assert(declarationFiles.length > 0, "No package declaration files were emitted.");
 
   for (const file of declarationFiles) {
@@ -145,7 +147,10 @@ function packTarball(workDir, requestedPackDir) {
   mkdirSync(packDir, { recursive: true });
   const output = run("npm", ["pack", "--pack-destination", packDir], { capture: true });
   const tarballs = readdirSync(packDir).filter((entry) => entry.endsWith(".tgz"));
-  assert(tarballs.length === 1, `Expected one packed tarball, found ${tarballs.length}.\n${output}`);
+  assert(
+    tarballs.length === 1,
+    `Expected one packed tarball, found ${tarballs.length}.\n${output}`,
+  );
   return join(packDir, tarballs[0]);
 }
 
@@ -198,7 +203,10 @@ function readBootstrapEntry(archivePath, arch) {
     .subarray(centralOffset + 46, centralOffset + 46 + fileNameLength)
     .toString("utf8");
 
-  assert(entryName === "bootstrap", `${arch} archive entry must be named bootstrap, got ${entryName}.`);
+  assert(
+    entryName === "bootstrap",
+    `${arch} archive entry must be named bootstrap, got ${entryName}.`,
+  );
   assert(extraLength === 0, `${arch} archive central entry contains unexpected extra data.`);
   assert(commentLength === 0, `${arch} archive central entry contains an unexpected comment.`);
 
@@ -240,7 +248,8 @@ function readBootstrapEntry(archivePath, arch) {
   );
   assert(crc32(bootstrap) === expectedCrc, `${arch} bootstrap failed its ZIP CRC check.`);
   assert(
-    bootstrap.length >= 20 && bootstrap.subarray(0, 4).equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46])),
+    bootstrap.length >= 20 &&
+      bootstrap.subarray(0, 4).equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46])),
     `${arch} bootstrap is not an ELF binary.`,
   );
   assert(bootstrap[4] === 2, `${arch} bootstrap is not a 64-bit ELF binary.`);
@@ -295,9 +304,7 @@ function verifyTarball(tarball, workDir) {
 }
 
 function verifyStagedProviderArchive(consumerDir, assemblyDir) {
-  const manifest = JSON.parse(
-    readFileSync(join(assemblyDir, "ConsumerStack.assets.json"), "utf8"),
-  );
+  const manifest = JSON.parse(readFileSync(join(assemblyDir, "ConsumerStack.assets.json"), "utf8"));
   const fileAssets = Object.values(manifest.files ?? {}).filter(
     (asset) => asset.source?.packaging === "file",
   );
@@ -392,20 +399,20 @@ function verifyConsumerInstall(tarball, workDir) {
   run("npx", ["tsc", "--noEmit"], { cwd: consumerDir });
 
   const synthLines = [
-      'const { App, Stack } = require("aws-cdk-lib");',
-      'const { Bucket } = require("aws-cdk-lib/aws-s3");',
-      `const { ShinBucketDeployment, Source } = require("${packageName}");`,
-      "",
-      `const app = new App({ outdir: ${JSON.stringify(join(workDir, "cdk.out-cjs"))} });`,
-      'const stack = new Stack(app, "ConsumerStack");',
-      'const bucket = new Bucket(stack, "Bucket");',
-      'new ShinBucketDeployment(stack, "Deploy", {',
-      '  sources: [Source.data("index.html", "ok")],',
-      "  destinationBucket: bucket,",
-      "});",
-      "app.synth();",
-      "",
-    ];
+    'const { App, Stack } = require("aws-cdk-lib");',
+    'const { Bucket } = require("aws-cdk-lib/aws-s3");',
+    `const { ShinBucketDeployment, Source } = require("${packageName}");`,
+    "",
+    `const app = new App({ outdir: ${JSON.stringify(join(workDir, "cdk.out-cjs"))} });`,
+    'const stack = new Stack(app, "ConsumerStack");',
+    'const bucket = new Bucket(stack, "Bucket");',
+    'new ShinBucketDeployment(stack, "Deploy", {',
+    '  sources: [Source.data("index.html", "ok")],',
+    "  destinationBucket: bucket,",
+    "});",
+    "app.synth();",
+    "",
+  ];
   writeFileSync(join(consumerDir, "synth.cjs"), synthLines.join("\n"));
   run("node", ["synth.cjs"], { cwd: consumerDir });
   verifyStagedProviderArchive(consumerDir, join(workDir, "cdk.out-cjs"));

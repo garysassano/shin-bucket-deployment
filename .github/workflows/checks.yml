@@ -1,0 +1,294 @@
+name: Checks
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  node:
+    name: Node (build, typecheck, lint, test)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Install Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - name: Build published package
+        run: pnpm build:package
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Test
+        run: pnpm test
+
+  rust:
+    name: Rust (fmt, clippy, test)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      MISE_DATA_DIR: ${{ github.workspace }}/.mise
+      MISE_RUSTUP_HOME: ${{ github.workspace }}/.mise/rustup
+      CARGO_TARGET_DIR: ${{ github.workspace }}/rust/target
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup Rust toolchain
+        uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
+        with:
+          cache: true
+          mise_toml: |
+            [tools]
+            rust = { version = "stable", components = "rustfmt,clippy" }
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
+        with:
+          workspaces: rust -> target
+          cache-targets: true
+          cache-workspace-crates: true
+          cache-all-crates: false
+          cache-bin: false
+
+      - name: Format check
+        run: cargo fmt --manifest-path rust/Cargo.toml --all --check
+
+      - name: Clippy
+        run: cargo clippy --manifest-path rust/Cargo.toml --all-targets --all-features -- -D warnings
+
+      - name: Test
+        run: cargo test --manifest-path rust/Cargo.toml --all-features
+
+  supply-chain:
+    name: Supply chain (npm audit, cargo audit, cargo deny)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      MISE_DATA_DIR: ${{ github.workspace }}/.mise
+      MISE_RUSTUP_HOME: ${{ github.workspace }}/.mise/rustup
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Install Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Setup Rust supply-chain tools
+        uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
+        with:
+          cache: true
+          mise_toml: |
+            [tools]
+            rust = "stable"
+            cargo-binstall = "1.20.1"
+            "cargo:cargo-audit" = "0.22.2"
+            "cargo:cargo-deny" = "0.19.9"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: npm audit
+        run: pnpm audit --audit-level high
+
+      - name: cargo audit
+        run: cargo audit --file rust/Cargo.lock
+
+      - name: cargo deny
+        run: cargo deny --manifest-path rust/Cargo.toml check
+
+  workflow-quality:
+    name: Workflow and TOML quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      MISE_DATA_DIR: ${{ github.workspace }}/.mise
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup workflow tools
+        uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
+        with:
+          cache: true
+          install_args: actionlint ripgrep taplo
+
+      - name: Lint GitHub Actions workflows
+        run: actionlint
+
+      - name: Verify immutable action references
+        run: |
+          if rg --pcre2 '^\s*(?:-\s*)?uses:\s+(?!\./)[^@\s]+@(?![0-9a-f]{40}(?:\s|$))' .github/workflows; then
+            echo "Every external action must use a full 40-character commit SHA." >&2
+            exit 1
+          fi
+
+      - name: Check TOML formatting
+        run: taplo fmt --check mise.toml rust/Cargo.toml rust/deny.toml
+
+  bootstrap:
+    name: Bootstrap (${{ matrix.arch }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      matrix:
+        include:
+          - arch: arm64
+            target: aarch64-unknown-linux-gnu
+          - arch: x86_64
+            target: x86_64-unknown-linux-gnu
+    env:
+      MISE_DATA_DIR: ${{ github.workspace }}/.mise
+      MISE_RUSTUP_HOME: ${{ github.workspace }}/.mise/rustup
+      CARGO_TARGET_DIR: ${{ github.workspace }}/rust/target
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Setup Rust toolchain and tools
+        uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
+        with:
+          cache: true
+          mise_toml: |
+            [tools]
+            zig = "0.16.0"
+            rust = { version = "stable", targets = "${{ matrix.target }}" }
+            cargo-binstall = "1.20.1"
+            "cargo:cargo-lambda" = "1.9.1"
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
+        with:
+          workspaces: rust -> target
+          cache-targets: true
+          cache-workspace-crates: true
+          cache-all-crates: false
+          cache-bin: false
+          key: bootstrap-${{ matrix.target }}
+
+      - name: Build bootstrap
+        run: node scripts/build-bootstrap.mjs ${{ matrix.arch }}
+
+      - name: Upload bootstrap artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bootstrap-${{ matrix.arch }}
+          path: assets/bootstrap-${{ matrix.arch }}/bootstrap.zip
+          if-no-files-found: error
+          retention-days: 1
+
+  package:
+    name: Package contract (Node ${{ matrix.node }})
+    needs: bootstrap
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Install Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Download arm64 bootstrap
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: bootstrap-arm64
+          path: assets/bootstrap-arm64
+
+      - name: Download x86_64 bootstrap
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: bootstrap-x86_64
+          path: assets/bootstrap-x86_64
+
+      - name: Verify package contract
+        run: pnpm verify:package
+
+  synth:
+    name: Synth verification scenarios
+    needs: bootstrap
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Install Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Download arm64 bootstrap
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: bootstrap-arm64
+          path: assets/bootstrap-arm64
+
+      - name: Download x86_64 bootstrap
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: bootstrap-x86_64
+          path: assets/bootstrap-x86_64
+
+      - name: Verify bootstrap archives are present
+        run: |
+          test -f assets/bootstrap-arm64/bootstrap.zip
+          test -f assets/bootstrap-x86_64/bootstrap.zip
+
+      - name: Synthesize verification scenarios
+        run: pnpm verify synth
