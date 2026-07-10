@@ -1,24 +1,33 @@
 name: Release
 
-# Publishes the construct to npm with prebuilt Rust provider binaries baked in.
-# Publishing is tag-only. Manual runs build and verify the package as a dry run.
+# Publishing is tag-only. Manual runs execute the complete release path through
+# an npm dry run without requesting an OIDC token.
 on:
   push:
     tags:
       - "v*"
   workflow_dispatch:
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   preflight:
     name: Validate release ref
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Validate tag, version, and main ancestry
         if: ${{ github.event_name == 'push' }}
@@ -28,137 +37,148 @@ jobs:
           git fetch origin main
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main
 
-  # Cross-compile the Rust provider once per architecture and upload the
-  # bootstrap archives as artifacts for the publish job to assemble.
-  build-bootstrap:
-    name: Build bootstrap (${{ matrix.arch }})
+  checks:
+    name: Complete release gates
     needs: preflight
-    runs-on: ubuntu-24.04
-    strategy:
-      matrix:
-        include:
-          - arch: arm64
-            target: aarch64-unknown-linux-gnu
-          - arch: x86_64
-            target: x86_64-unknown-linux-gnu
-    env:
-      MISE_DATA_DIR: ${{ github.workspace }}/.mise
-      MISE_RUSTUP_HOME: ${{ github.workspace }}/.mise/rustup
-      CARGO_TARGET_DIR: ${{ github.workspace }}/rust/target
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Setup Rust toolchain and tools
-        uses: jdx/mise-action@v4
-        with:
-          cache: true
-          mise_toml: |
-            [tools]
-            zig = "0.16.0"
-            rust = { version = "stable", targets = "${{ matrix.target }}" }
-            cargo-binstall = "latest"
-            "cargo:cargo-lambda" = "1.9.1"
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: rust -> target
-          cache-targets: true
-          cache-workspace-crates: true
-          cache-all-crates: false
-          cache-bin: false
-          key: bootstrap-${{ matrix.target }}
-
-      - name: Build bootstrap
-        run: node scripts/build-bootstrap.mjs ${{ matrix.arch }}
-
-      - name: Upload bootstrap artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: bootstrap-${{ matrix.arch }}
-          path: assets/bootstrap-${{ matrix.arch }}/bootstrap.zip
-          if-no-files-found: error
-          retention-days: 1
-
-  publish:
-    name: Publish to npm
-    needs: [preflight, build-bootstrap]
-    runs-on: ubuntu-24.04
     permissions:
       contents: read
-      id-token: write # OIDC trusted publishing + automatic provenance
+    uses: ./.github/workflows/checks.yml
+
+  package:
+    name: Create verified release artifact
+    needs: [preflight, checks]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
 
       - name: Install Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: 24
-          cache: pnpm
-          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
       - name: Download arm64 bootstrap
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: bootstrap-arm64
           path: assets/bootstrap-arm64
 
       - name: Download x86_64 bootstrap
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: bootstrap-x86_64
           path: assets/bootstrap-x86_64
-
-      - name: Verify bootstrap binaries are present
-        run: |
-          test -f assets/bootstrap-arm64/bootstrap.zip
-          test -f assets/bootstrap-x86_64/bootstrap.zip
-
-      - name: Typecheck
-        run: pnpm typecheck
-
-      - name: Lint
-        run: pnpm lint
-
-      - name: Test
-        run: pnpm test
 
       - name: Build, pack, and verify the publish artifact
         run: |
           pnpm run verify:package -- --pack-destination "$RUNNER_TEMP/npm-pack"
           tarballs=("$RUNNER_TEMP"/npm-pack/*.tgz)
           test "${#tarballs[@]}" -eq 1
-          echo "TARBALL=${tarballs[0]}" >> "$GITHUB_ENV"
+          tarball="${tarballs[0]}"
+          cd "$(dirname "$tarball")"
+          sha256sum "$(basename "$tarball")" >"$(basename "$tarball").sha256"
 
-      - name: Publish (dry run)
-        if: ${{ github.event_name == 'workflow_dispatch' }}
-        run: npm publish "$TARBALL" --dry-run
+      - name: Upload exact release artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-package
+          path: |
+            ${{ runner.temp }}/npm-pack/*.tgz
+            ${{ runner.temp }}/npm-pack/*.sha256
+          if-no-files-found: error
+          retention-days: 7
 
-      - name: Publish
-        if: ${{ github.event_name == 'push' }}
-        # OIDC trusted publishing: npm authenticates via the id-token (no NPM_TOKEN),
-        # and provenance is generated automatically for a public repo + package.
-        run: npm publish "$TARBALL" --access public --provenance
+  dry-run:
+    name: npm publish dry run
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    needs: package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Install Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
 
-  # Create a GitHub Release for the tag after a successful npm publish.
-  # Only runs on tag pushes (workflow_dispatch has no release tag to target).
+      - name: Download exact release artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-package
+          path: ${{ runner.temp }}/release-package
+
+      - name: Publish dry run
+        run: |
+          tarballs=("$RUNNER_TEMP"/release-package/*.tgz)
+          test "${#tarballs[@]}" -eq 1
+          # npm otherwise rejects a rehearsal when package.json still names the
+          # current published version. This job has no OIDC token or npm auth.
+          npm publish "${tarballs[0]}" --dry-run --force
+
+  publish:
+    name: Publish to npm
+    if: ${{ github.event_name == 'push' }}
+    needs: package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Download exact release artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-package
+          path: ${{ runner.temp }}/release-package
+
+      - name: Publish or verify an idempotent rerun
+        run: |
+          tarballs=("$RUNNER_TEMP"/release-package/*.tgz)
+          test "${#tarballs[@]}" -eq 1
+          node scripts/publish-package.mjs --tarball "${tarballs[0]}"
+
   github-release:
     name: Create GitHub release
-    needs: publish
     if: ${{ github.event_name == 'push' }}
+    needs: publish
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     permissions:
-      contents: write # create the GitHub Release
+      contents: write
     steps:
-      - uses: actions/checkout@v7
+      - name: Download exact release artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-package
+          path: ${{ runner.temp }}/release-package
 
-      - name: Create GitHub release
+      - name: Create or update GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" --generate-notes --verify-tag
+        run: |
+          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" --generate-notes --verify-tag
+          fi
+          gh release upload "$GITHUB_REF_NAME" "$RUNNER_TEMP"/release-package/* --clobber

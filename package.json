@@ -57,7 +57,7 @@
     "rust:test": "cargo test --manifest-path rust/Cargo.toml",
     "rust:audit": "cargo audit --file rust/Cargo.lock",
     "rust:deny": "cargo deny --manifest-path rust/Cargo.toml check",
-    "test": "vitest run",
+    "test": "vitest run && node --test scripts/*.test.mjs",
     "verify:package": "node scripts/verify-package.mjs",
     "scenario": "pnpm build && node dist/scenarios/runner.js",
     "verify": "pnpm build && node dist/scenarios/runner.js verify",

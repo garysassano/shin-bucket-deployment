@@ -49,7 +49,9 @@ function run(command, args) {
 function buildArch(arch) {
   const config = ARCH_TARGETS[arch];
   if (!config) {
-    throw new Error(`Unknown architecture: ${arch}. Expected one of ${Object.keys(ARCH_TARGETS).join(", ")}`);
+    throw new Error(
+      `Unknown architecture: ${arch}. Expected one of ${Object.keys(ARCH_TARGETS).join(", ")}`,
+    );
   }
 
   run("cargo", [

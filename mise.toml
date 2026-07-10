@@ -1,7 +1,10 @@
 [tools]
+actionlint = "1.7.12"
 node = "24"
 pnpm = "11"
+ripgrep = "15.1.0"
 rust = "stable"
+taplo = "0.10.0"
 zig = "0.16.0"
 "cargo:cargo-lambda" = "1.9.1"
 "cargo:cargo-audit" = "0.22.2"
