@@ -10,6 +10,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, "..");
 const registryOrigin = "https://registry.npmjs.org";
 const provenancePredicateType = "https://slsa.dev/provenance/v1";
+const registryVerificationAttempts = 60;
+const registryVerificationIntervalMs = 5_000;
 
 function assert(condition, message) {
   if (!condition) {
@@ -171,7 +173,7 @@ async function verifyPublishedPackage(manifest, digest) {
 
 async function waitForPublishedPackage(manifest, digest) {
   let lastError;
-  for (let attempt = 1; attempt <= 12; attempt++) {
+  for (let attempt = 1; attempt <= registryVerificationAttempts; attempt++) {
     try {
       if (await verifyPublishedPackage(manifest, digest)) {
         return;
@@ -179,10 +181,10 @@ async function waitForPublishedPackage(manifest, digest) {
     } catch (error) {
       lastError = error;
     }
-    await new Promise((resolveDelay) => setTimeout(resolveDelay, 5_000));
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, registryVerificationIntervalMs));
   }
   throw (
-    lastError ?? new Error("Published package did not appear in the registry within 60 seconds.")
+    lastError ?? new Error("Published package did not appear in the registry within 5 minutes.")
   );
 }
 
