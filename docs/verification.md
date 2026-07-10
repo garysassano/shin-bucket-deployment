@@ -5,17 +5,20 @@ This page is the human-readable verification snapshot for `ShinBucketDeployment`
 Runbooks, evidence collection rules, and sanitization rules live in the repo-local agent skill at `.agents/skills/shin-verification/SKILL.md`.
 
 > [!IMPORTANT]
-> This snapshot predates both the packaged prebuilt-provider path and the opt-in previous-destination cleanup contract. It does not verify that an npm-installed provider archive starts successfully in Lambda or that previous-destination cleanup works in AWS; both paths must be refreshed before this page is treated as current verification evidence.
+> The latest full AWS suite remains the 2026-05-15 baseline. A targeted
+> 2026-07-10 refresh verifies the rebuilt packaged arm64 provider and the new
+> destination lifecycle contract in AWS. The remaining full-suite scenarios and
+> packaged x86_64 runtime path still need a current AWS rerun.
 
 ## Current Snapshot
 
 | Field | Value |
 | --- | --- |
-| Latest verification date | 2026-05-15 |
-| Latest verification baseline | `0751eed` (`rename benchmark asset inputs`) plus the runner output isolation change in this verification update |
-| Region | Local/unit suite plus AWS end-to-end suite in `ap-southeast-2` |
-| Latest verification runs | `2026-05-15-aws-end-to-end-verification` and `2026-05-15-local-unit-synth-verification` |
-| Cleanup | All AWS end-to-end verification stacks destroyed and confirmed absent |
+| Latest verification date | 2026-07-10 |
+| Latest verification baseline | `c73ac75` (`feat!: redesign destination lifecycle controls`) |
+| Region | Local release gates plus targeted AWS lifecycle verification in `eu-central-1`; previous full AWS suite in `ap-southeast-2` |
+| Latest verification runs | `2026-07-10-targeted-lifecycle-aws` and `2026-07-10-local-release-candidate` |
+| Cleanup | Targeted AWS lifecycle stack destroyed and confirmed absent; previous full-suite cleanup also confirmed |
 | Raw evidence | Not committed; raw AWS output remains in scratch only |
 | Scenario runner | `pnpm verify list`, `pnpm verify synth`, `pnpm verify deploy`, or `pnpm verify destroy`; concurrent runs isolate CDK output per scenario |
 
@@ -23,13 +26,14 @@ Runbooks, evidence collection rules, and sanitization rules live in the repo-loc
 
 | Priority | Area | Latest Evidence | Status |
 | --- | --- | --- | --- |
-| P0 | Rust provider tests | CloudFormation parsing, marker replacement, archive planning, destination prune planning, chunked hashing, MD5/ETag helpers, retryable body helpers, and `PutObject` retry policy helpers. | Pass as of 2026-05-15 full verification suite |
+| P0 | Rust provider tests | CloudFormation parsing, lifecycle authorization, namespace overlap, marker replacement, archive planning, destination prune planning, chunked hashing, MD5/ETag helpers, retryable body helpers, and `PutObject` retry policy helpers. | Pass as of 2026-07-10 local release gates |
 | P0 | S3 algorithm integration | Ignored Rust S3-to-S3 generated ZIP integration test with 2,500 generated files and bounded-memory ranged reads. | Pass as of 2026-05-02 |
-| P0 | TypeScript tests | CDK synthesis, custom resource properties, unsupported prop checks, provider singleton behavior. | Pass as of 2026-05-15 full verification suite |
-| P0 | Build and lint | TypeScript build/typecheck/lint and Rust checks. | Pass as of 2026-05-15 full verification suite |
-| P0 | Scenario synthesis | Public ShinBucketDeployment verification scenarios synthesize as part of deployment runs. | Pass as of 2026-05-15 full verification suite |
+| P0 | TypeScript tests | CDK synthesis, lifecycle custom-resource properties and IAM, unsupported prop checks, provider singleton behavior. | Pass as of 2026-07-10 local release gates |
+| P0 | Build and lint | TypeScript build/typecheck/lint, Rust fmt/check/clippy, package smoke test, npm audit, cargo audit, and cargo deny. | Pass as of 2026-07-10 local release gates |
+| P0 | Scenario synthesis | Every default `ShinBucketDeployment` verification scenario synthesizes locally. | Pass as of 2026-07-10 local release gates |
+| P0 | Packaged provider runtime | Rebuilt packaged arm64 provider starts in Lambda and handles the targeted lifecycle chain; both packaged architectures pass local archive/package verification. | Targeted AWS pass; x86_64 AWS refresh required |
 | P0 | AWS end-to-end simple deployment | Create, root-prefix deployment, S3 object checks, and destroy with the provider Lambda running in AWS. | Pass as of 2026-05-15 AWS end-to-end suite |
-| P0 | AWS end-to-end update/delete behavior | Historical prune, retention, object-deletion, copy, overwrite-order, and larger-archive scenarios. The resource-authorized previous-destination update path has not yet been rerun in AWS. | Refresh required |
+| P0 | AWS end-to-end update/delete behavior | Targeted ordered lifecycle chain verifies previous object deletion after Update, preservation of the new child namespace, current object deletion on custom-resource Delete, and final stack absence. Other update/delete scenarios retain the 2026-05-15 full-suite baseline. | Targeted pass; full refresh required |
 | P0 | AWS end-to-end metadata/replacement behavior | Include/exclude filters, system/user metadata, SSE-S3 metadata, deploy-time marker replacement, JSON/YAML/data sources, and JSON escaping. | Pass as of 2026-05-15 AWS end-to-end suite |
 | P0 | AWS end-to-end KMS destination | KMS-encrypted destination bucket deploys and stored objects report `aws:kms`. | Pass as of 2026-05-15 AWS end-to-end suite |
 | P0 | AWS end-to-end CloudFront invalidation | Sync and async invalidation examples create invalidations during token updates and destroy cleanly; sync uses explicit paths and async covers prefix-derived default invalidation paths. | Pass as of 2026-05-15 AWS end-to-end suite |
@@ -41,6 +45,8 @@ Runbooks, evidence collection rules, and sanitization rules live in the repo-loc
 
 | Run | Category | Scenario | Status | Evidence |
 | --- | --- | --- | --- | --- |
+| `2026-07-10-targeted-lifecycle-aws` | aws | `object-deletion-initial` → `object-deletion-updated` → `object-deletion-bucket-only` | Pass | The packaged arm64 provider ran in AWS; Update removed the previous object while preserving the updated child namespace, Delete removed the current object, and the remaining stack was destroyed and confirmed absent. |
+| `2026-07-10-local-release-candidate` | local | Full static, unit, package, audit, and default-scenario synthesis gates | Pass | TypeScript build/typecheck/lint/tests, Rust fmt/check/clippy/tests, package smoke verification for both provider architectures, npm/cargo audits, cargo deny, and every default verification scenario synthesis passed. |
 | `2026-05-15-aws-end-to-end-verification` | aws | Full ShinBucketDeployment AWS end-to-end suite | Pass | Concurrent deploy created or updated all 14 verification stacks; sanitized assertions passed for S3 object placement, metadata/filtering, marker replacement, prune behavior, retention, delete cleanup, extract=false, source overwrite order, large archive, KMS encryption, CloudFront sync/async invalidations, and final stack absence. |
 | `2026-05-15-local-unit-synth-verification` | local | Local unit/static/synthesis suite | Pass | Rust formatting/check/tests, TypeScript build/typecheck/lint/tests, and every public ShinBucketDeployment example used by AWS verification synthesized during deploy/destroy. |
 | `2026-05-15-runner-concurrency-fix` | local/aws | Verification runner concurrent CDK output isolation | Pass | Initial concurrent deploy/destroy attempts exposed `cdk.out` synth lock contention; runner now passes per-scenario `--output` directories and the fresh concurrent deploy/destroy completed with zero remaining verification stacks. |
@@ -50,5 +56,6 @@ Historical verification rows were removed in favor of keeping only this latest h
 ## Known Limitations
 
 - Metadata-only updates remain a known limitation until metadata participates in skip identity or forces replacement.
-- Resource-authorized namespace decisions, owner-tag boundaries, synthesized authorization, and scenario synthesis have local coverage; the corresponding AWS update/delete chain still needs a sanitized rerun.
+- Cross-bucket lifecycle moves and changed-distribution invalidation have local coverage but still need a current targeted AWS rerun.
+- The packaged x86_64 provider passes local artifact and consumer smoke verification but has not been refreshed in AWS.
 - Raw AWS evidence is intentionally excluded from git. Update this page with sanitized results after a new full verification run.
