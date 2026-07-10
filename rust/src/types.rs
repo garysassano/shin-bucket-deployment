@@ -76,7 +76,25 @@ pub(crate) struct DeploymentRequest {
     pub(crate) include: Vec<String>,
     pub(crate) output_object_keys: bool,
     pub(crate) destination_bucket_arn: Option<String>,
+    pub(crate) destination_owner_id: Option<String>,
+    pub(crate) cleanup_previous_destination: Option<CleanupPreviousDestination>,
     pub(crate) runtime: RuntimeOptions,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CleanupPreviousDestination {
+    pub(crate) bucket_name: String,
+    pub(crate) bucket_prefix: String,
+    pub(crate) distribution_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PreviousDestination {
+    pub(crate) bucket_name: String,
+    pub(crate) bucket_prefix: String,
+    pub(crate) distribution_id: Option<String>,
+    pub(crate) distribution_paths: Vec<String>,
+    pub(crate) owner_id: Option<String>,
 }
 
 #[derive(Clone, Debug)]

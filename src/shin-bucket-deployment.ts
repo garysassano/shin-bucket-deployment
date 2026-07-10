@@ -15,6 +15,7 @@ import {
   Tags,
   Token,
 } from "aws-cdk-lib";
+import type { IDistribution } from "aws-cdk-lib/aws-cloudfront";
 import { Effect, type IRole, PolicyStatement } from "aws-cdk-lib/aws-iam";
 import { Architecture, Code, Function as LambdaFunction, Runtime } from "aws-cdk-lib/aws-lambda";
 import { Bucket, BucketGrants, type IBucket } from "aws-cdk-lib/aws-s3";
@@ -260,6 +261,30 @@ export interface ShinBucketDeploymentAdvancedRuntimeTuning {
   readonly putObjectRetry?: ShinBucketDeploymentPutObjectRetryTuning;
 }
 
+/**
+ * Exact previous destination that may be cleaned during one deployment update.
+ *
+ * This is intentionally explicit because CloudFormation supplies
+ * `OldResourceProperties` to the provider at runtime, while the execution role
+ * and cleanup decision must be authorized by the new template.
+ */
+export interface ShinBucketDeploymentPreviousDestination {
+  /** Previous destination bucket. */
+  readonly bucket: IBucket;
+
+  /**
+   * Previous destination key prefix.
+   * @default - bucket root
+   */
+  readonly keyPrefix?: string;
+
+  /**
+   * Previous CloudFront distribution, when it differs from the current one.
+   * @default - no previous distribution authorization
+   */
+  readonly distribution?: IDistribution;
+}
+
 export interface ShinBucketDeploymentProps
   extends Omit<
     BucketDeploymentProps,
@@ -308,6 +333,29 @@ export interface ShinBucketDeploymentProps
    * @default - provider defaults derived from memoryLimit
    */
   readonly advancedRuntimeTuning?: ShinBucketDeploymentAdvancedRuntimeTuning;
+
+  /**
+   * Retain deployed objects when this custom resource is deleted.
+   *
+   * This does not authorize deletion of a previous destination during Update;
+   * use `cleanupPreviousDestination` for that one migration.
+   *
+   * @default true
+   */
+  readonly retainOnDelete?: boolean;
+
+  /**
+   * Authorize cleanup of this exact destination during the next destination
+   * update.
+   *
+   * The provider compares this value with CloudFormation
+   * `OldResourceProperties`. A missing or mismatched authorization retains the
+   * previous destination instead of failing the update. Remove this property
+   * after the migration succeeds.
+   *
+   * @default - retain the previous destination during updates
+   */
+  readonly cleanupPreviousDestination?: ShinBucketDeploymentPreviousDestination;
 }
 
 /**
@@ -504,6 +552,25 @@ export class ShinBucketDeployment extends Construct {
       }),
     );
 
+    if (props.cleanupPreviousDestination) {
+      const previous = props.cleanupPreviousDestination;
+      const previousGrants = BucketGrants.fromBucket(previous.bucket);
+      previousGrants.delete(
+        this.handlerFunction,
+        destinationObjectGrantPattern(previous.keyPrefix),
+      );
+      this.handlerFunction.addToRolePolicy(
+        destinationListPolicyStatement(previous.bucket.bucketArn, previous.keyPrefix, true),
+      );
+      this.handlerFunction.addToRolePolicy(
+        new PolicyStatement({
+          effect: Effect.ALLOW,
+          actions: ["s3:GetBucketTagging"],
+          resources: [previous.bucket.bucketArn],
+        }),
+      );
+    }
+
     if (props.accessControl) {
       this.destinationBucket.grantPutAcl(this.handlerFunction, destinationObjectKeyPattern);
     }
@@ -515,6 +582,21 @@ export class ShinBucketDeployment extends Construct {
           actions: ["cloudfront:GetInvalidation", "cloudfront:CreateInvalidation"],
           resources: [
             cloudFrontDistributionArn(this, props.distribution.distributionRef.distributionId),
+          ],
+        }),
+      );
+    }
+
+    if (props.cleanupPreviousDestination?.distribution) {
+      this.handlerFunction.addToRolePolicy(
+        new PolicyStatement({
+          effect: Effect.ALLOW,
+          actions: ["cloudfront:GetInvalidation", "cloudfront:CreateInvalidation"],
+          resources: [
+            cloudFrontDistributionArn(
+              this,
+              props.cleanupPreviousDestination.distribution.distributionRef.distributionId,
+            ),
           ],
         }),
       );
@@ -586,6 +668,17 @@ export class ShinBucketDeployment extends Construct {
         ),
         DestinationBucketName: this.destinationBucket.bucketName,
         DestinationBucketKeyPrefix: props.destinationKeyPrefix,
+        DestinationOwnerId: Lazy.string({
+          produce: () => this.cr.node.addr.slice(-8),
+        }),
+        CleanupPreviousDestination: props.cleanupPreviousDestination
+          ? {
+              DestinationBucketName: props.cleanupPreviousDestination.bucket.bucketName,
+              DestinationBucketKeyPrefix: props.cleanupPreviousDestination.keyPrefix,
+              DistributionId:
+                props.cleanupPreviousDestination.distribution?.distributionRef.distributionId,
+            }
+          : undefined,
         WaitForDistributionInvalidation: props.waitForDistributionInvalidation ?? true,
         RetainOnDelete: props.retainOnDelete,
         Extract: props.extract ?? true,

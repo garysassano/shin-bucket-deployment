@@ -106,7 +106,7 @@ Verification deploy/destroy can run independent scenario chains concurrently wit
 | `prune-update-v1` / `prune-update-v2` | `scenarios/apps/updates/prune-update-v1-app.ts`, `scenarios/apps/updates/prune-update-v2-app.ts` | Update path that removes destination objects absent from the new source plan. |
 | `prune-disabled-v1` / `prune-disabled-v2` | `scenarios/apps/updates/prune-disabled-v1-app.ts`, `scenarios/apps/updates/prune-disabled-v2-app.ts` | Update path with `prune=false`, preserving destination objects absent from the new source plan. |
 | `retain-on-delete-v1` / `retain-on-delete-v2` | `scenarios/apps/retention/retain-on-delete-v1-app.ts`, `scenarios/apps/retention/retain-on-delete-v2-app.ts` | Update/delete behavior when `retainOnDelete=true`. |
-| `delete-cleanup-v1` / `delete-cleanup-v2` / `delete-cleanup-bucket-only` | `scenarios/apps/retention/delete-cleanup-v1-app.ts`, `scenarios/apps/retention/delete-cleanup-v2-app.ts`, `scenarios/apps/retention/delete-cleanup-bucket-only-app.ts` | Update/delete behavior when `retainOnDelete=false`. |
+| `delete-cleanup-v1` / `delete-cleanup-v2` / `delete-cleanup-bucket-only` | `scenarios/apps/retention/delete-cleanup-v1-app.ts`, `scenarios/apps/retention/delete-cleanup-v2-app.ts`, `scenarios/apps/retention/delete-cleanup-bucket-only-app.ts` | Explicit previous-destination cleanup on Update, followed by Delete cleanup when `retainOnDelete=false`. |
 | `extract-false` | `scenarios/apps/basic/extract-false-app.ts` | Archive copy mode with `extract=false`. |
 | `large-archive` | `scenarios/apps/scale/large-archive-app.ts` | Larger archive ranged-read path. |
 | `kms-destination` | `scenarios/apps/security/kms-destination-app.ts` | KMS-encrypted destination bucket. |
@@ -127,26 +127,89 @@ flowchart TD
   E --> G
   F --> G
   G --> H{"Delete and retainOnDelete=false?"}
-  H -->|Yes| I["Run delete-prefix lifecycle checks"]
+  H -->|Yes| I["Delete current namespace unless a competing owner overlaps"]
   H -->|No| J{"Create or Update?"}
   I --> J
-  J -->|Yes| K["Run S3 deployment"]
+  J -->|Yes| K["Run current S3 deployment"]
   J -->|No| L["Skip S3 deployment"]
-  K --> M{"Distribution configured?"}
+  K --> M{"Update with OldResourceProperties?"}
   L --> M
-  M -->|Yes| N["Create CloudFront invalidation"]
-  N --> O{"waitForDistributionInvalidation?"}
-  O -->|Yes| P["Poll invalidation until completed or timeout"]
-  O -->|No| Q["Return after invalidation request"]
-  M -->|No| R["Skip CloudFront"]
-  P --> S["Delete old destination prefix when required"]
-  Q --> S
-  R --> S
-  S --> T["Send SUCCESS response"]
-  B -. "parse/runtime error" .-> U["Send FAILED response"]
-  K -. "S3 error" .-> U
-  N -. "CloudFront error" .-> U
+  M -->|Yes| N["Plan exact-authorized previous cleanup"]
+  M -->|No| O["No previous cleanup"]
+  N --> P["Delete old namespace, excluding any current child namespace"]
+  P --> Q{"Affected distribution configured?"}
+  O --> Q
+  Q -->|Yes| R["Create deduplicated CloudFront invalidation after S3 mutation"]
+  Q -->|No| S["Skip CloudFront"]
+  R --> T{"waitForDistributionInvalidation?"}
+  T -->|Yes| U["Poll invalidation until completed or timeout"]
+  T -->|No| V["Return after invalidation request"]
+  S --> W["Send SUCCESS response"]
+  U --> W
+  V --> W
+  B -. "parse/runtime error" .-> X["Send FAILED response"]
+  K -. "S3 error" .-> X
+  P -. "S3 error" .-> X
+  R -. "CloudFront error" .-> X
 ```
+
+## Upstream `BucketDeployment` lifecycle comparison
+
+This comparison was checked against AWS CDK `main` commit
+[`2b1c632dc2ab754882bdae066555879d8c702944`](https://github.com/aws/aws-cdk/tree/2b1c632dc2ab754882bdae066555879d8c702944).
+It is intentionally balanced: upstream's delete-old-first order avoids the
+specific former Shin regression where deploy-then-sweep could erase newly
+written child content. Shin keeps new content available and makes the cleanup
+decision more precise.
+
+Upstream's Python handler:
+
+- Reads `OldResourceProperties`, recursively removes a changed old destination,
+  then calls `s3_deploy` and finally invalidates CloudFront
+  ([handler lines 128–145](https://github.com/aws/aws-cdk/blob/2b1c632dc2ab754882bdae066555879d8c702944/packages/%40aws-cdk/custom-resource-handlers/lib/aws-s3-deployment/bucket-deployment-handler/index.py#L128-L145)).
+- Runs the ownership check only for Delete; changed-destination Update cleanup
+  goes directly to `aws s3 rm --recursive`.
+- Implements ownership as a raw tag-key `startswith` test
+  ([handler lines 317–332](https://github.com/aws/aws-cdk/blob/2b1c632dc2ab754882bdae066555879d8c702944/packages/%40aws-cdk/custom-resource-handlers/lib/aws-s3-deployment/bucket-deployment-handler/index.py#L317-L332)),
+  so the namespace `site` also matches an owner tag for `site2`.
+- Invalidates whenever the current resource properties contain a distribution,
+  including retained or no-op Delete events.
+
+Upstream's TypeScript construct grants the provider against the current
+destination bucket and uses a wildcard CloudFront resource
+([construct lines 415–431](https://github.com/aws/aws-cdk/blob/2b1c632dc2ab754882bdae066555879d8c702944/packages/aws-cdk-lib/aws-s3-deployment/lib/bucket-deployment.ts#L415-L431)).
+It documents and creates the same `aws-cdk:cr-owned:{prefix}:{hash}` tag family
+([construct lines 494–543](https://github.com/aws/aws-cdk/blob/2b1c632dc2ab754882bdae066555879d8c702944/packages/aws-cdk-lib/aws-s3-deployment/lib/bucket-deployment.ts#L494-L543)),
+but it does not carry an old-bucket construct reference into the new template.
+Consequently, a cross-bucket update can reach old cleanup without the old
+bucket's permissions.
+
+Shin differs in these ways:
+
+1. Deploy current content first; never create the upstream delete-before-sync
+   availability gap.
+2. Treat `retainOnDelete` as Delete behavior. Update cleanup requires an exact,
+   temporary `cleanupPreviousDestination` match against
+   `OldResourceProperties`.
+3. Carry the previous bucket and optional previous distribution as CDK
+   interfaces, so the new template expresses the dependency and functional
+   permissions needed for that exact migration.
+4. Classify same, disjoint, previous-parent, and current-parent namespaces with
+   delimiter-aware comparisons. Previous-parent cleanup excludes the entire
+   current child namespace; current-parent updates need no destructive second
+   sweep.
+5. Parse the owner suffix and check symmetric namespace overlap on Update and
+   Delete. A competing owner retains content, while `site` and `site2` remain
+   independent.
+6. Treat confirmed `NoSuchBucket` and `NoSuchDistribution` as idempotent success
+   only for cleanup/Delete paths; access-denied and transport errors still fail.
+7. Invalidate after S3 mutation, skip retained/no-op Deletes, and merge stable,
+   deduplicated paths when old and current destinations share a distribution.
+
+These lifecycle improvements are in addition to the existing Rust/SDK data
+path: archive-aware ranged reads, bounded source windows, direct SDK transfer
+operations, conditional destination writes, and deterministic same-event
+CloudFront caller references.
 
 ## S3 Deployment Flow
 
@@ -217,7 +280,7 @@ CloudFormation failure responses use a truncated `Reason` string. CloudFormation
 
 The provider role uses source grants from each bound CDK source and destination grants from the target bucket. Destination object write/delete permissions are scoped to `destinationKeyPrefix` when the prefix is concrete. Destination `ListBucket` is also scoped with `s3:prefix` when the current prefix is concrete and `retainOnDelete` is not `false`.
 
-When `retainOnDelete=false`, delete/list permissions remain broader because update and delete events may need to clean up an old destination prefix from previous resource properties. Tokenized prefixes also fall back to broader grants because their final prefix cannot be represented as a static IAM resource or condition at synthesis time.
+When `retainOnDelete=false`, the existing broader current-destination delete/list policy is intentionally unchanged by the lifecycle-correctness work; narrowing it is a separate future review. `cleanupPreviousDestination` grants List/Delete and ownership-tag access for the exact previous bucket/prefix named by the new template, plus invalidation access when an old distribution is supplied. The provider still compares that authorization with `OldResourceProperties` before using it. Tokenized prefixes fall back to broader grants because their final prefix cannot be represented as a static IAM resource or condition at synthesis time.
 
 ## Engine Transition
 

@@ -11,7 +11,7 @@ mod metadata;
 mod planner;
 mod transfer;
 
-pub(crate) use destination::{bucket_owned, delete_prefix};
+pub(crate) use destination::{bucket_has_competing_owner, delete_prefix, delete_prefix_excluding};
 
 pub(crate) const DEFAULT_MAX_PARALLEL_TRANSFERS: usize = 32;
 pub(crate) const DEFAULT_SOURCE_BLOCK_BYTES: usize = 8 * 1024 * 1024;
@@ -287,6 +287,8 @@ mod aws_integration_tests {
                 include: Vec::new(),
                 output_object_keys: true,
                 destination_bucket_arn: None,
+                destination_owner_id: Some("integration-owner".to_string()),
+                cleanup_previous_destination: None,
                 available_memory_mb: Some(128),
                 max_parallel_transfers: Some(8),
                 source_block_bytes: Some(64 * 1024),

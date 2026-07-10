@@ -1,5 +1,6 @@
 mod cloudformation;
 mod cloudfront;
+mod lifecycle;
 mod replace;
 mod request;
 mod s3;

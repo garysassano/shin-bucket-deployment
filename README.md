@@ -58,6 +58,35 @@ export class DemoStack extends Stack {
 }
 ```
 
+### Changing a destination safely
+
+`retainOnDelete` controls cleanup when the custom resource is deleted. A
+destination change does not delete the previous bucket/prefix unless the new
+template explicitly authorizes that exact destination with
+`cleanupPreviousDestination`.
+
+Change the destination and temporarily identify the previous destination in the
+same deployment:
+
+```ts
+new ShinBucketDeployment(this, "DeployWebsite", {
+  sources: [Source.asset("site")],
+  destinationBucket: newBucket,
+  destinationKeyPrefix: "site-v2",
+  cleanupPreviousDestination: {
+    bucket: oldBucket,
+    keyPrefix: "site-v1",
+    // Include the old distribution here when it differs from `distribution`.
+    distribution: oldDistribution,
+  },
+});
+```
+
+Remove `cleanupPreviousDestination` after that update succeeds. A missing or
+mismatched authorization retains the previous destination instead of failing
+after the new content has already been written. Parent/child prefix changes are
+segment-aware; cleanup never deletes the newly deployed namespace.
+
 ## Why Build This
 
 The official `BucketDeployment` is a good default for many stacks, but its provider is built around AWS CLI copy/sync orchestration. This construct keeps the familiar CDK surface while using a purpose-built Rust Lambda function for static asset deployment.
@@ -69,6 +98,26 @@ The official `BucketDeployment` is a good default for many stacks, but its provi
 | Archive-aware planning      | For extracted assets, the provider plans directly from the zip archive instead of extracting the whole archive to a working directory before syncing.                                                                                                                                                                                                       |
 | `ETag`-based skip decisions | The provider lists the destination prefix once and compares planned content MD5 values with destination `ETag` values to skip unchanged single-part static objects.                                                                                                                                                                                         |
 | Marker-free streaming path  | Missing sources without deploy-time markers stream directly from archive entries; replacement buffers are only used for sources that declare markers.                                                                                                                                                                                                       |
+
+### Destination lifecycle compared with upstream CDK
+
+The comparison below was verified against AWS CDK `main` at
+[`2b1c632`](https://github.com/aws/aws-cdk/tree/2b1c632dc2ab754882bdae066555879d8c702944).
+Upstream does one thing more safely than older Shin releases: it deletes the old
+destination before deploying the new one, so it cannot erase a child namespace
+that it has just written. Shin's explicit lifecycle contract removes that
+regression while improving the broader migration behavior:
+
+| Area | AWS CDK `BucketDeployment` | `ShinBucketDeployment` |
+| --- | --- | --- |
+| Update ordering | Recursively deletes the old destination, then deploys the new content, creating an availability gap. | Deploys the new content first, then performs exact-authorized cleanup while excluding the complete current namespace. |
+| Cleanup authorization | `retainOnDelete=false` implicitly authorizes changed-destination cleanup from `OldResourceProperties`. | Requires a temporary `cleanupPreviousDestination` that must exactly match `OldResourceProperties`; missing or mismatched authorization retains old content. |
+| Cross-bucket moves | The handler role is granted against the current bucket, so removing the old bucket can fail with missing permissions. | The previous `IBucket` reference adds the permissions and dependency needed for that exact old bucket/prefix. |
+| Shared-prefix ownership | Ownership tags guard Delete, but Update cleanup bypasses the guard and tag matching uses raw `startswith`. | Both Update and Delete check parsed owner identity and segment-aware namespace overlap; `site` does not collide with `site2`. |
+| Missing old resources | Recursive cleanup or invalidation can fail after resources were removed independently. | Confirmed-missing buckets and distributions are idempotent success during previous-destination or Delete cleanup. |
+| CloudFront invalidation | Runs whenever a distribution is present, including retained/no-op Deletes. | Runs after S3 mutation, only invalidates Delete when objects were removed, and deduplicates affected old/current paths. |
+
+See [the source-backed lifecycle comparison](docs/architecture.md#upstream-bucketdeployment-lifecycle-comparison) for the exact upstream handler and construct references.
 
 ## Benchmark Snapshots
 
@@ -90,7 +139,7 @@ The construct follows the upstream `BucketDeployment` API where the behavior map
 | Sources         | `sources`, `Source.data`, `Source.jsonData`, `Source.yamlData`, `embeddedCatalog`                                                                                                                                            |
 | Destination     | `destinationBucket`, `destinationKeyPrefix`, `deployedBucket`, `objectKeys`                                                                                                                                                  |
 | Filtering       | `include`, `exclude`                                                                                                                                                                                                         |
-| Update behavior | `extract`, `prune`, `retainOnDelete`, `outputObjectKeys`                                                                                                                                                                     |
+| Update behavior | `extract`, `prune`, `retainOnDelete`, `cleanupPreviousDestination`, `outputObjectKeys`                                                                                                                                       |
 | S3 metadata     | `accessControl`, `cacheControl`, `contentDisposition`, `contentEncoding`, `contentLanguage`, `contentType`, `metadata`, `serverSideEncryption`, `serverSideEncryptionAwsKmsKeyId`, `storageClass`, `websiteRedirectLocation` |
 | CloudFront      | `distribution`, `distributionPaths`, `waitForDistributionInvalidation`                                                                                                                                                       |
 | Provider Lambda | `architecture`, `bundling`, `ephemeralStorageSize`, `logGroup`, `logRetention`, `memoryLimit`, `role`, `securityGroups`, `vpc`, `vpcSubnets`                                                                                 |

@@ -705,6 +705,8 @@ mod tests {
             include: Vec::new(),
             output_object_keys: true,
             destination_bucket_arn: None,
+            destination_owner_id: Some("test-owner".to_string()),
+            cleanup_previous_destination: None,
             runtime: RuntimeOptions {
                 available_memory_mb: 1024,
                 max_parallel_transfers: 1,

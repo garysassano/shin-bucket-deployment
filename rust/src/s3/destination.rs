@@ -8,6 +8,8 @@ use tracing::warn;
 use crate::request::strip_destination_prefix;
 use crate::types::{AppState, DeploymentManifest, DeploymentRequest, DeploymentStats, Filters};
 
+const OWNER_TAG_BASE: &str = "aws-cdk:cr-owned";
+
 pub(super) struct DestinationPlan {
     pub(super) objects: HashMap<String, DestinationObject>,
     pub(super) keys_to_delete: Vec<String>,
@@ -31,23 +33,52 @@ pub(crate) async fn delete_prefix(
     bucket: &str,
     prefix: &str,
     stats: Option<&DeploymentStats>,
-) -> Result<()> {
+) -> Result<u64> {
+    delete_namespace(state, bucket, prefix, None, stats).await
+}
+
+pub(crate) async fn delete_prefix_excluding(
+    state: &AppState,
+    bucket: &str,
+    prefix: &str,
+    excluded_prefix: &str,
+    stats: Option<&DeploymentStats>,
+) -> Result<u64> {
+    delete_namespace(state, bucket, prefix, Some(excluded_prefix), stats).await
+}
+
+async fn delete_namespace(
+    state: &AppState,
+    bucket: &str,
+    prefix: &str,
+    excluded_prefix: Option<&str>,
+    stats: Option<&DeploymentStats>,
+) -> Result<u64> {
     let list_prefix = namespace_list_prefix(prefix);
+    let excluded_prefix = excluded_prefix.and_then(namespace_list_prefix);
     let mut start_after = None;
+    let mut deleted = 0_u64;
 
     loop {
-        let response = state
+        let response = match state
             .destination_s3
             .list_objects_v2()
             .bucket(bucket)
             .set_prefix(list_prefix.clone())
             .set_start_after(start_after.clone())
             .send()
-            .await?;
+            .await
+        {
+            Ok(response) => response,
+            Err(error) if service_error_code(&error) == Some("NoSuchBucket") => return Ok(deleted),
+            Err(error) => return Err(error.into()),
+        };
 
         let mut keys_to_delete = Vec::new();
         for object in response.contents() {
-            if let Some(key) = object.key() {
+            if let Some(key) = object.key()
+                && !key_is_excluded(key, excluded_prefix.as_deref())
+            {
                 keys_to_delete.push(key.to_string());
             }
         }
@@ -59,7 +90,9 @@ pub(crate) async fn delete_prefix(
             .next_back()
             .map(ToOwned::to_owned);
 
-        delete_keys_optional_stats(state, bucket, &keys_to_delete, stats).await?;
+        deleted = deleted.saturating_add(
+            delete_keys_optional_stats(state, bucket, &keys_to_delete, stats).await?,
+        );
 
         if !response.is_truncated().unwrap_or(false) || last_key.is_none() {
             break;
@@ -67,16 +100,16 @@ pub(crate) async fn delete_prefix(
         start_after = last_key;
     }
 
-    Ok(())
+    Ok(deleted)
 }
 
-pub(crate) async fn bucket_owned(state: &AppState, bucket: &str, prefix: &str) -> Result<bool> {
-    let tag_prefix = if prefix.is_empty() {
-        "aws-cdk:cr-owned".to_string()
-    } else {
-        format!("aws-cdk:cr-owned:{prefix}")
-    };
-
+pub(crate) async fn bucket_has_competing_owner(
+    state: &AppState,
+    bucket: &str,
+    prefix: &str,
+    excluded_prefix: Option<&str>,
+    current_owner_id: Option<&str>,
+) -> Result<bool> {
     match state
         .destination_s3
         .get_bucket_tagging()
@@ -84,15 +117,14 @@ pub(crate) async fn bucket_owned(state: &AppState, bucket: &str, prefix: &str) -
         .send()
         .await
     {
-        Ok(response) => Ok(response
-            .tag_set()
-            .iter()
-            .any(|tag| tag.key().starts_with(&tag_prefix))),
+        Ok(response) => Ok(response.tag_set().iter().any(|tag| {
+            owner_tag_overlaps_cleanup(tag.key(), prefix, excluded_prefix, current_owner_id)
+        })),
         Err(err)
             if err
                 .as_service_error()
                 .and_then(|service_err| service_err.code())
-                == Some("NoSuchTagSet") =>
+                .is_some_and(|code| matches!(code, "NoSuchTagSet" | "NoSuchBucket")) =>
         {
             Ok(false)
         }
@@ -100,7 +132,7 @@ pub(crate) async fn bucket_owned(state: &AppState, bucket: &str, prefix: &str) -
             warn!(error = %err, bucket, "failed to read bucket tags");
             Err(err).with_context(|| {
                 format!(
-                    "unable to determine whether bucket {bucket} is owned by this custom resource"
+                    "unable to determine whether bucket {bucket} has a competing custom resource owner"
                 )
             })
         }
@@ -174,7 +206,9 @@ pub(super) async fn delete_keys(
     keys: &[String],
     stats: &DeploymentStats,
 ) -> Result<()> {
-    delete_keys_optional_stats(state, bucket, keys, Some(stats)).await
+    delete_keys_optional_stats(state, bucket, keys, Some(stats))
+        .await
+        .map(|_| ())
 }
 
 async fn delete_keys_optional_stats(
@@ -182,7 +216,8 @@ async fn delete_keys_optional_stats(
     bucket: &str,
     keys: &[String],
     stats: Option<&DeploymentStats>,
-) -> Result<()> {
+) -> Result<u64> {
+    let mut deleted = 0_u64;
     for chunk in keys.chunks(1000) {
         if chunk.is_empty() {
             continue;
@@ -200,14 +235,23 @@ async fn delete_keys_optional_stats(
             .quiet(true)
             .build()?;
 
-        let response = state
+        let response = match state
             .destination_s3
             .delete_objects()
             .bucket(bucket)
             .delete(delete)
             .send()
             .await
-            .with_context(|| format!("failed to delete objects from bucket {bucket}"))?;
+        {
+            Ok(response) => response,
+            Err(error) if service_error_code(&error) == Some("NoSuchBucket") => {
+                return Ok(deleted);
+            }
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("failed to delete objects from bucket {bucket}"));
+            }
+        };
 
         if !response.errors().is_empty() {
             let details = response
@@ -225,9 +269,10 @@ async fn delete_keys_optional_stats(
                 "failed to delete some objects from bucket {bucket}: {details}"
             ));
         }
+        deleted = deleted.saturating_add(chunk.len() as u64);
     }
 
-    Ok(())
+    Ok(deleted)
 }
 
 pub(super) fn destination_etag_matches(
@@ -270,6 +315,73 @@ fn namespace_list_prefix(prefix: &str) -> Option<String> {
     Some(normalized)
 }
 
+fn service_error_code<E>(error: &aws_sdk_s3::error::SdkError<E>) -> Option<&str>
+where
+    E: ProvideErrorMetadata,
+{
+    error
+        .as_service_error()
+        .and_then(ProvideErrorMetadata::code)
+}
+
+fn owner_tag_overlaps_cleanup(
+    tag_key: &str,
+    cleanup_prefix: &str,
+    excluded_prefix: Option<&str>,
+    current_owner_id: Option<&str>,
+) -> bool {
+    let Some((owner_prefix, owner_id)) = parse_owner_tag(tag_key) else {
+        return false;
+    };
+    if current_owner_id == Some(owner_id) {
+        return false;
+    }
+
+    let owner_namespace = namespace(owner_prefix);
+    let cleanup_namespace = namespace(cleanup_prefix);
+    if !namespaces_overlap(&owner_namespace, &cleanup_namespace) {
+        return false;
+    }
+
+    if let Some(excluded_prefix) = excluded_prefix {
+        let excluded_namespace = namespace(excluded_prefix);
+        if namespace_contains(&excluded_namespace, &owner_namespace) {
+            return false;
+        }
+    }
+
+    true
+}
+
+fn parse_owner_tag(tag_key: &str) -> Option<(&str, &str)> {
+    let suffix = tag_key.strip_prefix(&format!("{OWNER_TAG_BASE}:"))?;
+    if suffix.is_empty() {
+        return None;
+    }
+
+    match suffix.rsplit_once(':') {
+        Some((prefix, owner_id)) if !owner_id.is_empty() => Some((prefix, owner_id)),
+        None => Some(("", suffix)),
+        _ => None,
+    }
+}
+
+fn namespace(prefix: &str) -> String {
+    namespace_list_prefix(prefix).unwrap_or_default()
+}
+
+fn namespace_contains(parent: &str, child: &str) -> bool {
+    parent.is_empty() || child.starts_with(parent)
+}
+
+fn namespaces_overlap(left: &str, right: &str) -> bool {
+    namespace_contains(left, right) || namespace_contains(right, left)
+}
+
+fn key_is_excluded(key: &str, excluded_namespace: Option<&str>) -> bool {
+    excluded_namespace.is_some_and(|excluded| key.starts_with(excluded))
+}
+
 fn record_destination_object(
     key: &str,
     etag: Option<&str>,
@@ -303,8 +415,8 @@ mod tests {
     use std::collections::HashMap;
 
     use super::{
-        DestinationObject, DestinationRecordContext, namespace_list_prefix, normalize_etag,
-        record_destination_object,
+        DestinationObject, DestinationRecordContext, key_is_excluded, namespace_list_prefix,
+        normalize_etag, owner_tag_overlaps_cleanup, parse_owner_tag, record_destination_object,
     };
     use crate::request::compile_filters;
     use crate::types::{DeploymentManifest, PlannedAction, PlannedObject};
@@ -428,5 +540,72 @@ mod tests {
 
         assert!(objects.is_empty());
         assert!(keys_to_delete.is_empty());
+    }
+
+    #[test]
+    fn owner_tags_parse_root_and_prefixed_namespaces() {
+        assert_eq!(
+            parse_owner_tag("aws-cdk:cr-owned:deadbeef"),
+            Some(("", "deadbeef"))
+        );
+        assert_eq!(
+            parse_owner_tag("aws-cdk:cr-owned:site:blue:deadbeef"),
+            Some(("site:blue", "deadbeef"))
+        );
+        assert_eq!(parse_owner_tag("unrelated"), None);
+    }
+
+    #[test]
+    fn owner_overlap_is_segment_aware_and_ignores_the_current_owner() {
+        assert!(owner_tag_overlaps_cleanup(
+            "aws-cdk:cr-owned:site:other",
+            "site",
+            None,
+            Some("current")
+        ));
+        assert!(!owner_tag_overlaps_cleanup(
+            "aws-cdk:cr-owned:site2:other",
+            "site",
+            None,
+            Some("current")
+        ));
+        assert!(!owner_tag_overlaps_cleanup(
+            "aws-cdk:cr-owned:site:current",
+            "site",
+            None,
+            Some("current")
+        ));
+    }
+
+    #[test]
+    fn owners_wholly_inside_the_excluded_namespace_are_safe() {
+        assert!(!owner_tag_overlaps_cleanup(
+            "aws-cdk:cr-owned:site/v2:other",
+            "site",
+            Some("site/v2"),
+            Some("current")
+        ));
+        assert!(owner_tag_overlaps_cleanup(
+            "aws-cdk:cr-owned:site/v1:other",
+            "site",
+            Some("site/v2"),
+            Some("current")
+        ));
+        assert!(owner_tag_overlaps_cleanup(
+            "aws-cdk:cr-owned:site:other",
+            "site",
+            Some("site/v2"),
+            Some("current")
+        ));
+    }
+
+    #[test]
+    fn cleanup_exclusion_preserves_only_the_complete_child_namespace() {
+        assert!(key_is_excluded("site/v2/index.html", Some("site/v2/")));
+        assert!(key_is_excluded("site/v2/nested/app.js", Some("site/v2/")));
+        assert!(!key_is_excluded("site/v20/index.html", Some("site/v2/")));
+        assert!(!key_is_excluded("site/v1/index.html", Some("site/v2/")));
+        assert!(!key_is_excluded("site/v2", Some("site/v2/")));
+        assert!(!key_is_excluded("site/v2/index.html", None));
     }
 }

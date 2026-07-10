@@ -54,7 +54,7 @@ This matrix is point-in-time documentation. Re-check it when `s3-unspool` change
 | `extract=false` | Preserved as a separate `CopyObject` path. |
 | `include` / `exclude` | Preserved while walking ZIP entries and destination prune candidates. |
 | `prune` | Preserved through destination listing and batched `DeleteObjects`. |
-| `retainOnDelete` | Preserved through existing delete lifecycle behavior. |
+| `retainOnDelete` | Governs custom-resource Delete cleanup. Update cleanup requires an exact temporary `cleanupPreviousDestination` authorization. |
 | S3 metadata props | Preserved for upload and copy requests. |
 | CloudFront invalidation | Preserved after S3 deployment. |
 | `deployedBucket` and `objectKeys` | Preserved through custom-resource response data. |
