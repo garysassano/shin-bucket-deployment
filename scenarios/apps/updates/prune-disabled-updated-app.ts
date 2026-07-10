@@ -18,7 +18,7 @@ class PruneDisabledUpdateShinBucketDeploymentStack extends Stack {
           "runtime/current.txt",
           [
             `stack=${Aws.STACK_NAME}`,
-            "version=v2",
+            "phase=updated",
             "state=prune-disabled-keeps-removed-source",
           ].join("\n"),
         ),

@@ -37,6 +37,10 @@ Never commit:
 - raw CloudWatch log exports
 - profile names
 
+Treat a maintainer-supplied AWS profile name as a local-only command input. In
+committed docs, PR text, evidence summaries, and final reports, refer to it only
+as the configured test profile.
+
 Committed verification docs may include:
 
 - region
@@ -90,7 +94,10 @@ pnpm verify deploy --concurrency 4
 pnpm verify destroy --concurrency 4
 ```
 
-The runner preserves ordered update chains such as `*-v1` before `*-v2`, while running independent chains concurrently. Use `--concurrency 1` for serial debugging.
+The runner preserves ordered update chains such as `*-initial` before
+`*-updated`, while running independent chains concurrently. Scenario phases use
+these suffixes rather than release-like `v1`/`v2` or `alpha`/`beta` labels. Use
+`--concurrency 1` for serial debugging.
 
 The default suite includes:
 
@@ -100,9 +107,9 @@ The default suite includes:
 - marker replacement
 - prune update
 - `prune=false` update preservation
-- retain-on-delete update/delete
+- default object retention across update/delete
 - `extract=false`
-- `retainOnDelete=false` cleanup
+- explicit previous-object deletion on Update and current-object deletion on Delete
 - duplicate source overwrite order
 - larger archive ranged-read path
 - KMS-encrypted destination bucket

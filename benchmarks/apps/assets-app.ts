@@ -19,7 +19,9 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
       "SHIN_BENCH_LAMBDA_MAX_PARALLEL_TRANSFERS",
     );
     const implementation = parseImplementation(process.env.SHIN_BENCH_IMPLEMENTATION);
-    const retainOnDelete = parseOptionalBooleanEnv("SHIN_BENCH_RETAIN_ON_DELETE");
+    const deleteDestinationObjectsOnDelete = parseOptionalBooleanEnv(
+      "SHIN_BENCH_DELETE_DESTINATION_OBJECTS_ON_DELETE",
+    );
 
     const websiteBucket = new Bucket(this, "WebsiteBucket", {
       autoDeleteObjects: true,
@@ -31,19 +33,28 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
       destinationKeyPrefix: destinationPrefix,
       memoryLimit: memoryLimitMb,
       prune: process.env.SHIN_BENCH_PRUNE !== "false",
-      ...(retainOnDelete === undefined ? {} : { retainOnDelete }),
       waitForDistributionInvalidation: process.env.SHIN_BENCH_WAIT_FOR_CLOUDFRONT === "true",
     };
 
     if (implementation === "shin") {
       new ShinBucketDeployment(this, "DeployBenchmarkAssets", {
         ...deploymentProps,
+        ...(deleteDestinationObjectsOnDelete === undefined
+          ? {}
+          : {
+              destinationLifecycle: {
+                deleteDestinationObjectsOnDelete,
+              },
+            }),
         ...(maxParallelTransfers === undefined ? {} : { maxParallelTransfers }),
         sources: [ShinSource.asset(bundle.root)],
       });
     } else {
       new AwsBucketDeployment(this, "DeployBenchmarkAssets", {
         ...deploymentProps,
+        ...(deleteDestinationObjectsOnDelete === undefined
+          ? {}
+          : { retainOnDelete: !deleteDestinationObjectsOnDelete }),
         sources: [AwsSource.asset(bundle.root)],
       });
     }

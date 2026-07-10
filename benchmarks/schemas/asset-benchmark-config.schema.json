@@ -73,7 +73,7 @@
           "prune": {
             "type": "boolean"
           },
-          "retainOnDelete": {
+          "deleteDestinationObjectsOnDelete": {
             "type": "boolean"
           }
         }

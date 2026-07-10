@@ -2,7 +2,7 @@ import { App, Aws, CfnOutput, RemovalPolicy, Stack, type StackProps } from "aws-
 import { Bucket } from "aws-cdk-lib/aws-s3";
 import { ShinBucketDeployment, Source } from "../../../src";
 
-class PruneUpdateShinBucketDeploymentStack extends Stack {
+class PruneDisabledUpdateShinBucketDeploymentStack extends Stack {
   constructor(scope: App, id: string, props?: StackProps) {
     super(scope, id, props);
 
@@ -16,32 +16,29 @@ class PruneUpdateShinBucketDeploymentStack extends Stack {
         Source.asset("test/fixtures/my-website"),
         Source.data(
           "runtime/current.txt",
-          [`stack=${Aws.STACK_NAME}`, "version=v1", "state=current-and-legacy-exist"].join("\n"),
+          [`stack=${Aws.STACK_NAME}`, "phase=initial", "state=prune-disabled-seed"].join("\n"),
         ),
-        Source.data("runtime/legacy.txt", "remove this by deploying prune-update-v2"),
+        Source.data("runtime/kept-by-prune-false.txt", "this remains after the updated phase\n"),
       ],
       destinationBucket: websiteBucket,
-      destinationKeyPrefix: "prune-site",
+      destinationKeyPrefix: "prune-disabled-site",
+      prune: false,
     });
 
     new CfnOutput(this, "BucketName", {
       value: websiteBucket.bucketName,
     });
 
-    new CfnOutput(this, "ListPrunePrefixCommand", {
-      value: `aws s3 ls s3://${websiteBucket.bucketName}/prune-site/ --recursive`,
+    new CfnOutput(this, "ListPruneDisabledPrefixCommand", {
+      value: `aws s3 ls s3://${websiteBucket.bucketName}/prune-disabled-site/ --recursive`,
     });
 
-    new CfnOutput(this, "FetchCurrentFileCommand", {
-      value: `aws s3 cp s3://${websiteBucket.bucketName}/prune-site/runtime/current.txt -`,
+    new CfnOutput(this, "FetchKeptFileCommand", {
+      value: `aws s3 cp s3://${websiteBucket.bucketName}/prune-disabled-site/runtime/kept-by-prune-false.txt -`,
     });
 
-    new CfnOutput(this, "FetchLegacyFileCommand", {
-      value: `aws s3 cp s3://${websiteBucket.bucketName}/prune-site/runtime/legacy.txt -`,
-    });
-
-    new CfnOutput(this, "UpgradeToPruneV2Command", {
-      value: "pnpm verify deploy prune-update-v2",
+    new CfnOutput(this, "DeployUpdatedPruneDisabledScenarioCommand", {
+      value: "pnpm verify deploy prune-disabled-updated",
     });
   }
 }
@@ -55,4 +52,6 @@ const env =
       }
     : undefined;
 
-new PruneUpdateShinBucketDeploymentStack(app, "ShinBucketDeploymentPruneUpdateDemo", { env });
+new PruneDisabledUpdateShinBucketDeploymentStack(app, "ShinBucketDeploymentPruneDisabledDemo", {
+  env,
+});

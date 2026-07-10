@@ -329,7 +329,7 @@ test("supports account-regional destination buckets", () => {
   });
 });
 
-test("keeps delete and list permissions broad when retainOnDelete is false", () => {
+test("keeps delete and list permissions broad when destination object deletion on Delete is enabled", () => {
   const stack = new Stack();
   const destinationBucket = new Bucket(stack, "Dest");
 
@@ -337,7 +337,9 @@ test("keeps delete and list permissions broad when retainOnDelete is false", () 
     sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
     destinationBucket,
     destinationKeyPrefix: "site",
-    retainOnDelete: false,
+    destinationLifecycle: {
+      deleteDestinationObjectsOnDelete: true,
+    },
     bundling: testBundling(),
   });
 

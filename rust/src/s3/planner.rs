@@ -694,7 +694,7 @@ mod tests {
             dest_bucket_name: "destination-bucket".to_string(),
             dest_bucket_prefix: "site".to_string(),
             extract: false,
-            retain_on_delete: true,
+            delete_destination_objects_on_delete: false,
             distribution_id: None,
             distribution_paths: vec!["/*".to_string()],
             wait_for_distribution_invalidation: true,
@@ -706,7 +706,7 @@ mod tests {
             output_object_keys: true,
             destination_bucket_arn: None,
             destination_owner_id: Some("test-owner".to_string()),
-            cleanup_previous_destination: None,
+            delete_previous_destination_objects_on_update: None,
             runtime: RuntimeOptions {
                 available_memory_mb: 1024,
                 max_parallel_transfers: 1,

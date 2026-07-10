@@ -262,33 +262,67 @@ export interface ShinBucketDeploymentAdvancedRuntimeTuning {
 }
 
 /**
- * Exact previous destination that may be cleaned during one deployment update.
+ * Previous destination resources that changed during a deployment update.
  *
- * This is intentionally explicit because CloudFormation supplies
- * `OldResourceProperties` to the provider at runtime, while the execution role
- * and cleanup decision must be authorized by the new template.
+ * CloudFormation supplies the previous prefix through `OldResourceProperties`.
+ * Only resources that differ from the current destination need to be provided
+ * so CDK can synthesize their IAM permissions and dependencies.
  */
-export interface ShinBucketDeploymentPreviousDestination {
-  /** Previous destination bucket. */
-  readonly bucket: IBucket;
+export type ShinBucketDeploymentPreviousDestinationResources =
+  | {
+      /** Previous destination bucket, when it differs from `destinationBucket`. */
+      readonly bucket: IBucket;
+
+      /** Previous CloudFront distribution, when it also differs from the current one. */
+      readonly distribution?: IDistribution;
+    }
+  | {
+      /** Previous destination bucket, when it also differs from `destinationBucket`. */
+      readonly bucket?: IBucket;
+
+      /** Previous CloudFront distribution, when it differs from the current one. */
+      readonly distribution: IDistribution;
+    };
+
+/**
+ * Destructive destination behavior for CloudFormation lifecycle events.
+ *
+ * Both operations are disabled by default. Objects are deleted only from the
+ * selected destination namespace; the bucket and CloudFront distribution
+ * resources are never deleted.
+ */
+export interface ShinBucketDeploymentDestinationLifecycle {
+  /**
+   * Delete the current destination objects when CloudFormation deletes the
+   * custom resource.
+   *
+   * @default false
+   */
+  readonly deleteDestinationObjectsOnDelete?: boolean;
 
   /**
-   * Previous destination key prefix.
-   * @default - bucket root
+   * Delete the previous destination objects after a successful deployment
+   * update.
+   *
+   * Set this to `true` when only the prefix changed. If the bucket or
+   * distribution changed, provide the previous resource so CDK can synthesize
+   * its IAM permissions and dependency.
+   *
+   * @default false
    */
-  readonly keyPrefix?: string;
-
-  /**
-   * Previous CloudFront distribution, when it differs from the current one.
-   * @default - no previous distribution authorization
-   */
-  readonly distribution?: IDistribution;
+  readonly deletePreviousDestinationObjectsOnUpdate?:
+    | true
+    | ShinBucketDeploymentPreviousDestinationResources;
 }
 
 export interface ShinBucketDeploymentProps
   extends Omit<
     BucketDeploymentProps,
-    "expires" | "signContent" | "serverSideEncryptionCustomerAlgorithm" | "useEfs"
+    | "expires"
+    | "retainOnDelete"
+    | "signContent"
+    | "serverSideEncryptionCustomerAlgorithm"
+    | "useEfs"
   > {
   /**
    * Lambda architecture for the Rust provider.
@@ -335,27 +369,11 @@ export interface ShinBucketDeploymentProps
   readonly advancedRuntimeTuning?: ShinBucketDeploymentAdvancedRuntimeTuning;
 
   /**
-   * Retain deployed objects when this custom resource is deleted.
+   * Destructive destination behavior for Update and Delete lifecycle events.
    *
-   * This does not authorize deletion of a previous destination during Update;
-   * use `cleanupPreviousDestination` for that one migration.
-   *
-   * @default true
+   * @default - retain current objects on Delete and previous objects on Update
    */
-  readonly retainOnDelete?: boolean;
-
-  /**
-   * Authorize cleanup of this exact destination during the next destination
-   * update.
-   *
-   * The provider compares this value with CloudFormation
-   * `OldResourceProperties`. A missing or mismatched authorization retains the
-   * previous destination instead of failing the update. Remove this property
-   * after the migration succeeds.
-   *
-   * @default - retain the previous destination during updates
-   */
-  readonly cleanupPreviousDestination?: ShinBucketDeploymentPreviousDestination;
+  readonly destinationLifecycle?: ShinBucketDeploymentDestinationLifecycle;
 }
 
 /**
@@ -490,6 +508,22 @@ export class ShinBucketDeployment extends Construct {
     validatePutObjectRetryProps(this, putObjectRetryTuning);
 
     this.destinationBucket = props.destinationBucket;
+    const deletePreviousDestinationObjectsOnUpdate =
+      props.destinationLifecycle?.deletePreviousDestinationObjectsOnUpdate;
+    const previousDestinationResources = deletePreviousDestinationObjectsOnUpdate
+      ? {
+          bucket:
+            deletePreviousDestinationObjectsOnUpdate === true
+              ? this.destinationBucket
+              : (deletePreviousDestinationObjectsOnUpdate.bucket ?? this.destinationBucket),
+          distribution:
+            deletePreviousDestinationObjectsOnUpdate === true
+              ? undefined
+              : deletePreviousDestinationObjectsOnUpdate.distribution,
+        }
+      : undefined;
+    const deleteDestinationObjectsOnDelete =
+      props.destinationLifecycle?.deleteDestinationObjectsOnDelete === true;
 
     if (props.vpc) {
       this.node.addDependency(props.vpc);
@@ -535,13 +569,13 @@ export class ShinBucketDeployment extends Construct {
     );
     destinationGrants.delete(
       this.handlerFunction,
-      props.retainOnDelete === false ? "*" : destinationObjectKeyPattern,
+      deleteDestinationObjectsOnDelete ? "*" : destinationObjectKeyPattern,
     );
     this.handlerFunction.addToRolePolicy(
       destinationListPolicyStatement(
         this.destinationBucket.bucketArn,
         props.destinationKeyPrefix,
-        props.retainOnDelete,
+        deleteDestinationObjectsOnDelete,
       ),
     );
     this.handlerFunction.addToRolePolicy(
@@ -552,15 +586,12 @@ export class ShinBucketDeployment extends Construct {
       }),
     );
 
-    if (props.cleanupPreviousDestination) {
-      const previous = props.cleanupPreviousDestination;
+    if (previousDestinationResources) {
+      const previous = previousDestinationResources;
       const previousGrants = BucketGrants.fromBucket(previous.bucket);
-      previousGrants.delete(
-        this.handlerFunction,
-        destinationObjectGrantPattern(previous.keyPrefix),
-      );
+      previousGrants.delete(this.handlerFunction, "*");
       this.handlerFunction.addToRolePolicy(
-        destinationListPolicyStatement(previous.bucket.bucketArn, previous.keyPrefix, true),
+        destinationListPolicyStatement(previous.bucket.bucketArn, undefined, false),
       );
       this.handlerFunction.addToRolePolicy(
         new PolicyStatement({
@@ -587,7 +618,7 @@ export class ShinBucketDeployment extends Construct {
       );
     }
 
-    if (props.cleanupPreviousDestination?.distribution) {
+    if (previousDestinationResources?.distribution) {
       this.handlerFunction.addToRolePolicy(
         new PolicyStatement({
           effect: Effect.ALLOW,
@@ -595,7 +626,7 @@ export class ShinBucketDeployment extends Construct {
           resources: [
             cloudFrontDistributionArn(
               this,
-              props.cleanupPreviousDestination.distribution.distributionRef.distributionId,
+              previousDestinationResources.distribution.distributionRef.distributionId,
             ),
           ],
         }),
@@ -671,16 +702,15 @@ export class ShinBucketDeployment extends Construct {
         DestinationOwnerId: Lazy.string({
           produce: () => this.cr.node.addr.slice(-8),
         }),
-        CleanupPreviousDestination: props.cleanupPreviousDestination
+        DeletePreviousDestinationObjectsOnUpdate: previousDestinationResources
           ? {
-              DestinationBucketName: props.cleanupPreviousDestination.bucket.bucketName,
-              DestinationBucketKeyPrefix: props.cleanupPreviousDestination.keyPrefix,
+              DestinationBucketName: previousDestinationResources.bucket.bucketName,
               DistributionId:
-                props.cleanupPreviousDestination.distribution?.distributionRef.distributionId,
+                previousDestinationResources.distribution?.distributionRef.distributionId,
             }
           : undefined,
         WaitForDistributionInvalidation: props.waitForDistributionInvalidation ?? true,
-        RetainOnDelete: props.retainOnDelete,
+        DeleteDestinationObjectsOnDelete: deleteDestinationObjectsOnDelete,
         Extract: props.extract ?? true,
         Prune: props.prune ?? true,
         Exclude: props.exclude,
@@ -1033,9 +1063,9 @@ function destinationObjectGrantPattern(prefix: string | undefined): string {
 function destinationListPolicyStatement(
   bucketArn: string,
   destinationKeyPrefix: string | undefined,
-  retainOnDelete: boolean | undefined,
+  deleteDestinationObjectsOnDelete: boolean,
 ): PolicyStatement {
-  const prefix = destinationListPrefix(destinationKeyPrefix, retainOnDelete);
+  const prefix = destinationListPrefix(destinationKeyPrefix, deleteDestinationObjectsOnDelete);
   return new PolicyStatement({
     effect: Effect.ALLOW,
     actions: ["s3:ListBucket"],
@@ -1044,8 +1074,11 @@ function destinationListPolicyStatement(
   });
 }
 
-function destinationListPrefix(prefix: string | undefined, retainOnDelete: boolean | undefined) {
-  if (!prefix || prefix === "/" || Token.isUnresolved(prefix) || retainOnDelete === false) {
+function destinationListPrefix(
+  prefix: string | undefined,
+  deleteDestinationObjectsOnDelete: boolean,
+) {
+  if (!prefix || prefix === "/" || Token.isUnresolved(prefix) || deleteDestinationObjectsOnDelete) {
     return undefined;
   }
 

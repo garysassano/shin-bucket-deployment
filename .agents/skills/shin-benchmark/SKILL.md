@@ -38,6 +38,10 @@ Never commit:
 - raw CloudWatch log exports
 - profile names
 
+Treat a maintainer-supplied AWS profile name as a local-only command input. In
+committed docs, PR text, evidence summaries, and final reports, refer to it only
+as the configured test profile.
+
 Committed benchmark records may include:
 
 - region
