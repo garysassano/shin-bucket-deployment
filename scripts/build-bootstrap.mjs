@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-// Build the Rust provider `bootstrap` binary for both Lambda architectures and
-// stage them under `assets/bootstrap-<arch>/bootstrap` so they can be shipped
-// inside the published npm package. Consumers then use the prebuilt binary and
-// do not need a Rust toolchain.
+// Build the Rust provider ZIP for both Lambda architectures and stage it under
+// `assets/bootstrap-<arch>/bootstrap.zip` so it can be shipped inside the
+// published npm package. Keeping the executable inside the ZIP preserves its
+// Unix mode through npm packaging.
 //
 // Usage:
 //   node scripts/build-bootstrap.mjs            # build arm64 + x86_64
@@ -22,7 +22,7 @@ const manifestPath = join(repoRoot, "rust", "Cargo.toml");
 const binaryName = "shin-bucket-deployment-handler";
 
 // Map our public architecture names to cargo-lambda --target triples and the
-// directory cargo-lambda writes the artifact to.
+// directory used by the public package.
 const ARCH_TARGETS = {
   arm64: {
     target: "aarch64-unknown-linux-gnu",
@@ -62,27 +62,31 @@ function buildArch(arch) {
     binaryName,
     "--target",
     config.target,
+    "--output-format",
+    "zip",
+    "--lambda-dir",
+    join(repoRoot, "rust", "target", "lambda-packages", arch),
   ]);
 
-  // cargo-lambda places the renamed `bootstrap` under
-  // target/lambda/<binaryName>/bootstrap regardless of target triple.
-  const candidates = [
-    join(repoRoot, "rust", "target", "lambda", binaryName, "bootstrap"),
-    join(repoRoot, "rust", "target", config.target, "release", "bootstrap"),
-  ];
-  const builtBootstrap = candidates.find((candidate) => existsSync(candidate));
-  if (!builtBootstrap) {
-    throw new Error(
-      `Could not find built bootstrap for ${arch}. Looked in:\n${candidates.join("\n")}`,
-    );
+  const builtArchive = join(
+    repoRoot,
+    "rust",
+    "target",
+    "lambda-packages",
+    arch,
+    binaryName,
+    "bootstrap.zip",
+  );
+  if (!existsSync(builtArchive)) {
+    throw new Error(`Could not find built bootstrap archive for ${arch}: ${builtArchive}`);
   }
 
   const outDir = join(repoRoot, "assets", `bootstrap-${config.lambdaDir}`);
   rmSync(outDir, { recursive: true, force: true });
   mkdirSync(outDir, { recursive: true });
-  const outFile = join(outDir, "bootstrap");
-  copyFileSync(builtBootstrap, outFile);
-  console.log(`Staged ${arch} bootstrap -> ${outFile}`);
+  const outFile = join(outDir, "bootstrap.zip");
+  copyFileSync(builtArchive, outFile);
+  console.log(`Staged ${arch} bootstrap archive -> ${outFile}`);
 }
 
 function main() {

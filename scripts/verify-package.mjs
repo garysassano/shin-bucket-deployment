@@ -1,20 +1,20 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
-  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
   rmSync,
-  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { inflateRawSync } from "node:zlib";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(__dirname, "..");
@@ -24,8 +24,8 @@ const requiredFiles = [
   "package/lib/index.d.ts",
   "package/lib/shin-bucket-deployment.js",
   "package/lib/shin-bucket-deployment.d.ts",
-  "package/assets/bootstrap-arm64/bootstrap",
-  "package/assets/bootstrap-x86_64/bootstrap",
+  "package/assets/bootstrap-arm64/bootstrap.zip",
+  "package/assets/bootstrap-x86_64/bootstrap.zip",
   "package/README.md",
   "package/LICENSE",
   "package/package.json",
@@ -39,6 +39,24 @@ const forbiddenTarballPrefixes = [
   "package/test/",
 ];
 const forbiddenDeclarationPatterns = [/cargo-lambda-cdk/, /aws-cdk-lib\/core\/lib/];
+const ZIP_END_OF_CENTRAL_DIRECTORY_SIGNATURE = 0x06054b50;
+const ZIP_CENTRAL_DIRECTORY_SIGNATURE = 0x02014b50;
+const ZIP_LOCAL_FILE_HEADER_SIGNATURE = 0x04034b50;
+const ELF_MACHINE_BY_ARCH = {
+  arm64: 183,
+  x86_64: 62,
+};
+
+function crc32(buffer) {
+  let crc = 0xffffffff;
+  for (const byte of buffer) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit++) {
+      crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -78,6 +96,28 @@ function assert(condition, message) {
   }
 }
 
+function parseOptions(args) {
+  let packDestination;
+
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index];
+    if (arg === "--") {
+      continue;
+    }
+    if (arg === "--pack-destination") {
+      const value = args[index + 1];
+      assert(value, "--pack-destination requires a directory path.");
+      assert(packDestination === undefined, "--pack-destination may only be specified once.");
+      packDestination = resolve(value);
+      index++;
+      continue;
+    }
+    throw new Error(`Unknown option: ${arg}`);
+  }
+
+  return { packDestination };
+}
+
 function verifyDeclarations() {
   const declarationFiles = walkFiles(join(repoRoot, "lib")).filter((file) => file.endsWith(".d.ts"));
   assert(declarationFiles.length > 0, "No package declaration files were emitted.");
@@ -96,13 +136,125 @@ function verifyDeclarations() {
   }
 }
 
-function packTarball(workDir) {
-  const packDir = join(workDir, "pack");
+function packTarball(workDir, requestedPackDir) {
+  const packDir = requestedPackDir ?? join(workDir, "pack");
+  assert(
+    !existsSync(packDir) || readdirSync(packDir).length === 0,
+    `Pack destination must be empty: ${packDir}`,
+  );
   mkdirSync(packDir, { recursive: true });
   const output = run("npm", ["pack", "--pack-destination", packDir], { capture: true });
   const tarballs = readdirSync(packDir).filter((entry) => entry.endsWith(".tgz"));
   assert(tarballs.length === 1, `Expected one packed tarball, found ${tarballs.length}.\n${output}`);
   return join(packDir, tarballs[0]);
+}
+
+function findEndOfCentralDirectory(archive) {
+  assert(archive.length >= 22, "Bootstrap archive is too short to be a ZIP file.");
+  const minimumOffset = Math.max(0, archive.length - 65_557);
+  for (let offset = archive.length - 22; offset >= minimumOffset; offset--) {
+    if (archive.readUInt32LE(offset) === ZIP_END_OF_CENTRAL_DIRECTORY_SIGNATURE) {
+      return offset;
+    }
+  }
+  throw new Error("Bootstrap archive is missing its ZIP end-of-central-directory record.");
+}
+
+function readBootstrapEntry(archivePath, arch) {
+  const archive = readFileSync(archivePath);
+  const eocdOffset = findEndOfCentralDirectory(archive);
+  assert(archive.readUInt16LE(eocdOffset + 4) === 0, `${arch} archive is split across disks.`);
+  assert(archive.readUInt16LE(eocdOffset + 6) === 0, `${arch} archive is split across disks.`);
+  const entriesOnDisk = archive.readUInt16LE(eocdOffset + 8);
+  const entryCount = archive.readUInt16LE(eocdOffset + 10);
+  assert(entriesOnDisk === entryCount, `${arch} archive has an inconsistent entry count.`);
+  assert(entryCount === 1, `${arch} archive must contain exactly one entry, found ${entryCount}.`);
+
+  const centralSize = archive.readUInt32LE(eocdOffset + 12);
+  const centralOffset = archive.readUInt32LE(eocdOffset + 16);
+  assert(
+    centralOffset + centralSize <= eocdOffset,
+    `${arch} archive central directory extends beyond its declared boundary.`,
+  );
+  assert(
+    archive.readUInt32LE(centralOffset) === ZIP_CENTRAL_DIRECTORY_SIGNATURE,
+    `${arch} archive has an invalid central-directory record.`,
+  );
+
+  const versionMadeBy = archive.readUInt16LE(centralOffset + 4);
+  assert(versionMadeBy >>> 8 === 3, `${arch} archive entry was not created with Unix attributes.`);
+  const flags = archive.readUInt16LE(centralOffset + 8);
+  assert((flags & 1) === 0, `${arch} bootstrap archive must not be encrypted.`);
+  const compressionMethod = archive.readUInt16LE(centralOffset + 10);
+  const expectedCrc = archive.readUInt32LE(centralOffset + 16);
+  const compressedSize = archive.readUInt32LE(centralOffset + 20);
+  const uncompressedSize = archive.readUInt32LE(centralOffset + 24);
+  const fileNameLength = archive.readUInt16LE(centralOffset + 28);
+  const extraLength = archive.readUInt16LE(centralOffset + 30);
+  const commentLength = archive.readUInt16LE(centralOffset + 32);
+  const externalAttributes = archive.readUInt32LE(centralOffset + 38);
+  const localHeaderOffset = archive.readUInt32LE(centralOffset + 42);
+  const entryName = archive
+    .subarray(centralOffset + 46, centralOffset + 46 + fileNameLength)
+    .toString("utf8");
+
+  assert(entryName === "bootstrap", `${arch} archive entry must be named bootstrap, got ${entryName}.`);
+  assert(extraLength === 0, `${arch} archive central entry contains unexpected extra data.`);
+  assert(commentLength === 0, `${arch} archive central entry contains an unexpected comment.`);
+
+  const unixMode = externalAttributes >>> 16;
+  assert((unixMode & 0o170000) === 0o100000, `${arch} bootstrap is not a regular file.`);
+  assert((unixMode & 0o100) !== 0, `${arch} bootstrap is not owner-executable.`);
+  assert(
+    archive.readUInt32LE(localHeaderOffset) === ZIP_LOCAL_FILE_HEADER_SIGNATURE,
+    `${arch} archive has an invalid local-file header.`,
+  );
+
+  const localFlags = archive.readUInt16LE(localHeaderOffset + 6);
+  const localCompressionMethod = archive.readUInt16LE(localHeaderOffset + 8);
+  const localNameLength = archive.readUInt16LE(localHeaderOffset + 26);
+  const localExtraLength = archive.readUInt16LE(localHeaderOffset + 28);
+  const localEntryName = archive
+    .subarray(localHeaderOffset + 30, localHeaderOffset + 30 + localNameLength)
+    .toString("utf8");
+  assert(localFlags === flags, `${arch} archive has inconsistent ZIP flags.`);
+  assert(
+    localCompressionMethod === compressionMethod,
+    `${arch} archive has inconsistent compression methods.`,
+  );
+  assert(localEntryName === entryName, `${arch} archive has inconsistent entry names.`);
+  const dataOffset = localHeaderOffset + 30 + localNameLength + localExtraLength;
+  const compressed = archive.subarray(dataOffset, dataOffset + compressedSize);
+  let bootstrap;
+  if (compressionMethod === 0) {
+    bootstrap = compressed;
+  } else if (compressionMethod === 8) {
+    bootstrap = inflateRawSync(compressed);
+  } else {
+    throw new Error(`${arch} bootstrap uses unsupported ZIP compression ${compressionMethod}.`);
+  }
+
+  assert(
+    bootstrap.length === uncompressedSize,
+    `${arch} bootstrap size mismatch: expected ${uncompressedSize}, got ${bootstrap.length}.`,
+  );
+  assert(crc32(bootstrap) === expectedCrc, `${arch} bootstrap failed its ZIP CRC check.`);
+  assert(
+    bootstrap.length >= 20 && bootstrap.subarray(0, 4).equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46])),
+    `${arch} bootstrap is not an ELF binary.`,
+  );
+  assert(bootstrap[4] === 2, `${arch} bootstrap is not a 64-bit ELF binary.`);
+  assert(bootstrap[5] === 1, `${arch} bootstrap is not little-endian.`);
+  assert(
+    bootstrap.readUInt16LE(18) === ELF_MACHINE_BY_ARCH[arch],
+    `${arch} bootstrap has ELF machine ${bootstrap.readUInt16LE(18)}; expected ${ELF_MACHINE_BY_ARCH[arch]}.`,
+  );
+
+  return bootstrap;
+}
+
+function sha256File(path) {
+  return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
 function verifyTarball(tarball, workDir) {
@@ -127,9 +279,9 @@ function verifyTarball(tarball, workDir) {
   run("tar", ["-xzf", tarball, "-C", extractDir]);
 
   for (const arch of ["arm64", "x86_64"]) {
-    const bootstrap = join(extractDir, "package", "assets", `bootstrap-${arch}`, "bootstrap");
-    assert(existsSync(bootstrap), `Missing ${arch} bootstrap in extracted tarball.`);
-    assert((statSync(bootstrap).mode & 0o111) !== 0, `${arch} bootstrap is not executable.`);
+    const archive = join(extractDir, "package", "assets", `bootstrap-${arch}`, "bootstrap.zip");
+    assert(existsSync(archive), `Missing ${arch} bootstrap archive in extracted tarball.`);
+    readBootstrapEntry(archive, arch);
   }
 
   const packedPackageJson = JSON.parse(
@@ -140,6 +292,36 @@ function verifyTarball(tarball, workDir) {
     "Packed package metadata does not point at the current repository.",
   );
   assert(packedPackageJson.engines.node === ">=22.0.0", "Packed package has wrong Node engine.");
+}
+
+function verifyStagedProviderArchive(consumerDir, assemblyDir) {
+  const manifest = JSON.parse(
+    readFileSync(join(assemblyDir, "ConsumerStack.assets.json"), "utf8"),
+  );
+  const fileAssets = Object.values(manifest.files ?? {}).filter(
+    (asset) => asset.source?.packaging === "file",
+  );
+  const packagedArchive = join(
+    consumerDir,
+    "node_modules",
+    packageName,
+    "assets",
+    "bootstrap-arm64",
+    "bootstrap.zip",
+  );
+  const packagedDigest = sha256File(packagedArchive);
+  const matchingAssets = fileAssets.filter((asset) => {
+    const stagedPath = asset.source?.path;
+    return (
+      typeof stagedPath === "string" &&
+      existsSync(join(assemblyDir, stagedPath)) &&
+      sha256File(join(assemblyDir, stagedPath)) === packagedDigest
+    );
+  });
+  assert(
+    matchingAssets.length === 1,
+    `Expected one exact staged provider archive, found ${matchingAssets.length}.`,
+  );
 }
 
 function verifyConsumerInstall(tarball, workDir) {
@@ -209,14 +391,33 @@ function verifyConsumerInstall(tarball, workDir) {
   );
   run("npx", ["tsc", "--noEmit"], { cwd: consumerDir });
 
-  writeFileSync(
-    join(consumerDir, "synth.cjs"),
-    [
+  const synthLines = [
       'const { App, Stack } = require("aws-cdk-lib");',
       'const { Bucket } = require("aws-cdk-lib/aws-s3");',
       `const { ShinBucketDeployment, Source } = require("${packageName}");`,
       "",
-      "const app = new App();",
+      `const app = new App({ outdir: ${JSON.stringify(join(workDir, "cdk.out-cjs"))} });`,
+      'const stack = new Stack(app, "ConsumerStack");',
+      'const bucket = new Bucket(stack, "Bucket");',
+      'new ShinBucketDeployment(stack, "Deploy", {',
+      '  sources: [Source.data("index.html", "ok")],',
+      "  destinationBucket: bucket,",
+      "});",
+      "app.synth();",
+      "",
+    ];
+  writeFileSync(join(consumerDir, "synth.cjs"), synthLines.join("\n"));
+  run("node", ["synth.cjs"], { cwd: consumerDir });
+  verifyStagedProviderArchive(consumerDir, join(workDir, "cdk.out-cjs"));
+
+  writeFileSync(
+    join(consumerDir, "synth.mjs"),
+    [
+      'import { App, Stack } from "aws-cdk-lib";',
+      'import { Bucket } from "aws-cdk-lib/aws-s3";',
+      `import { ShinBucketDeployment, Source } from "${packageName}";`,
+      "",
+      `const app = new App({ outdir: ${JSON.stringify(join(workDir, "cdk.out-esm"))} });`,
       'const stack = new Stack(app, "ConsumerStack");',
       'const bucket = new Bucket(stack, "Bucket");',
       'new ShinBucketDeployment(stack, "Deploy", {',
@@ -227,20 +428,31 @@ function verifyConsumerInstall(tarball, workDir) {
       "",
     ].join("\n"),
   );
-  run("node", ["synth.cjs"], { cwd: consumerDir });
+  run("node", ["synth.mjs"], { cwd: consumerDir });
+  verifyStagedProviderArchive(consumerDir, join(workDir, "cdk.out-esm"));
 }
 
 function main() {
+  const options = parseOptions(process.argv.slice(2));
   const workDir = mkdtempSync(join(tmpdir(), "shin-package-"));
   try {
-    chmodSync(join(repoRoot, "assets", "bootstrap-arm64", "bootstrap"), 0o755);
-    chmodSync(join(repoRoot, "assets", "bootstrap-x86_64", "bootstrap"), 0o755);
+    for (const arch of ["arm64", "x86_64"]) {
+      const archive = join(repoRoot, "assets", `bootstrap-${arch}`, "bootstrap.zip");
+      assert(
+        existsSync(archive),
+        `Missing ${arch} bootstrap archive. Run pnpm prebuild:bootstrap before package verification.`,
+      );
+      readBootstrapEntry(archive, arch);
+    }
     run("pnpm", ["build:package"]);
     verifyDeclarations();
-    const tarball = packTarball(workDir);
+    const tarball = packTarball(workDir, options.packDestination);
     verifyTarball(tarball, workDir);
     verifyConsumerInstall(tarball, workDir);
     console.log(`Verified ${packageName} package smoke test.`);
+    if (options.packDestination) {
+      console.log(`TARBALL=${tarball}`);
+    }
   } finally {
     rmSync(workDir, { recursive: true, force: true });
   }

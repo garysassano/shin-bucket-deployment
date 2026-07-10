@@ -4,6 +4,9 @@ This page is the human-readable verification snapshot for `ShinBucketDeployment`
 
 Runbooks, evidence collection rules, and sanitization rules live in the repo-local agent skill at `.agents/skills/shin-verification/SKILL.md`.
 
+> [!IMPORTANT]
+> This snapshot predates the packaged prebuilt-provider path introduced after 2026-05-15. It does not verify that an npm-installed provider archive starts successfully in Lambda; that path must be refreshed before the package is treated as current verification evidence.
+
 ## Current Snapshot
 
 | Field | Value |

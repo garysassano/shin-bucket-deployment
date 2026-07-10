@@ -2,7 +2,7 @@
 
 Rust-backed alternative to AWS CDK's official [`BucketDeployment`](https://docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.aws_s3_deployment.BucketDeployment.html) construct.
 
-`ShinBucketDeployment` is a near drop-in replacement for `BucketDeployment`, intended for S3 static asset deployment when you want faster deployments, a leaner custom resource, and fewer full-archive extraction costs than the upstream construct.
+`ShinBucketDeployment` is a near drop-in replacement for `BucketDeployment`, intended for S3 static asset deployment when you want a purpose-built Rust provider and fewer full-archive extraction costs than the upstream construct.
 
 The published package ships prebuilt Rust provider binaries for both Lambda architectures (`arm64` and `x86_64`), so consumers do not need a Rust toolchain. Swapping from the upstream construct is a one-line import change.
 
@@ -72,6 +72,9 @@ The official `BucketDeployment` is a good default for many stacks, but its provi
 
 ## Benchmark Snapshots
 
+> [!CAUTION]
+> These are historical exploratory snapshots with single-sample methodology. They are being revalidated and should not be treated as performance guarantees or used to choose production defaults.
+
 <img src="https://raw.githubusercontent.com/garysassano/shin-bucket-deployment/main/benchmarks/snapshots/tiny-many-1024mib-32.svg" alt="ShinBucketDeployment tiny-many 1024 MiB parallel 32 benchmark" width="100%">
 
 <img src="https://raw.githubusercontent.com/garysassano/shin-bucket-deployment/main/benchmarks/snapshots/tiny-many-2048mib-64.svg" alt="ShinBucketDeployment tiny-many 2048 MiB parallel 64 benchmark" width="100%">
@@ -122,7 +125,7 @@ For existing marker-free zip entries with catalog MD5s, the provider compares de
 
 Marker-free ZIP entry streaming uses the same small-buffer defaults as the local `s3-unspool` extraction path: 64 KiB entry read buffers, 256 KiB S3 body chunks, and a 1 MiB body pipe between entry production and the SDK upload body. With the default 32 parallel transfers, this keeps entry stream buffering around 44 MiB, leaving the 1024 MiB default provider Lambda memory for the Rust runtime, AWS SDK, source block window, and ZIP metadata.
 
-At the default 1024 MiB memory limit, adaptive source scheduling reserves about 64 MiB for runtime/base overhead, 384 MiB for 32 transfer workers, 32 MiB for four in-flight source range requests, and 2 KiB per ZIP entry for metadata. The remaining source block window is clamped to the actual source ZIP size and capped by the adaptive model; for large enough archives it is about 160 MiB minus the file reserve after large-archive RSS slack. The default moved from 512 MiB to 1024 MiB because the `large-few` benchmark made cold-create provider duration roughly 2x faster while billed compute cost stayed in the same range; current benchmark comparisons use 512, 1024, and 2048 MiB.
+At the default 1024 MiB memory limit, adaptive source scheduling reserves about 64 MiB for runtime/base overhead, 384 MiB for 32 transfer workers, 32 MiB for four in-flight source range requests, and 2 KiB per ZIP entry for metadata. The remaining source block window is clamped to the actual source ZIP size and capped by the adaptive model; for large enough archives it is about 160 MiB minus the file reserve after large-archive RSS slack. The 1024 MiB default was selected from historical exploratory measurements whose methodology is now being revalidated; it is not a performance guarantee.
 
 ### Invalidation and Logs
 
