@@ -1,26 +1,38 @@
 name: Release
 
 # Publishes the construct to npm with prebuilt Rust provider binaries baked in.
-# Triggered by pushing a semver tag (e.g. v0.1.0) or manually via workflow_dispatch.
+# Publishing is tag-only. Manual runs build and verify the package as a dry run.
 on:
   push:
     tags:
       - "v*"
   workflow_dispatch:
-    inputs:
-      dry-run:
-        description: "Build and pack only; do not publish to npm"
-        type: boolean
-        default: true
 
 permissions:
   contents: read
 
 jobs:
+  preflight:
+    name: Validate release ref
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Validate tag, version, and main ancestry
+        if: ${{ github.event_name == 'push' }}
+        run: |
+          [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          test "v$(node -p "require('./package.json').version")" = "$GITHUB_REF_NAME"
+          git fetch origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+
   # Cross-compile the Rust provider once per architecture and upload the
-  # bootstrap binaries as artifacts for the publish job to assemble.
+  # bootstrap archives as artifacts for the publish job to assemble.
   build-bootstrap:
     name: Build bootstrap (${{ matrix.arch }})
+    needs: preflight
     runs-on: ubuntu-24.04
     strategy:
       matrix:
@@ -64,13 +76,13 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: bootstrap-${{ matrix.arch }}
-          path: assets/bootstrap-${{ matrix.arch }}/bootstrap
+          path: assets/bootstrap-${{ matrix.arch }}/bootstrap.zip
           if-no-files-found: error
           retention-days: 1
 
   publish:
     name: Publish to npm
-    needs: build-bootstrap
+    needs: [preflight, build-bootstrap]
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -105,15 +117,8 @@ jobs:
 
       - name: Verify bootstrap binaries are present
         run: |
-          chmod 755 assets/bootstrap-arm64/bootstrap assets/bootstrap-x86_64/bootstrap
-          test -f assets/bootstrap-arm64/bootstrap
-          test -f assets/bootstrap-x86_64/bootstrap
-          test -x assets/bootstrap-arm64/bootstrap
-          test -x assets/bootstrap-x86_64/bootstrap
-
-      - name: Verify tag matches package version
-        if: ${{ github.event_name == 'push' }}
-        run: test "v$(node -p "require('./package.json').version")" = "$GITHUB_REF_NAME"
+          test -f assets/bootstrap-arm64/bootstrap.zip
+          test -f assets/bootstrap-x86_64/bootstrap.zip
 
       - name: Typecheck
         run: pnpm typecheck
@@ -124,27 +129,22 @@ jobs:
       - name: Test
         run: pnpm test
 
-      - name: Verify package
-        run: pnpm verify:package
-
-      - name: Build package
-        run: pnpm build:package
-
-      - name: Pack
+      - name: Build, pack, and verify the publish artifact
         run: |
-          mkdir -p /tmp/npm-pack
-          pnpm pack --pack-destination /tmp/npm-pack
-          echo "TARBALL=$(ls /tmp/npm-pack/*.tgz)" >> "$GITHUB_ENV"
+          pnpm run verify:package -- --pack-destination "$RUNNER_TEMP/npm-pack"
+          tarballs=("$RUNNER_TEMP"/npm-pack/*.tgz)
+          test "${#tarballs[@]}" -eq 1
+          echo "TARBALL=${tarballs[0]}" >> "$GITHUB_ENV"
 
       - name: Publish (dry run)
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run }}
+        if: ${{ github.event_name == 'workflow_dispatch' }}
         run: npm publish "$TARBALL" --dry-run
 
       - name: Publish
-        if: ${{ github.event_name == 'push' || !inputs.dry-run }}
+        if: ${{ github.event_name == 'push' }}
         # OIDC trusted publishing: npm authenticates via the id-token (no NPM_TOKEN),
         # and provenance is generated automatically for a public repo + package.
-        run: npm publish "$TARBALL" --access public
+        run: npm publish "$TARBALL" --access public --provenance
 
   # Create a GitHub Release for the tag after a successful npm publish.
   # Only runs on tag pushes (workflow_dispatch has no release tag to target).

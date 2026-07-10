@@ -313,9 +313,9 @@ export interface ShinBucketDeploymentProps
 /**
  * Rust-backed alternative to `BucketDeployment`.
  *
- * By default the provider runs a prebuilt Rust `bootstrap` binary shipped with
- * the package, so consumers do not need a Rust toolchain. Passing `bundling` or
- * `rustProjectPath` opts into compiling the provider locally.
+ * By default the provider runs a prebuilt Rust `bootstrap` from an archive
+ * shipped with the package, so consumers do not need a Rust toolchain. Passing
+ * `bundling` or `rustProjectPath` opts into compiling the provider locally.
  */
 export class ShinBucketDeployment extends Construct {
   private readonly cr: CustomResource;
@@ -674,13 +674,12 @@ function resolveDefaultRustProjectPath(scope: Construct): string {
 }
 
 /**
- * Locate the prebuilt Lambda `bootstrap` binary shipped inside the published
- * package for the requested architecture, if present. Published tarballs
- * include `assets/bootstrap-<arch>/bootstrap`; local checkouts that have not
- * run the prebuild step will not, in which case the construct falls back to the
- * local cargo-lambda compile path.
+ * Locate the prebuilt Lambda archive shipped inside the published package for
+ * the requested architecture, if present. The archive contains an executable
+ * root `bootstrap`; local checkouts that have not run the prebuild step fall
+ * back to the local cargo-lambda compile path.
  */
-function resolvePrebuiltBootstrapDir(architecture: Architecture): string | undefined {
+function resolvePrebuiltBootstrapArchive(architecture: Architecture): string | undefined {
   const dirName = `bootstrap-${architecture.name}`;
   const candidates = [
     join(__dirname, "..", "..", "assets", dirName),
@@ -688,8 +687,9 @@ function resolvePrebuiltBootstrapDir(architecture: Architecture): string | undef
   ];
 
   for (const candidate of candidates) {
-    if (existsSync(join(candidate, "bootstrap"))) {
-      return candidate;
+    const archive = join(candidate, "bootstrap.zip");
+    if (existsSync(archive)) {
+      return archive;
     }
   }
 
@@ -723,8 +723,10 @@ function getOrCreateHandler(
   // request is available (e.g. a local checkout before prebuild), fall back to the
   // local cargo-lambda compile path.
   const wantsCompile = props.rustProjectPath !== undefined || props.bundling !== undefined;
-  const prebuiltBootstrapDir = wantsCompile ? undefined : resolvePrebuiltBootstrapDir(architecture);
-  const useCompilePath = wantsCompile || prebuiltBootstrapDir === undefined;
+  const prebuiltBootstrapArchive = wantsCompile
+    ? undefined
+    : resolvePrebuiltBootstrapArchive(architecture);
+  const useCompilePath = wantsCompile || prebuiltBootstrapArchive === undefined;
 
   const rustProjectPath = useCompilePath
     ? (props.rustProjectPath ?? resolveDefaultRustProjectPath(scope))
@@ -776,19 +778,19 @@ function getOrCreateHandler(
     return createCompiledHandler(stack, handlerId, props, shared, manifestPath as string);
   }
 
-  return createPrebuiltHandler(stack, handlerId, shared, prebuiltBootstrapDir as string);
+  return createPrebuiltHandler(stack, handlerId, shared, prebuiltBootstrapArchive as string);
 }
 
 function createPrebuiltHandler(
   stack: Stack,
   handlerId: string,
   shared: SharedHandlerOptions,
-  bootstrapDir: string,
+  bootstrapArchive: string,
 ): LambdaFunction {
   return new LambdaFunction(stack, handlerId, {
     runtime: Runtime.PROVIDED_AL2023,
     handler: "bootstrap",
-    code: Code.fromAsset(bootstrapDir),
+    code: Code.fromAsset(bootstrapArchive),
     architecture: shared.architecture,
     timeout: shared.timeout,
     memorySize: shared.memorySize,

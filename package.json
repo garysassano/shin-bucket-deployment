@@ -1,7 +1,7 @@
 {
   "name": "shin-bucket-deployment",
-  "version": "0.1.4",
-  "description": "Rust-backed drop-in alternative to the AWS CDK BucketDeployment construct",
+  "version": "0.1.5",
+  "description": "Rust-backed near drop-in alternative to the AWS CDK BucketDeployment construct",
   "license": "MIT",
   "keywords": [
     "aws",
@@ -33,15 +33,15 @@
   "files": [
     "lib/**/*.js",
     "lib/**/*.d.ts",
-    "assets/bootstrap-arm64/bootstrap",
-    "assets/bootstrap-x86_64/bootstrap",
+    "assets/bootstrap-arm64/bootstrap.zip",
+    "assets/bootstrap-x86_64/bootstrap.zip",
     "README.md",
     "LICENSE"
   ],
   "publishConfig": {
     "access": "public"
   },
-  "packageManager": "pnpm@11.6.0",
+  "packageManager": "pnpm@11.10.0",
   "engines": {
     "node": ">=22.0.0"
   },
@@ -86,7 +86,7 @@
     "cargo-lambda-cdk": "0.0.36",
     "constructs": "10.6.0",
     "typescript": "7.0.2",
-    "vitest": "4.1.9",
+    "vitest": "4.1.10",
     "zod": "^4.4.3"
   }
 }

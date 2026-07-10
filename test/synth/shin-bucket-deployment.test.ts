@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { App, Stack } from "aws-cdk-lib";
 import { Match, Template } from "aws-cdk-lib/assertions";
@@ -13,6 +14,7 @@ import { ensurePrebuiltBootstrapAssets } from "../support/prebuilt-assets";
 interface FileAssetManifestEntry {
   displayName?: string;
   source?: {
+    packaging?: string;
     path?: string;
   };
 }
@@ -92,6 +94,42 @@ test("uses the packaged x86_64 prebuilt provider when requested", () => {
     });
   } finally {
     cleanup();
+  }
+});
+
+test("stages the packaged provider archive byte-for-byte as a file asset", () => {
+  const cleanupAssets = ensurePrebuiltBootstrapAssets();
+  const outdir = mkdtempSync(join(tmpdir(), "shin-prebuilt-synth-"));
+  try {
+    const app = new App({ outdir });
+    const stack = new Stack(app, "PrebuiltStack");
+    const destinationBucket = new Bucket(stack, "Dest");
+
+    new ShinBucketDeployment(stack, "Deploy", {
+      sources: [Source.data("index.html", "ok")],
+      destinationBucket,
+    });
+
+    const assembly = app.synth();
+    const assetManifest = JSON.parse(
+      readFileSync(join(assembly.directory, "PrebuiltStack.assets.json"), "utf8"),
+    ) as { files?: Record<string, FileAssetManifestEntry> };
+    const expectedArchive = readFileSync(
+      join(__dirname, "..", "..", "assets", "bootstrap-arm64", "bootstrap.zip"),
+    );
+    const matchingAssets = Object.values(assetManifest.files ?? {}).filter((asset) => {
+      const sourcePath = asset.source?.path;
+      return (
+        asset.source?.packaging === "file" &&
+        sourcePath !== undefined &&
+        readFileSync(join(assembly.directory, sourcePath)).equals(expectedArchive)
+      );
+    });
+
+    expect(matchingAssets).toHaveLength(1);
+  } finally {
+    cleanupAssets();
+    rmSync(outdir, { recursive: true, force: true });
   }
 });
 

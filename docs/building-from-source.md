@@ -1,8 +1,8 @@
 # Building from source
 
 Most CDK apps should use the published npm package as-is. It ships prebuilt
-Rust Lambda `bootstrap` binaries for both supported Lambda architectures, and
-the npm tarball intentionally excludes the `rust/` source tree.
+Rust Lambda archives for both supported Lambda architectures, and the npm
+tarball intentionally excludes the `rust/` source tree.
 
 Use this page when you want to change the Rust provider, audit or rebuild the
 provider artifacts yourself, or make a CDK app compile a local Rust provider
@@ -31,18 +31,19 @@ pnpm prebuild:bootstrap
 pnpm verify:package
 ```
 
-`pnpm prebuild:bootstrap` stages the binaries at
-`assets/bootstrap-arm64/bootstrap` and `assets/bootstrap-x86_64/bootstrap`. To
-build only one architecture, pass it through to the script:
+`pnpm prebuild:bootstrap` stages the archives at
+`assets/bootstrap-arm64/bootstrap.zip` and
+`assets/bootstrap-x86_64/bootstrap.zip`. Each archive contains one executable
+root `bootstrap`. To build only one architecture, pass it through to the script:
 
 ```sh
 pnpm prebuild:bootstrap -- arm64
 pnpm prebuild:bootstrap -- x86_64
 ```
 
-`pnpm verify:package` rebuilds the package output, packs a tarball, verifies
-that both bootstrap binaries are present and executable, and smoke-tests a
-consumer install without `cargo-lambda-cdk`.
+`pnpm verify:package` rebuilds the package output, creates one tarball, verifies
+that both archives contain an executable architecture-correct `bootstrap`, and
+smoke-tests CommonJS and ESM consumers without `cargo-lambda-cdk`.
 
 ## Compile a local provider from a CDK app
 

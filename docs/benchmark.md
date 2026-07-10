@@ -16,6 +16,9 @@ Runbooks, evidence collection rules, schema guidance, and sanitization rules liv
 
 ## Current Snapshot
 
+> [!CAUTION]
+> The committed rows use the original single-sample methodology and are retained as historical evidence while the benchmark harness is revalidated. Do not use them to select production defaults.
+
 | Field | Value |
 | --- | --- |
 | Snapshot date | 2026-05-15 |

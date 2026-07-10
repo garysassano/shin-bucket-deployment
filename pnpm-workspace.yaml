@@ -1,1 +1,8 @@
 minimumReleaseAge: 4320
+# Temporary while the TypeScript 7.0.2 platform packages complete the 72-hour
+# release-age window. Remove after 2026-07-11T15:51:00Z.
+minimumReleaseAgeExclude:
+  - typescript@7.0.2
+  - "@typescript/*"
+overrides:
+  vite: 8.1.3
