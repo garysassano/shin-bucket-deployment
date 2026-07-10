@@ -13,19 +13,18 @@ use crate::s3::{
     default_source_window_memory_budget_mb,
 };
 use crate::types::{
-    CleanupPreviousDestination, DeploymentRequest, Filters, MarkerConfig, PreviousDestination,
-    PutObjectRetryJitter, PutObjectRetryOptions, RuntimeOptions,
+    DeletePreviousDestinationObjectsOnUpdate, DeploymentRequest, Filters, MarkerConfig,
+    PreviousDestination, PutObjectRetryJitter, PutObjectRetryOptions, RuntimeOptions,
 };
 
 const DEFAULT_AVAILABLE_MEMORY_MB: u64 = 1024;
 const MIN_SOURCE_BLOCK_BYTES: usize = 30;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 #[serde(rename_all = "PascalCase")]
-pub(crate) struct RawPreviousDestination {
+pub(crate) struct RawDeletePreviousDestinationObjectsOnUpdate {
     pub(crate) destination_bucket_name: String,
-    #[serde(default)]
-    pub(crate) destination_bucket_key_prefix: Option<String>,
     #[serde(default)]
     pub(crate) distribution_id: Option<String>,
 }
@@ -44,8 +43,8 @@ pub(crate) struct RawDeploymentRequest {
     pub(crate) destination_bucket_key_prefix: Option<String>,
     #[serde(default = "default_true", deserialize_with = "deserialize_boolish")]
     pub(crate) extract: bool,
-    #[serde(default = "default_true", deserialize_with = "deserialize_boolish")]
-    pub(crate) retain_on_delete: bool,
+    #[serde(default, deserialize_with = "deserialize_boolish")]
+    pub(crate) delete_destination_objects_on_delete: bool,
     #[serde(default)]
     pub(crate) distribution_id: Option<String>,
     #[serde(default)]
@@ -69,7 +68,8 @@ pub(crate) struct RawDeploymentRequest {
     #[serde(default)]
     pub(crate) destination_owner_id: Option<String>,
     #[serde(default)]
-    pub(crate) cleanup_previous_destination: Option<RawPreviousDestination>,
+    pub(crate) delete_previous_destination_objects_on_update:
+        Option<RawDeletePreviousDestinationObjectsOnUpdate>,
     #[serde(default, deserialize_with = "deserialize_optional_u64ish")]
     pub(crate) available_memory_mb: Option<u64>,
     #[serde(default, deserialize_with = "deserialize_optional_usizeish")]
@@ -145,7 +145,7 @@ pub(crate) fn parse_request(raw: &RawDeploymentRequest) -> DeploymentRequest {
         dest_bucket_name: raw.destination_bucket_name.clone(),
         dest_bucket_prefix,
         extract: raw.extract,
-        retain_on_delete: raw.retain_on_delete,
+        delete_destination_objects_on_delete: raw.delete_destination_objects_on_delete,
         distribution_id: raw.distribution_id.clone(),
         distribution_paths: raw
             .distribution_paths
@@ -160,18 +160,13 @@ pub(crate) fn parse_request(raw: &RawDeploymentRequest) -> DeploymentRequest {
         output_object_keys: raw.output_object_keys,
         destination_bucket_arn: raw.destination_bucket_arn.clone(),
         destination_owner_id: raw.destination_owner_id.clone(),
-        cleanup_previous_destination: raw.cleanup_previous_destination.as_ref().map(|previous| {
-            CleanupPreviousDestination {
+        delete_previous_destination_objects_on_update: raw
+            .delete_previous_destination_objects_on_update
+            .as_ref()
+            .map(|previous| DeletePreviousDestinationObjectsOnUpdate {
                 bucket_name: previous.destination_bucket_name.clone(),
-                bucket_prefix: normalize_destination_prefix(
-                    previous
-                        .destination_bucket_key_prefix
-                        .clone()
-                        .unwrap_or_default(),
-                ),
                 distribution_id: previous.distribution_id.clone(),
-            }
-        }),
+            }),
         runtime: runtime_options(raw),
     }
 }
@@ -473,11 +468,15 @@ mod tests {
         let request = parse_request(&raw);
 
         assert!(request.extract);
-        assert!(request.retain_on_delete);
+        assert!(!request.delete_destination_objects_on_delete);
         assert!(request.prune);
         assert!(request.output_object_keys);
         assert!(request.destination_owner_id.is_none());
-        assert!(request.cleanup_previous_destination.is_none());
+        assert!(
+            request
+                .delete_previous_destination_objects_on_update
+                .is_none()
+        );
         assert_eq!(request.distribution_paths, vec!["/*"]);
         assert_eq!(request.runtime.available_memory_mb, 1024);
         assert_eq!(request.runtime.source_window_memory_budget_mb, 1024);
@@ -538,7 +537,7 @@ mod tests {
     fn deserializes_cloudformation_string_booleans() {
         let mut props = minimal_request();
         props["Extract"] = json!("true");
-        props["RetainOnDelete"] = json!("false");
+        props["DeleteDestinationObjectsOnDelete"] = json!("true");
         props["WaitForDistributionInvalidation"] = json!("true");
         props["Prune"] = json!("false");
         props["OutputObjectKeys"] = json!("true");
@@ -548,7 +547,7 @@ mod tests {
         let request = parse_request(&raw);
 
         assert!(request.extract);
-        assert!(!request.retain_on_delete);
+        assert!(request.delete_destination_objects_on_delete);
         assert!(request.wait_for_distribution_invalidation);
         assert!(!request.prune);
         assert!(request.output_object_keys);
@@ -602,12 +601,11 @@ mod tests {
     }
 
     #[test]
-    fn deserializes_previous_destination_cleanup_authorization() {
+    fn deserializes_previous_destination_delete_authorization() {
         let mut props = minimal_request();
         props["DestinationOwnerId"] = json!("owner-123");
-        props["CleanupPreviousDestination"] = json!({
+        props["DeletePreviousDestinationObjectsOnUpdate"] = json!({
             "DestinationBucketName": "old-bucket",
-            "DestinationBucketKeyPrefix": "old-site/",
             "DistributionId": "old-distribution"
         });
 
@@ -616,13 +614,23 @@ mod tests {
 
         assert_eq!(request.destination_owner_id.as_deref(), Some("owner-123"));
         assert_eq!(
-            request.cleanup_previous_destination,
-            Some(CleanupPreviousDestination {
+            request.delete_previous_destination_objects_on_update,
+            Some(DeletePreviousDestinationObjectsOnUpdate {
                 bucket_name: "old-bucket".to_string(),
-                bucket_prefix: "old-site/".to_string(),
                 distribution_id: Some("old-distribution".to_string()),
             })
         );
+    }
+
+    #[test]
+    fn rejects_obsolete_previous_prefix_authorization() {
+        let mut props = minimal_request();
+        props["DeletePreviousDestinationObjectsOnUpdate"] = json!({
+            "DestinationBucketName": "old-bucket",
+            "DestinationBucketKeyPrefix": "old-site"
+        });
+
+        assert!(serde_json::from_value::<RawDeploymentRequest>(props).is_err());
     }
 
     #[test]

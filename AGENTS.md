@@ -24,6 +24,15 @@ Never commit raw AWS evidence or identifiers:
 - raw CloudWatch log exports
 - AWS profile names
 
+Treat maintainer-supplied AWS profile names as local-only command inputs. Do not
+repeat them in committed docs, PR text, evidence summaries, or final reports;
+refer to the configured test profile generically.
+
+Name ordered verification scenario templates with `-initial` and `-updated`
+suffixes. Do not use `v1`/`v2`, `alpha`/`beta`, or other release-like labels for
+scenario phases. Use a descriptive suffix such as `-bucket-only` for terminal
+shape changes.
+
 Keep raw AWS output in scratch directories outside the repo. Commit only sanitized docs, benchmark result rows, source, tests, and scenarios.
 
 For benchmark telemetry interpretation, use the `docs/architecture.md` Diagnostics field reference. Do not infer S3 throttling from source block refetches or waits unless the provider summary also shows source `getRetries`/`getErrors` or destination `putObject.throttledAttempts`/`retryAttempts`.

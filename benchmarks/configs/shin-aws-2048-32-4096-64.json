@@ -22,7 +22,7 @@
     {
       "name": "unchanged-update",
       "assetState": "baseline",
-      "retainOnDelete": true
+      "deleteDestinationObjectsOnDelete": false
     },
     {
       "name": "changed-update",

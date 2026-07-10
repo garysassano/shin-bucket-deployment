@@ -2,7 +2,7 @@ import { App, CfnOutput, RemovalPolicy, Stack, type StackProps } from "aws-cdk-l
 import { Bucket } from "aws-cdk-lib/aws-s3";
 import { ShinBucketDeployment, Source } from "../../../src";
 
-class RetainOnDeleteShinBucketDeploymentStack extends Stack {
+class DefaultRetentionShinBucketDeploymentStack extends Stack {
   constructor(scope: App, id: string, props?: StackProps) {
     super(scope, id, props);
 
@@ -13,11 +13,10 @@ class RetainOnDeleteShinBucketDeploymentStack extends Stack {
     new ShinBucketDeployment(this, "DeployWebsite", {
       sources: [
         Source.asset("test/fixtures/my-website"),
-        Source.data("runtime/current.txt", "version=v1\nstate=retain-old-prefix-on-update"),
+        Source.data("runtime/current.txt", "phase=initial\nstate=retain-old-prefix-on-update"),
       ],
       destinationBucket: websiteBucket,
-      destinationKeyPrefix: "retain-v1",
-      retainOnDelete: true,
+      destinationKeyPrefix: "retain-initial",
     });
 
     new CfnOutput(this, "BucketName", {
@@ -28,12 +27,12 @@ class RetainOnDeleteShinBucketDeploymentStack extends Stack {
       value: `aws s3 ls s3://${websiteBucket.bucketName}/ --recursive`,
     });
 
-    new CfnOutput(this, "FetchV1CurrentFileCommand", {
-      value: `aws s3 cp s3://${websiteBucket.bucketName}/retain-v1/runtime/current.txt -`,
+    new CfnOutput(this, "FetchInitialCurrentFileCommand", {
+      value: `aws s3 cp s3://${websiteBucket.bucketName}/retain-initial/runtime/current.txt -`,
     });
 
-    new CfnOutput(this, "UpgradeToRetainV2Command", {
-      value: "pnpm verify deploy retain-on-delete-v2",
+    new CfnOutput(this, "DeployUpdatedDefaultRetentionScenarioCommand", {
+      value: "pnpm verify deploy default-retention-updated",
     });
   }
 }
@@ -47,6 +46,6 @@ const env =
       }
     : undefined;
 
-new RetainOnDeleteShinBucketDeploymentStack(app, "ShinBucketDeploymentRetainOnDeleteDemo", {
+new DefaultRetentionShinBucketDeploymentStack(app, "ShinBucketDeploymentDefaultRetentionDemo", {
   env,
 });

@@ -2,7 +2,7 @@ import { App, CfnOutput, RemovalPolicy, Stack, type StackProps } from "aws-cdk-l
 import { Bucket } from "aws-cdk-lib/aws-s3";
 import { ShinBucketDeployment, Source } from "../../../src";
 
-class RetainOnDeleteShinBucketDeploymentStack extends Stack {
+class DefaultRetentionShinBucketDeploymentStack extends Stack {
   constructor(scope: App, id: string, props?: StackProps) {
     super(scope, id, props);
 
@@ -13,11 +13,13 @@ class RetainOnDeleteShinBucketDeploymentStack extends Stack {
     new ShinBucketDeployment(this, "DeployWebsite", {
       sources: [
         Source.asset("test/fixtures/my-website"),
-        Source.data("runtime/current.txt", "version=v2\nstate=retain-previous-prefix-and-delete"),
+        Source.data(
+          "runtime/current.txt",
+          "phase=updated\nstate=retain-previous-prefix-and-delete",
+        ),
       ],
       destinationBucket: websiteBucket,
-      destinationKeyPrefix: "retain-v2",
-      retainOnDelete: true,
+      destinationKeyPrefix: "retain-updated",
     });
 
     new CfnOutput(this, "BucketName", {
@@ -28,16 +30,16 @@ class RetainOnDeleteShinBucketDeploymentStack extends Stack {
       value: `aws s3 ls s3://${websiteBucket.bucketName}/ --recursive`,
     });
 
-    new CfnOutput(this, "FetchV1CurrentFileCommand", {
-      value: `aws s3 cp s3://${websiteBucket.bucketName}/retain-v1/runtime/current.txt -`,
+    new CfnOutput(this, "FetchInitialCurrentFileCommand", {
+      value: `aws s3 cp s3://${websiteBucket.bucketName}/retain-initial/runtime/current.txt -`,
     });
 
-    new CfnOutput(this, "FetchV2CurrentFileCommand", {
-      value: `aws s3 cp s3://${websiteBucket.bucketName}/retain-v2/runtime/current.txt -`,
+    new CfnOutput(this, "FetchUpdatedCurrentFileCommand", {
+      value: `aws s3 cp s3://${websiteBucket.bucketName}/retain-updated/runtime/current.txt -`,
     });
 
     new CfnOutput(this, "DestroyRetainDemoCommand", {
-      value: "pnpm verify destroy retain-on-delete-v2",
+      value: "pnpm verify destroy default-retention-updated",
     });
   }
 }
@@ -51,6 +53,6 @@ const env =
       }
     : undefined;
 
-new RetainOnDeleteShinBucketDeploymentStack(app, "ShinBucketDeploymentRetainOnDeleteDemo", {
+new DefaultRetentionShinBucketDeploymentStack(app, "ShinBucketDeploymentDefaultRetentionDemo", {
   env,
 });

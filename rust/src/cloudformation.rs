@@ -225,7 +225,7 @@ async fn process_request_inner(
     let mut deleted_current_destination = false;
     let mut cleaned_previous_destination = None;
 
-    if request_type == "Delete" && !request.retain_on_delete {
+    if request_type == "Delete" && request.delete_destination_objects_on_delete {
         if bucket_has_competing_owner(
             state,
             &request.dest_bucket_name,

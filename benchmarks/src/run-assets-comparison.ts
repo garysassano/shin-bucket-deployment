@@ -29,7 +29,7 @@ type PhaseConfig = {
   readonly cloudfrontWait: boolean;
   readonly name: string;
   readonly prune: boolean;
-  readonly retainOnDelete?: boolean;
+  readonly deleteDestinationObjectsOnDelete?: boolean;
 };
 
 type RunnerConfig = {
@@ -79,7 +79,7 @@ const DEFAULT_PHASES: PhaseConfig[] = [
     cloudfrontWait: false,
     name: "unchanged-update",
     prune: true,
-    retainOnDelete: true,
+    deleteDestinationObjectsOnDelete: false,
   },
   { assetState: "changed", cloudfrontWait: false, name: "changed-update", prune: true },
   { assetState: "pruned", cloudfrontWait: false, name: "pruned-update", prune: true },
@@ -113,7 +113,7 @@ const phaseSchema = z.object({
   cloudfrontWait: z.boolean().optional(),
   name: nonEmptyStringSchema,
   prune: z.boolean().optional(),
-  retainOnDelete: z.boolean().optional(),
+  deleteDestinationObjectsOnDelete: z.boolean().optional(),
 });
 const benchmarkConfigSchema = z
   .object({
@@ -334,9 +334,13 @@ function benchmarkEnv(args: {
     SHIN_BENCH_ASSET_STATE: phase.assetState,
     SHIN_BENCH_ASSET_PROFILE: run.assetProfile,
     SHIN_BENCH_PRUNE: String(phase.prune),
-    ...(phase.retainOnDelete === undefined
+    ...(phase.deleteDestinationObjectsOnDelete === undefined
       ? {}
-      : { SHIN_BENCH_RETAIN_ON_DELETE: String(phase.retainOnDelete) }),
+      : {
+          SHIN_BENCH_DELETE_DESTINATION_OBJECTS_ON_DELETE: String(
+            phase.deleteDestinationObjectsOnDelete,
+          ),
+        }),
     SHIN_BENCH_STACK_SUFFIX: stackSuffix,
     SHIN_BENCH_WAIT_FOR_CLOUDFRONT: String(phase.cloudfrontWait),
   };
@@ -629,7 +633,7 @@ function configPhaseToRunPhase(phase: NonNullable<BenchmarkConfig["phases"]>[num
     cloudfrontWait: phase.cloudfrontWait ?? false,
     name: phase.name,
     prune: phase.prune ?? true,
-    retainOnDelete: phase.retainOnDelete,
+    deleteDestinationObjectsOnDelete: phase.deleteDestinationObjectsOnDelete,
   };
 }
 

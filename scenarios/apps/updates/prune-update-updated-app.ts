@@ -16,7 +16,7 @@ class PruneUpdateShinBucketDeploymentStack extends Stack {
         Source.asset("test/fixtures/my-website"),
         Source.data(
           "runtime/current.txt",
-          [`stack=${Aws.STACK_NAME}`, "version=v2", "state=legacy-should-be-pruned"].join("\n"),
+          [`stack=${Aws.STACK_NAME}`, "phase=updated", "state=legacy-should-be-pruned"].join("\n"),
         ),
       ],
       destinationBucket: websiteBucket,

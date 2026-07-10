@@ -2,7 +2,7 @@ import { App, CfnOutput, RemovalPolicy, Stack, type StackProps } from "aws-cdk-l
 import { Bucket } from "aws-cdk-lib/aws-s3";
 import { ShinBucketDeployment, Source } from "../../../src";
 
-class DeleteCleanupShinBucketDeploymentStack extends Stack {
+class ObjectDeletionShinBucketDeploymentStack extends Stack {
   constructor(scope: App, id: string, props?: StackProps) {
     super(scope, id, props);
 
@@ -12,13 +12,12 @@ class DeleteCleanupShinBucketDeploymentStack extends Stack {
     });
 
     new ShinBucketDeployment(this, "DeployWebsite", {
-      sources: [Source.data("runtime/current.txt", "version=v2\n")],
+      sources: [Source.data("runtime/current.txt", "phase=updated\n")],
       destinationBucket: websiteBucket,
-      destinationKeyPrefix: "cleanup/v2",
-      retainOnDelete: false,
-      cleanupPreviousDestination: {
-        bucket: websiteBucket,
-        keyPrefix: "cleanup",
+      destinationKeyPrefix: "cleanup/updated",
+      destinationLifecycle: {
+        deleteDestinationObjectsOnDelete: true,
+        deletePreviousDestinationObjectsOnUpdate: true,
       },
     });
 
@@ -26,11 +25,11 @@ class DeleteCleanupShinBucketDeploymentStack extends Stack {
       value: websiteBucket.bucketName,
     });
 
-    new CfnOutput(this, "FetchV2CurrentFileCommand", {
-      value: `aws s3 cp s3://${websiteBucket.bucketName}/cleanup/v2/runtime/current.txt -`,
+    new CfnOutput(this, "FetchUpdatedCurrentFileCommand", {
+      value: `aws s3 cp s3://${websiteBucket.bucketName}/cleanup/updated/runtime/current.txt -`,
     });
 
-    new CfnOutput(this, "ConfirmV1RemovedCommand", {
+    new CfnOutput(this, "ConfirmInitialObjectRemovedCommand", {
       value: `aws s3api head-object --bucket ${websiteBucket.bucketName} --key cleanup/runtime/current.txt`,
     });
   }
@@ -45,6 +44,6 @@ const env =
       }
     : undefined;
 
-new DeleteCleanupShinBucketDeploymentStack(app, "ShinBucketDeploymentDeleteCleanupDemo", {
+new ObjectDeletionShinBucketDeploymentStack(app, "ShinBucketDeploymentObjectDeletionDemo", {
   env,
 });

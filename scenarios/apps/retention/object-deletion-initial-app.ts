@@ -1,7 +1,8 @@
 import { App, CfnOutput, RemovalPolicy, Stack, type StackProps } from "aws-cdk-lib";
 import { Bucket } from "aws-cdk-lib/aws-s3";
+import { ShinBucketDeployment, Source } from "../../../src";
 
-class DeleteCleanupBucketOnlyShinBucketDeploymentStack extends Stack {
+class ObjectDeletionShinBucketDeploymentStack extends Stack {
   constructor(scope: App, id: string, props?: StackProps) {
     super(scope, id, props);
 
@@ -10,8 +11,21 @@ class DeleteCleanupBucketOnlyShinBucketDeploymentStack extends Stack {
       removalPolicy: RemovalPolicy.DESTROY,
     });
 
+    new ShinBucketDeployment(this, "DeployWebsite", {
+      sources: [Source.data("runtime/current.txt", "phase=initial\n")],
+      destinationBucket: websiteBucket,
+      destinationKeyPrefix: "cleanup",
+      destinationLifecycle: {
+        deleteDestinationObjectsOnDelete: true,
+      },
+    });
+
     new CfnOutput(this, "BucketName", {
       value: websiteBucket.bucketName,
+    });
+
+    new CfnOutput(this, "FetchInitialCurrentFileCommand", {
+      value: `aws s3 cp s3://${websiteBucket.bucketName}/cleanup/runtime/current.txt -`,
     });
   }
 }
@@ -25,6 +39,6 @@ const env =
       }
     : undefined;
 
-new DeleteCleanupBucketOnlyShinBucketDeploymentStack(app, "ShinBucketDeploymentDeleteCleanupDemo", {
+new ObjectDeletionShinBucketDeploymentStack(app, "ShinBucketDeploymentObjectDeletionDemo", {
   env,
 });

@@ -65,7 +65,7 @@ pub(crate) struct DeploymentRequest {
     pub(crate) dest_bucket_name: String,
     pub(crate) dest_bucket_prefix: String,
     pub(crate) extract: bool,
-    pub(crate) retain_on_delete: bool,
+    pub(crate) delete_destination_objects_on_delete: bool,
     pub(crate) distribution_id: Option<String>,
     pub(crate) distribution_paths: Vec<String>,
     pub(crate) wait_for_distribution_invalidation: bool,
@@ -77,14 +77,14 @@ pub(crate) struct DeploymentRequest {
     pub(crate) output_object_keys: bool,
     pub(crate) destination_bucket_arn: Option<String>,
     pub(crate) destination_owner_id: Option<String>,
-    pub(crate) cleanup_previous_destination: Option<CleanupPreviousDestination>,
+    pub(crate) delete_previous_destination_objects_on_update:
+        Option<DeletePreviousDestinationObjectsOnUpdate>,
     pub(crate) runtime: RuntimeOptions,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct CleanupPreviousDestination {
+pub(crate) struct DeletePreviousDestinationObjectsOnUpdate {
     pub(crate) bucket_name: String,
-    pub(crate) bucket_prefix: String,
     pub(crate) distribution_id: Option<String>,
 }
 
