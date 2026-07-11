@@ -17,6 +17,8 @@ use http_body::{Body, Frame, SizeHint};
 use tokio::io::{AsyncBufRead, AsyncRead, AsyncReadExt, AsyncSeek, ReadBuf, SeekFrom};
 use tokio::sync::futures::OwnedNotified;
 use tokio::sync::{Notify, Semaphore, mpsc};
+use tokio::task::JoinHandle;
+use tokio::time::{Instant, timeout_at};
 
 use crate::types::AppState;
 
@@ -167,6 +169,7 @@ pub(crate) struct SourceBlockStore {
     source_get_concurrency: usize,
     window_bytes: u64,
     fetch_semaphore: Semaphore,
+    body_tasks: Mutex<Vec<JoinHandle<()>>>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -634,34 +637,65 @@ impl SourceBlockStore {
             source_get_concurrency: options.get_concurrency,
             window_bytes: options.window_bytes.max(options.block_bytes) as u64,
             fetch_semaphore: Semaphore::new(options.get_concurrency),
+            body_tasks: Mutex::new(Vec::new()),
         })
     }
 
-    pub(crate) fn start_scheduler(self: &Arc<Self>) -> tokio::task::JoinHandle<()> {
-        let store = Arc::clone(self);
-        tokio::spawn(async move {
-            let mut tasks = FuturesUnordered::new();
-            let mut next_index = 0_usize;
+    pub(crate) async fn run_scheduler(self: Arc<Self>) {
+        let mut tasks = FuturesUnordered::new();
+        let mut next_index = 0_usize;
 
-            loop {
-                while tasks.len() < store.source_get_concurrency && next_index < store.blocks.len()
-                {
-                    let index = next_index;
-                    next_index += 1;
-                    let Some(block) = store.reserve_fetch(index).await else {
-                        continue;
-                    };
-                    let store = Arc::clone(&store);
-                    tasks.push(tokio::spawn(async move {
-                        store.fetch_reserved_block(index, block).await;
-                    }));
-                }
+        loop {
+            while tasks.len() < self.source_get_concurrency && next_index < self.blocks.len() {
+                let index = next_index;
+                next_index += 1;
+                let Some(block) = self.reserve_fetch(index).await else {
+                    continue;
+                };
+                let store = Arc::clone(&self);
+                tasks.push(async move {
+                    store.fetch_reserved_block(index, block).await;
+                });
+            }
 
-                if tasks.next().await.is_none() {
-                    break;
+            if tasks.next().await.is_none() {
+                break;
+            }
+        }
+    }
+
+    pub(crate) async fn abort_and_drain_body_tasks(&self, deadline: Instant) -> Result<()> {
+        let tasks = {
+            let mut tasks = self
+                .body_tasks
+                .lock()
+                .expect("source body task mutex should not be poisoned");
+            std::mem::take(&mut *tasks)
+        };
+
+        for task in &tasks {
+            task.abort();
+        }
+
+        timeout_at(deadline, async {
+            for task in tasks {
+                match task.await {
+                    Ok(()) => {}
+                    Err(error) if error.is_cancelled() => {}
+                    Err(error) => return Err(error).context("source body task panicked"),
                 }
             }
+            Ok(())
         })
+        .await
+        .context("source body tasks did not drain before the deployment drain deadline")?
+    }
+
+    fn track_body_task(&self, task: JoinHandle<()>) {
+        self.body_tasks
+            .lock()
+            .expect("source body task mutex should not be poisoned")
+            .push(task);
     }
 
     async fn reserve_fetch(&self, index: usize) -> Option<SourceBlockRange> {
@@ -1438,11 +1472,13 @@ fn zip_entry_sdk_body(
     content_length: u64,
 ) -> SdkBody {
     let (sender, receiver) = mpsc::channel(ZIP_ENTRY_BODY_PIPE_CHUNKS);
-    tokio::spawn(async move {
-        if let Err(error) = send_zip_entry_chunks(store, plan, sender.clone()).await {
+    let body_store = Arc::clone(&store);
+    let task = tokio::spawn(async move {
+        if let Err(error) = send_zip_entry_chunks(body_store, plan, sender.clone()).await {
             let _ = sender.send(Err(error)).await;
         }
     });
+    store.track_body_task(task);
 
     SdkBody::from_body_1_x(ReceiverBody {
         receiver: tokio::sync::Mutex::new(receiver),
@@ -1635,11 +1671,15 @@ fn boxed_body_error(error: impl std::error::Error + Send + Sync + 'static) -> Bo
 
 #[cfg(test)]
 mod tests {
+    use std::future::pending;
     use std::io::Write;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
 
     use tokio::io::AsyncReadExt;
     use tokio::sync::Semaphore;
+    use tokio::time::Instant;
     use zip::write::{SimpleFileOptions, ZipWriter};
 
     use super::{
@@ -1651,6 +1691,14 @@ mod tests {
     };
     use crate::s3::planner::ZipEntryPlan;
     use crate::s3::{DEFAULT_SOURCE_BLOCK_BYTES, DEFAULT_SOURCE_BLOCK_MERGE_GAP_BYTES};
+
+    struct DropSignal(Arc<AtomicBool>);
+
+    impl Drop for DropSignal {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Release);
+        }
+    }
 
     #[test]
     fn source_blocks_are_sorted_coalesced_and_split() {
@@ -1703,6 +1751,27 @@ mod tests {
         assert!(error.to_string().contains("CRC32"));
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn spawned_source_bodies_are_aborted_and_drained() {
+        let zip = zip_from_entry("body.txt", b"body task");
+        let plan = zip_plan_from_archive(&zip, "body.txt");
+        let store = ready_store_for_plan(&zip, &plan);
+        let dropped = Arc::new(AtomicBool::new(false));
+        let task_dropped = Arc::clone(&dropped);
+        store.track_body_task(tokio::spawn(async move {
+            let _signal = DropSignal(task_dropped);
+            pending::<()>().await;
+        }));
+        tokio::task::yield_now().await;
+
+        store
+            .abort_and_drain_body_tasks(Instant::now() + Duration::from_secs(1))
+            .await
+            .expect("body task drain");
+
+        assert!(dropped.load(Ordering::Acquire));
+    }
+
     #[tokio::test]
     async fn open_entry_data_reader_rejects_short_local_header() {
         // Simulate a block boundary splitting the 30-byte local header; the
@@ -1738,6 +1807,7 @@ mod tests {
             source_get_concurrency: 1,
             window_bytes: block.len(),
             fetch_semaphore: Semaphore::new(1),
+            body_tasks: std::sync::Mutex::new(Vec::new()),
         });
         let plan = ZipEntryPlan {
             source_index: 0,
@@ -1826,6 +1896,7 @@ mod tests {
             source_get_concurrency: 1,
             window_bytes: block.len(),
             fetch_semaphore: Semaphore::new(1),
+            body_tasks: std::sync::Mutex::new(Vec::new()),
         })
     }
 

@@ -16,7 +16,9 @@ use md5::{Digest as Md5Digest, Md5};
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
+use tokio::time::timeout_at;
 
+use crate::deadline::InvocationDeadlines;
 use crate::replace::replace_markers;
 use crate::types::{
     AppState, DeploymentRequest, DeploymentStats, MarkerConfig, ObjectMetadata,
@@ -41,6 +43,11 @@ enum UploadPayload {
         plan: ZipEntryPlan,
         content_length: u64,
     },
+}
+
+pub(super) struct TransferExecution {
+    pub(super) stats: Arc<DeploymentStats>,
+    pub(super) deadlines: InvocationDeadlines,
 }
 
 impl UploadPayload {
@@ -106,17 +113,20 @@ pub(super) async fn execute_copy_plans(
     metadata: &ObjectMetadata,
     copy_plans: Vec<CopyPlan>,
     max_parallel_transfers: usize,
-    stats: Arc<DeploymentStats>,
+    execution: TransferExecution,
 ) -> Result<()> {
+    let TransferExecution { stats, deadlines } = execution;
     let semaphore = Arc::new(Semaphore::new(max_parallel_transfers.max(1)));
     let mut tasks = JoinSet::new();
 
     for plan in copy_plans {
-        let permit = semaphore
-            .clone()
-            .acquire_owned()
-            .await
-            .context("failed to acquire copy semaphore")?;
+        let permit = match timeout_at(deadlines.work(), semaphore.clone().acquire_owned()).await {
+            Ok(permit) => permit.context("failed to acquire copy semaphore")?,
+            Err(_) => {
+                abort_and_drain_transfer_tasks(&mut tasks, deadlines).await?;
+                return Err(transfer_deadline_error());
+            }
+        };
         let state = state.clone();
         let metadata = metadata.clone();
         let destination_bucket = destination_bucket.to_string();
@@ -140,7 +150,7 @@ pub(super) async fn execute_copy_plans(
         });
     }
 
-    join_transfer_tasks(tasks).await
+    join_transfer_tasks(tasks, deadlines).await
 }
 
 pub(super) async fn upload_zip_entries(
@@ -150,14 +160,16 @@ pub(super) async fn upload_zip_entries(
     metadata: &ObjectMetadata,
     zip_plans: BTreeMap<usize, Vec<ZipEntryPlan>>,
     destination_objects: &HashMap<String, DestinationObject>,
-    stats: Arc<DeploymentStats>,
+    execution: TransferExecution,
 ) -> Result<()> {
+    let TransferExecution { stats, deadlines } = execution;
     let semaphore = Arc::new(Semaphore::new(
         request.runtime.max_parallel_transfers.max(1),
     ));
     let put_diagnostics = Arc::new(PutDiagnostics::default());
     let put_retry_coordinator = Arc::new(PutRetryCoordinator::new());
     let mut archive_diagnostics_sources = Vec::new();
+    let mut block_stores = Vec::new();
     let mut tasks = JoinSet::new();
 
     for (archive_index, plans) in zip_plans {
@@ -189,6 +201,7 @@ pub(super) async fn upload_zip_entries(
                 window_bytes: source_window_bytes,
             },
         );
+        block_stores.push(Arc::clone(&store));
         tracing::info!(
             archive_index,
             source_zip_bytes = source.len(),
@@ -200,13 +213,17 @@ pub(super) async fn upload_zip_entries(
             max_parallel_transfers = request.runtime.max_parallel_transfers,
             "planned source block schedule"
         );
-        let scheduler = store.start_scheduler();
+        let scheduler_store = store.clone();
         for plan in plans {
-            let permit = semaphore
-                .clone()
-                .acquire_owned()
-                .await
-                .context("failed to acquire upload semaphore")?;
+            let permit = match timeout_at(deadlines.work(), semaphore.clone().acquire_owned()).await
+            {
+                Ok(permit) => permit.context("failed to acquire upload semaphore")?,
+                Err(_) => {
+                    abort_and_drain_transfer_tasks(&mut tasks, deadlines).await?;
+                    abort_and_drain_body_tasks(&block_stores, deadlines).await?;
+                    return Err(transfer_deadline_error());
+                }
+            };
             let store = store.clone();
             let state = state.clone();
             let metadata = metadata.clone();
@@ -253,19 +270,19 @@ pub(super) async fn upload_zip_entries(
             });
         }
         tasks.spawn(async move {
-            scheduler
-                .await
-                .context("source block scheduler panicked or was cancelled")?;
+            scheduler_store.run_scheduler().await;
             Ok(())
         });
     }
 
-    let transfer_result = join_transfer_tasks(tasks).await;
+    let transfer_result = join_transfer_tasks(tasks, deadlines).await;
+    let body_drain_result = abort_and_drain_body_tasks(&block_stores, deadlines).await;
     for (archive_index, source) in archive_diagnostics_sources {
         log_source_diagnostics(archive_index, &source, &stats);
     }
     log_put_diagnostics(&request.runtime.put_object_retry, &put_diagnostics, &stats);
-    transfer_result
+    transfer_result?;
+    body_drain_result
 }
 
 fn catalog_skips_zip_entry(
@@ -650,12 +667,63 @@ fn finalize_md5(hasher: Md5) -> String {
     output
 }
 
-async fn join_transfer_tasks(mut tasks: JoinSet<Result<()>>) -> Result<()> {
-    while let Some(result) = tasks.join_next().await {
-        result.context("transfer task panicked or was cancelled")??;
-    }
+async fn join_transfer_tasks(
+    mut tasks: JoinSet<Result<()>>,
+    deadlines: InvocationDeadlines,
+) -> Result<()> {
+    loop {
+        let next = match timeout_at(deadlines.work(), tasks.join_next()).await {
+            Ok(next) => next,
+            Err(_) => {
+                abort_and_drain_transfer_tasks(&mut tasks, deadlines).await?;
+                return Err(transfer_deadline_error());
+            }
+        };
+        let Some(result) = next else {
+            return Ok(());
+        };
 
+        match result {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                abort_and_drain_transfer_tasks(&mut tasks, deadlines).await?;
+                return Err(error);
+            }
+            Err(error) => {
+                abort_and_drain_transfer_tasks(&mut tasks, deadlines).await?;
+                return Err(error).context("transfer task panicked or was cancelled");
+            }
+        }
+    }
+}
+
+async fn abort_and_drain_transfer_tasks(
+    tasks: &mut JoinSet<Result<()>>,
+    deadlines: InvocationDeadlines,
+) -> Result<()> {
+    tasks.abort_all();
+    timeout_at(deadlines.bounded_drain(), async {
+        while tasks.join_next().await.is_some() {}
+    })
+    .await
+    .context("transfer tasks did not drain before the deployment drain deadline")?;
     Ok(())
+}
+
+async fn abort_and_drain_body_tasks(
+    stores: &[Arc<SourceBlockStore>],
+    deadlines: InvocationDeadlines,
+) -> Result<()> {
+    for store in stores {
+        store
+            .abort_and_drain_body_tasks(deadlines.bounded_drain())
+            .await?;
+    }
+    Ok(())
+}
+
+fn transfer_deadline_error() -> anyhow::Error {
+    anyhow!("S3 transfer work exceeded the deployment work deadline")
 }
 
 fn put_retry_cap_millis(attempt: usize, throttled: bool, retry: &PutObjectRetryOptions) -> u64 {
@@ -916,13 +984,31 @@ fn put_error_message(error: &SdkError<PutObjectError>) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::future::pending;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
+
+    use anyhow::Result;
+    use tokio::task::JoinSet;
+    use tokio::time::Instant as TokioInstant;
+
     use super::super::destination::DestinationObject;
+    use crate::deadline::InvocationDeadlines;
     use crate::types::{PutObjectRetryJitter, PutObjectRetryOptions};
 
     use super::{
-        PutPrecondition, PutRetryCoordinator, duration_millis_u64, md5_hex,
+        PutPrecondition, PutRetryCoordinator, duration_millis_u64, join_transfer_tasks, md5_hex,
         put_precondition_for_destination, put_retry_cap_millis, quoted_etag,
     };
+
+    struct DropSignal(Arc<AtomicBool>);
+
+    impl Drop for DropSignal {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Release);
+        }
+    }
 
     #[test]
     fn md5_hex_matches_known_digest() {
@@ -1005,5 +1091,29 @@ mod tests {
 
         retry.jitter = PutObjectRetryJitter::Full;
         assert!(duration_millis_u64(coordinator.retry_delay(3, false, &retry)) <= 1_000);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn deadline_aborts_and_drains_spawned_transfer_tasks() {
+        let dropped = Arc::new(AtomicBool::new(false));
+        let mut tasks = JoinSet::<Result<()>>::new();
+        let task_dropped = Arc::clone(&dropped);
+        tasks.spawn(async move {
+            let _signal = DropSignal(task_dropped);
+            pending::<()>().await;
+            Ok(())
+        });
+
+        let result = join_transfer_tasks(
+            tasks,
+            InvocationDeadlines::from_remaining_at(
+                TokioInstant::now(),
+                Duration::from_secs(50) + Duration::from_millis(10),
+            ),
+        )
+        .await;
+
+        assert!(result.is_err());
+        assert!(dropped.load(Ordering::Acquire));
     }
 }

@@ -118,8 +118,9 @@ Verification deploy/destroy can run independent scenario chains concurrently wit
 
 ```mermaid
 flowchart TD
-  A["CloudFormation custom resource event"] --> B["Parse request and resource properties"]
-  B --> C{"Request type"}
+  A["CloudFormation custom resource event"] --> B["Validate envelope and ResourceType"]
+  B --> Y["Parse properties; pre-serialize SUCCESS; preflight response and invalidation limits"]
+  Y --> C{"Request type"}
   C -->|Create| D["Generate physical resource id"]
   C -->|Update| E["Reuse physical resource id"]
   C -->|Delete| F["Reuse physical resource id"]
@@ -139,15 +140,16 @@ flowchart TD
   N --> P["Delete old namespace, excluding any current child namespace"]
   P --> Q{"Affected distribution configured?"}
   O --> Q
-  Q -->|Yes| R["Create deduplicated CloudFront invalidation after S3 mutation"]
+  Q -->|Yes| R["Create deduplicated, deadline-bounded CloudFront invalidation after S3 mutation"]
   Q -->|No| S["Skip CloudFront"]
   R --> T{"waitForDistributionInvalidation?"}
   T -->|Yes| U["Poll invalidation until completed or timeout"]
   T -->|No| V["Return after invalidation request"]
-  S --> W["Send SUCCESS response"]
+  S --> W["Retry pre-serialized SUCCESS callback within the callback reserve"]
   U --> W
   V --> W
-  B -. "parse/runtime error" .-> X["Send FAILED response"]
+  B -. "protocol error" .-> X["Serialize bounded FAILED callback and retry within the reserve"]
+  Y -. "preflight error" .-> X
   K -. "S3 error" .-> X
   P -. "S3 error" .-> X
   R -. "CloudFront error" .-> X
@@ -406,7 +408,28 @@ The source ZIP ranged-read path still uses source `If-Match` when the source obj
 
 CloudFront invalidations use a bounded caller reference hash derived from the CloudFormation request identity (`StackId`, `RequestId`, and logical resource id) plus the distribution id and invalidation paths. CloudFormation documents `StackId` plus `RequestId` as a way to uniquely identify a request on a custom resource, and CloudFront documents `CallerReference` as the idempotency value that prevents accidentally resubmitting an identical invalidation request. If Lambda retries the same custom-resource event after creating the invalidation but before sending the CloudFormation response, CloudFront returns the existing invalidation instead of creating a duplicate. The upstream CDK `BucketDeployment` provider currently uses a fresh `uuid4()` caller reference for each invocation; this provider intentionally uses the request-derived caller reference to make same-event retries idempotent at the CloudFront API boundary.
 
-CloudFormation failure responses use a truncated `Reason` string. CloudFormation documents a 4096-byte maximum custom-resource response body, and `Reason` is part of that body. The provider keeps the full error in CloudWatch Logs but caps the response reason so a long Rust/AWS SDK error chain does not turn a useful deployment failure into an oversized or missing custom-resource response.
+## CloudFormation Deadline And Response Protocol
+
+The provider derives absolute monotonic deadlines from each Lambda invocation.
+S3 and CloudFront work stops five seconds before a callback-only reserve begins;
+spawned transfer, source-scheduler, and body tasks are then cancelled and
+drained within that five-second window. The final 45 seconds are reserved only
+for failure/success response serialization and delivery. CloudFront creation,
+polling, and poll delays all use the work deadline rather than a separate fixed
+poll count.
+
+Before any S3 mutation, the provider validates the custom resource
+`ResourceType`, CloudFront invalidation path/count serialization bounds, and
+the complete serialized success response. CloudFormation limits the entire
+custom-resource response body to 4096 bytes, so an oversized response fails
+before deployment with guidance to set `outputObjectKeys:false`. Failure
+responses dynamically reduce the serialized `Reason` when JSON escaping would
+otherwise exceed the same limit; the full error remains in CloudWatch Logs.
+
+The pre-serialized success body is reused for callback attempts. Callback
+connection errors, request timeouts, and HTTP 5xx responses use bounded
+exponential full-jitter retries within the invocation deadline. HTTP 4xx and
+other non-retryable responses fail immediately.
 
 ## IAM Shape
 
