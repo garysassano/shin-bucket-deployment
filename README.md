@@ -51,7 +51,6 @@ export class DemoStack extends Stack {
       destinationBucket: bucket,
       destinationKeyPrefix: "site",
       distribution,
-      prune: true,
       waitForDistributionInvalidation: true,
     });
   }
@@ -91,7 +90,7 @@ The construct follows the upstream `BucketDeployment` API where the behavior map
 | Sources         | `sources`, `Source.data`, `Source.jsonData`, `Source.yamlData`, `embeddedCatalog`                                                                                                                                            |
 | Destination     | `destinationBucket`, `destinationKeyPrefix`, `deployedBucket`, `objectKeys`                                                                                                                                                  |
 | Filtering       | `include`, `exclude`                                                                                                                                                                                                         |
-| Lifecycle       | `destinationLifecycle`, `prune`                                                                                                                                                                                              |
+| Lifecycle       | `destinationLifecycle`                                                                                                                                                                                                       |
 | Update behavior | `extract`, `outputObjectKeys`                                                                                                                                                                                                |
 | S3 metadata     | `accessControl`, `cacheControl`, `contentDisposition`, `contentEncoding`, `contentLanguage`, `contentType`, `metadata`, `serverSideEncryption`, `serverSideEncryptionAwsKmsKeyId`, `storageClass`, `websiteRedirectLocation` |
 | CloudFront      | `distribution`, `distributionPaths`, `waitForDistributionInvalidation`                                                                                                                                                       |
@@ -103,7 +102,8 @@ Unsupported upstream props:
 | Prop                                    | Reason                                                                                                                          |
 | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
 | `expires`                               | Prefer `cacheControl` for deployment-time cache behavior.                                                                       |
-| `retainOnDelete`                        | Replaced by the positive, event-specific `destinationLifecycle.deleteDestinationObjectsOnDelete` setting.                       |
+| `prune`                                 | Replaced by `destinationLifecycle.onDeployment.deleteStaleObjects`.                                                              |
+| `retainOnDelete`                        | Replaced by the explicit `destinationLifecycle.onChange` and `destinationLifecycle.onDelete` settings.                          |
 | `serverSideEncryptionCustomerAlgorithm` | SSE-C is intentionally not implemented; use SSE-S3 or SSE-KMS.                                                                  |
 | `signContent`                           | The provider uses AWS SDK calls directly, not the upstream AWS CLI upload path.                                                 |
 | `useEfs`                                | EFS is not needed because the provider streams data with bounded memory instead of staging archives or extracted files on disk. |
@@ -120,7 +120,7 @@ For `extract=false`, each source object is copied directly with S3 `CopyObject`.
 
 ### Change Detection
 
-Before uploading or copying, the provider lists the destination prefix. Destination keys are used for `prune=true`, and destination `ETag` values are used to skip unchanged objects.
+Before uploading or copying, the provider lists the destination prefix. Destination keys are used to delete stale objects when `destinationLifecycle.onDeployment.deleteStaleObjects` is enabled, and destination `ETag` values are used to skip unchanged objects.
 
 For existing marker-free zip entries with catalog MD5s, the provider compares destination size and `ETag` before reading entry bytes. Without a usable catalog match, it reads and decompresses the entry from ranged source blocks, validates size and CRC32, computes MD5, and compares it with the destination `ETag`. Missing marker-free objects stream directly to S3 without pre-hashing. Entries with deploy-time markers are materialized after decompression and replacement so the final bytes can be hashed and uploaded when changed.
 

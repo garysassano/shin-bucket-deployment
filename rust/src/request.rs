@@ -13,8 +13,8 @@ use crate::s3::{
     default_source_window_memory_budget_mb,
 };
 use crate::types::{
-    DeletePreviousDestinationObjectsOnUpdate, DeploymentRequest, Filters, MarkerConfig,
-    PreviousDestination, PutObjectRetryJitter, PutObjectRetryOptions, RuntimeOptions,
+    DeletePreviousObjectsOnChange, DeploymentRequest, Filters, MarkerConfig, PreviousDestination,
+    PutObjectRetryJitter, PutObjectRetryOptions, RuntimeOptions,
 };
 
 const DEFAULT_AVAILABLE_MEMORY_MB: u64 = 1024;
@@ -23,10 +23,8 @@ const MIN_SOURCE_BLOCK_BYTES: usize = 30;
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 #[serde(rename_all = "PascalCase")]
-pub(crate) struct RawDeletePreviousDestinationObjectsOnUpdate {
+pub(crate) struct RawDeletePreviousObjectsOnChange {
     pub(crate) destination_bucket_name: String,
-    #[serde(default)]
-    pub(crate) distribution_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -44,7 +42,7 @@ pub(crate) struct RawDeploymentRequest {
     #[serde(default = "default_true", deserialize_with = "deserialize_boolish")]
     pub(crate) extract: bool,
     #[serde(default, deserialize_with = "deserialize_boolish")]
-    pub(crate) delete_destination_objects_on_delete: bool,
+    pub(crate) delete_current_objects_on_delete: bool,
     #[serde(default)]
     pub(crate) distribution_id: Option<String>,
     #[serde(default)]
@@ -56,7 +54,7 @@ pub(crate) struct RawDeploymentRequest {
     #[serde(default)]
     pub(crate) system_metadata: HashMap<String, String>,
     #[serde(default = "default_true", deserialize_with = "deserialize_boolish")]
-    pub(crate) prune: bool,
+    pub(crate) delete_stale_objects_on_deployment: bool,
     #[serde(default)]
     pub(crate) exclude: Vec<String>,
     #[serde(default)]
@@ -68,8 +66,9 @@ pub(crate) struct RawDeploymentRequest {
     #[serde(default)]
     pub(crate) destination_owner_id: Option<String>,
     #[serde(default)]
-    pub(crate) delete_previous_destination_objects_on_update:
-        Option<RawDeletePreviousDestinationObjectsOnUpdate>,
+    pub(crate) delete_previous_objects_on_change: Option<RawDeletePreviousObjectsOnChange>,
+    #[serde(default)]
+    pub(crate) invalidate_previous_distribution_on_change: Option<String>,
     #[serde(default, deserialize_with = "deserialize_optional_u64ish")]
     pub(crate) available_memory_mb: Option<u64>,
     #[serde(default, deserialize_with = "deserialize_optional_usizeish")]
@@ -145,7 +144,7 @@ pub(crate) fn parse_request(raw: &RawDeploymentRequest) -> DeploymentRequest {
         dest_bucket_name: raw.destination_bucket_name.clone(),
         dest_bucket_prefix,
         extract: raw.extract,
-        delete_destination_objects_on_delete: raw.delete_destination_objects_on_delete,
+        delete_current_objects_on_delete: raw.delete_current_objects_on_delete,
         distribution_id: raw.distribution_id.clone(),
         distribution_paths: raw
             .distribution_paths
@@ -154,19 +153,20 @@ pub(crate) fn parse_request(raw: &RawDeploymentRequest) -> DeploymentRequest {
         wait_for_distribution_invalidation: raw.wait_for_distribution_invalidation,
         user_metadata: raw.user_metadata.clone(),
         system_metadata: raw.system_metadata.clone(),
-        prune: raw.prune,
+        delete_stale_objects_on_deployment: raw.delete_stale_objects_on_deployment,
         exclude: raw.exclude.clone(),
         include: raw.include.clone(),
         output_object_keys: raw.output_object_keys,
         destination_bucket_arn: raw.destination_bucket_arn.clone(),
         destination_owner_id: raw.destination_owner_id.clone(),
-        delete_previous_destination_objects_on_update: raw
-            .delete_previous_destination_objects_on_update
-            .as_ref()
-            .map(|previous| DeletePreviousDestinationObjectsOnUpdate {
+        delete_previous_objects_on_change: raw.delete_previous_objects_on_change.as_ref().map(
+            |previous| DeletePreviousObjectsOnChange {
                 bucket_name: previous.destination_bucket_name.clone(),
-                distribution_id: previous.distribution_id.clone(),
-            }),
+            },
+        ),
+        invalidate_previous_distribution_on_change: raw
+            .invalidate_previous_distribution_on_change
+            .clone(),
         runtime: runtime_options(raw),
     }
 }
@@ -468,15 +468,12 @@ mod tests {
         let request = parse_request(&raw);
 
         assert!(request.extract);
-        assert!(!request.delete_destination_objects_on_delete);
-        assert!(request.prune);
+        assert!(!request.delete_current_objects_on_delete);
+        assert!(request.delete_stale_objects_on_deployment);
         assert!(request.output_object_keys);
         assert!(request.destination_owner_id.is_none());
-        assert!(
-            request
-                .delete_previous_destination_objects_on_update
-                .is_none()
-        );
+        assert!(request.delete_previous_objects_on_change.is_none());
+        assert!(request.invalidate_previous_distribution_on_change.is_none());
         assert_eq!(request.distribution_paths, vec!["/*"]);
         assert_eq!(request.runtime.available_memory_mb, 1024);
         assert_eq!(request.runtime.source_window_memory_budget_mb, 1024);
@@ -528,7 +525,7 @@ mod tests {
     #[test]
     fn serde_rejects_non_boolean_properties() {
         let mut props = minimal_request();
-        props["Prune"] = json!({"bad": true});
+        props["DeleteStaleObjectsOnDeployment"] = json!({"bad": true});
 
         assert!(serde_json::from_value::<RawDeploymentRequest>(props).is_err());
     }
@@ -537,9 +534,9 @@ mod tests {
     fn deserializes_cloudformation_string_booleans() {
         let mut props = minimal_request();
         props["Extract"] = json!("true");
-        props["DeleteDestinationObjectsOnDelete"] = json!("true");
+        props["DeleteCurrentObjectsOnDelete"] = json!("true");
         props["WaitForDistributionInvalidation"] = json!("true");
-        props["Prune"] = json!("false");
+        props["DeleteStaleObjectsOnDeployment"] = json!("false");
         props["OutputObjectKeys"] = json!("true");
 
         let raw: RawDeploymentRequest =
@@ -547,9 +544,9 @@ mod tests {
         let request = parse_request(&raw);
 
         assert!(request.extract);
-        assert!(request.delete_destination_objects_on_delete);
+        assert!(request.delete_current_objects_on_delete);
         assert!(request.wait_for_distribution_invalidation);
-        assert!(!request.prune);
+        assert!(!request.delete_stale_objects_on_deployment);
         assert!(request.output_object_keys);
     }
 
@@ -604,28 +601,33 @@ mod tests {
     fn deserializes_previous_destination_delete_authorization() {
         let mut props = minimal_request();
         props["DestinationOwnerId"] = json!("owner-123");
-        props["DeletePreviousDestinationObjectsOnUpdate"] = json!({
-            "DestinationBucketName": "old-bucket",
-            "DistributionId": "old-distribution"
+        props["DeletePreviousObjectsOnChange"] = json!({
+            "DestinationBucketName": "old-bucket"
         });
+        props["InvalidatePreviousDistributionOnChange"] = json!("old-distribution");
 
         let raw: RawDeploymentRequest = serde_json::from_value(props).unwrap();
         let request = parse_request(&raw);
 
         assert_eq!(request.destination_owner_id.as_deref(), Some("owner-123"));
         assert_eq!(
-            request.delete_previous_destination_objects_on_update,
-            Some(DeletePreviousDestinationObjectsOnUpdate {
+            request.delete_previous_objects_on_change,
+            Some(DeletePreviousObjectsOnChange {
                 bucket_name: "old-bucket".to_string(),
-                distribution_id: Some("old-distribution".to_string()),
             })
+        );
+        assert_eq!(
+            request
+                .invalidate_previous_distribution_on_change
+                .as_deref(),
+            Some("old-distribution")
         );
     }
 
     #[test]
     fn rejects_obsolete_previous_prefix_authorization() {
         let mut props = minimal_request();
-        props["DeletePreviousDestinationObjectsOnUpdate"] = json!({
+        props["DeletePreviousObjectsOnChange"] = json!({
             "DestinationBucketName": "old-bucket",
             "DestinationBucketKeyPrefix": "old-site"
         });

@@ -38,10 +38,12 @@ const VERIFY_SCENARIOS = {
   "marker-replacement": { file: "metadata/marker-replacement-app.js" },
   "metadata-and-filters": { file: "metadata/metadata-and-filters-app.js" },
   "source-overwrite-order": { file: "metadata/source-overwrite-order-app.js" },
-  "prune-update-initial": { file: "updates/prune-update-initial-app.js" },
-  "prune-update-updated": { file: "updates/prune-update-updated-app.js" },
-  "prune-disabled-initial": { file: "updates/prune-disabled-initial-app.js" },
-  "prune-disabled-updated": { file: "updates/prune-disabled-updated-app.js" },
+  "stale-object-cleanup-initial": { file: "updates/stale-object-cleanup-initial-app.js" },
+  "stale-object-cleanup-updated": { file: "updates/stale-object-cleanup-updated-app.js" },
+  "stale-object-retention-initial": { file: "updates/stale-object-retention-initial-app.js" },
+  "stale-object-retention-updated": {
+    file: "updates/stale-object-retention-updated-app.js",
+  },
   "default-retention-initial": { file: "retention/default-retention-initial-app.js" },
   "default-retention-updated": {
     file: "retention/default-retention-updated-app.js",
@@ -59,7 +61,7 @@ const VERIFY_SCENARIOS = {
 } as const satisfies Record<string, ScenarioDefinition>;
 
 const BENCHMARK_SCENARIOS = {
-  assets: { appRoot: "benchmarks", file: "apps/assets-app.js" },
+  assets: { appRoot: "benchmarks", file: "assets-app.js" },
 } as const satisfies Record<string, ScenarioDefinition>;
 
 const VERIFY_DEFAULT_ORDER = Object.keys(VERIFY_SCENARIOS);
@@ -69,8 +71,8 @@ const VERIFY_DEFAULT_GROUPS = [
   ["marker-replacement"],
   ["metadata-and-filters"],
   ["source-overwrite-order"],
-  ["prune-update-initial", "prune-update-updated"],
-  ["prune-disabled-initial", "prune-disabled-updated"],
+  ["stale-object-cleanup-initial", "stale-object-cleanup-updated"],
+  ["stale-object-retention-initial", "stale-object-retention-updated"],
   ["default-retention-initial", "default-retention-updated"],
   ["extract-false"],
   ["object-deletion-initial", "object-deletion-updated", "object-deletion-bucket-only"],
@@ -84,8 +86,8 @@ const VERIFY_DESTROY_ORDER = [
   "root-prefix",
   "marker-replacement",
   "metadata-and-filters",
-  "prune-update-updated",
-  "prune-disabled-updated",
+  "stale-object-cleanup-updated",
+  "stale-object-retention-updated",
   "default-retention-updated",
   "extract-false",
   "object-deletion-bucket-only",

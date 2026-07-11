@@ -99,6 +99,14 @@ Choose benchmark configs deliberately. Paired Shin vs AWS comparisons should use
 - same repetition count
 - same stack suffix pattern
 
+Benchmark configuration uses behavior-oriented names even when comparing with
+upstream AWS CDK. Map `deleteStaleObjects` to Shin
+`destinationLifecycle.onDeployment.deleteStaleObjects` and upstream `prune`.
+Map `deleteCurrentObjectsOnDelete` to Shin
+`destinationLifecycle.onDelete.deleteCurrentObjects` and the inverse of
+upstream `retainOnDelete`. Keep the upstream prop names only at the adapter
+boundary; do not expose them as Shin configuration names.
+
 For parameter sweeps, keep all non-swept inputs identical and encode the swept value in the row identity. For `maxParallelTransfers` sweeps, include the top-level `parallel` field and the provider summary field `maxParallelTransfers`; distinct phase names such as `cold-create-parallel-8` are acceptable when the phase itself represents the sweep point. Use `--run-token` only for scratch paths and stack suffixes, not as committed result identity.
 
 Always collect telemetry first, then destroy benchmark stacks, then verify they are absent before finalizing records.
@@ -238,7 +246,7 @@ Before committing benchmark updates:
 ```bash
 pnpm benchmark:comparison-report -- --input-file benchmarks/results.jsonl --output-file /tmp/benchmark-report-check.md
 git diff --check
-pnpm test -- test/benchmarks/collector.test.ts
+pnpm exec vitest run test/benchmarks/collector.test.ts
 ```
 
 Run broader `pnpm typecheck`, `pnpm lint`, and `pnpm test` if report scripts, collector scripts, or validation-sensitive source changed.

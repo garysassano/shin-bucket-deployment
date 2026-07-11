@@ -38,10 +38,10 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     expect(customResourceProperties(stack)).toMatchObject({
       DestinationOwnerId: expect.stringMatching(/^[a-f0-9]{8}$/),
     });
-    expect(
-      customResourceProperties(stack).DeletePreviousDestinationObjectsOnUpdate,
-    ).toBeUndefined();
-    expect(customResourceProperties(stack).DeleteDestinationObjectsOnDelete).toBe(false);
+    expect(customResourceProperties(stack).DeletePreviousObjectsOnChange).toBeUndefined();
+    expect(customResourceProperties(stack).InvalidatePreviousDistributionOnChange).toBeUndefined();
+    expect(customResourceProperties(stack).DeleteCurrentObjectsOnDelete).toBe(false);
+    expect(customResourceProperties(stack).DeleteStaleObjectsOnDeployment).toBe(true);
   });
 
   test("infers the previous prefix and defaults unchanged resources", () => {
@@ -53,16 +53,17 @@ describe("ShinBucketDeployment validation and option coverage", () => {
       destinationBucket,
       destinationKeyPrefix: "new-site",
       destinationLifecycle: {
-        deletePreviousDestinationObjectsOnUpdate: true,
+        onChange: {
+          deletePreviousObjects: true,
+        },
       },
       bundling: testBundling(),
     });
 
     const previousDestinationAuthorization = customResourceProperties(stack)
-      .DeletePreviousDestinationObjectsOnUpdate as {
+      .DeletePreviousObjectsOnChange as {
       DestinationBucketName: { Ref: string };
       DestinationBucketKeyPrefix?: string;
-      DistributionId?: { Ref: string };
     };
     expect(previousDestinationAuthorization).toEqual({
       DestinationBucketName: {
@@ -117,28 +118,34 @@ describe("ShinBucketDeployment validation and option coverage", () => {
       destinationBucket,
       destinationKeyPrefix: "new-site",
       destinationLifecycle: {
-        deleteDestinationObjectsOnDelete: true,
-        deletePreviousDestinationObjectsOnUpdate: {
-          bucket: previousBucket,
-          distribution: previousDistribution,
+        onDeployment: {
+          deleteStaleObjects: false,
+        },
+        onChange: {
+          deletePreviousObjects: previousBucket,
+          invalidatePreviousDistribution: previousDistribution,
+        },
+        onDelete: {
+          deleteCurrentObjects: true,
         },
       },
       bundling: testBundling(),
     });
 
     const previousDestinationAuthorization = customResourceProperties(stack)
-      .DeletePreviousDestinationObjectsOnUpdate as {
+      .DeletePreviousObjectsOnChange as {
       DestinationBucketName: { Ref: string };
-      DistributionId: { Ref: string };
     };
-    expect(previousDestinationAuthorization).toMatchObject({
+    expect(previousDestinationAuthorization).toEqual({
       DestinationBucketName: {
         Ref: expect.stringMatching(/^PreviousDest/),
       },
-      DistributionId: {
-        Ref: expect.stringMatching(/^PreviousDistribution/),
-      },
     });
+    expect(customResourceProperties(stack).InvalidatePreviousDistributionOnChange).toEqual({
+      Ref: expect.stringMatching(/^PreviousDistribution/),
+    });
+    expect(customResourceProperties(stack).DeleteCurrentObjectsOnDelete).toBe(true);
+    expect(customResourceProperties(stack).DeleteStaleObjectsOnDeployment).toBe(false);
 
     const template = Template.fromStack(stack);
     template.hasResourceProperties("AWS::IAM::Policy", {
@@ -221,6 +228,8 @@ describe("ShinBucketDeployment validation and option coverage", () => {
       /does not support serverSideEncryptionCustomerAlgorithm/,
     ],
     ["expires", { toString: (): string => "tomorrow" }, /does not support expires/],
+    ["prune", false, /destinationLifecycle\.onDeployment\.deleteStaleObjects/],
+    ["retainOnDelete", false, /explicit destinationLifecycle\.onChange/],
   ] as const)("rejects unsupported prop %s", (propName, value, pattern) => {
     const stack = new Stack();
     const destinationBucket = new Bucket(stack, "Dest");
@@ -232,6 +241,21 @@ describe("ShinBucketDeployment validation and option coverage", () => {
         [propName]: value,
       } as never);
     }).toThrow(pattern);
+  });
+
+  test("rejects the obsolete flat destination lifecycle shape", () => {
+    const stack = new Stack();
+    const destinationBucket = new Bucket(stack, "Dest");
+
+    expect(() => {
+      new ShinBucketDeployment(stack, "Deploy", {
+        sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
+        destinationBucket,
+        destinationLifecycle: {
+          deleteDestinationObjectsOnDelete: true,
+        },
+      } as never);
+    }).toThrow(/onDeployment, onChange, and onDelete/);
   });
 
   test("fails synthesis when extract=false is combined with deploy-time markers", () => {

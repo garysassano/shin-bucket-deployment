@@ -105,15 +105,21 @@ The default suite includes:
 - root-prefix deployment without `destinationKeyPrefix`
 - metadata and include/exclude filters
 - marker replacement
-- prune update
-- `prune=false` update preservation
+- stale-object cleanup during deployment
+- stale-object retention with `onDeployment.deleteStaleObjects=false`
 - default object retention across update/delete
 - `extract=false`
-- explicit previous-object deletion on Update and current-object deletion on Delete
+- explicit previous-object deletion on destination change and current-object deletion on Delete
 - duplicate source overwrite order
 - larger archive ranged-read path
 - KMS-encrypted destination bucket
 - CloudFront sync/async invalidation with explicit and default invalidation paths
+
+Lifecycle scenarios and assertions must use the public phase names
+`onDeployment`, `onChange`, and `onDelete`. Use `deleteStaleObjects`,
+`deletePreviousObjects`, `invalidatePreviousDistribution`, and
+`deleteCurrentObjects` for the actions. Do not describe the public behavior as
+`prune` or `retainOnDelete`.
 
 Always destroy AWS verification stacks and verify they are absent before finalizing `docs/verification.md`. Raw AWS logs and resource identifiers stay in scratch only.
 

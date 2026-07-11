@@ -19,9 +19,10 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
       "SHIN_BENCH_LAMBDA_MAX_PARALLEL_TRANSFERS",
     );
     const implementation = parseImplementation(process.env.SHIN_BENCH_IMPLEMENTATION);
-    const deleteDestinationObjectsOnDelete = parseOptionalBooleanEnv(
-      "SHIN_BENCH_DELETE_DESTINATION_OBJECTS_ON_DELETE",
+    const deleteCurrentObjectsOnDelete = parseOptionalBooleanEnv(
+      "SHIN_BENCH_DELETE_CURRENT_OBJECTS_ON_DELETE",
     );
+    const deleteStaleObjects = process.env.SHIN_BENCH_DELETE_STALE_OBJECTS !== "false";
 
     const websiteBucket = new Bucket(this, "WebsiteBucket", {
       autoDeleteObjects: true,
@@ -32,29 +33,34 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
       destinationBucket: websiteBucket,
       destinationKeyPrefix: destinationPrefix,
       memoryLimit: memoryLimitMb,
-      prune: process.env.SHIN_BENCH_PRUNE !== "false",
       waitForDistributionInvalidation: process.env.SHIN_BENCH_WAIT_FOR_CLOUDFRONT === "true",
     };
 
     if (implementation === "shin") {
       new ShinBucketDeployment(this, "DeployBenchmarkAssets", {
         ...deploymentProps,
-        ...(deleteDestinationObjectsOnDelete === undefined
-          ? {}
-          : {
-              destinationLifecycle: {
-                deleteDestinationObjectsOnDelete,
-              },
-            }),
+        destinationLifecycle: {
+          onDeployment: {
+            deleteStaleObjects,
+          },
+          ...(deleteCurrentObjectsOnDelete === undefined
+            ? {}
+            : {
+                onDelete: {
+                  deleteCurrentObjects: deleteCurrentObjectsOnDelete,
+                },
+              }),
+        },
         ...(maxParallelTransfers === undefined ? {} : { maxParallelTransfers }),
         sources: [ShinSource.asset(bundle.root)],
       });
     } else {
       new AwsBucketDeployment(this, "DeployBenchmarkAssets", {
         ...deploymentProps,
-        ...(deleteDestinationObjectsOnDelete === undefined
+        prune: deleteStaleObjects,
+        ...(deleteCurrentObjectsOnDelete === undefined
           ? {}
-          : { retainOnDelete: !deleteDestinationObjectsOnDelete }),
+          : { retainOnDelete: !deleteCurrentObjectsOnDelete }),
         sources: [AwsSource.asset(bundle.root)],
       });
     }

@@ -33,6 +33,24 @@ suffixes. Do not use `v1`/`v2`, `alpha`/`beta`, or other release-like labels for
 scenario phases. Use a descriptive suffix such as `-bucket-only` for terminal
 shape changes.
 
+Keep destructive destination behavior under the phase-oriented
+`destinationLifecycle` API:
+
+- `onDeployment.deleteStaleObjects` controls stale-object deletion on Create
+  and Update.
+- `onChange.deletePreviousObjects` controls previous-namespace deletion when
+  destination settings change; `true` reuses the current bucket and an
+  `IBucket` value authorizes a changed previous bucket.
+- `onChange.invalidatePreviousDistribution` independently authorizes a changed
+  previous CloudFront distribution.
+- `onDelete.deleteCurrentObjects` controls current-namespace deletion on
+  custom-resource Delete.
+
+Do not reintroduce the public `prune`, `retainOnDelete`, or flat lifecycle
+aliases. CloudFormation supplies the previous prefix at runtime through
+`OldResourceProperties`; changed previous buckets and distributions remain
+explicit synthesis-time inputs for IAM and dependencies.
+
 Keep raw AWS output in scratch directories outside the repo. Commit only sanitized docs, benchmark result rows, source, tests, and scenarios.
 
 For benchmark telemetry interpretation, use the `docs/architecture.md` Diagnostics field reference. Do not infer S3 throttling from source block refetches or waits unless the provider summary also shows source `getRetries`/`getErrors` or destination `putObject.throttledAttempts`/`retryAttempts`.

@@ -65,27 +65,26 @@ pub(crate) struct DeploymentRequest {
     pub(crate) dest_bucket_name: String,
     pub(crate) dest_bucket_prefix: String,
     pub(crate) extract: bool,
-    pub(crate) delete_destination_objects_on_delete: bool,
+    pub(crate) delete_current_objects_on_delete: bool,
     pub(crate) distribution_id: Option<String>,
     pub(crate) distribution_paths: Vec<String>,
     pub(crate) wait_for_distribution_invalidation: bool,
     pub(crate) user_metadata: HashMap<String, String>,
     pub(crate) system_metadata: HashMap<String, String>,
-    pub(crate) prune: bool,
+    pub(crate) delete_stale_objects_on_deployment: bool,
     pub(crate) exclude: Vec<String>,
     pub(crate) include: Vec<String>,
     pub(crate) output_object_keys: bool,
     pub(crate) destination_bucket_arn: Option<String>,
     pub(crate) destination_owner_id: Option<String>,
-    pub(crate) delete_previous_destination_objects_on_update:
-        Option<DeletePreviousDestinationObjectsOnUpdate>,
+    pub(crate) delete_previous_objects_on_change: Option<DeletePreviousObjectsOnChange>,
+    pub(crate) invalidate_previous_distribution_on_change: Option<String>,
     pub(crate) runtime: RuntimeOptions,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct DeletePreviousDestinationObjectsOnUpdate {
+pub(crate) struct DeletePreviousObjectsOnChange {
     pub(crate) bucket_name: String,
-    pub(crate) distribution_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -238,7 +237,7 @@ pub(crate) struct DeploymentStatsSnapshot<'a> {
     pub(crate) request_type: &'a str,
     pub(crate) status: &'a str,
     pub(crate) extract: bool,
-    pub(crate) prune: bool,
+    pub(crate) delete_stale_objects_on_deployment: bool,
     pub(crate) available_memory_mb: u64,
     pub(crate) max_parallel_transfers: usize,
     pub(crate) duration_ms: u64,
@@ -487,7 +486,7 @@ impl DeploymentStats {
             request_type,
             status,
             extract: request.extract,
-            prune: request.prune,
+            delete_stale_objects_on_deployment: request.delete_stale_objects_on_deployment,
             available_memory_mb: request.runtime.available_memory_mb,
             max_parallel_transfers: request.runtime.max_parallel_transfers,
             duration_ms: duration_ms(self.started.0.elapsed()),

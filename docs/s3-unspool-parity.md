@@ -29,7 +29,7 @@ This matrix is point-in-time documentation. Re-check it when `s3-unspool` change
 | Decompress ZIP entries from ranged source data | Implemented for stored and deflated entries. |
 | Validate ZIP entry output size and CRC32 | Implemented for hashing, marker replacement input, catalog loading, and upload streaming. |
 | Small bounded entry streaming buffers | Implemented with the same defaults as the local `s3-unspool` extraction path: 64 KiB entry read buffers, 256 KiB S3 body chunks, and 1 MiB body pipe capacity. |
-| Destination prefix list as comparison input | Implemented. Destination `ListObjectsV2` drives skip and prune decisions. |
+| Destination prefix list as comparison input | Implemented. Destination `ListObjectsV2` drives skip and stale-object deletion decisions. |
 | Destination size short-circuit | Implemented. Existing objects with different listed size upload without pre-hashing. |
 | Embedded MD5 catalog runtime support | Implemented. Existing `.shin/catalog.v1.json` entries are consumed. |
 | Cataloged asset production | Implemented for local directory `Source.asset` inputs through this construct's `Source` wrapper. |
@@ -39,7 +39,7 @@ This matrix is point-in-time documentation. Re-check it when `s3-unspool` change
 | Runtime tuning surface | Implemented for transfer concurrency, source block/window settings, source GET concurrency, and PUT retry policy. |
 | Adaptive source tuning | Implemented. Source GET concurrency and source block window default from the provider Lambda memory size. |
 | Structured diagnostics counters | Implemented as provider logs for source GET attempts/retries/errors, bytes/amplification, block hits/waits/releases/refetches, split wait reasons, replay-claim counters, resident source-window high-water, active reader and active GET high-water, conditional write conflicts, and PUT retry/failure counters. |
-| `DestinationCleanup` policy | Mapped to CDK `prune`: `prune=true` behaves like `DeleteExtra`; `prune=false` behaves like `KeepExtra`. |
+| `DestinationCleanup` policy | Mapped to `destinationLifecycle.onDeployment.deleteStaleObjects`: `true` behaves like `DeleteExtra`; `false` behaves like `KeepExtra`. |
 | `ComparisonMode` policy | Mapped to fixed `CatalogThenHash` behavior for marker-free ZIP entries. There is no public force-hash mode. |
 | `ConflictPolicy` policy | Mapped to CloudFormation fail-fast behavior. Conditional destination write conflicts are counted in the sanitized provider summary and fail the custom-resource request instead of being reported and continued. |
 | `AdaptiveSourceWindow` | Implemented as equivalent internal memory-derived source-window sizing. Public CDK users set `memoryLimit`; low-level overrides remain under `advancedRuntimeTuning`. |
@@ -52,9 +52,9 @@ This matrix is point-in-time documentation. Re-check it when `s3-unspool` change
 | Multiple source precedence | Preserved by building one deployment manifest; later sources overwrite earlier relative keys. |
 | Deploy-time markers | Preserved. Marker entries are decompressed, validated, materialized, replaced, hashed, and uploaded when changed. |
 | `extract=false` | Preserved as a separate `CopyObject` path. |
-| `include` / `exclude` | Preserved while walking ZIP entries and destination prune candidates. |
-| `prune` | Preserved through destination listing and batched `DeleteObjects`. |
-| `destinationLifecycle` | Separately opts into deleting current destination objects on Delete or previous destination objects on Update. Update deletion derives the old prefix from `OldResourceProperties` and requires explicit old resources only when they changed. |
+| `include` / `exclude` | Preserved while walking ZIP entries and stale-object deletion candidates. |
+| `destinationLifecycle.onDeployment.deleteStaleObjects` | Maps the upstream `prune` behavior to destination listing and batched `DeleteObjects`. |
+| `destinationLifecycle.onChange` / `onDelete` | Separately opts into deleting previous objects, invalidating a changed previous distribution, or deleting current objects on Delete. Previous-object deletion derives the old prefix from `OldResourceProperties`; changed old resources are explicit synthesis-time inputs. |
 | S3 metadata props | Preserved for upload and copy requests. |
 | CloudFront invalidation | Preserved after S3 deployment. |
 | `deployedBucket` and `objectKeys` | Preserved through custom-resource response data. |

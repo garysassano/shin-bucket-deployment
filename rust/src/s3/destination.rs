@@ -25,7 +25,7 @@ struct DestinationRecordContext<'a> {
     strip_prefix: &'a str,
     filters: &'a Filters,
     manifest: &'a DeploymentManifest,
-    prune: bool,
+    delete_stale_objects_on_deployment: bool,
 }
 
 pub(crate) async fn delete_prefix(
@@ -172,7 +172,7 @@ pub(super) async fn plan_destination(
                     strip_prefix,
                     filters,
                     manifest,
-                    prune: request.prune,
+                    delete_stale_objects_on_deployment: request.delete_stale_objects_on_deployment,
                 },
                 &mut objects,
                 &mut keys_to_delete,
@@ -405,7 +405,7 @@ fn record_destination_object(
     if !context.filters.should_include(&relative_key) {
         return;
     }
-    if context.prune && !context.manifest.contains_key(&relative_key) {
+    if context.delete_stale_objects_on_deployment && !context.manifest.contains_key(&relative_key) {
         keys_to_delete.push(key.to_string());
     }
 }
@@ -442,7 +442,7 @@ mod tests {
     }
 
     #[test]
-    fn destination_entry_records_etag_and_queues_missing_manifest_key_for_prune() {
+    fn destination_entry_records_etag_and_queues_stale_manifest_key_for_deletion() {
         let filters = compile_filters(&[], &[]).unwrap();
         let manifest = DeploymentManifest::new();
         let mut objects = HashMap::<String, DestinationObject>::new();
@@ -456,7 +456,7 @@ mod tests {
                 strip_prefix: "site/",
                 filters: &filters,
                 manifest: &manifest,
-                prune: true,
+                delete_stale_objects_on_deployment: true,
             },
             &mut objects,
             &mut keys_to_delete,
@@ -493,7 +493,7 @@ mod tests {
                 strip_prefix: "site/",
                 filters: &filters,
                 manifest: &manifest,
-                prune: true,
+                delete_stale_objects_on_deployment: true,
             },
             &mut objects,
             &mut keys_to_delete,
@@ -506,7 +506,7 @@ mod tests {
                 strip_prefix: "site/",
                 filters: &filters,
                 manifest: &manifest,
-                prune: true,
+                delete_stale_objects_on_deployment: true,
             },
             &mut objects,
             &mut keys_to_delete,
@@ -532,7 +532,7 @@ mod tests {
                 strip_prefix: "site/",
                 filters: &filters,
                 manifest: &manifest,
-                prune: true,
+                delete_stale_objects_on_deployment: true,
             },
             &mut objects,
             &mut keys_to_delete,

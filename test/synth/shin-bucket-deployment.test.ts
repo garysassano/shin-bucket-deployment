@@ -45,7 +45,7 @@ test("renders a Rust-backed custom resource", () => {
       Ref: Match.anyValue(),
     },
     Extract: true,
-    Prune: true,
+    DeleteStaleObjectsOnDeployment: true,
     AvailableMemoryMb: 1024,
   });
 }, 120_000);
@@ -329,7 +329,7 @@ test("supports account-regional destination buckets", () => {
   });
 });
 
-test("keeps delete and list permissions broad when destination object deletion on Delete is enabled", () => {
+test("keeps delete and list permissions scoped when current object deletion is enabled", () => {
   const stack = new Stack();
   const destinationBucket = new Bucket(stack, "Dest");
 
@@ -338,7 +338,9 @@ test("keeps delete and list permissions broad when destination object deletion o
     destinationBucket,
     destinationKeyPrefix: "site",
     destinationLifecycle: {
-      deleteDestinationObjectsOnDelete: true,
+      onDelete: {
+        deleteCurrentObjects: true,
+      },
     },
     bundling: testBundling(),
   });
@@ -355,14 +357,18 @@ test("keeps delete and list permissions broad when destination object deletion o
               "",
               Match.arrayWith([
                 Match.objectLike({ "Fn::GetAtt": Match.arrayWith(["DestC383B82A", "Arn"]) }),
-                "/*",
+                "/site/*",
               ]),
             ],
           },
         }),
         Match.objectLike({
           Action: "s3:ListBucket",
-          Condition: Match.absent(),
+          Condition: {
+            StringEquals: {
+              "s3:prefix": "site/",
+            },
+          },
         }),
       ]),
     },

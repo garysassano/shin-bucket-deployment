@@ -16,7 +16,7 @@ The provider Lambda:
 - skips unchanged objects when destination metadata is sufficient
 - uploads changed extracted objects with `PutObject`
 - copies `extract=false` sources with `CopyObject`
-- deletes destination keys not present in the plan when `prune=true`
+- deletes destination keys not present in the plan when `destinationLifecycle.onDeployment.deleteStaleObjects` is enabled
 - creates optional CloudFront invalidations after S3 changes
 
 Runtime tuning defaults:
@@ -103,8 +103,8 @@ Verification deploy/destroy can run independent scenario chains concurrently wit
 | `marker-replacement` | `scenarios/apps/metadata/marker-replacement-app.ts` | Deploy-time marker replacement across asset, data, JSON, and YAML sources. |
 | `metadata-and-filters` | `scenarios/apps/metadata/metadata-and-filters-app.ts` | Include/exclude filters and S3 metadata mapping. |
 | `source-overwrite-order` | `scenarios/apps/metadata/source-overwrite-order-app.ts` | Duplicate source keys where later sources win. |
-| `prune-update-initial` / `prune-update-updated` | `scenarios/apps/updates/prune-update-initial-app.ts`, `scenarios/apps/updates/prune-update-updated-app.ts` | Ordered update chain that removes destination objects absent from the updated source plan. |
-| `prune-disabled-initial` / `prune-disabled-updated` | `scenarios/apps/updates/prune-disabled-initial-app.ts`, `scenarios/apps/updates/prune-disabled-updated-app.ts` | Ordered update chain with `prune=false`, preserving destination objects absent from the updated source plan. |
+| `stale-object-cleanup-initial` / `stale-object-cleanup-updated` | `scenarios/apps/updates/stale-object-cleanup-initial-app.ts`, `scenarios/apps/updates/stale-object-cleanup-updated-app.ts` | Ordered update chain that removes destination objects absent from the updated source plan. |
+| `stale-object-retention-initial` / `stale-object-retention-updated` | `scenarios/apps/updates/stale-object-retention-initial-app.ts`, `scenarios/apps/updates/stale-object-retention-updated-app.ts` | Ordered update chain with stale-object deletion disabled, preserving destination objects absent from the updated source plan. |
 | `default-retention-initial` / `default-retention-updated` | `scenarios/apps/retention/default-retention-initial-app.ts`, `scenarios/apps/retention/default-retention-updated-app.ts` | Ordered update chain proving that the default retains previous destination objects and current objects on Delete. |
 | `object-deletion-initial` / `object-deletion-updated` / `object-deletion-bucket-only` | `scenarios/apps/retention/object-deletion-initial-app.ts`, `scenarios/apps/retention/object-deletion-updated-app.ts`, `scenarios/apps/retention/object-deletion-bucket-only-app.ts` | Ordered update chain proving explicit previous-destination object deletion on Update, followed by current-destination object deletion on Delete. |
 | `extract-false` | `scenarios/apps/basic/extract-false-app.ts` | Archive copy mode with `extract=false`. |
@@ -126,7 +126,7 @@ flowchart TD
   D --> G["Build DeploymentRequest"]
   E --> G
   F --> G
-  G --> H{"Delete with destination object deletion enabled?"}
+  G --> H{"Delete with current-object deletion enabled?"}
   H -->|Yes| I["Delete current namespace unless a competing owner overlaps"]
   H -->|No| J{"Create or Update?"}
   I --> J
@@ -155,14 +155,20 @@ flowchart TD
 
 ## Changing a destination safely
 
-`destinationLifecycle` names the destructive action and CloudFormation event
-directly. Both `deletePreviousDestinationObjectsOnUpdate` and
-`deleteDestinationObjectsOnDelete` default to disabled, so previous objects are
-retained after destination changes and current objects are retained when the
-custom resource is deleted.
+`destinationLifecycle` groups cleanup by lifecycle phase while each nested
+property names the action directly:
 
-When only the prefix changes, the current bucket and distribution remain the
-authorized resources:
+- `onDeployment` applies whenever current sources are deployed on Create or
+  Update. `deleteStaleObjects` defaults to `true`.
+- `onChange` applies only when the destination bucket, prefix, or distribution
+  changed in a CloudFormation Update. Previous-object deletion and
+  previous-distribution invalidation are both disabled by default.
+- `onDelete` applies when CloudFormation deletes the custom resource.
+  `deleteCurrentObjects` defaults to `false`.
+
+When only the prefix changes, set `deletePreviousObjects` to `true`. The current
+bucket remains the authorized bucket, and CloudFormation supplies the previous
+prefix through `OldResourceProperties`:
 
 ```ts
 new ShinBucketDeployment(this, "DeployWebsite", {
@@ -171,14 +177,15 @@ new ShinBucketDeployment(this, "DeployWebsite", {
   destinationKeyPrefix: "site-v2",
   distribution,
   destinationLifecycle: {
-    deletePreviousDestinationObjectsOnUpdate: true,
+    onChange: {
+      deletePreviousObjects: true,
+    },
   },
 });
 ```
 
-CloudFormation provides the previous prefix in `OldResourceProperties`, so the
-caller does not repeat it. When the bucket or distribution changes, pass only
-the old resources that changed:
+When the bucket changes, pass the previous `IBucket` directly. When the
+distribution changes, authorize its separate invalidation action explicitly:
 
 ```ts
 new ShinBucketDeployment(this, "DeployWebsite", {
@@ -187,47 +194,56 @@ new ShinBucketDeployment(this, "DeployWebsite", {
   destinationKeyPrefix: "site-v2",
   distribution: newDistribution,
   destinationLifecycle: {
-    deletePreviousDestinationObjectsOnUpdate: {
-      bucket: oldBucket,
-      distribution: oldDistribution,
+    onChange: {
+      deletePreviousObjects: oldBucket,
+      invalidatePreviousDistribution: oldDistribution,
     },
   },
 });
 ```
 
-| Changed value | `destinationLifecycle.deletePreviousDestinationObjectsOnUpdate` |
+| Changed value | `destinationLifecycle.onChange` |
 | --- | --- |
-| Prefix only | `true` |
-| Bucket | `{ bucket: oldBucket }` |
-| Distribution | `{ distribution: oldDistribution }` |
-| Bucket and distribution | `{ bucket: oldBucket, distribution: oldDistribution }` |
+| Prefix only | `{ deletePreviousObjects: true }` |
+| Bucket | `{ deletePreviousObjects: oldBucket }` |
+| Distribution | `{ invalidatePreviousDistribution: oldDistribution }` |
+| Bucket and distribution | `{ deletePreviousObjects: oldBucket, invalidatePreviousDistribution: oldDistribution }` |
 
-To delete the current destination objects when CloudFormation deletes the
-custom resource, enable the separate Delete action. The two actions can be
-combined:
+The actions are independent. Omitting `invalidatePreviousDistribution` does
+not block explicitly requested object deletion. If the previous distribution
+differs and its cached content changed, the provider skips that invalidation
+and logs that it was not explicitly authorized.
+
+To retain stale objects during normal deployments and delete current objects
+when CloudFormation deletes the custom resource:
 
 ```ts
 destinationLifecycle: {
-  deletePreviousDestinationObjectsOnUpdate: true,
-  deleteDestinationObjectsOnDelete: true,
+  onDeployment: {
+    deleteStaleObjects: false,
+  },
+  onDelete: {
+    deleteCurrentObjects: true,
+  },
 }
 ```
 
-Neither action deletes the bucket or CloudFront distribution resource.
-`prune=true` is separate: it removes objects that are absent from the current
-source plan during a deployment, within the current destination namespace.
+None of these actions deletes the bucket or CloudFront distribution resource.
+`deleteStaleObjects` removes only objects in the current namespace that are
+absent from the deployment plan and match the active include/exclude filters.
 
-The bucket defaults to `destinationBucket`. An omitted previous distribution is
-accepted only when the distribution in `OldResourceProperties` is absent or
-matches the current `distribution`. A changed old distribution must be passed
-explicitly so CDK can grant its invalidation permissions.
+For previous-object deletion, `true` reuses `destinationBucket`; an `IBucket`
+value authorizes a changed previous bucket. An unchanged current distribution
+is invalidated automatically. A changed previous distribution must be passed
+to `invalidatePreviousDistribution` so CDK can grant distribution-specific
+invalidation permissions and synthesize its dependency.
 
 The provider deploys the current content before considering previous cleanup.
 It derives the old prefix from `OldResourceProperties`, verifies that the old
-bucket and changed distribution match the resources authorized by the new
-template, and applies the owner and namespace-overlap checks. A missing or
-mismatched resource authorization retains the previous destination and logs the
-reason; it does not undo the successful deployment of current content.
+bucket matches the resource authorized by the new template, and applies the
+owner and namespace-overlap checks. A missing or mismatched bucket
+authorization retains the previous destination and logs the reason; it does
+not undo the successful deployment of current content.
 
 Parent/child prefix changes are segment-aware. If the previous prefix contains
 the current prefix, cleanup excludes the complete current namespace. If the
@@ -251,16 +267,16 @@ deletion grants List/Delete and ownership-tag access across the selected bucket.
 The provider limits its operation to the old prefix from
 `OldResourceProperties`, but the execution role's S3 permission is broader for
 the duration that the option remains in the template. Remove
-`deletePreviousDestinationObjectsOnUpdate` after the transition to remove that
-additional grant.
+`destinationLifecycle.onChange.deletePreviousObjects` after the transition to
+remove that additional grant.
 
 Fully automatic cross-bucket cleanup would require wildcard permissions over
 buckets that are absent from the synthesized construct graph. That would weaken
 least privilege, omit useful CloudFormation dependencies, and give the provider
 authority unrelated to the declared migration. Shin instead requires an
 explicit old `IBucket` for cross-bucket moves and scopes the additional grant to
-that bucket. Changed CloudFront distributions follow the same rule and receive
-distribution-specific invalidation permissions.
+that bucket. Changed CloudFront distributions likewise require an explicit
+`IDistribution` and receive distribution-specific invalidation permissions.
 
 There is intentionally no lifecycle protocol version, deprecated alias, or
 compatibility parser in this contract. PR3 was merged with zero active users,
@@ -302,9 +318,10 @@ Shin differs in these ways:
 
 1. Deploy current content first; never create the upstream delete-before-sync
    availability gap.
-2. Make object deletion an explicit lifecycle choice for each event. Update
-   deletion is a temporary opt-in; the provider derives the old prefix from
-   `OldResourceProperties` and validates the authorized resources.
+2. Group explicit cleanup actions under deployment, destination-change, and
+   Delete phases. Previous-object deletion is a temporary opt-in; the provider
+   derives the old prefix from `OldResourceProperties` and validates the
+   authorized bucket.
 3. Reuse current resources when they are unchanged, while carrying an explicitly
    changed previous bucket or distribution as a CDK interface so the new
    template expresses its dependency and functional permissions.
@@ -350,7 +367,7 @@ For `extract=false`:
 4. Skip copies whose destination `ETag` matches.
 5. Run changed copies with `CopyObject` and `MetadataDirective=REPLACE`.
 
-Destination listing is also used for pruning. With `prune=true`, objects under the destination prefix that are not in the current deployment plan are removed with `DeleteObjects` in 1000-key chunks.
+Destination listing is also used for stale-object cleanup. With `destinationLifecycle.onDeployment.deleteStaleObjects` enabled, objects under the destination prefix that are not in the current deployment plan are removed with `DeleteObjects` in 1000-key chunks.
 
 ## Skip Decisions
 
@@ -392,9 +409,9 @@ CloudFormation failure responses use a truncated `Reason` string. CloudFormation
 
 ## IAM Shape
 
-The provider role uses source grants from each bound CDK source and destination grants from the target bucket. Destination object write/delete permissions are scoped to `destinationKeyPrefix` when the prefix is concrete. Destination `ListBucket` is also scoped with `s3:prefix` when the current prefix is concrete and `deleteDestinationObjectsOnDelete` is disabled.
+The provider role uses source grants from each bound CDK source and destination grants from the target bucket. Destination object write/delete permissions are scoped to `destinationKeyPrefix` when the prefix is concrete. Destination `ListBucket` is likewise scoped with `s3:prefix` for both deployment cleanup and `onDelete.deleteCurrentObjects`. A root or unresolved prefix requires bucket-wide object/list scope.
 
-When `deleteDestinationObjectsOnDelete` is enabled, the current-destination delete/list policy covers the full bucket. `deletePreviousDestinationObjectsOnUpdate` likewise grants List/Delete and ownership-tag access across the selected previous bucket because `OldResourceProperties` does not reveal the old prefix until runtime. The provider derives that prefix from the Update event and validates the selected bucket before using the grant. An omitted bucket defaults to the current destination; a changed old bucket must be passed explicitly. Current CloudFront permissions cover an unchanged distribution, while an explicitly changed old distribution receives distribution-specific invalidation access.
+`onChange.deletePreviousObjects` grants List/Delete and ownership-tag access across the selected previous bucket because `OldResourceProperties` does not reveal the old prefix until runtime. The provider derives that prefix from the Update event and validates the selected bucket before using the grant. `true` reuses the current bucket; a changed old bucket must be passed explicitly. Current CloudFront permissions cover an unchanged distribution, while `onChange.invalidatePreviousDistribution` grants distribution-specific invalidation access independently of object deletion.
 
 ## Engine Transition
 
@@ -484,7 +501,7 @@ Destination upload diagnostics field reference:
 | Include/exclude filters | Filters are applied while walking ZIP entries. |
 | S3 metadata and content type handling | Upload and copy requests apply CDK metadata options. |
 | `extract=false` | Copy mode stays separate from ZIP extraction. |
-| `prune` and `destinationLifecycle` | Destination listing and delete planning remain provider-owned. |
+| `destinationLifecycle` | Destination listing, stale-object deletion, destination-change cleanup, and Delete cleanup remain provider-owned. |
 | CloudFront invalidation | Runs after S3 deployment and is outside the extraction engine. |
 | CDK asset packaging | Directory assets are packaged by this construct to embed the catalog. Bundled assets and symlink-following options should use `embeddedCatalog: false` until cataloged packaging supports them. |
 
@@ -507,5 +524,5 @@ Destination upload diagnostics field reference:
 The highest-value architecture work is now:
 
 1. Build a benchmark runner that captures local wall time, CloudFormation timing, provider logs, S3 request counts, bytes read/written, and destination object state.
-2. Expand structured provider telemetry to include planning, skip, prune, and invalidation counters.
+2. Expand structured provider telemetry to include planning, skip, stale-object deletion, and invalidation counters.
 3. Add cataloged packaging support for CDK asset bundling or keep the current explicit fallback if the compatibility surface is too large.

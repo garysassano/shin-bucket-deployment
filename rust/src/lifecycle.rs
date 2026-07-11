@@ -20,7 +20,7 @@ pub(crate) struct DeletePreviousDestination {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum UpdateCleanupDecision {
+pub(crate) enum DestinationChangeCleanupDecision {
     NotNeeded(NoCleanupReason),
     Retain(RetainReason),
     Delete(DeletePreviousDestination),
@@ -34,10 +34,10 @@ enum NamespaceRelation {
     Disjoint,
 }
 
-pub(crate) fn plan_update_cleanup(
+pub(crate) fn plan_destination_change_cleanup(
     current: &DeploymentRequest,
     previous: &PreviousDestination,
-) -> UpdateCleanupDecision {
+) -> DestinationChangeCleanupDecision {
     let same_bucket = current.dest_bucket_name == previous.bucket_name;
     let relation = if same_bucket {
         namespace_relation(&previous.bucket_prefix, &current.dest_bucket_prefix)
@@ -47,26 +47,22 @@ pub(crate) fn plan_update_cleanup(
 
     match relation {
         NamespaceRelation::Same => {
-            return UpdateCleanupDecision::NotNeeded(NoCleanupReason::SameDestination);
+            return DestinationChangeCleanupDecision::NotNeeded(NoCleanupReason::SameDestination);
         }
         NamespaceRelation::CurrentContainsPrevious => {
-            return UpdateCleanupDecision::NotNeeded(NoCleanupReason::CurrentContainsPrevious);
+            return DestinationChangeCleanupDecision::NotNeeded(
+                NoCleanupReason::CurrentContainsPrevious,
+            );
         }
         NamespaceRelation::PreviousContainsCurrent | NamespaceRelation::Disjoint => {}
     }
 
-    if current
-        .delete_previous_destination_objects_on_update
-        .is_none()
-    {
-        return UpdateCleanupDecision::Retain(RetainReason::MissingAuthorization);
+    if current.delete_previous_objects_on_change.is_none() {
+        return DestinationChangeCleanupDecision::Retain(RetainReason::MissingAuthorization);
     }
 
-    let namespace_authorized = previous_namespace_authorized(current, previous);
-    let distribution_authorized = cleanup_distribution_authorized(current, previous);
-
-    if !namespace_authorized || !distribution_authorized {
-        return UpdateCleanupDecision::Retain(RetainReason::AuthorizationMismatch);
+    if !previous_namespace_authorized(current, previous) {
+        return DestinationChangeCleanupDecision::Retain(RetainReason::AuthorizationMismatch);
     }
 
     if let (Some(current_owner), Some(previous_owner)) = (
@@ -74,13 +70,13 @@ pub(crate) fn plan_update_cleanup(
         previous.owner_id.as_deref(),
     ) && current_owner != previous_owner
     {
-        return UpdateCleanupDecision::Retain(RetainReason::OwnerMismatch);
+        return DestinationChangeCleanupDecision::Retain(RetainReason::OwnerMismatch);
     }
 
     let excluded_prefix = (relation == NamespaceRelation::PreviousContainsCurrent)
         .then(|| current.dest_bucket_prefix.clone());
 
-    UpdateCleanupDecision::Delete(DeletePreviousDestination {
+    DestinationChangeCleanupDecision::Delete(DeletePreviousDestination {
         previous: previous.clone(),
         excluded_prefix,
     })
@@ -101,34 +97,8 @@ pub(crate) fn previous_distribution_authorized(
     current: &DeploymentRequest,
     previous: &PreviousDestination,
 ) -> bool {
-    previous_namespace_authorized(current, previous)
-        && current
-            .delete_previous_destination_objects_on_update
-            .as_ref()
-            .is_some_and(|authorization| {
-                authorization.distribution_id.is_some()
-                    && authorization.distribution_id == previous.distribution_id
-            })
-}
-
-fn cleanup_distribution_authorized(
-    current: &DeploymentRequest,
-    previous: &PreviousDestination,
-) -> bool {
-    let Some(authorization) = current
-        .delete_previous_destination_objects_on_update
-        .as_ref()
-    else {
-        return false;
-    };
-
-    match authorization.distribution_id.as_ref() {
-        Some(_) => authorization.distribution_id == previous.distribution_id,
-        None => {
-            previous.distribution_id.is_none()
-                || previous.distribution_id == current.distribution_id
-        }
-    }
+    current.invalidate_previous_distribution_on_change.is_some()
+        && current.invalidate_previous_distribution_on_change == previous.distribution_id
 }
 
 fn previous_namespace_authorized(
@@ -136,7 +106,7 @@ fn previous_namespace_authorized(
     previous: &PreviousDestination,
 ) -> bool {
     current
-        .delete_previous_destination_objects_on_update
+        .delete_previous_objects_on_change
         .as_ref()
         .is_some_and(|authorization| authorization.bucket_name == previous.bucket_name)
 }
@@ -176,7 +146,7 @@ mod tests {
     use std::collections::HashMap;
 
     use crate::types::{
-        DeletePreviousDestinationObjectsOnUpdate, DeploymentRequest, PutObjectRetryJitter,
+        DeletePreviousObjectsOnChange, DeploymentRequest, PutObjectRetryJitter,
         PutObjectRetryOptions, RuntimeOptions,
     };
 
@@ -191,19 +161,20 @@ mod tests {
             dest_bucket_name: bucket.to_string(),
             dest_bucket_prefix: prefix.to_string(),
             extract: true,
-            delete_destination_objects_on_delete: true,
+            delete_current_objects_on_delete: true,
             distribution_id: None,
             distribution_paths: vec!["/*".to_string()],
             wait_for_distribution_invalidation: true,
             user_metadata: HashMap::new(),
             system_metadata: HashMap::new(),
-            prune: true,
+            delete_stale_objects_on_deployment: true,
             exclude: Vec::new(),
             include: Vec::new(),
             output_object_keys: true,
             destination_bucket_arn: None,
             destination_owner_id: Some("owner".to_string()),
-            delete_previous_destination_objects_on_update: None,
+            delete_previous_objects_on_change: None,
+            invalidate_previous_distribution_on_change: None,
             runtime: RuntimeOptions {
                 available_memory_mb: 1024,
                 max_parallel_transfers: 1,
@@ -235,19 +206,17 @@ mod tests {
     }
 
     fn authorize(request: &mut DeploymentRequest, previous: &PreviousDestination) {
-        request.delete_previous_destination_objects_on_update =
-            Some(DeletePreviousDestinationObjectsOnUpdate {
-                bucket_name: previous.bucket_name.clone(),
-                distribution_id: previous.distribution_id.clone(),
-            });
+        request.delete_previous_objects_on_change = Some(DeletePreviousObjectsOnChange {
+            bucket_name: previous.bucket_name.clone(),
+        });
     }
 
     #[test]
     fn equivalent_prefixes_need_no_cleanup() {
         let request = current("bucket", "site/");
         assert_eq!(
-            plan_update_cleanup(&request, &previous("bucket", "site")),
-            UpdateCleanupDecision::NotNeeded(NoCleanupReason::SameDestination)
+            plan_destination_change_cleanup(&request, &previous("bucket", "site")),
+            DestinationChangeCleanupDecision::NotNeeded(NoCleanupReason::SameDestination)
         );
     }
 
@@ -258,8 +227,8 @@ mod tests {
         authorize(&mut request, &previous);
 
         assert_eq!(
-            plan_update_cleanup(&request, &previous),
-            UpdateCleanupDecision::Delete(DeletePreviousDestination {
+            plan_destination_change_cleanup(&request, &previous),
+            DestinationChangeCleanupDecision::Delete(DeletePreviousDestination {
                 previous,
                 excluded_prefix: Some("site/updated".to_string()),
             })
@@ -272,7 +241,9 @@ mod tests {
         let previous = previous("bucket", "");
         authorize(&mut request, &previous);
 
-        let UpdateCleanupDecision::Delete(plan) = plan_update_cleanup(&request, &previous) else {
+        let DestinationChangeCleanupDecision::Delete(plan) =
+            plan_destination_change_cleanup(&request, &previous)
+        else {
             panic!("expected cleanup");
         };
         assert_eq!(plan.excluded_prefix.as_deref(), Some("site"));
@@ -282,8 +253,8 @@ mod tests {
     fn current_parent_subsumes_the_previous_namespace() {
         let request = current("bucket", "site");
         assert_eq!(
-            plan_update_cleanup(&request, &previous("bucket", "site/initial")),
-            UpdateCleanupDecision::NotNeeded(NoCleanupReason::CurrentContainsPrevious)
+            plan_destination_change_cleanup(&request, &previous("bucket", "site/initial")),
+            DestinationChangeCleanupDecision::NotNeeded(NoCleanupReason::CurrentContainsPrevious)
         );
     }
 
@@ -293,7 +264,9 @@ mod tests {
         let previous = previous("bucket", "site");
         authorize(&mut request, &previous);
 
-        let UpdateCleanupDecision::Delete(plan) = plan_update_cleanup(&request, &previous) else {
+        let DestinationChangeCleanupDecision::Delete(plan) =
+            plan_destination_change_cleanup(&request, &previous)
+        else {
             panic!("expected cleanup");
         };
         assert!(plan.excluded_prefix.is_none());
@@ -322,7 +295,9 @@ mod tests {
         let previous = previous("bucket", "site/");
         authorize(&mut request, &previous);
 
-        let UpdateCleanupDecision::Delete(plan) = plan_update_cleanup(&request, &previous) else {
+        let DestinationChangeCleanupDecision::Delete(plan) =
+            plan_destination_change_cleanup(&request, &previous)
+        else {
             panic!("expected cleanup");
         };
         assert_eq!(plan.excluded_prefix.as_deref(), Some("site//"));
@@ -334,12 +309,14 @@ mod tests {
         let previous = previous("old", "site");
 
         assert_eq!(
-            plan_update_cleanup(&request, &previous),
-            UpdateCleanupDecision::Retain(RetainReason::MissingAuthorization)
+            plan_destination_change_cleanup(&request, &previous),
+            DestinationChangeCleanupDecision::Retain(RetainReason::MissingAuthorization)
         );
 
         authorize(&mut request, &previous);
-        let UpdateCleanupDecision::Delete(plan) = plan_update_cleanup(&request, &previous) else {
+        let DestinationChangeCleanupDecision::Delete(plan) =
+            plan_destination_change_cleanup(&request, &previous)
+        else {
             panic!("expected cleanup");
         };
         assert_eq!(plan.previous.bucket_name, "old");
@@ -350,73 +327,59 @@ mod tests {
     fn mismatched_bucket_is_retained() {
         let mut request = current("new", "site");
         let previous = previous("old", "site");
-        request.delete_previous_destination_objects_on_update =
-            Some(DeletePreviousDestinationObjectsOnUpdate {
-                bucket_name: "other".to_string(),
-                distribution_id: None,
-            });
+        request.delete_previous_objects_on_change = Some(DeletePreviousObjectsOnChange {
+            bucket_name: "other".to_string(),
+        });
 
         assert_eq!(
-            plan_update_cleanup(&request, &previous),
-            UpdateCleanupDecision::Retain(RetainReason::AuthorizationMismatch)
+            plan_destination_change_cleanup(&request, &previous),
+            DestinationChangeCleanupDecision::Retain(RetainReason::AuthorizationMismatch)
         );
     }
 
     #[test]
-    fn changed_distribution_requires_exact_previous_distribution() {
+    fn previous_object_cleanup_is_independent_of_distribution_authorization() {
         let mut request = current("bucket", "updated");
         request.distribution_id = Some("new-distribution".to_string());
         let mut previous = previous("bucket", "initial");
         previous.distribution_id = Some("old-distribution".to_string());
         authorize(&mut request, &previous);
-        request
-            .delete_previous_destination_objects_on_update
-            .as_mut()
-            .expect("authorization")
-            .distribution_id = None;
 
-        assert_eq!(
-            plan_update_cleanup(&request, &previous),
-            UpdateCleanupDecision::Retain(RetainReason::AuthorizationMismatch)
-        );
-
-        request
-            .delete_previous_destination_objects_on_update
-            .as_mut()
-            .expect("authorization")
-            .distribution_id = Some("old-distribution".to_string());
         assert!(matches!(
-            plan_update_cleanup(&request, &previous),
-            UpdateCleanupDecision::Delete(_)
+            plan_destination_change_cleanup(&request, &previous),
+            DestinationChangeCleanupDecision::Delete(_)
         ));
+        assert!(!previous_distribution_authorized(&request, &previous));
     }
 
     #[test]
-    fn unchanged_distribution_needs_no_separate_distribution_authorization() {
+    fn previous_distribution_requires_exact_independent_authorization() {
+        let mut request = current("bucket", "site");
+        request.distribution_id = Some("new-distribution".to_string());
+        let mut previous = previous("bucket", "site");
+        previous.distribution_id = Some("old-distribution".to_string());
+
+        assert!(!previous_distribution_authorized(&request, &previous));
+        request.invalidate_previous_distribution_on_change = Some("wrong".to_string());
+        assert!(!previous_distribution_authorized(&request, &previous));
+        request.invalidate_previous_distribution_on_change = Some("old-distribution".to_string());
+        assert!(previous_distribution_authorized(&request, &previous));
+    }
+
+    #[test]
+    fn unchanged_distribution_does_not_block_previous_object_cleanup() {
         let mut request = current("bucket", "updated");
         request.distribution_id = Some("distribution".to_string());
         let mut previous = previous("bucket", "initial");
         previous.distribution_id = Some("distribution".to_string());
-        request.delete_previous_destination_objects_on_update =
-            Some(DeletePreviousDestinationObjectsOnUpdate {
-                bucket_name: previous.bucket_name.clone(),
-                distribution_id: None,
-            });
+        request.delete_previous_objects_on_change = Some(DeletePreviousObjectsOnChange {
+            bucket_name: previous.bucket_name.clone(),
+        });
 
         assert!(matches!(
-            plan_update_cleanup(&request, &previous),
-            UpdateCleanupDecision::Delete(_)
+            plan_destination_change_cleanup(&request, &previous),
+            DestinationChangeCleanupDecision::Delete(_)
         ));
-
-        request
-            .delete_previous_destination_objects_on_update
-            .as_mut()
-            .expect("authorization")
-            .distribution_id = Some("wrong-distribution".to_string());
-        assert_eq!(
-            plan_update_cleanup(&request, &previous),
-            UpdateCleanupDecision::Retain(RetainReason::AuthorizationMismatch)
-        );
     }
 
     #[test]
@@ -427,8 +390,8 @@ mod tests {
 
         previous.owner_id = Some("different-owner".to_string());
         assert_eq!(
-            plan_update_cleanup(&request, &previous),
-            UpdateCleanupDecision::Retain(RetainReason::OwnerMismatch)
+            plan_destination_change_cleanup(&request, &previous),
+            DestinationChangeCleanupDecision::Retain(RetainReason::OwnerMismatch)
         );
     }
 
@@ -437,11 +400,11 @@ mod tests {
         let mut request = current("new", "site");
         let previous = previous("old", "site");
         authorize(&mut request, &previous);
-        request.delete_destination_objects_on_delete = false;
+        request.delete_current_objects_on_delete = false;
 
         assert!(matches!(
-            plan_update_cleanup(&request, &previous),
-            UpdateCleanupDecision::Delete(_)
+            plan_destination_change_cleanup(&request, &previous),
+            DestinationChangeCleanupDecision::Delete(_)
         ));
     }
 }

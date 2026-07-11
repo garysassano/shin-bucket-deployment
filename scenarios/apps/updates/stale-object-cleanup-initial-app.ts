@@ -2,7 +2,7 @@ import { App, Aws, CfnOutput, RemovalPolicy, Stack, type StackProps } from "aws-
 import { Bucket } from "aws-cdk-lib/aws-s3";
 import { ShinBucketDeployment, Source } from "../../../src";
 
-class PruneDisabledUpdateShinBucketDeploymentStack extends Stack {
+class StaleObjectCleanupShinBucketDeploymentStack extends Stack {
   constructor(scope: App, id: string, props?: StackProps) {
     super(scope, id, props);
 
@@ -16,29 +16,32 @@ class PruneDisabledUpdateShinBucketDeploymentStack extends Stack {
         Source.asset("test/fixtures/my-website"),
         Source.data(
           "runtime/current.txt",
-          [`stack=${Aws.STACK_NAME}`, "phase=initial", "state=prune-disabled-seed"].join("\n"),
+          [`stack=${Aws.STACK_NAME}`, "phase=initial", "state=current-and-legacy-exist"].join("\n"),
         ),
-        Source.data("runtime/kept-by-prune-false.txt", "this remains after the updated phase\n"),
+        Source.data("runtime/legacy.txt", "remove this by deploying stale-object-cleanup-updated"),
       ],
       destinationBucket: websiteBucket,
-      destinationKeyPrefix: "prune-disabled-site",
-      prune: false,
+      destinationKeyPrefix: "stale-cleanup-site",
     });
 
     new CfnOutput(this, "BucketName", {
       value: websiteBucket.bucketName,
     });
 
-    new CfnOutput(this, "ListPruneDisabledPrefixCommand", {
-      value: `aws s3 ls s3://${websiteBucket.bucketName}/prune-disabled-site/ --recursive`,
+    new CfnOutput(this, "ListCleanupPrefixCommand", {
+      value: `aws s3 ls s3://${websiteBucket.bucketName}/stale-cleanup-site/ --recursive`,
     });
 
-    new CfnOutput(this, "FetchKeptFileCommand", {
-      value: `aws s3 cp s3://${websiteBucket.bucketName}/prune-disabled-site/runtime/kept-by-prune-false.txt -`,
+    new CfnOutput(this, "FetchCurrentFileCommand", {
+      value: `aws s3 cp s3://${websiteBucket.bucketName}/stale-cleanup-site/runtime/current.txt -`,
     });
 
-    new CfnOutput(this, "DeployUpdatedPruneDisabledScenarioCommand", {
-      value: "pnpm verify deploy prune-disabled-updated",
+    new CfnOutput(this, "FetchLegacyFileCommand", {
+      value: `aws s3 cp s3://${websiteBucket.bucketName}/stale-cleanup-site/runtime/legacy.txt -`,
+    });
+
+    new CfnOutput(this, "DeployUpdatedCleanupScenarioCommand", {
+      value: "pnpm verify deploy stale-object-cleanup-updated",
     });
   }
 }
@@ -52,6 +55,6 @@ const env =
       }
     : undefined;
 
-new PruneDisabledUpdateShinBucketDeploymentStack(app, "ShinBucketDeploymentPruneDisabledDemo", {
+new StaleObjectCleanupShinBucketDeploymentStack(app, "ShinBucketDeploymentStaleObjectCleanupDemo", {
   env,
 });

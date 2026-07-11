@@ -16,8 +16,12 @@ class ObjectDeletionShinBucketDeploymentStack extends Stack {
       destinationBucket: websiteBucket,
       destinationKeyPrefix: "cleanup/updated",
       destinationLifecycle: {
-        deleteDestinationObjectsOnDelete: true,
-        deletePreviousDestinationObjectsOnUpdate: true,
+        onChange: {
+          deletePreviousObjects: true,
+        },
+        onDelete: {
+          deleteCurrentObjects: true,
+        },
       },
     });
 

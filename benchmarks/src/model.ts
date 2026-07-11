@@ -27,6 +27,8 @@ export type ProviderSummary = {
   readonly requestType?: string | null;
   readonly status?: string | null;
   readonly extract?: boolean | null;
+  readonly deleteStaleObjectsOnDeployment?: boolean | null;
+  /** Historical provider snapshots before the destination lifecycle rename. */
   readonly prune?: boolean | null;
   readonly availableMemoryMb?: number | null;
   readonly maxParallelTransfers?: number | null;

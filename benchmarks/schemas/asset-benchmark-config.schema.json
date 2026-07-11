@@ -70,10 +70,10 @@
             "type": "string",
             "minLength": 1
           },
-          "prune": {
+          "deleteStaleObjects": {
             "type": "boolean"
           },
-          "deleteDestinationObjectsOnDelete": {
+          "deleteCurrentObjectsOnDelete": {
             "type": "boolean"
           }
         }

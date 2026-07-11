@@ -2,7 +2,7 @@ import { App, Aws, CfnOutput, RemovalPolicy, Stack, type StackProps } from "aws-
 import { Bucket } from "aws-cdk-lib/aws-s3";
 import { ShinBucketDeployment, Source } from "../../../src";
 
-class PruneUpdateShinBucketDeploymentStack extends Stack {
+class StaleObjectRetentionShinBucketDeploymentStack extends Stack {
   constructor(scope: App, id: string, props?: StackProps) {
     super(scope, id, props);
 
@@ -16,32 +16,34 @@ class PruneUpdateShinBucketDeploymentStack extends Stack {
         Source.asset("test/fixtures/my-website"),
         Source.data(
           "runtime/current.txt",
-          [`stack=${Aws.STACK_NAME}`, "phase=initial", "state=current-and-legacy-exist"].join("\n"),
+          [`stack=${Aws.STACK_NAME}`, "phase=updated", "state=stale-object-cleanup-disabled"].join(
+            "\n",
+          ),
         ),
-        Source.data("runtime/legacy.txt", "remove this by deploying prune-update-updated"),
       ],
       destinationBucket: websiteBucket,
-      destinationKeyPrefix: "prune-site",
+      destinationKeyPrefix: "stale-retention-site",
+      destinationLifecycle: {
+        onDeployment: {
+          deleteStaleObjects: false,
+        },
+      },
     });
 
     new CfnOutput(this, "BucketName", {
       value: websiteBucket.bucketName,
     });
 
-    new CfnOutput(this, "ListPrunePrefixCommand", {
-      value: `aws s3 ls s3://${websiteBucket.bucketName}/prune-site/ --recursive`,
+    new CfnOutput(this, "ListRetentionPrefixCommand", {
+      value: `aws s3 ls s3://${websiteBucket.bucketName}/stale-retention-site/ --recursive`,
     });
 
     new CfnOutput(this, "FetchCurrentFileCommand", {
-      value: `aws s3 cp s3://${websiteBucket.bucketName}/prune-site/runtime/current.txt -`,
+      value: `aws s3 cp s3://${websiteBucket.bucketName}/stale-retention-site/runtime/current.txt -`,
     });
 
-    new CfnOutput(this, "FetchLegacyFileCommand", {
-      value: `aws s3 cp s3://${websiteBucket.bucketName}/prune-site/runtime/legacy.txt -`,
-    });
-
-    new CfnOutput(this, "DeployUpdatedPruneScenarioCommand", {
-      value: "pnpm verify deploy prune-update-updated",
+    new CfnOutput(this, "ConfirmKeptFileStillExistsCommand", {
+      value: `aws s3 cp s3://${websiteBucket.bucketName}/stale-retention-site/runtime/retained-stale.txt -`,
     });
   }
 }
@@ -55,4 +57,8 @@ const env =
       }
     : undefined;
 
-new PruneUpdateShinBucketDeploymentStack(app, "ShinBucketDeploymentPruneUpdateDemo", { env });
+new StaleObjectRetentionShinBucketDeploymentStack(
+  app,
+  "ShinBucketDeploymentStaleObjectRetentionDemo",
+  { env },
+);

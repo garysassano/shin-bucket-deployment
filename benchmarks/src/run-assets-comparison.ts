@@ -28,8 +28,8 @@ type PhaseConfig = {
   readonly assetState: BenchmarkAssetState;
   readonly cloudfrontWait: boolean;
   readonly name: string;
-  readonly prune: boolean;
-  readonly deleteDestinationObjectsOnDelete?: boolean;
+  readonly deleteStaleObjects: boolean;
+  readonly deleteCurrentObjectsOnDelete?: boolean;
 };
 
 type RunnerConfig = {
@@ -73,16 +73,31 @@ type StackResource = {
 };
 
 const DEFAULT_PHASES: PhaseConfig[] = [
-  { assetState: "baseline", cloudfrontWait: false, name: "cold-create", prune: true },
+  {
+    assetState: "baseline",
+    cloudfrontWait: false,
+    name: "cold-create",
+    deleteStaleObjects: true,
+  },
   {
     assetState: "baseline",
     cloudfrontWait: false,
     name: "unchanged-update",
-    prune: true,
-    deleteDestinationObjectsOnDelete: false,
+    deleteStaleObjects: true,
+    deleteCurrentObjectsOnDelete: false,
   },
-  { assetState: "changed", cloudfrontWait: false, name: "changed-update", prune: true },
-  { assetState: "pruned", cloudfrontWait: false, name: "pruned-update", prune: true },
+  {
+    assetState: "changed",
+    cloudfrontWait: false,
+    name: "changed-update",
+    deleteStaleObjects: true,
+  },
+  {
+    assetState: "pruned",
+    cloudfrontWait: false,
+    name: "pruned-update",
+    deleteStaleObjects: true,
+  },
 ];
 
 const CLI_OPTIONS = [
@@ -112,8 +127,8 @@ const phaseSchema = z.object({
   assetState: stateSchema,
   cloudfrontWait: z.boolean().optional(),
   name: nonEmptyStringSchema,
-  prune: z.boolean().optional(),
-  deleteDestinationObjectsOnDelete: z.boolean().optional(),
+  deleteStaleObjects: z.boolean().optional(),
+  deleteCurrentObjectsOnDelete: z.boolean().optional(),
 });
 const benchmarkConfigSchema = z
   .object({
@@ -286,7 +301,7 @@ async function runBenchmarkStack(args: {
           assetState: options.phases.at(-1)?.assetState ?? "baseline",
           cloudfrontWait: false,
           name: "destroy",
-          prune: options.phases.at(-1)?.prune ?? true,
+          deleteStaleObjects: options.phases.at(-1)?.deleteStaleObjects ?? true,
         },
         run,
         stackSuffix,
@@ -333,13 +348,11 @@ function benchmarkEnv(args: {
     SHIN_BENCH_LAMBDA_MEMORY_MB: String(run.memoryMb),
     SHIN_BENCH_ASSET_STATE: phase.assetState,
     SHIN_BENCH_ASSET_PROFILE: run.assetProfile,
-    SHIN_BENCH_PRUNE: String(phase.prune),
-    ...(phase.deleteDestinationObjectsOnDelete === undefined
+    SHIN_BENCH_DELETE_STALE_OBJECTS: String(phase.deleteStaleObjects),
+    ...(phase.deleteCurrentObjectsOnDelete === undefined
       ? {}
       : {
-          SHIN_BENCH_DELETE_DESTINATION_OBJECTS_ON_DELETE: String(
-            phase.deleteDestinationObjectsOnDelete,
-          ),
+          SHIN_BENCH_DELETE_CURRENT_OBJECTS_ON_DELETE: String(phase.deleteCurrentObjectsOnDelete),
         }),
     SHIN_BENCH_STACK_SUFFIX: stackSuffix,
     SHIN_BENCH_WAIT_FOR_CLOUDFRONT: String(phase.cloudfrontWait),
@@ -632,8 +645,8 @@ function configPhaseToRunPhase(phase: NonNullable<BenchmarkConfig["phases"]>[num
     assetState: phase.assetState,
     cloudfrontWait: phase.cloudfrontWait ?? false,
     name: phase.name,
-    prune: phase.prune ?? true,
-    deleteDestinationObjectsOnDelete: phase.deleteDestinationObjectsOnDelete,
+    deleteStaleObjects: phase.deleteStaleObjects ?? true,
+    deleteCurrentObjectsOnDelete: phase.deleteCurrentObjectsOnDelete,
   };
 }
 

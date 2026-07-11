@@ -12,8 +12,8 @@ use uuid::Uuid;
 
 use crate::cloudfront::invalidate as invalidate_cloudfront;
 use crate::lifecycle::{
-    UpdateCleanupDecision, destination_namespaces_overlap, plan_update_cleanup,
-    previous_distribution_authorized,
+    DestinationChangeCleanupDecision, destination_namespaces_overlap,
+    plan_destination_change_cleanup, previous_distribution_authorized,
 };
 use crate::request::{RawDeploymentRequest, parse_old_destination, parse_request};
 use crate::s3::{bucket_has_competing_owner, delete_prefix, delete_prefix_excluding, deploy};
@@ -225,7 +225,7 @@ async fn process_request_inner(
     let mut deleted_current_destination = false;
     let mut cleaned_previous_destination = None;
 
-    if request_type == "Delete" && request.delete_destination_objects_on_delete {
+    if request_type == "Delete" && request.delete_current_objects_on_delete {
         if bucket_has_competing_owner(
             state,
             &request.dest_bucket_name,
@@ -259,8 +259,8 @@ async fn process_request_inner(
     if request_type == "Update"
         && let Some(previous) = previous_destination.as_ref()
     {
-        match plan_update_cleanup(request, previous) {
-            UpdateCleanupDecision::Delete(plan) => {
+        match plan_destination_change_cleanup(request, previous) {
+            DestinationChangeCleanupDecision::Delete(plan) => {
                 let competing_owner = bucket_has_competing_owner(
                     state,
                     &plan.previous.bucket_name,
@@ -300,10 +300,10 @@ async fn process_request_inner(
                     }
                 }
             }
-            UpdateCleanupDecision::Retain(reason) => {
+            DestinationChangeCleanupDecision::Retain(reason) => {
                 tracing::warn!(?reason, "previous destination retained");
             }
-            UpdateCleanupDecision::NotNeeded(_) => {}
+            DestinationChangeCleanupDecision::NotNeeded(_) => {}
         }
     }
 
@@ -322,9 +322,7 @@ async fn process_request_inner(
         && previous.distribution_id != request.distribution_id
         && let Some(distribution_id) = non_empty(previous.distribution_id.as_deref())
     {
-        if cleaned_previous_destination.is_some()
-            || previous_distribution_authorized(request, previous)
-        {
+        if previous_distribution_authorized(request, previous) {
             invalidate_distribution(
                 state,
                 identity,

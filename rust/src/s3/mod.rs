@@ -165,7 +165,7 @@ pub(crate) async fn deploy(
     }
     stats.add_transfer_millis(crate::types::duration_ms(started.elapsed()));
 
-    if request.prune {
+    if request.delete_stale_objects_on_deployment {
         let started = std::time::Instant::now();
         destination::delete_keys(
             state,
@@ -276,19 +276,20 @@ mod aws_integration_tests {
                 destination_bucket_name: destination_bucket.clone(),
                 destination_bucket_key_prefix: Some(prefix.clone()),
                 extract: true,
-                delete_destination_objects_on_delete: false,
+                delete_current_objects_on_delete: false,
                 distribution_id: None,
                 distribution_paths: None,
                 wait_for_distribution_invalidation: true,
                 user_metadata: HashMap::new(),
                 system_metadata: HashMap::new(),
-                prune: true,
+                delete_stale_objects_on_deployment: true,
                 exclude: Vec::new(),
                 include: Vec::new(),
                 output_object_keys: true,
                 destination_bucket_arn: None,
                 destination_owner_id: Some("integration-owner".to_string()),
-                delete_previous_destination_objects_on_update: None,
+                delete_previous_objects_on_change: None,
+                invalidate_previous_distribution_on_change: None,
                 available_memory_mb: Some(128),
                 max_parallel_transfers: Some(8),
                 source_block_bytes: Some(64 * 1024),
@@ -456,7 +457,7 @@ mod aws_integration_tests {
                 .send()
                 .await
                 .is_err(),
-            "stale prefixed object was not pruned"
+            "stale prefixed object was not deleted"
         );
         ensure!(
             get_bytes(client, bucket, "outside-prefix.txt").await? == b"keep".to_vec(),

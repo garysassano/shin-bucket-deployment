@@ -2,7 +2,7 @@ import { App, Aws, CfnOutput, RemovalPolicy, Stack, type StackProps } from "aws-
 import { Bucket } from "aws-cdk-lib/aws-s3";
 import { ShinBucketDeployment, Source } from "../../../src";
 
-class PruneUpdateShinBucketDeploymentStack extends Stack {
+class StaleObjectCleanupShinBucketDeploymentStack extends Stack {
   constructor(scope: App, id: string, props?: StackProps) {
     super(scope, id, props);
 
@@ -16,27 +16,27 @@ class PruneUpdateShinBucketDeploymentStack extends Stack {
         Source.asset("test/fixtures/my-website"),
         Source.data(
           "runtime/current.txt",
-          [`stack=${Aws.STACK_NAME}`, "phase=updated", "state=legacy-should-be-pruned"].join("\n"),
+          [`stack=${Aws.STACK_NAME}`, "phase=updated", "state=legacy-should-be-deleted"].join("\n"),
         ),
       ],
       destinationBucket: websiteBucket,
-      destinationKeyPrefix: "prune-site",
+      destinationKeyPrefix: "stale-cleanup-site",
     });
 
     new CfnOutput(this, "BucketName", {
       value: websiteBucket.bucketName,
     });
 
-    new CfnOutput(this, "ListPrunePrefixCommand", {
-      value: `aws s3 ls s3://${websiteBucket.bucketName}/prune-site/ --recursive`,
+    new CfnOutput(this, "ListCleanupPrefixCommand", {
+      value: `aws s3 ls s3://${websiteBucket.bucketName}/stale-cleanup-site/ --recursive`,
     });
 
     new CfnOutput(this, "FetchCurrentFileCommand", {
-      value: `aws s3 cp s3://${websiteBucket.bucketName}/prune-site/runtime/current.txt -`,
+      value: `aws s3 cp s3://${websiteBucket.bucketName}/stale-cleanup-site/runtime/current.txt -`,
     });
 
     new CfnOutput(this, "ConfirmLegacyRemovedCommand", {
-      value: `aws s3api head-object --bucket ${websiteBucket.bucketName} --key prune-site/runtime/legacy.txt`,
+      value: `aws s3api head-object --bucket ${websiteBucket.bucketName} --key stale-cleanup-site/runtime/legacy.txt`,
     });
   }
 }
@@ -50,4 +50,6 @@ const env =
       }
     : undefined;
 
-new PruneUpdateShinBucketDeploymentStack(app, "ShinBucketDeploymentPruneUpdateDemo", { env });
+new StaleObjectCleanupShinBucketDeploymentStack(app, "ShinBucketDeploymentStaleObjectCleanupDemo", {
+  env,
+});
