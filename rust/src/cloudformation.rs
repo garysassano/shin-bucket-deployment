@@ -1,16 +1,19 @@
 use std::collections::HashSet;
+use std::future::Future;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, ensure};
 use aws_lambda_events::event::cloudformation::CloudFormationCustomResourceRequest;
 use lambda_runtime::Error;
 use md5::{Digest, Md5};
 use serde_json::{Map, Value, json};
+use tokio::time::{Instant as TokioInstant, sleep_until, timeout_at};
 use tracing::error;
 use uuid::Uuid;
 
-use crate::cloudfront::invalidate as invalidate_cloudfront;
+use crate::cloudfront::{invalidate as invalidate_cloudfront, validate_invalidation_paths};
+use crate::deadline::InvocationDeadlines;
 use crate::lifecycle::{
     DestinationChangeCleanupDecision, destination_namespaces_overlap,
     plan_destination_change_cleanup, previous_distribution_authorized,
@@ -20,6 +23,11 @@ use crate::s3::{bucket_has_competing_owner, delete_prefix, delete_prefix_excludi
 use crate::types::{AppState, DeploymentStats, ResponsePayload, duration_ms};
 
 const MAX_FAILURE_REASON_BYTES: usize = 1024;
+const MAX_CLOUDFORMATION_RESPONSE_BYTES: usize = 4096;
+const RESOURCE_TYPE: &str = "Custom::ShinBucketDeployment";
+const CALLBACK_MAX_ATTEMPTS: usize = 5;
+const CALLBACK_RETRY_BASE_DELAY: Duration = Duration::from_millis(250);
+const CALLBACK_RETRY_MAX_DELAY: Duration = Duration::from_secs(2);
 
 type RequestEnvelope = CloudFormationCustomResourceRequest<Value, Value>;
 
@@ -28,6 +36,12 @@ struct RequestIdentity<'a> {
     stack_id: &'a str,
     request_id: &'a str,
     logical_resource_id: &'a str,
+}
+
+#[derive(Clone, Copy)]
+struct RequestExecution<'a> {
+    identity: RequestIdentity<'a>,
+    deadlines: InvocationDeadlines,
 }
 
 struct DecodedRequest<'a> {
@@ -42,24 +56,30 @@ pub(crate) async fn handle_event(
     state: Arc<AppState>,
     event: lambda_runtime::LambdaEvent<Value>,
 ) -> Result<Value, Error> {
-    let request = decode_request_envelope(event.payload)?;
-    let response = process_request_envelope(&state, &request).await;
+    let (payload, context) = event.into_parts();
+    let deadlines = InvocationDeadlines::from_lambda_deadline(context.deadline());
+    let request = decode_request_envelope(payload)?;
 
     let Some((response_url, stack_id, request_id, logical_resource_id)) = response_target(&request)
     else {
         return Err(anyhow!("unsupported CloudFormation custom resource request type").into());
     };
 
+    let response = timeout_at(
+        deadlines.drain(),
+        process_request_envelope(&state, &request, deadlines),
+    )
+    .await
+    .context("deployment cancellation did not finish before the callback-only reserve")
+    .and_then(|response| response);
+
     match response {
-        Ok(success) => {
+        Ok(success_body) => {
             send_response(
                 &state.http,
                 response_url,
-                stack_id,
-                request_id,
-                logical_resource_id,
-                "SUCCESS",
-                &success,
+                &success_body,
+                deadlines.callback(),
             )
             .await
             .context("failed to send success response")?;
@@ -75,15 +95,14 @@ pub(crate) async fn handle_event(
                 reason: Some(reason),
                 data: Map::new(),
             };
+            let failure_body =
+                serialize_failure_response(stack_id, request_id, logical_resource_id, &failure)?;
 
             send_response(
                 &state.http,
                 response_url,
-                stack_id,
-                request_id,
-                logical_resource_id,
-                "FAILED",
-                &failure,
+                &failure_body,
+                deadlines.callback(),
             )
             .await
             .context("failed to send failure response")?;
@@ -104,7 +123,8 @@ fn decode_resource_properties(value: &Value, label: &str) -> Result<RawDeploymen
 async fn process_request_envelope(
     state: &AppState,
     request: &RequestEnvelope,
-) -> Result<ResponsePayload> {
+    deadlines: InvocationDeadlines,
+) -> Result<Vec<u8>> {
     let decoded = decode_deployment_request(request)?;
     tracing::info!(
         request_type = decoded.request_type,
@@ -118,11 +138,13 @@ async fn process_request_envelope(
         decoded.physical_resource_id,
         &decoded.resource_properties,
         decoded.old_resource_properties.as_ref(),
+        deadlines,
     )
     .await
 }
 
 fn decode_deployment_request(request: &RequestEnvelope) -> Result<DecodedRequest<'_>> {
+    validate_resource_type(request)?;
     match request {
         CloudFormationCustomResourceRequest::Create(request) => Ok(DecodedRequest {
             request_type: "Create",
@@ -182,16 +204,39 @@ async fn process_request(
     physical_resource_id: Option<&str>,
     resource_properties: &RawDeploymentRequest,
     old_resource_properties: Option<&RawDeploymentRequest>,
-) -> Result<ResponsePayload> {
+    deadlines: InvocationDeadlines,
+) -> Result<Vec<u8>> {
     let request = parse_request(resource_properties);
+    let physical_resource_id = match request_type {
+        "Create" => format!("aws.cdk.cargobucketdeployment.{}", Uuid::new_v4()),
+        "Update" | "Delete" => physical_resource_id
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| anyhow!("PhysicalResourceId is required for {request_type}"))?,
+        other => return Err(anyhow!("Unsupported request type: {other}")),
+    };
+    let success = success_payload(&request, physical_resource_id.clone())?;
+    let success_body = serialize_response(
+        identity.stack_id,
+        identity.request_id,
+        identity.logical_resource_id,
+        "SUCCESS",
+        &success,
+    )?;
+    validate_response_body_size(&success_body, request.output_object_keys)?;
+
+    let previous_destination = old_resource_properties.map(parse_old_destination);
+    preflight_invalidation_requests(request_type, &request, previous_destination.as_ref())?;
+
     let stats = Arc::new(DeploymentStats::default());
     let mut status = "success";
     let result = process_request_inner(
         state,
         request_type,
-        identity,
-        physical_resource_id,
-        old_resource_properties,
+        RequestExecution {
+            identity,
+            deadlines,
+        },
+        previous_destination.as_ref(),
         &request,
         Arc::clone(&stats),
     )
@@ -201,176 +246,33 @@ async fn process_request(
         status = "failure";
     }
     log_deployment_summary(&stats, request_type, status, &request);
-    result
+    result?;
+    Ok(success_body)
 }
 
-async fn process_request_inner(
-    state: &AppState,
-    request_type: &str,
-    identity: RequestIdentity<'_>,
-    physical_resource_id: Option<&str>,
-    old_resource_properties: Option<&RawDeploymentRequest>,
+fn validate_resource_type(request: &RequestEnvelope) -> Result<()> {
+    let resource_type = match request {
+        CloudFormationCustomResourceRequest::Create(request) => &request.resource_type,
+        CloudFormationCustomResourceRequest::Update(request) => &request.resource_type,
+        CloudFormationCustomResourceRequest::Delete(request) => &request.resource_type,
+        _ => {
+            return Err(anyhow!(
+                "unsupported CloudFormation custom resource request type"
+            ));
+        }
+    };
+
+    ensure!(
+        resource_type == RESOURCE_TYPE,
+        "unexpected CloudFormation ResourceType `{resource_type}`; expected `{RESOURCE_TYPE}`"
+    );
+    Ok(())
+}
+
+fn success_payload(
     request: &crate::types::DeploymentRequest,
-    stats: Arc<DeploymentStats>,
+    physical_resource_id: String,
 ) -> Result<ResponsePayload> {
-    let physical_resource_id = match request_type {
-        "Create" => format!("aws.cdk.cargobucketdeployment.{}", Uuid::new_v4()),
-        "Update" | "Delete" => physical_resource_id
-            .map(ToOwned::to_owned)
-            .ok_or_else(|| anyhow!("PhysicalResourceId is required for {request_type}"))?,
-        other => return Err(anyhow!("Unsupported request type: {other}")),
-    };
-
-    let previous_destination = old_resource_properties.map(parse_old_destination);
-    let mut deleted_current_destination = false;
-    let mut cleaned_previous_destination = None;
-
-    if request_type == "Delete" && request.delete_current_objects_on_delete {
-        if bucket_has_competing_owner(
-            state,
-            &request.dest_bucket_name,
-            &request.dest_bucket_prefix,
-            None,
-            request.destination_owner_id.as_deref(),
-        )
-        .await?
-        {
-            tracing::warn!(
-                "destination cleanup retained because another custom resource owns an overlapping namespace"
-            );
-        } else {
-            let started = Instant::now();
-            deleted_current_destination = delete_prefix(
-                state,
-                &request.dest_bucket_name,
-                &request.dest_bucket_prefix,
-                Some(&stats),
-            )
-            .await?
-                > 0;
-            stats.add_delete_millis(duration_ms(started.elapsed()));
-        }
-    }
-
-    if matches!(request_type, "Create" | "Update") {
-        deploy(state, request, Arc::clone(&stats)).await?;
-    }
-
-    if request_type == "Update"
-        && let Some(previous) = previous_destination.as_ref()
-    {
-        match plan_destination_change_cleanup(request, previous) {
-            DestinationChangeCleanupDecision::Delete(plan) => {
-                let competing_owner = bucket_has_competing_owner(
-                    state,
-                    &plan.previous.bucket_name,
-                    &plan.previous.bucket_prefix,
-                    plan.excluded_prefix.as_deref(),
-                    request.destination_owner_id.as_deref(),
-                )
-                .await?;
-
-                if competing_owner {
-                    tracing::warn!(
-                        "previous destination retained because another custom resource owns an overlapping namespace"
-                    );
-                } else {
-                    let started = Instant::now();
-                    let deleted = if let Some(excluded_prefix) = plan.excluded_prefix.as_deref() {
-                        delete_prefix_excluding(
-                            state,
-                            &plan.previous.bucket_name,
-                            &plan.previous.bucket_prefix,
-                            excluded_prefix,
-                            Some(&stats),
-                        )
-                        .await?
-                    } else {
-                        delete_prefix(
-                            state,
-                            &plan.previous.bucket_name,
-                            &plan.previous.bucket_prefix,
-                            Some(&stats),
-                        )
-                        .await?
-                    };
-                    stats.add_old_prefix_delete_millis(duration_ms(started.elapsed()));
-                    if deleted > 0 {
-                        cleaned_previous_destination = Some(plan.previous);
-                    }
-                }
-            }
-            DestinationChangeCleanupDecision::Retain(reason) => {
-                tracing::warn!(?reason, "previous destination retained");
-            }
-            DestinationChangeCleanupDecision::NotNeeded(_) => {}
-        }
-    }
-
-    let should_invalidate_current = match request_type {
-        "Create" | "Update" => true,
-        "Delete" => deleted_current_destination,
-        _ => false,
-    };
-
-    let previous_content_changed = previous_destination.as_ref().is_some_and(|previous| {
-        cleaned_previous_destination.is_some() || destination_namespaces_overlap(request, previous)
-    });
-
-    if previous_content_changed
-        && let Some(previous) = previous_destination.as_ref()
-        && previous.distribution_id != request.distribution_id
-        && let Some(distribution_id) = non_empty(previous.distribution_id.as_deref())
-    {
-        if previous_distribution_authorized(request, previous) {
-            invalidate_distribution(
-                state,
-                identity,
-                distribution_id,
-                &previous.distribution_paths,
-                request.wait_for_distribution_invalidation,
-                true,
-                &stats,
-            )
-            .await?;
-        } else {
-            tracing::warn!(
-                "previous distribution was not invalidated because it was not explicitly authorized"
-            );
-        }
-    }
-
-    if should_invalidate_current
-        && let Some(distribution_id) = non_empty(request.distribution_id.as_deref())
-    {
-        let distribution_paths = if previous_content_changed
-            && previous_destination
-                .as_ref()
-                .is_some_and(|previous| previous.distribution_id == request.distribution_id)
-        {
-            merge_distribution_paths(
-                &request.distribution_paths,
-                &previous_destination
-                    .as_ref()
-                    .expect("checked above")
-                    .distribution_paths,
-            )
-        } else {
-            request.distribution_paths.clone()
-        };
-
-        invalidate_distribution(
-            state,
-            identity,
-            distribution_id,
-            &distribution_paths,
-            request.wait_for_distribution_invalidation,
-            request_type == "Delete",
-            &stats,
-        )
-        .await?;
-    }
-
     let mut data = Map::new();
     if let Some(destination_bucket_arn) = request.destination_bucket_arn.clone() {
         data.insert(
@@ -394,9 +296,241 @@ async fn process_request_inner(
     })
 }
 
+fn preflight_invalidation_requests(
+    request_type: &str,
+    request: &crate::types::DeploymentRequest,
+    previous: Option<&crate::types::PreviousDestination>,
+) -> Result<()> {
+    let current_may_invalidate = matches!(request_type, "Create" | "Update")
+        || (request_type == "Delete" && request.delete_current_objects_on_delete);
+    if current_may_invalidate && non_empty(request.distribution_id.as_deref()).is_some() {
+        validate_invalidation_paths(&request.distribution_paths)
+            .context("current CloudFront invalidation request is invalid")?;
+    }
+
+    if request_type != "Update" {
+        return Ok(());
+    }
+    let Some(previous) = previous else {
+        return Ok(());
+    };
+    let Some(previous_distribution_id) = non_empty(previous.distribution_id.as_deref()) else {
+        return Ok(());
+    };
+    let previous_may_change = destination_namespaces_overlap(request, previous)
+        || matches!(
+            plan_destination_change_cleanup(request, previous),
+            DestinationChangeCleanupDecision::Delete(_)
+        );
+    if !previous_may_change {
+        return Ok(());
+    }
+    let same_distribution = request.distribution_id.as_deref() == Some(previous_distribution_id);
+    if same_distribution || previous_distribution_authorized(request, previous) {
+        validate_invalidation_paths(&previous.distribution_paths)
+            .context("previous CloudFront invalidation request is invalid")?;
+    }
+    if same_distribution {
+        validate_invalidation_paths(&merge_distribution_paths(
+            &request.distribution_paths,
+            &previous.distribution_paths,
+        ))
+        .context("merged CloudFront invalidation request is invalid")?;
+    }
+
+    Ok(())
+}
+
+async fn run_work<T, F>(deadlines: InvocationDeadlines, label: &str, future: F) -> Result<T>
+where
+    F: Future<Output = Result<T>>,
+{
+    timeout_at(deadlines.work(), future)
+        .await
+        .with_context(|| format!("{label} exceeded the deployment work deadline"))?
+}
+
+async fn process_request_inner(
+    state: &AppState,
+    request_type: &str,
+    execution: RequestExecution<'_>,
+    previous_destination: Option<&crate::types::PreviousDestination>,
+    request: &crate::types::DeploymentRequest,
+    stats: Arc<DeploymentStats>,
+) -> Result<()> {
+    let deadlines = execution.deadlines;
+    let mut deleted_current_destination = false;
+    let mut cleaned_previous_destination = None;
+
+    if request_type == "Delete" && request.delete_current_objects_on_delete {
+        if run_work(
+            deadlines,
+            "destination ownership check",
+            bucket_has_competing_owner(
+                state,
+                &request.dest_bucket_name,
+                &request.dest_bucket_prefix,
+                None,
+                request.destination_owner_id.as_deref(),
+            ),
+        )
+        .await?
+        {
+            tracing::warn!(
+                "destination cleanup retained because another custom resource owns an overlapping namespace"
+            );
+        } else {
+            let started = Instant::now();
+            deleted_current_destination = run_work(
+                deadlines,
+                "current destination cleanup",
+                delete_prefix(
+                    state,
+                    &request.dest_bucket_name,
+                    &request.dest_bucket_prefix,
+                    Some(&stats),
+                ),
+            )
+            .await?
+                > 0;
+            stats.add_delete_millis(duration_ms(started.elapsed()));
+        }
+    }
+
+    if matches!(request_type, "Create" | "Update") {
+        deploy(state, request, Arc::clone(&stats), deadlines).await?;
+    }
+
+    if request_type == "Update"
+        && let Some(previous) = previous_destination
+    {
+        match plan_destination_change_cleanup(request, previous) {
+            DestinationChangeCleanupDecision::Delete(plan) => {
+                let competing_owner = run_work(
+                    deadlines,
+                    "previous destination ownership check",
+                    bucket_has_competing_owner(
+                        state,
+                        &plan.previous.bucket_name,
+                        &plan.previous.bucket_prefix,
+                        plan.excluded_prefix.as_deref(),
+                        request.destination_owner_id.as_deref(),
+                    ),
+                )
+                .await?;
+
+                if competing_owner {
+                    tracing::warn!(
+                        "previous destination retained because another custom resource owns an overlapping namespace"
+                    );
+                } else {
+                    let started = Instant::now();
+                    let deleted = if let Some(excluded_prefix) = plan.excluded_prefix.as_deref() {
+                        run_work(
+                            deadlines,
+                            "overlapping previous destination cleanup",
+                            delete_prefix_excluding(
+                                state,
+                                &plan.previous.bucket_name,
+                                &plan.previous.bucket_prefix,
+                                excluded_prefix,
+                                Some(&stats),
+                            ),
+                        )
+                        .await?
+                    } else {
+                        run_work(
+                            deadlines,
+                            "previous destination cleanup",
+                            delete_prefix(
+                                state,
+                                &plan.previous.bucket_name,
+                                &plan.previous.bucket_prefix,
+                                Some(&stats),
+                            ),
+                        )
+                        .await?
+                    };
+                    stats.add_old_prefix_delete_millis(duration_ms(started.elapsed()));
+                    if deleted > 0 {
+                        cleaned_previous_destination = Some(plan.previous);
+                    }
+                }
+            }
+            DestinationChangeCleanupDecision::Retain(reason) => {
+                tracing::warn!(?reason, "previous destination retained");
+            }
+            DestinationChangeCleanupDecision::NotNeeded(_) => {}
+        }
+    }
+
+    let should_invalidate_current = match request_type {
+        "Create" | "Update" => true,
+        "Delete" => deleted_current_destination,
+        _ => false,
+    };
+
+    let previous_content_changed = previous_destination.is_some_and(|previous| {
+        cleaned_previous_destination.is_some() || destination_namespaces_overlap(request, previous)
+    });
+
+    if previous_content_changed
+        && let Some(previous) = previous_destination
+        && previous.distribution_id != request.distribution_id
+        && let Some(distribution_id) = non_empty(previous.distribution_id.as_deref())
+    {
+        if previous_distribution_authorized(request, previous) {
+            invalidate_distribution(
+                state,
+                execution,
+                distribution_id,
+                &previous.distribution_paths,
+                request.wait_for_distribution_invalidation,
+                true,
+                &stats,
+            )
+            .await?;
+        } else {
+            tracing::warn!(
+                "previous distribution was not invalidated because it was not explicitly authorized"
+            );
+        }
+    }
+
+    if should_invalidate_current
+        && let Some(distribution_id) = non_empty(request.distribution_id.as_deref())
+    {
+        let distribution_paths = if previous_content_changed
+            && previous_destination
+                .is_some_and(|previous| previous.distribution_id == request.distribution_id)
+        {
+            merge_distribution_paths(
+                &request.distribution_paths,
+                &previous_destination
+                    .expect("checked above")
+                    .distribution_paths,
+            )
+        } else {
+            request.distribution_paths.clone()
+        };
+
+        invalidate_distribution(
+            state,
+            execution,
+            distribution_id,
+            &distribution_paths,
+            request.wait_for_distribution_invalidation,
+            request_type == "Delete",
+            &stats,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
 async fn invalidate_distribution(
     state: &AppState,
-    identity: RequestIdentity<'_>,
+    execution: RequestExecution<'_>,
     distribution_id: &str,
     distribution_paths: &[String],
     wait_for_completion: bool,
@@ -410,13 +544,14 @@ async fn invalidate_distribution(
         distribution_paths,
         wait_for_completion,
         &cloudfront_caller_reference(
-            identity.stack_id,
-            identity.request_id,
-            identity.logical_resource_id,
+            execution.identity.stack_id,
+            execution.identity.request_id,
+            execution.identity.logical_resource_id,
             distribution_id,
             distribution_paths,
         ),
         missing_distribution_is_success,
+        execution.deadlines.work(),
     )
     .await?;
     stats.add_cloudfront_millis(duration_ms(started.elapsed()));
@@ -475,12 +610,22 @@ fn finalize_md5(hasher: Md5) -> String {
 }
 
 fn truncate_failure_reason(reason: &str) -> String {
-    if reason.len() <= MAX_FAILURE_REASON_BYTES {
+    truncate_failure_reason_to(reason, MAX_FAILURE_REASON_BYTES)
+}
+
+fn truncate_failure_reason_to(reason: &str, max_bytes: usize) -> String {
+    if reason.len() <= max_bytes {
         return reason.to_string();
+    }
+    if max_bytes == 0 {
+        return String::new();
     }
 
     const SUFFIX: &str = " ... [truncated]";
-    let mut end = MAX_FAILURE_REASON_BYTES.saturating_sub(SUFFIX.len());
+    if max_bytes <= SUFFIX.len() {
+        return SUFFIX[..max_bytes].to_string();
+    }
+    let mut end = max_bytes - SUFFIX.len();
     while end > 0 && !reason.is_char_boundary(end) {
         end -= 1;
     }
@@ -539,15 +684,28 @@ fn physical_resource_id(request: &RequestEnvelope) -> Option<&str> {
 async fn send_response(
     http: &reqwest::Client,
     response_url: &str,
+    body: &[u8],
+    deadline: TokioInstant,
+) -> Result<()> {
+    validate_response_url(response_url)?;
+    send_response_with_policy(
+        http,
+        response_url,
+        body,
+        deadline,
+        CallbackRetryPolicy::production(),
+    )
+    .await
+}
+
+fn serialize_response(
     stack_id: &str,
     request_id: &str,
     logical_resource_id: &str,
     status: &str,
     payload: &ResponsePayload,
-) -> Result<()> {
-    validate_response_url(response_url)?;
-
-    let body = serde_json::to_string(&json!({
+) -> Result<Vec<u8>> {
+    serde_json::to_vec(&json!({
         "Status": status,
         "Reason": payload.reason.clone().unwrap_or_else(|| format!("See the details in CloudWatch Logs for RequestId {}", request_id)),
         "PhysicalResourceId": payload.physical_resource_id,
@@ -556,17 +714,167 @@ async fn send_response(
         "LogicalResourceId": logical_resource_id,
         "NoEcho": false,
         "Data": payload.data,
-    }))?;
+    }))
+    .context("failed to serialize CloudFormation response")
+}
 
-    http.put(response_url)
-        .header("content-type", "")
-        .header("content-length", body.len())
-        .body(body)
-        .send()
-        .await?
-        .error_for_status()?;
+fn serialize_failure_response(
+    stack_id: &str,
+    request_id: &str,
+    logical_resource_id: &str,
+    payload: &ResponsePayload,
+) -> Result<Vec<u8>> {
+    let full_reason = payload.reason.as_deref().unwrap_or_default();
+    let mut reason_limit = full_reason.len().min(MAX_FAILURE_REASON_BYTES);
 
+    loop {
+        let bounded = ResponsePayload {
+            physical_resource_id: payload.physical_resource_id.clone(),
+            reason: Some(truncate_failure_reason_to(full_reason, reason_limit)),
+            data: payload.data.clone(),
+        };
+        let body = serialize_response(
+            stack_id,
+            request_id,
+            logical_resource_id,
+            "FAILED",
+            &bounded,
+        )?;
+        if body.len() <= MAX_CLOUDFORMATION_RESPONSE_BYTES {
+            return Ok(body);
+        }
+        ensure!(
+            reason_limit > 0,
+            "CloudFormation failure response identity exceeds the {MAX_CLOUDFORMATION_RESPONSE_BYTES}-byte body limit"
+        );
+        let excess = body.len() - MAX_CLOUDFORMATION_RESPONSE_BYTES;
+        reason_limit = reason_limit.saturating_sub(excess.max(1));
+    }
+}
+
+fn validate_response_body_size(body: &[u8], output_object_keys: bool) -> Result<()> {
+    ensure!(
+        body.len() <= MAX_CLOUDFORMATION_RESPONSE_BYTES,
+        "CloudFormation response body is {} bytes; the maximum is {MAX_CLOUDFORMATION_RESPONSE_BYTES} bytes. Set outputObjectKeys:false to omit SourceObjectKeys{}",
+        body.len(),
+        if output_object_keys {
+            " before retrying the deployment"
+        } else {
+            ", and reduce other response data"
+        }
+    );
     Ok(())
+}
+
+#[derive(Clone, Copy)]
+struct CallbackRetryPolicy {
+    max_attempts: usize,
+    base_delay: Duration,
+    max_delay: Duration,
+    jitter: bool,
+}
+
+impl CallbackRetryPolicy {
+    const fn production() -> Self {
+        Self {
+            max_attempts: CALLBACK_MAX_ATTEMPTS,
+            base_delay: CALLBACK_RETRY_BASE_DELAY,
+            max_delay: CALLBACK_RETRY_MAX_DELAY,
+            jitter: true,
+        }
+    }
+}
+
+async fn send_response_with_policy(
+    http: &reqwest::Client,
+    response_url: &str,
+    body: &[u8],
+    deadline: TokioInstant,
+    retry: CallbackRetryPolicy,
+) -> Result<()> {
+    ensure!(
+        retry.max_attempts > 0,
+        "callback retry attempts must be positive"
+    );
+
+    for attempt in 1..=retry.max_attempts {
+        ensure!(
+            TokioInstant::now() < deadline,
+            "CloudFormation callback deadline was exhausted before attempt {attempt}"
+        );
+
+        let response = timeout_at(
+            deadline,
+            http.put(response_url)
+                .header("content-type", "")
+                .header("content-length", body.len())
+                .body(body.to_vec())
+                .send(),
+        )
+        .await
+        .with_context(|| {
+            format!("CloudFormation callback deadline was exhausted during attempt {attempt}")
+        })?;
+
+        let retry_error = match response {
+            Ok(response) if response.status().is_success() => return Ok(()),
+            Ok(response) if response.status().is_server_error() => anyhow!(
+                "CloudFormation callback attempt {attempt} returned retryable status {}",
+                response.status()
+            ),
+            Ok(response) => {
+                return Err(anyhow!(
+                    "CloudFormation callback attempt {attempt} returned non-retryable status {}",
+                    response.status()
+                ));
+            }
+            Err(error) if error.is_connect() || error.is_timeout() => {
+                anyhow!(error).context(format!(
+                    "CloudFormation callback attempt {attempt} failed with a retryable transport error"
+                ))
+            }
+            Err(error) => {
+                return Err(error).context(format!(
+                    "CloudFormation callback attempt {attempt} failed with a non-retryable transport error"
+                ));
+            }
+        };
+
+        if attempt == retry.max_attempts {
+            return Err(retry_error).context(format!(
+                "CloudFormation callback failed after {attempt} attempts"
+            ));
+        }
+
+        let delay = callback_retry_delay(attempt, retry);
+        let wake = TokioInstant::now()
+            .checked_add(delay)
+            .unwrap_or(deadline)
+            .min(deadline);
+        ensure!(
+            wake < deadline,
+            "CloudFormation callback reserve was exhausted after attempt {attempt}: {retry_error:#}"
+        );
+        sleep_until(wake).await;
+    }
+
+    unreachable!("positive callback attempt count checked above")
+}
+
+fn callback_retry_delay(attempt: usize, retry: CallbackRetryPolicy) -> Duration {
+    let exponent = u32::try_from(attempt.saturating_sub(1)).unwrap_or(u32::MAX);
+    let multiplier = 2_u32.checked_pow(exponent).unwrap_or(u32::MAX);
+    let cap = retry
+        .base_delay
+        .checked_mul(multiplier)
+        .unwrap_or(retry.max_delay)
+        .min(retry.max_delay);
+    if !retry.jitter || cap.is_zero() {
+        return cap;
+    }
+
+    let cap_millis = u64::try_from(cap.as_millis()).unwrap_or(u64::MAX);
+    Duration::from_millis(fastrand::u64(0..=cap_millis))
 }
 
 /// Validates the CloudFormation `ResponseURL` before PUTing the response.
@@ -594,14 +902,421 @@ fn validate_response_url(response_url: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::thread::{self, JoinHandle};
+    use std::time::Duration;
+
     use aws_lambda_events::event::cloudformation::CloudFormationCustomResourceRequest;
-    use serde_json::json;
+    use reqwest::Client;
+    use serde_json::{Map, Value, json};
+    use tokio::time::Instant as TokioInstant;
+
+    use crate::request::{RawDeploymentRequest, parse_request};
+    use crate::types::ResponsePayload;
 
     use super::{
-        MAX_FAILURE_REASON_BYTES, cloudfront_caller_reference, decode_request_envelope,
-        decode_resource_properties, merge_distribution_paths, truncate_failure_reason,
-        validate_response_url,
+        CallbackRetryPolicy, MAX_CLOUDFORMATION_RESPONSE_BYTES, MAX_FAILURE_REASON_BYTES,
+        RESOURCE_TYPE, callback_retry_delay, cloudfront_caller_reference,
+        decode_deployment_request, decode_request_envelope, decode_resource_properties,
+        merge_distribution_paths, preflight_invalidation_requests, send_response_with_policy,
+        serialize_failure_response, serialize_response, truncate_failure_reason,
+        validate_resource_type, validate_response_body_size, validate_response_url,
     };
+
+    enum MockCallback {
+        Status(u16),
+        Timeout(Duration),
+    }
+
+    struct MockCallbackServer {
+        url: String,
+        requests: Arc<AtomicUsize>,
+        thread: Option<JoinHandle<()>>,
+    }
+
+    impl MockCallbackServer {
+        fn start(responses: Vec<MockCallback>) -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock callback server");
+            listener
+                .set_nonblocking(true)
+                .expect("make mock callback listener nonblocking");
+            let address = listener.local_addr().expect("mock callback address");
+            let requests = Arc::new(AtomicUsize::new(0));
+            let request_count = Arc::clone(&requests);
+            let thread = thread::spawn(move || {
+                let mut workers = Vec::new();
+                for response in responses {
+                    let accept_deadline = std::time::Instant::now() + Duration::from_secs(2);
+                    let stream = loop {
+                        match listener.accept() {
+                            Ok((stream, _)) => break stream,
+                            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                                assert!(
+                                    std::time::Instant::now() < accept_deadline,
+                                    "timed out waiting for callback request"
+                                );
+                                thread::sleep(Duration::from_millis(2));
+                            }
+                            Err(error) => panic!("accept callback request: {error}"),
+                        }
+                    };
+                    request_count.fetch_add(1, Ordering::AcqRel);
+                    workers.push(thread::spawn(move || handle_callback(stream, response)));
+                }
+                for worker in workers {
+                    worker.join().expect("mock callback worker");
+                }
+            });
+
+            Self {
+                url: format!("http://{address}/response"),
+                requests,
+                thread: Some(thread),
+            }
+        }
+
+        fn finish(mut self) -> usize {
+            self.thread
+                .take()
+                .expect("mock callback thread")
+                .join()
+                .expect("mock callback server");
+            self.requests.load(Ordering::Acquire)
+        }
+    }
+
+    fn handle_callback(mut stream: TcpStream, response: MockCallback) {
+        stream
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .expect("set mock read timeout");
+        read_request(&mut stream);
+        match response {
+            MockCallback::Status(status) => {
+                write!(
+                    stream,
+                    "HTTP/1.1 {status} mock\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                )
+                .expect("write callback response");
+                stream.flush().expect("flush callback response");
+            }
+            MockCallback::Timeout(duration) => thread::sleep(duration),
+        }
+    }
+
+    fn read_request(stream: &mut TcpStream) {
+        let mut request = Vec::new();
+        let mut buffer = [0_u8; 1024];
+        loop {
+            let bytes = stream.read(&mut buffer).expect("read callback request");
+            if bytes == 0 {
+                break;
+            }
+            request.extend_from_slice(&buffer[..bytes]);
+            let Some(header_end) = request.windows(4).position(|bytes| bytes == b"\r\n\r\n") else {
+                continue;
+            };
+            let header_end = header_end + 4;
+            let headers = String::from_utf8_lossy(&request[..header_end]);
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    line.split_once(':').and_then(|(name, value)| {
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().expect("content length"))
+                    })
+                })
+                .unwrap_or(0);
+            if request.len() >= header_end + content_length {
+                break;
+            }
+        }
+    }
+
+    fn callback_client(timeout: Duration) -> Client {
+        Client::builder()
+            .no_proxy()
+            .timeout(timeout)
+            .build()
+            .expect("callback client")
+    }
+
+    fn test_retry_policy(max_attempts: usize) -> CallbackRetryPolicy {
+        CallbackRetryPolicy {
+            max_attempts,
+            base_delay: Duration::ZERO,
+            max_delay: Duration::ZERO,
+            jitter: false,
+        }
+    }
+
+    #[test]
+    fn callback_retry_delay_is_exponential_and_capped() {
+        let policy = CallbackRetryPolicy {
+            max_attempts: 8,
+            base_delay: Duration::from_millis(250),
+            max_delay: Duration::from_secs(2),
+            jitter: false,
+        };
+
+        assert_eq!(callback_retry_delay(1, policy), Duration::from_millis(250));
+        assert_eq!(callback_retry_delay(2, policy), Duration::from_millis(500));
+        assert_eq!(callback_retry_delay(3, policy), Duration::from_secs(1));
+        assert_eq!(callback_retry_delay(4, policy), Duration::from_secs(2));
+        assert_eq!(callback_retry_delay(8, policy), Duration::from_secs(2));
+    }
+
+    fn deployment_request_with_paths(paths: Vec<String>) -> crate::types::DeploymentRequest {
+        let raw: RawDeploymentRequest = serde_json::from_value(json!({
+            "SourceBucketNames": ["source"],
+            "SourceObjectKeys": ["asset.zip"],
+            "DestinationBucketName": "destination",
+            "DistributionId": "distribution",
+            "DistributionPaths": paths
+        }))
+        .expect("raw deployment request");
+        parse_request(&raw)
+    }
+
+    #[tokio::test]
+    async fn callback_accepts_success_without_retry() {
+        let server = MockCallbackServer::start(vec![MockCallback::Status(200)]);
+        let result = send_response_with_policy(
+            &callback_client(Duration::from_secs(1)),
+            &server.url,
+            b"{}",
+            TokioInstant::now() + Duration::from_secs(1),
+            test_retry_policy(3),
+        )
+        .await;
+        let requests = server.finish();
+
+        assert!(result.is_ok());
+        assert_eq!(requests, 1);
+    }
+
+    #[tokio::test]
+    async fn callback_never_retries_a_4xx_response() {
+        let server = MockCallbackServer::start(vec![MockCallback::Status(400)]);
+        let result = send_response_with_policy(
+            &callback_client(Duration::from_secs(1)),
+            &server.url,
+            b"{}",
+            TokioInstant::now() + Duration::from_secs(1),
+            test_retry_policy(3),
+        )
+        .await;
+        let requests = server.finish();
+
+        assert!(
+            result
+                .expect_err("4xx callback must fail")
+                .to_string()
+                .contains("non-retryable status 400")
+        );
+        assert_eq!(requests, 1);
+    }
+
+    #[tokio::test]
+    async fn callback_retries_5xx_until_success() {
+        let server = MockCallbackServer::start(vec![
+            MockCallback::Status(500),
+            MockCallback::Status(503),
+            MockCallback::Status(200),
+        ]);
+        let result = send_response_with_policy(
+            &callback_client(Duration::from_secs(1)),
+            &server.url,
+            b"{}",
+            TokioInstant::now() + Duration::from_secs(1),
+            test_retry_policy(3),
+        )
+        .await;
+        let requests = server.finish();
+
+        assert!(result.is_ok());
+        assert_eq!(requests, 3);
+    }
+
+    #[tokio::test]
+    async fn callback_retries_a_request_timeout() {
+        let server = MockCallbackServer::start(vec![
+            MockCallback::Timeout(Duration::from_millis(150)),
+            MockCallback::Status(200),
+        ]);
+        let result = send_response_with_policy(
+            &callback_client(Duration::from_millis(30)),
+            &server.url,
+            b"{}",
+            TokioInstant::now() + Duration::from_secs(1),
+            test_retry_policy(2),
+        )
+        .await;
+        let requests = server.finish();
+
+        assert!(result.is_ok());
+        assert_eq!(requests, 2);
+    }
+
+    #[tokio::test]
+    async fn callback_retries_connection_failures_to_the_attempt_bound() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("reserve unused callback port");
+        let address = listener.local_addr().expect("unused callback address");
+        drop(listener);
+
+        let error = send_response_with_policy(
+            &callback_client(Duration::from_secs(1)),
+            &format!("http://{address}/response"),
+            b"{}",
+            TokioInstant::now() + Duration::from_secs(1),
+            test_retry_policy(3),
+        )
+        .await
+        .expect_err("connection failures must exhaust the attempt bound");
+
+        assert!(format!("{error:#}").contains("failed after 3 attempts"));
+    }
+
+    #[tokio::test]
+    async fn callback_request_cannot_run_past_its_absolute_deadline() {
+        let server =
+            MockCallbackServer::start(vec![MockCallback::Timeout(Duration::from_millis(150))]);
+        let result = send_response_with_policy(
+            &callback_client(Duration::from_secs(1)),
+            &server.url,
+            b"{}",
+            TokioInstant::now() + Duration::from_millis(30),
+            test_retry_policy(3),
+        )
+        .await;
+        let requests = server.finish();
+
+        assert!(
+            format!(
+                "{:#}",
+                result.expect_err("callback deadline must stop the request")
+            )
+            .contains("callback deadline was exhausted")
+        );
+        assert_eq!(requests, 1);
+    }
+
+    #[test]
+    fn complete_response_body_accepts_4096_bytes_and_rejects_4097() {
+        let payload = |filler: String| ResponsePayload {
+            physical_resource_id: "physical".to_string(),
+            reason: None,
+            data: Map::from_iter([("Filler".to_string(), Value::String(filler))]),
+        };
+        let empty = serialize_response(
+            "stack",
+            "request",
+            "Deploy",
+            "SUCCESS",
+            &payload(String::new()),
+        )
+        .expect("serialize empty response");
+        let filler_len = MAX_CLOUDFORMATION_RESPONSE_BYTES - empty.len();
+        let boundary = serialize_response(
+            "stack",
+            "request",
+            "Deploy",
+            "SUCCESS",
+            &payload("x".repeat(filler_len)),
+        )
+        .expect("serialize boundary response");
+        let oversized = serialize_response(
+            "stack",
+            "request",
+            "Deploy",
+            "SUCCESS",
+            &payload("x".repeat(filler_len + 1)),
+        )
+        .expect("serialize oversized response");
+
+        assert_eq!(boundary.len(), MAX_CLOUDFORMATION_RESPONSE_BYTES);
+        assert!(validate_response_body_size(&boundary, true).is_ok());
+        assert_eq!(oversized.len(), MAX_CLOUDFORMATION_RESPONSE_BYTES + 1);
+        assert!(
+            validate_response_body_size(&oversized, true)
+                .expect_err("oversized response must fail")
+                .to_string()
+                .contains("outputObjectKeys:false")
+        );
+    }
+
+    #[test]
+    fn escaped_failure_reason_is_reduced_to_a_valid_response_body() {
+        let failure = ResponsePayload {
+            physical_resource_id: "physical".to_string(),
+            reason: Some("\0".repeat(MAX_FAILURE_REASON_BYTES)),
+            data: Map::new(),
+        };
+
+        let body = serialize_failure_response("stack", "request", "Deploy", &failure)
+            .expect("serialize bounded failure response");
+
+        assert!(body.len() <= MAX_CLOUDFORMATION_RESPONSE_BYTES);
+        let response: Value = serde_json::from_slice(&body).expect("failure response JSON");
+        assert_eq!(response["Status"], "FAILED");
+    }
+
+    #[test]
+    fn resource_type_must_match_the_provider_protocol() {
+        let valid = decode_request_envelope(json!({
+            "RequestType": "Create",
+            "RequestId": "request-123",
+            "ResponseURL": "https://example.com/response",
+            "StackId": "stack-123",
+            "ResourceType": RESOURCE_TYPE,
+            "LogicalResourceId": "Deploy",
+            "ResourceProperties": {
+                "SourceBucketNames": ["source"],
+                "SourceObjectKeys": ["asset.zip"],
+                "DestinationBucketName": "destination"
+            }
+        }))
+        .expect("valid envelope");
+        assert!(validate_resource_type(&valid).is_ok());
+        assert!(decode_deployment_request(&valid).is_ok());
+
+        let invalid = decode_request_envelope(json!({
+            "RequestType": "Create",
+            "RequestId": "request-123",
+            "ResponseURL": "https://example.com/response",
+            "StackId": "stack-123",
+            "ResourceType": "Custom::WrongProvider",
+            "LogicalResourceId": "Deploy",
+            "ResourceProperties": {
+                "SourceBucketNames": ["source"],
+                "SourceObjectKeys": ["asset.zip"],
+                "DestinationBucketName": "destination"
+            }
+        }))
+        .expect("invalid resource type still forms an envelope");
+        let error = decode_deployment_request(&invalid)
+            .err()
+            .expect("wrong resource type must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("unexpected CloudFormation ResourceType")
+        );
+    }
+
+    #[test]
+    fn cloudfront_path_limits_are_preflighted_before_deployment_work() {
+        let request = deployment_request_with_paths(vec![format!("/{}", "a".repeat(4_000))]);
+
+        assert!(
+            preflight_invalidation_requests("Create", &request, None)
+                .expect_err("oversized CloudFront path must fail preflight")
+                .to_string()
+                .contains("current CloudFront invalidation request is invalid")
+        );
+    }
 
     #[test]
     fn cloudfront_caller_reference_is_stable_and_bounded() {

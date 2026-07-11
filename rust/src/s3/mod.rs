@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
+use tokio::time::timeout_at;
 
+use crate::deadline::InvocationDeadlines;
 use crate::request::compile_filters;
 use crate::types::{AppState, DeploymentRequest, DeploymentStats, ObjectMetadata, RuntimeOptions};
 
@@ -119,21 +121,29 @@ pub(crate) async fn deploy(
     state: &AppState,
     request: &DeploymentRequest,
     stats: Arc<DeploymentStats>,
+    deadlines: InvocationDeadlines,
 ) -> Result<()> {
     let started = std::time::Instant::now();
     planner::validate_request_lengths(request)?;
 
     let filters = compile_filters(&request.exclude, &request.include)?;
     let metadata = ObjectMetadata::from_request(request);
-    let (archives, deployment_manifest) =
-        planner::plan_deployment(state, request, &filters, &stats).await?;
+    let (archives, deployment_manifest) = timeout_at(
+        deadlines.work(),
+        planner::plan_deployment(state, request, &filters, &stats),
+    )
+    .await
+    .context("S3 deployment planning exceeded the deployment work deadline")??;
     stats.add_planned_entries(deployment_manifest.len() as u64);
     stats.add_plan_millis(crate::types::duration_ms(started.elapsed()));
 
     let started = std::time::Instant::now();
-    let destination_plan =
-        destination::plan_destination(state, request, &filters, &deployment_manifest, &stats)
-            .await?;
+    let destination_plan = timeout_at(
+        deadlines.work(),
+        destination::plan_destination(state, request, &filters, &deployment_manifest, &stats),
+    )
+    .await
+    .context("S3 destination planning exceeded the deployment work deadline")??;
     stats.add_destination_list_millis(crate::types::duration_ms(started.elapsed()));
 
     let started = std::time::Instant::now();
@@ -147,7 +157,10 @@ pub(crate) async fn deploy(
             &metadata,
             zip_plans,
             &destination_plan.objects,
-            Arc::clone(&stats),
+            transfer::TransferExecution {
+                stats: Arc::clone(&stats),
+                deadlines,
+            },
         )
         .await?;
     } else {
@@ -159,7 +172,10 @@ pub(crate) async fn deploy(
             &metadata,
             copy_plans,
             request.runtime.max_parallel_transfers,
-            Arc::clone(&stats),
+            transfer::TransferExecution {
+                stats: Arc::clone(&stats),
+                deadlines,
+            },
         )
         .await?;
     }
@@ -167,13 +183,17 @@ pub(crate) async fn deploy(
 
     if request.delete_stale_objects_on_deployment {
         let started = std::time::Instant::now();
-        destination::delete_keys(
-            state,
-            &request.dest_bucket_name,
-            &destination_plan.keys_to_delete,
-            &stats,
+        timeout_at(
+            deadlines.work(),
+            destination::delete_keys(
+                state,
+                &request.dest_bucket_name,
+                &destination_plan.keys_to_delete,
+                &stats,
+            ),
         )
-        .await?;
+        .await
+        .context("stale S3 object cleanup exceeded the deployment work deadline")??;
         stats.add_delete_millis(crate::types::duration_ms(started.elapsed()));
     }
 
@@ -197,9 +217,11 @@ mod aws_integration_tests {
     };
     use bytes::Bytes;
     use reqwest::Client as HttpClient;
+    use tokio::time::Instant as TokioInstant;
     use uuid::Uuid;
     use zip::write::{SimpleFileOptions, ZipWriter};
 
+    use crate::deadline::InvocationDeadlines;
     use crate::request::{RawDeploymentRequest, parse_request};
     use crate::types::{AppState, MarkerConfig};
 
@@ -309,6 +331,10 @@ mod aws_integration_tests {
                 &state,
                 &request,
                 std::sync::Arc::new(crate::types::DeploymentStats::default()),
+                InvocationDeadlines::from_remaining_at(
+                    TokioInstant::now(),
+                    Duration::from_secs(900),
+                ),
             )
             .await
             .context("initial deploy failed")?;
@@ -318,6 +344,10 @@ mod aws_integration_tests {
                 &state,
                 &request,
                 std::sync::Arc::new(crate::types::DeploymentStats::default()),
+                InvocationDeadlines::from_remaining_at(
+                    TokioInstant::now(),
+                    Duration::from_secs(900),
+                ),
             )
             .await
             .context("unchanged redeploy failed")?;
