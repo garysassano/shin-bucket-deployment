@@ -339,7 +339,7 @@ test("keeps delete and list permissions scoped when current object deletion is e
     destinationKeyPrefix: "site",
     destinationLifecycle: {
       onDelete: {
-        deleteCurrentObjects: true,
+        deleteObjects: true,
       },
     },
     bundling: testBundling(),

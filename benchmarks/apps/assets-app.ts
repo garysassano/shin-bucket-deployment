@@ -47,7 +47,7 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
             ? {}
             : {
                 onDelete: {
-                  deleteCurrentObjects: deleteCurrentObjectsOnDelete,
+                  deleteObjects: deleteCurrentObjectsOnDelete,
                 },
               }),
         },

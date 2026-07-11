@@ -161,13 +161,13 @@ property names the action directly:
 - `onDeploy` applies whenever current sources are deployed on Create or
   Update. `deleteStaleObjects` defaults to `true`.
 - `onChange` applies only when the destination bucket, prefix, or distribution
-  changed in a CloudFormation Update. Previous-object deletion and
-  previous-distribution invalidation are both disabled by default.
+  changed in a CloudFormation Update. Old-object deletion and old-distribution
+  invalidation are both disabled by default.
 - `onDelete` applies when CloudFormation deletes the custom resource.
-  `deleteCurrentObjects` defaults to `false`.
+  `deleteObjects` defaults to `false`.
 
-When only the prefix changes, set `deletePreviousObjects` to `true`. The current
-bucket remains the authorized bucket, and CloudFormation supplies the previous
+When only the prefix changes, set `deleteObjects` to `true`. The current bucket
+remains the authorized bucket, and CloudFormation supplies the old
 prefix through `OldResourceProperties`:
 
 ```ts
@@ -178,7 +178,7 @@ new ShinBucketDeployment(this, "DeployWebsite", {
   distribution,
   destinationLifecycle: {
     onChange: {
-      deletePreviousObjects: true,
+      deleteObjects: true,
     },
   },
 });
@@ -195,8 +195,9 @@ new ShinBucketDeployment(this, "DeployWebsite", {
   distribution: newDistribution,
   destinationLifecycle: {
     onChange: {
-      deletePreviousObjects: oldBucket,
-      invalidatePreviousDistribution: oldDistribution,
+      deleteObjects: true,
+      fromBucket: oldBucket,
+      invalidateDistribution: oldDistribution,
     },
   },
 });
@@ -204,12 +205,12 @@ new ShinBucketDeployment(this, "DeployWebsite", {
 
 | Changed value | `destinationLifecycle.onChange` |
 | --- | --- |
-| Prefix only | `{ deletePreviousObjects: true }` |
-| Bucket | `{ deletePreviousObjects: oldBucket }` |
-| Distribution | `{ invalidatePreviousDistribution: oldDistribution }` |
-| Bucket and distribution | `{ deletePreviousObjects: oldBucket, invalidatePreviousDistribution: oldDistribution }` |
+| Prefix only | `{ deleteObjects: true }` |
+| Bucket | `{ deleteObjects: true, fromBucket: oldBucket }` |
+| Distribution | `{ invalidateDistribution: oldDistribution }` |
+| Bucket and distribution | `{ deleteObjects: true, fromBucket: oldBucket, invalidateDistribution: oldDistribution }` |
 
-The actions are independent. Omitting `invalidatePreviousDistribution` does
+The actions are independent. Omitting `invalidateDistribution` does
 not block explicitly requested object deletion. If the previous distribution
 differs and its cached content changed, the provider skips that invalidation
 and logs that it was not explicitly authorized.
@@ -223,7 +224,7 @@ destinationLifecycle: {
     deleteStaleObjects: false,
   },
   onDelete: {
-    deleteCurrentObjects: true,
+    deleteObjects: true,
   },
 }
 ```
@@ -232,10 +233,10 @@ None of these actions deletes the bucket or CloudFront distribution resource.
 `deleteStaleObjects` removes only objects in the current namespace that are
 absent from the deployment plan and match the active include/exclude filters.
 
-For previous-object deletion, `true` reuses `destinationBucket`; an `IBucket`
-value authorizes a changed previous bucket. An unchanged current distribution
-is invalidated automatically. A changed previous distribution must be passed
-to `invalidatePreviousDistribution` so CDK can grant distribution-specific
+For old-object deletion, omitting `fromBucket` reuses `destinationBucket`; an
+explicit `fromBucket` authorizes a changed old bucket. An unchanged current
+distribution is invalidated automatically. A changed old distribution must be
+passed to `invalidateDistribution` so CDK can grant distribution-specific
 invalidation permissions and synthesize its dependency.
 
 The provider deploys the current content before considering previous cleanup.
@@ -267,8 +268,8 @@ deletion grants List/Delete and ownership-tag access across the selected bucket.
 The provider limits its operation to the old prefix from
 `OldResourceProperties`, but the execution role's S3 permission is broader for
 the duration that the option remains in the template. Remove
-`destinationLifecycle.onChange.deletePreviousObjects` after the transition to
-remove that additional grant.
+`destinationLifecycle.onChange.deleteObjects` and `fromBucket` after the
+transition to remove that additional grant.
 
 Fully automatic cross-bucket cleanup would require wildcard permissions over
 buckets that are absent from the synthesized construct graph. That would weaken
@@ -409,9 +410,9 @@ CloudFormation failure responses use a truncated `Reason` string. CloudFormation
 
 ## IAM Shape
 
-The provider role uses source grants from each bound CDK source and destination grants from the target bucket. Destination object write/delete permissions are scoped to `destinationKeyPrefix` when the prefix is concrete. Destination `ListBucket` is likewise scoped with `s3:prefix` for both deployment cleanup and `onDelete.deleteCurrentObjects`. A root or unresolved prefix requires bucket-wide object/list scope.
+The provider role uses source grants from each bound CDK source and destination grants from the target bucket. Destination object write/delete permissions are scoped to `destinationKeyPrefix` when the prefix is concrete. Destination `ListBucket` is likewise scoped with `s3:prefix` for both deployment cleanup and `onDelete.deleteObjects`. A root or unresolved prefix requires bucket-wide object/list scope.
 
-`onChange.deletePreviousObjects` grants List/Delete and ownership-tag access across the selected previous bucket because `OldResourceProperties` does not reveal the old prefix until runtime. The provider derives that prefix from the Update event and validates the selected bucket before using the grant. `true` reuses the current bucket; a changed old bucket must be passed explicitly. Current CloudFront permissions cover an unchanged distribution, while `onChange.invalidatePreviousDistribution` grants distribution-specific invalidation access independently of object deletion.
+`onChange.deleteObjects` grants List/Delete and ownership-tag access across the selected old bucket because `OldResourceProperties` does not reveal the old prefix until runtime. The provider derives that prefix from the Update event and validates the selected bucket before using the grant. Omitting `fromBucket` reuses the current bucket; a changed old bucket must be passed explicitly. Current CloudFront permissions cover an unchanged distribution, while `onChange.invalidateDistribution` grants distribution-specific invalidation access independently of object deletion.
 
 ## Engine Transition
 

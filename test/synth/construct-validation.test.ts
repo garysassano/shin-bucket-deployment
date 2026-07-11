@@ -54,7 +54,7 @@ describe("ShinBucketDeployment validation and option coverage", () => {
       destinationKeyPrefix: "new-site",
       destinationLifecycle: {
         onChange: {
-          deletePreviousObjects: true,
+          deleteObjects: true,
         },
       },
       bundling: testBundling(),
@@ -122,11 +122,12 @@ describe("ShinBucketDeployment validation and option coverage", () => {
           deleteStaleObjects: false,
         },
         onChange: {
-          deletePreviousObjects: previousBucket,
-          invalidatePreviousDistribution: previousDistribution,
+          deleteObjects: true,
+          fromBucket: previousBucket,
+          invalidateDistribution: previousDistribution,
         },
         onDelete: {
-          deleteCurrentObjects: true,
+          deleteObjects: true,
         },
       },
       bundling: testBundling(),
@@ -255,7 +256,45 @@ describe("ShinBucketDeployment validation and option coverage", () => {
           deleteDestinationObjectsOnDelete: true,
         },
       } as never);
-    }).toThrow(/onDeploy, onChange, and onDelete/);
+    }).toThrow(/onChange\.deleteObjects/);
+  });
+
+  test("rejects obsolete nested destination lifecycle action names", () => {
+    const stack = new Stack();
+    const destinationBucket = new Bucket(stack, "Dest");
+
+    expect(() => {
+      new ShinBucketDeployment(stack, "Deploy", {
+        sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
+        destinationBucket,
+        destinationLifecycle: {
+          onChange: {
+            deletePreviousObjects: true,
+          },
+          onDelete: {
+            deleteCurrentObjects: true,
+          },
+        },
+      } as never);
+    }).toThrow(/onChange\.deleteObjects/);
+  });
+
+  test("rejects fromBucket without deleteObjects", () => {
+    const stack = new Stack();
+    const destinationBucket = new Bucket(stack, "Dest");
+    const previousBucket = new Bucket(stack, "PreviousDest");
+
+    expect(() => {
+      new ShinBucketDeployment(stack, "Deploy", {
+        sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
+        destinationBucket,
+        destinationLifecycle: {
+          onChange: {
+            fromBucket: previousBucket,
+          },
+        },
+      });
+    }).toThrow(/fromBucket requires deleteObjects=true/);
   });
 
   test("fails synthesis when extract=false is combined with deploy-time markers", () => {

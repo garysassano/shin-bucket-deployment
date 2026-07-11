@@ -54,7 +54,7 @@ This matrix is point-in-time documentation. Re-check it when `s3-unspool` change
 | `extract=false` | Preserved as a separate `CopyObject` path. |
 | `include` / `exclude` | Preserved while walking ZIP entries and stale-object deletion candidates. |
 | `destinationLifecycle.onDeploy.deleteStaleObjects` | Maps the upstream `prune` behavior to destination listing and batched `DeleteObjects`. |
-| `destinationLifecycle.onChange` / `onDelete` | Separately opts into deleting previous objects, invalidating a changed previous distribution, or deleting current objects on Delete. Previous-object deletion derives the old prefix from `OldResourceProperties`; changed old resources are explicit synthesis-time inputs. |
+| `destinationLifecycle.onChange` / `onDelete` | Separately opts into deleting old objects, invalidating a changed old distribution, or deleting destination objects on Delete. Old-object deletion derives the old prefix from `OldResourceProperties`; changed old resources are explicit synthesis-time inputs. |
 | S3 metadata props | Preserved for upload and copy requests. |
 | CloudFront invalidation | Preserved after S3 deployment. |
 | `deployedBucket` and `objectKeys` | Preserved through custom-resource response data. |

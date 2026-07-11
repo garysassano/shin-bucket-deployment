@@ -287,19 +287,26 @@ export interface ShinBucketDeploymentDestinationLifecycle {
    */
   readonly onChange?: {
     /**
-     * Delete objects from the previous destination namespace.
+     * Delete objects from the old destination namespace.
      *
-     * Set this to `true` when the bucket is unchanged. If the bucket changed,
-     * provide the previous bucket so CDK can synthesize its IAM permissions and
-     * dependency. CloudFormation supplies the previous prefix through
-     * `OldResourceProperties`.
+     * CloudFormation supplies the old prefix through `OldResourceProperties`.
      *
      * @default false
      */
-    readonly deletePreviousObjects?: true | IBucket;
+    readonly deleteObjects?: boolean;
 
     /**
-     * Invalidate the previous CloudFront distribution after its cached content
+     * Bucket containing the objects to delete when the destination bucket
+     * changes.
+     *
+     * Omit this for same-bucket prefix changes. Requires `deleteObjects=true`.
+     *
+     * @default - the current destination bucket
+     */
+    readonly fromBucket?: IBucket;
+
+    /**
+     * Invalidate the old CloudFront distribution after its cached content
      * changes.
      *
      * Provide this only when the distribution changed. An unchanged current
@@ -307,7 +314,7 @@ export interface ShinBucketDeploymentDestinationLifecycle {
      *
      * @default - no separate previous distribution
      */
-    readonly invalidatePreviousDistribution?: IDistribution;
+    readonly invalidateDistribution?: IDistribution;
   };
 
   /**
@@ -315,11 +322,11 @@ export interface ShinBucketDeploymentDestinationLifecycle {
    */
   readonly onDelete?: {
     /**
-     * Delete objects from the current destination namespace.
+     * Delete objects from the destination namespace.
      *
      * @default false
      */
-    readonly deleteCurrentObjects?: boolean;
+    readonly deleteObjects?: boolean;
   };
 }
 
@@ -418,6 +425,14 @@ export class ShinBucketDeployment extends Construct {
       | {
           readonly deleteDestinationObjectsOnDelete?: unknown;
           readonly deletePreviousDestinationObjectsOnUpdate?: unknown;
+          readonly onDeployment?: unknown;
+          readonly onChange?: {
+            readonly deletePreviousObjects?: unknown;
+            readonly invalidatePreviousDistribution?: unknown;
+          };
+          readonly onDelete?: {
+            readonly deleteCurrentObjects?: unknown;
+          };
         }
       | undefined;
 
@@ -439,11 +454,26 @@ export class ShinBucketDeployment extends Construct {
 
     if (
       maybeLegacyLifecycle?.deleteDestinationObjectsOnDelete !== undefined ||
-      maybeLegacyLifecycle?.deletePreviousDestinationObjectsOnUpdate !== undefined
+      maybeLegacyLifecycle?.deletePreviousDestinationObjectsOnUpdate !== undefined ||
+      maybeLegacyLifecycle?.onDeployment !== undefined ||
+      maybeLegacyLifecycle?.onChange?.deletePreviousObjects !== undefined ||
+      maybeLegacyLifecycle?.onChange?.invalidatePreviousDistribution !== undefined ||
+      maybeLegacyLifecycle?.onDelete?.deleteCurrentObjects !== undefined
     ) {
       throw new ValidationError(
         literalString("ShinBucketDeploymentFlatDestinationLifecycleUnsupported"),
-        "ShinBucketDeployment destinationLifecycle uses onDeploy, onChange, and onDelete phase objects.",
+        "ShinBucketDeployment destinationLifecycle uses onDeploy.deleteStaleObjects, onChange.deleteObjects/fromBucket/invalidateDistribution, and onDelete.deleteObjects.",
+        this,
+      );
+    }
+
+    if (
+      props.destinationLifecycle?.onChange?.fromBucket &&
+      props.destinationLifecycle.onChange.deleteObjects !== true
+    ) {
+      throw new ValidationError(
+        literalString("ShinBucketDeploymentFromBucketRequiresDeleteObjects"),
+        "destinationLifecycle.onChange.fromBucket requires deleteObjects=true.",
         this,
       );
     }
@@ -551,13 +581,12 @@ export class ShinBucketDeployment extends Construct {
     validatePutObjectRetryProps(this, putObjectRetryTuning);
 
     this.destinationBucket = props.destinationBucket;
-    const deletePreviousObjects = props.destinationLifecycle?.onChange?.deletePreviousObjects;
-    const previousDestinationBucket =
-      deletePreviousObjects === true ? this.destinationBucket : deletePreviousObjects;
-    const previousDistribution =
-      props.destinationLifecycle?.onChange?.invalidatePreviousDistribution;
-    const deleteCurrentObjectsOnDelete =
-      props.destinationLifecycle?.onDelete?.deleteCurrentObjects === true;
+    const deleteObjectsOnChange = props.destinationLifecycle?.onChange?.deleteObjects === true;
+    const previousDestinationBucket = deleteObjectsOnChange
+      ? (props.destinationLifecycle?.onChange?.fromBucket ?? this.destinationBucket)
+      : undefined;
+    const previousDistribution = props.destinationLifecycle?.onChange?.invalidateDistribution;
+    const deleteObjectsOnDelete = props.destinationLifecycle?.onDelete?.deleteObjects === true;
     const deleteStaleObjectsOnDeploy =
       props.destinationLifecycle?.onDeploy?.deleteStaleObjects ?? true;
 
@@ -735,7 +764,7 @@ export class ShinBucketDeployment extends Construct {
         InvalidatePreviousDistributionOnChange:
           previousDistribution?.distributionRef.distributionId,
         WaitForDistributionInvalidation: props.waitForDistributionInvalidation ?? true,
-        DeleteCurrentObjectsOnDelete: deleteCurrentObjectsOnDelete,
+        DeleteCurrentObjectsOnDelete: deleteObjectsOnDelete,
         Extract: props.extract ?? true,
         DeleteStaleObjectsOnDeployment: deleteStaleObjectsOnDeploy,
         Exclude: props.exclude,
