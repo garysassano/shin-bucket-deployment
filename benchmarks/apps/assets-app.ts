@@ -40,7 +40,7 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
       new ShinBucketDeployment(this, "DeployBenchmarkAssets", {
         ...deploymentProps,
         destinationLifecycle: {
-          onDeployment: {
+          onDeploy: {
             deleteStaleObjects,
           },
           ...(deleteCurrentObjectsOnDelete === undefined

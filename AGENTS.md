@@ -36,7 +36,7 @@ shape changes.
 Keep destructive destination behavior under the phase-oriented
 `destinationLifecycle` API:
 
-- `onDeployment.deleteStaleObjects` controls stale-object deletion on Create
+- `onDeploy.deleteStaleObjects` controls stale-object deletion on Create
   and Update.
 - `onChange.deletePreviousObjects` controls previous-namespace deletion when
   destination settings change; `true` reuses the current bucket and an

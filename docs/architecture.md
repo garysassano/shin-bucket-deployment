@@ -16,7 +16,7 @@ The provider Lambda:
 - skips unchanged objects when destination metadata is sufficient
 - uploads changed extracted objects with `PutObject`
 - copies `extract=false` sources with `CopyObject`
-- deletes destination keys not present in the plan when `destinationLifecycle.onDeployment.deleteStaleObjects` is enabled
+- deletes destination keys not present in the plan when `destinationLifecycle.onDeploy.deleteStaleObjects` is enabled
 - creates optional CloudFront invalidations after S3 changes
 
 Runtime tuning defaults:
@@ -158,7 +158,7 @@ flowchart TD
 `destinationLifecycle` groups cleanup by lifecycle phase while each nested
 property names the action directly:
 
-- `onDeployment` applies whenever current sources are deployed on Create or
+- `onDeploy` applies whenever current sources are deployed on Create or
   Update. `deleteStaleObjects` defaults to `true`.
 - `onChange` applies only when the destination bucket, prefix, or distribution
   changed in a CloudFormation Update. Previous-object deletion and
@@ -219,7 +219,7 @@ when CloudFormation deletes the custom resource:
 
 ```ts
 destinationLifecycle: {
-  onDeployment: {
+  onDeploy: {
     deleteStaleObjects: false,
   },
   onDelete: {
@@ -367,7 +367,7 @@ For `extract=false`:
 4. Skip copies whose destination `ETag` matches.
 5. Run changed copies with `CopyObject` and `MetadataDirective=REPLACE`.
 
-Destination listing is also used for stale-object cleanup. With `destinationLifecycle.onDeployment.deleteStaleObjects` enabled, objects under the destination prefix that are not in the current deployment plan are removed with `DeleteObjects` in 1000-key chunks.
+Destination listing is also used for stale-object cleanup. With `destinationLifecycle.onDeploy.deleteStaleObjects` enabled, objects under the destination prefix that are not in the current deployment plan are removed with `DeleteObjects` in 1000-key chunks.
 
 ## Skip Decisions
 

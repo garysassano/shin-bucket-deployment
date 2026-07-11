@@ -106,7 +106,7 @@ The default suite includes:
 - metadata and include/exclude filters
 - marker replacement
 - stale-object cleanup during deployment
-- stale-object retention with `onDeployment.deleteStaleObjects=false`
+- stale-object retention with `onDeploy.deleteStaleObjects=false`
 - default object retention across update/delete
 - `extract=false`
 - explicit previous-object deletion on destination change and current-object deletion on Delete
@@ -116,7 +116,7 @@ The default suite includes:
 - CloudFront sync/async invalidation with explicit and default invalidation paths
 
 Lifecycle scenarios and assertions must use the public phase names
-`onDeployment`, `onChange`, and `onDelete`. Use `deleteStaleObjects`,
+`onDeploy`, `onChange`, and `onDelete`. Use `deleteStaleObjects`,
 `deletePreviousObjects`, `invalidatePreviousDistribution`, and
 `deleteCurrentObjects` for the actions. Do not describe the public behavior as
 `prune` or `retainOnDelete`.

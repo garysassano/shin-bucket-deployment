@@ -24,7 +24,7 @@ class StaleObjectRetentionShinBucketDeploymentStack extends Stack {
       destinationBucket: websiteBucket,
       destinationKeyPrefix: "stale-retention-site",
       destinationLifecycle: {
-        onDeployment: {
+        onDeploy: {
           deleteStaleObjects: false,
         },
       },

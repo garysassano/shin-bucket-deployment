@@ -271,7 +271,7 @@ export interface ShinBucketDeploymentDestinationLifecycle {
   /**
    * Cleanup performed while deploying the current sources on Create or Update.
    */
-  readonly onDeployment?: {
+  readonly onDeploy?: {
     /**
      * Delete objects in the current destination namespace that are absent from
      * the deployment plan.
@@ -424,7 +424,7 @@ export class ShinBucketDeployment extends Construct {
     if (maybeUnsupported.prune !== undefined) {
       throw new ValidationError(
         literalString("ShinBucketDeploymentPruneUnsupported"),
-        "ShinBucketDeployment replaces prune with destinationLifecycle.onDeployment.deleteStaleObjects.",
+        "ShinBucketDeployment replaces prune with destinationLifecycle.onDeploy.deleteStaleObjects.",
         this,
       );
     }
@@ -443,7 +443,7 @@ export class ShinBucketDeployment extends Construct {
     ) {
       throw new ValidationError(
         literalString("ShinBucketDeploymentFlatDestinationLifecycleUnsupported"),
-        "ShinBucketDeployment destinationLifecycle uses onDeployment, onChange, and onDelete phase objects.",
+        "ShinBucketDeployment destinationLifecycle uses onDeploy, onChange, and onDelete phase objects.",
         this,
       );
     }
@@ -558,8 +558,8 @@ export class ShinBucketDeployment extends Construct {
       props.destinationLifecycle?.onChange?.invalidatePreviousDistribution;
     const deleteCurrentObjectsOnDelete =
       props.destinationLifecycle?.onDelete?.deleteCurrentObjects === true;
-    const deleteStaleObjectsOnDeployment =
-      props.destinationLifecycle?.onDeployment?.deleteStaleObjects ?? true;
+    const deleteStaleObjectsOnDeploy =
+      props.destinationLifecycle?.onDeploy?.deleteStaleObjects ?? true;
 
     if (props.vpc) {
       this.node.addDependency(props.vpc);
@@ -737,7 +737,7 @@ export class ShinBucketDeployment extends Construct {
         WaitForDistributionInvalidation: props.waitForDistributionInvalidation ?? true,
         DeleteCurrentObjectsOnDelete: deleteCurrentObjectsOnDelete,
         Extract: props.extract ?? true,
-        DeleteStaleObjectsOnDeployment: deleteStaleObjectsOnDeployment,
+        DeleteStaleObjectsOnDeployment: deleteStaleObjectsOnDeploy,
         Exclude: props.exclude,
         Include: props.include,
         UserMetadata: props.metadata ? mapUserMetadata(props.metadata) : undefined,

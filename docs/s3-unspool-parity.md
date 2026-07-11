@@ -39,7 +39,7 @@ This matrix is point-in-time documentation. Re-check it when `s3-unspool` change
 | Runtime tuning surface | Implemented for transfer concurrency, source block/window settings, source GET concurrency, and PUT retry policy. |
 | Adaptive source tuning | Implemented. Source GET concurrency and source block window default from the provider Lambda memory size. |
 | Structured diagnostics counters | Implemented as provider logs for source GET attempts/retries/errors, bytes/amplification, block hits/waits/releases/refetches, split wait reasons, replay-claim counters, resident source-window high-water, active reader and active GET high-water, conditional write conflicts, and PUT retry/failure counters. |
-| `DestinationCleanup` policy | Mapped to `destinationLifecycle.onDeployment.deleteStaleObjects`: `true` behaves like `DeleteExtra`; `false` behaves like `KeepExtra`. |
+| `DestinationCleanup` policy | Mapped to `destinationLifecycle.onDeploy.deleteStaleObjects`: `true` behaves like `DeleteExtra`; `false` behaves like `KeepExtra`. |
 | `ComparisonMode` policy | Mapped to fixed `CatalogThenHash` behavior for marker-free ZIP entries. There is no public force-hash mode. |
 | `ConflictPolicy` policy | Mapped to CloudFormation fail-fast behavior. Conditional destination write conflicts are counted in the sanitized provider summary and fail the custom-resource request instead of being reported and continued. |
 | `AdaptiveSourceWindow` | Implemented as equivalent internal memory-derived source-window sizing. Public CDK users set `memoryLimit`; low-level overrides remain under `advancedRuntimeTuning`. |
@@ -53,7 +53,7 @@ This matrix is point-in-time documentation. Re-check it when `s3-unspool` change
 | Deploy-time markers | Preserved. Marker entries are decompressed, validated, materialized, replaced, hashed, and uploaded when changed. |
 | `extract=false` | Preserved as a separate `CopyObject` path. |
 | `include` / `exclude` | Preserved while walking ZIP entries and stale-object deletion candidates. |
-| `destinationLifecycle.onDeployment.deleteStaleObjects` | Maps the upstream `prune` behavior to destination listing and batched `DeleteObjects`. |
+| `destinationLifecycle.onDeploy.deleteStaleObjects` | Maps the upstream `prune` behavior to destination listing and batched `DeleteObjects`. |
 | `destinationLifecycle.onChange` / `onDelete` | Separately opts into deleting previous objects, invalidating a changed previous distribution, or deleting current objects on Delete. Previous-object deletion derives the old prefix from `OldResourceProperties`; changed old resources are explicit synthesis-time inputs. |
 | S3 metadata props | Preserved for upload and copy requests. |
 | CloudFront invalidation | Preserved after S3 deployment. |

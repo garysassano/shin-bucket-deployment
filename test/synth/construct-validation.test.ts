@@ -118,7 +118,7 @@ describe("ShinBucketDeployment validation and option coverage", () => {
       destinationBucket,
       destinationKeyPrefix: "new-site",
       destinationLifecycle: {
-        onDeployment: {
+        onDeploy: {
           deleteStaleObjects: false,
         },
         onChange: {
@@ -228,7 +228,7 @@ describe("ShinBucketDeployment validation and option coverage", () => {
       /does not support serverSideEncryptionCustomerAlgorithm/,
     ],
     ["expires", { toString: (): string => "tomorrow" }, /does not support expires/],
-    ["prune", false, /destinationLifecycle\.onDeployment\.deleteStaleObjects/],
+    ["prune", false, /destinationLifecycle\.onDeploy\.deleteStaleObjects/],
     ["retainOnDelete", false, /explicit destinationLifecycle\.onChange/],
   ] as const)("rejects unsupported prop %s", (propName, value, pattern) => {
     const stack = new Stack();
@@ -255,7 +255,7 @@ describe("ShinBucketDeployment validation and option coverage", () => {
           deleteDestinationObjectsOnDelete: true,
         },
       } as never);
-    }).toThrow(/onDeployment, onChange, and onDelete/);
+    }).toThrow(/onDeploy, onChange, and onDelete/);
   });
 
   test("fails synthesis when extract=false is combined with deploy-time markers", () => {

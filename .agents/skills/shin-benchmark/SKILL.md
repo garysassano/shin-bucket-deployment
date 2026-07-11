@@ -101,7 +101,7 @@ Choose benchmark configs deliberately. Paired Shin vs AWS comparisons should use
 
 Benchmark configuration uses behavior-oriented names even when comparing with
 upstream AWS CDK. Map `deleteStaleObjects` to Shin
-`destinationLifecycle.onDeployment.deleteStaleObjects` and upstream `prune`.
+`destinationLifecycle.onDeploy.deleteStaleObjects` and upstream `prune`.
 Map `deleteCurrentObjectsOnDelete` to Shin
 `destinationLifecycle.onDelete.deleteCurrentObjects` and the inverse of
 upstream `retainOnDelete`. Keep the upstream prop names only at the adapter
