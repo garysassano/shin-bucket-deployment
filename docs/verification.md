@@ -1,16 +1,9 @@
 # Verification
 
-This page is the current human-readable correctness snapshot for
-`ShinBucketDeployment`. Performance evidence and AWS CDK `BucketDeployment`
-comparisons remain separate in [benchmark](./benchmark.md). Verification is
-replaced rather than appended; runbooks and sanitization rules live in
-`.agents/skills/shin-verification/SKILL.md`.
+This page is the current human-readable correctness snapshot for `ShinBucketDeployment`. Performance evidence and AWS CDK `BucketDeployment` comparisons remain separate in [benchmark](./benchmark.md). Verification is replaced rather than appended; runbooks and sanitization rules live in `.agents/skills/shin-verification/SKILL.md`.
 
 > [!IMPORTANT]
-> The current PR7 release candidate has complete local and AWS correctness
-> evidence. The AWS run used the rebuilt arm64 provider from `7a910f4`; both
-> packaged architectures were rebuilt afterward from the same commit. Raw AWS
-> output and identifiers remain outside git.
+> The current PR #12 release candidate has complete local and AWS correctness evidence. The AWS run used the rebuilt arm64 provider from `7a910f4`; both packaged architectures were rebuilt afterward from the same commit. Raw AWS output and identifiers remain outside git.
 
 ## Current Snapshot
 
@@ -19,7 +12,7 @@ replaced rather than appended; runbooks and sanitization rules live in
 | Latest verification date | 2026-07-12 |
 | Current verification baseline | `7a910f4` (`fix: send stored SHA-256 for KMS uploads`) on `fix/object-semantic-correctness` |
 | Current verification category | Deterministic local gates plus deployed AWS end-to-end verification |
-| Latest current run | `2026-07-12-aws-pr7-release-candidate` |
+| Latest current run | `2026-07-12-aws-pr12-release-candidate` |
 | AWS status for current code | Pass: 21 ordered phases across 16 stacks, followed by independent state assertions |
 | Provider architecture exercised in AWS | arm64 |
 | Packaged provider architectures | arm64 and x86_64 rebuilt from the same provider source |
@@ -48,25 +41,15 @@ replaced rather than appended; runbooks and sanitization rules live in
 
 | Run | Category | Scope | Status | Evidence |
 | --- | --- | --- | --- | --- |
-| `2026-07-12-local-pr7-release-candidate` | local | Provider source through `7a910f4` and the PR7 TypeScript/scenario candidate | Pass | 114 Rust tests passed with one AWS-only test ignored; 86 Vitest and five Node tests passed; build/package/typecheck/lint/clippy/package gates passed; all 21 scenarios listed and synthesized; both Lambda architectures rebuilt. |
-| `2026-07-12-aws-pr7-release-candidate` | aws | 21 phases across 16 stacks using the rebuilt arm64 provider | Pass and cleaned | Every custom resource reached CloudFormation success. Independent assertions then verified content, inferred types, filters, markers, source order, ranged reads, lifecycle state, exact KMS/DSSE checksums, and sync/async CloudFront invalidation. All stacks and the retained bucket were removed. |
-| `2026-07-12-aws-object-semantics` | aws, historical | 21 phases across 15 stacks at `b40def8` | Superseded for current-code status | The run passed and cleaned up, but it exercised the removed metadata semantics, universal SHA-256, ACL reconciliation, and global marker preflight. It is not current PR7 evidence. |
+| `2026-07-12-local-pr12-release-candidate` | local | Provider source through `7a910f4` and the PR #12 TypeScript/scenario candidate | Pass | 114 Rust tests passed with one AWS-only test ignored; 86 Vitest and five Node tests passed; build/package/typecheck/lint/clippy/package gates passed; all 21 scenarios listed and synthesized; both Lambda architectures rebuilt. |
+| `2026-07-12-aws-pr12-release-candidate` | aws | 21 phases across 16 stacks using the rebuilt arm64 provider | Pass and cleaned | Every custom resource reached CloudFormation success. Independent assertions then verified content, inferred types, filters, markers, source order, ranged reads, lifecycle state, exact KMS/DSSE checksums, and sync/async CloudFront invalidation. All stacks and the retained bucket were removed. |
+| `2026-07-12-aws-object-semantics` | aws, historical | 21 phases across 15 stacks at `b40def8` | Superseded for current-code status | The run passed and cleaned up, but it exercised the removed metadata semantics, universal SHA-256, ACL reconciliation, and global marker preflight. It is not current PR #12 evidence. |
 
 ## Known Limitations
 
-- The deployed AWS run exercised arm64. The x86_64 provider was rebuilt from the
-  same source and passed package validation, but was not separately deployed.
-- Lost-response convergence is covered with deterministic S3 wire replay rather
-  than an injected AWS network failure. The real KMS/DSSE run confirms that the
-  stored checksum needed by that reconciliation path exists and matches.
-- KMS/DSSE destination ETags are not treated as plaintext MD5. Existing
-  encrypted objects can transfer again instead of using the SSE-S3 catalog/ETag
-  shortcut; avoiding a checksum-mode `HeadObject` per destination object keeps
-  the normal deployment request count bounded.
-- Marker output is materialized as a whole entry. Validation occurs once
-  immediately before that entry's PUT, so earlier independent writes may have
-  completed before a later marker entry fails.
-- Imported buckets, SSE-C, and encryption configurations whose strategy cannot
-  be proven at synthesis remain intentionally unsupported.
-- Raw AWS evidence remains intentionally excluded from git. Performance results
-  and their separate caveats are maintained in [benchmark](./benchmark.md).
+- The deployed AWS run exercised arm64. The x86_64 provider was rebuilt from the same source and passed package validation, but was not separately deployed.
+- Lost-response convergence is covered with deterministic S3 wire replay rather than an injected AWS network failure. The real KMS/DSSE run confirms that the stored checksum needed by that reconciliation path exists and matches.
+- KMS/DSSE destination ETags are not treated as plaintext MD5. Existing encrypted objects can transfer again instead of using the SSE-S3 catalog/ETag shortcut; avoiding a checksum-mode `HeadObject` per destination object keeps the normal deployment request count bounded.
+- Marker output is materialized as a whole entry. Validation occurs once immediately before that entry's PUT, so earlier independent writes may have completed before a later marker entry fails.
+- Imported buckets, SSE-C, and encryption configurations whose strategy cannot be proven at synthesis remain intentionally unsupported.
+- Raw AWS evidence remains intentionally excluded from git. Performance results and their separate caveats are maintained in [benchmark](./benchmark.md).

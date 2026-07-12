@@ -75,12 +75,7 @@ The official `BucketDeployment` is a good default for many stacks, but its provi
 > [!CAUTION]
 > These are historical exploratory snapshots with single-sample methodology. They are being revalidated and should not be treated as performance guarantees or used to choose production defaults.
 
-The separate [PR7 controlled decision run](docs/benchmark.md#pr7-performance-decision-run)
-used three repetitions per phase. Its current SSE-S3 provider medians were
-3.8x to 43.0x faster than upstream and improved on the original PR7 candidate
-in every measured phase; the correctness-required KMS path remained 2.6x to
-2.7x faster than upstream. The charts below still represent the older canonical
-snapshot and are intentionally not relabeled with those temporary run variants.
+The separate [PR #12 controlled decision run](docs/benchmark.md#pr-12-performance-decision-run) used three repetitions per phase. Its current SSE-S3 provider medians were 3.8x to 43.0x faster than upstream and improved on the original PR #12 candidate in every measured phase; the correctness-required KMS path remained 2.6x to 2.7x faster than upstream. The charts below still represent the older canonical snapshot and are intentionally not relabeled with those temporary run variants.
 
 <img src="https://raw.githubusercontent.com/garysassano/shin-bucket-deployment/main/benchmarks/snapshots/tiny-many-1024mib-32.svg" alt="ShinBucketDeployment tiny-many 1024 MiB parallel 32 benchmark" width="100%">
 

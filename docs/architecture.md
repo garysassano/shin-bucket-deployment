@@ -159,20 +159,13 @@ flowchart TD
 
 ## Changing a destination safely
 
-`destinationLifecycle` groups cleanup by lifecycle phase while each nested
-property names the action directly:
+`destinationLifecycle` groups cleanup by lifecycle phase while each nested property names the action directly:
 
-- `onDeploy` applies whenever current sources are deployed on Create or
-  Update. `deleteStaleObjects` defaults to `true`.
-- `onChange` applies only when the destination bucket, prefix, or distribution
-  changed in a CloudFormation Update. Old-object deletion and old-distribution
-  invalidation are both disabled by default.
-- `onDelete` applies when CloudFormation deletes the custom resource.
-  `deleteObjects` defaults to `false`.
+- `onDeploy` applies whenever current sources are deployed on Create or Update. `deleteStaleObjects` defaults to `true`.
+- `onChange` applies only when the destination bucket, prefix, or distribution changed in a CloudFormation Update. Old-object deletion and old-distribution invalidation are both disabled by default.
+- `onDelete` applies when CloudFormation deletes the custom resource. `deleteObjects` defaults to `false`.
 
-When only the prefix changes, set `deleteObjects` to `true`. The current bucket
-remains the authorized bucket, and CloudFormation supplies the old
-prefix through `OldResourceProperties`:
+When only the prefix changes, set `deleteObjects` to `true`. The current bucket remains the authorized bucket, and CloudFormation supplies the old prefix through `OldResourceProperties`:
 
 ```ts
 new ShinBucketDeployment(this, "DeployWebsite", {
@@ -188,8 +181,7 @@ new ShinBucketDeployment(this, "DeployWebsite", {
 });
 ```
 
-When the bucket changes, pass the previous `IBucket` directly. When the
-distribution changes, authorize its separate invalidation action explicitly:
+When the bucket changes, pass the previous `IBucket` directly. When the distribution changes, authorize its separate invalidation action explicitly:
 
 ```ts
 new ShinBucketDeployment(this, "DeployWebsite", {
@@ -214,13 +206,9 @@ new ShinBucketDeployment(this, "DeployWebsite", {
 | Distribution | `{ invalidateDistribution: oldDistribution }` |
 | Bucket and distribution | `{ deleteObjects: true, fromBucket: oldBucket, invalidateDistribution: oldDistribution }` |
 
-The actions are independent. Omitting `invalidateDistribution` does
-not block explicitly requested object deletion. If the previous distribution
-differs and its cached content changed, the provider skips that invalidation
-and logs that it was not explicitly authorized.
+The actions are independent. Omitting `invalidateDistribution` does not block explicitly requested object deletion. If the previous distribution differs and its cached content changed, the provider skips that invalidation and logs that it was not explicitly authorized.
 
-To retain stale objects during normal deployments and delete current objects
-when CloudFormation deletes the custom resource:
+To retain stale objects during normal deployments and delete current objects when CloudFormation deletes the custom resource:
 
 ```ts
 destinationLifecycle: {
@@ -233,119 +221,52 @@ destinationLifecycle: {
 }
 ```
 
-None of these actions deletes the bucket or CloudFront distribution resource.
-`deleteStaleObjects` removes only objects in the current namespace that are
-absent from the deployment plan and match the active include/exclude filters.
+None of these actions deletes the bucket or CloudFront distribution resource. `deleteStaleObjects` removes only objects in the current namespace that are absent from the deployment plan and match the active include/exclude filters.
 
-For old-object deletion, omitting `fromBucket` reuses `destinationBucket`; an
-explicit `fromBucket` authorizes a changed old bucket. An unchanged current
-distribution is invalidated automatically. A changed old distribution must be
-passed to `invalidateDistribution` so CDK can grant distribution-specific
-invalidation permissions and synthesize its dependency.
+For old-object deletion, omitting `fromBucket` reuses `destinationBucket`; an explicit `fromBucket` authorizes a changed old bucket. An unchanged current distribution is invalidated automatically. A changed old distribution must be passed to `invalidateDistribution` so CDK can grant distribution-specific invalidation permissions and synthesize its dependency.
 
-The provider deploys the current content before considering previous cleanup.
-It derives the old prefix from `OldResourceProperties`, verifies that the old
-bucket matches the resource authorized by the new template, and applies the
-owner and namespace-overlap checks. A missing or mismatched bucket
-authorization retains the previous destination and logs the reason; it does
-not undo the successful deployment of current content.
+The provider deploys the current content before considering previous cleanup. It derives the old prefix from `OldResourceProperties`, verifies that the old bucket matches the resource authorized by the new template, and applies the owner and namespace-overlap checks. A missing or mismatched bucket authorization retains the previous destination and logs the reason; it does not undo the successful deployment of current content.
 
-Parent/child prefix changes are segment-aware. If the previous prefix contains
-the current prefix, cleanup excludes the complete current namespace. If the
-current prefix contains the previous prefix, no separate cleanup is necessary.
-Neighboring prefixes such as `site` and `site2` are treated as disjoint.
+Parent/child prefix changes are segment-aware. If the previous prefix contains the current prefix, cleanup excludes the complete current namespace. If the current prefix contains the previous prefix, no separate cleanup is necessary. Neighboring prefixes such as `site` and `site2` are treated as disjoint.
 
 ### Synthesis and permission boundary
 
-`OldResourceProperties` exists only in the runtime Update event. CDK cannot use
-it during synthesis to add IAM permissions or construct dependencies. This
-creates different handling for prefixes and resources:
+`OldResourceProperties` exists only in the runtime Update event. CDK cannot use it during synthesis to add IAM permissions or construct dependencies. This creates different handling for prefixes and resources:
 
 - The provider can derive the old prefix at runtime.
-- CDK can reuse the current bucket and distribution permissions when those
-  resources did not change.
-- A changed bucket or distribution needs an explicit old-resource reference in
-  the new template.
+- CDK can reuse the current bucket and distribution permissions when those resources did not change.
+- A changed bucket or distribution needs an explicit old-resource reference in the new template.
 
-Because the old prefix is unknown during synthesis, enabling previous object
-deletion grants List/Delete and ownership-tag access across the selected bucket.
-The provider limits its operation to the old prefix from
-`OldResourceProperties`, but the execution role's S3 permission is broader for
-the duration that the option remains in the template. Remove
-`destinationLifecycle.onChange.deleteObjects` and `fromBucket` after the
-transition to remove that additional grant.
+Because the old prefix is unknown during synthesis, enabling previous object deletion grants List/Delete and ownership-tag access across the selected bucket. The provider limits its operation to the old prefix from `OldResourceProperties`, but the execution role's S3 permission is broader for the duration that the option remains in the template. Remove `destinationLifecycle.onChange.deleteObjects` and `fromBucket` after the transition to remove that additional grant.
 
-Fully automatic cross-bucket cleanup would require wildcard permissions over
-buckets that are absent from the synthesized construct graph. That would weaken
-least privilege, omit useful CloudFormation dependencies, and give the provider
-authority unrelated to the declared migration. Shin instead requires an
-explicit old `IBucket` for cross-bucket moves and scopes the additional grant to
-that bucket. Changed CloudFront distributions likewise require an explicit
-`IDistribution` and receive distribution-specific invalidation permissions.
+Fully automatic cross-bucket cleanup would require wildcard permissions over buckets that are absent from the synthesized construct graph. That would weaken least privilege, omit useful CloudFormation dependencies, and give the provider authority unrelated to the declared migration. Shin instead requires an explicit old `IBucket` for cross-bucket moves and scopes the additional grant to that bucket. Changed CloudFront distributions likewise require an explicit `IDistribution` and receive distribution-specific invalidation permissions.
 
-There is intentionally no lifecycle protocol version, deprecated alias, or
-compatibility parser in this contract. PR3 was merged with zero active users,
-so the clearer API directly replaces it; version negotiation would not protect
-an existing deployment.
+There is intentionally no lifecycle protocol version, deprecated alias, or compatibility parser in this contract. PR #8 was merged with zero active users, so the clearer API directly replaces it; version negotiation would not protect an existing deployment.
 
 ## Upstream `BucketDeployment` lifecycle comparison
 
-This comparison was checked against AWS CDK `main` commit
-[`2b1c632dc2ab754882bdae066555879d8c702944`](https://github.com/aws/aws-cdk/tree/2b1c632dc2ab754882bdae066555879d8c702944).
-It is intentionally balanced: upstream's delete-old-first order avoids the
-specific former Shin regression where deploy-then-sweep could erase newly
-written child content. Shin keeps new content available and makes the cleanup
-decision more precise.
+This comparison was checked against AWS CDK `main` commit [`2b1c632dc2ab754882bdae066555879d8c702944`](https://github.com/aws/aws-cdk/tree/2b1c632dc2ab754882bdae066555879d8c702944). It is intentionally balanced: upstream's delete-old-first order avoids the specific former Shin regression where deploy-then-sweep could erase newly written child content. Shin keeps new content available and makes the cleanup decision more precise.
 
 Upstream's Python handler:
 
-- Reads `OldResourceProperties`, recursively removes a changed old destination,
-  then calls `s3_deploy` and finally invalidates CloudFront
-  ([handler lines 128–145](https://github.com/aws/aws-cdk/blob/2b1c632dc2ab754882bdae066555879d8c702944/packages/%40aws-cdk/custom-resource-handlers/lib/aws-s3-deployment/bucket-deployment-handler/index.py#L128-L145)).
-- Runs the ownership check only for Delete; changed-destination Update cleanup
-  goes directly to `aws s3 rm --recursive`.
-- Implements ownership as a raw tag-key `startswith` test
-  ([handler lines 317–332](https://github.com/aws/aws-cdk/blob/2b1c632dc2ab754882bdae066555879d8c702944/packages/%40aws-cdk/custom-resource-handlers/lib/aws-s3-deployment/bucket-deployment-handler/index.py#L317-L332)),
-  so the namespace `site` also matches an owner tag for `site2`.
-- Invalidates whenever the current resource properties contain a distribution,
-  including retained or no-op Delete events.
+- Reads `OldResourceProperties`, recursively removes a changed old destination, then calls `s3_deploy` and finally invalidates CloudFront ([handler lines 128–145](https://github.com/aws/aws-cdk/blob/2b1c632dc2ab754882bdae066555879d8c702944/packages/%40aws-cdk/custom-resource-handlers/lib/aws-s3-deployment/bucket-deployment-handler/index.py#L128-L145)).
+- Runs the ownership check only for Delete; changed-destination Update cleanup goes directly to `aws s3 rm --recursive`.
+- Implements ownership as a raw tag-key `startswith` test ([handler lines 317–332](https://github.com/aws/aws-cdk/blob/2b1c632dc2ab754882bdae066555879d8c702944/packages/%40aws-cdk/custom-resource-handlers/lib/aws-s3-deployment/bucket-deployment-handler/index.py#L317-L332)), so the namespace `site` also matches an owner tag for `site2`.
+- Invalidates whenever the current resource properties contain a distribution, including retained or no-op Delete events.
 
-Upstream's TypeScript construct grants the provider against the current
-destination bucket and uses a wildcard CloudFront resource
-([construct lines 415–431](https://github.com/aws/aws-cdk/blob/2b1c632dc2ab754882bdae066555879d8c702944/packages/aws-cdk-lib/aws-s3-deployment/lib/bucket-deployment.ts#L415-L431)).
-It documents and creates the same `aws-cdk:cr-owned:{prefix}:{hash}` tag family
-([construct lines 494–543](https://github.com/aws/aws-cdk/blob/2b1c632dc2ab754882bdae066555879d8c702944/packages/aws-cdk-lib/aws-s3-deployment/lib/bucket-deployment.ts#L494-L543)),
-but it does not carry an old-bucket construct reference into the new template.
-Consequently, a cross-bucket update can reach old cleanup without the old
-bucket's permissions.
+Upstream's TypeScript construct grants the provider against the current destination bucket and uses a wildcard CloudFront resource ([construct lines 415–431](https://github.com/aws/aws-cdk/blob/2b1c632dc2ab754882bdae066555879d8c702944/packages/aws-cdk-lib/aws-s3-deployment/lib/bucket-deployment.ts#L415-L431)). It documents and creates the same `aws-cdk:cr-owned:{prefix}:{hash}` tag family ([construct lines 494–543](https://github.com/aws/aws-cdk/blob/2b1c632dc2ab754882bdae066555879d8c702944/packages/aws-cdk-lib/aws-s3-deployment/lib/bucket-deployment.ts#L494-L543)), but it does not carry an old-bucket construct reference into the new template. Consequently, a cross-bucket update can reach old cleanup without the old bucket's permissions.
 
 Shin differs in these ways:
 
-1. Deploy current content first; never create the upstream delete-before-sync
-   availability gap.
-2. Group explicit cleanup actions under deployment, destination-change, and
-   Delete phases. Previous-object deletion is a temporary opt-in; the provider
-   derives the old prefix from `OldResourceProperties` and validates the
-   authorized bucket.
-3. Reuse current resources when they are unchanged, while carrying an explicitly
-   changed previous bucket or distribution as a CDK interface so the new
-   template expresses its dependency and functional permissions.
-4. Classify same, disjoint, previous-parent, and current-parent namespaces with
-   delimiter-aware comparisons. Previous-parent cleanup excludes the entire
-   current child namespace; current-parent updates need no destructive second
-   sweep.
-5. Parse the owner suffix and check symmetric namespace overlap on Update and
-   Delete. A competing owner retains content, while `site` and `site2` remain
-   independent.
-6. Treat confirmed `NoSuchBucket` and `NoSuchDistribution` as idempotent success
-   only for cleanup/Delete paths; access-denied and transport errors still fail.
-7. Invalidate after S3 mutation, skip retained/no-op Deletes, and merge stable,
-   deduplicated paths when old and current destinations share a distribution.
+1. Deploy current content first; never create the upstream delete-before-sync availability gap.
+2. Group explicit cleanup actions under deployment, destination-change, and Delete phases. Previous-object deletion is a temporary opt-in; the provider derives the old prefix from `OldResourceProperties` and validates the authorized bucket.
+3. Reuse current resources when they are unchanged, while carrying an explicitly changed previous bucket or distribution as a CDK interface so the new template expresses its dependency and functional permissions.
+4. Classify same, disjoint, previous-parent, and current-parent namespaces with delimiter-aware comparisons. Previous-parent cleanup excludes the entire current child namespace; current-parent updates need no destructive second sweep.
+5. Parse the owner suffix and check symmetric namespace overlap on Update and Delete. A competing owner retains content, while `site` and `site2` remain independent.
+6. Treat confirmed `NoSuchBucket` and `NoSuchDistribution` as idempotent success only for cleanup/Delete paths; access-denied and transport errors still fail.
+7. Invalidate after S3 mutation, skip retained/no-op Deletes, and merge stable, deduplicated paths when old and current destinations share a distribution.
 
-These lifecycle improvements are in addition to the existing Rust/SDK data
-path: archive-aware ranged reads, bounded source windows, direct SDK transfer
-operations, conditional destination writes, and deterministic same-event
-CloudFront caller references.
+These lifecycle improvements are in addition to the existing Rust/SDK data path: archive-aware ranged reads, bounded source windows, direct SDK transfer operations, conditional destination writes, and deterministic same-event CloudFront caller references.
 
 ## S3 Deployment Flow
 
@@ -410,116 +331,45 @@ Directory `Source.asset` inputs are packaged with an authenticated source MD5 ca
 
 ## Authenticated Catalog Trust
 
-Cataloged local directories contain compact UTF-8 JSON at
-`.shin/catalog.v1.json`:
+Cataloged local directories contain compact UTF-8 JSON at `.shin/catalog.v1.json`:
 
 ```json
 {"version":1,"entries":[{"path":"index.html","size":123,"md5":"..."}]}
 ```
 
-The serializer fixes field order, orders normalized paths by UTF-8 bytes, and
-hashes the exact catalog file bytes with SHA-256 while writing them. Each entry
-contains an exact safe-integer byte size and a 32-character lowercase MD5.
-`.shin/catalog.v1.json` and `.shin/catalog.v2.json` are reserved input paths;
-the latter is reserved only to prevent metadata ambiguity and is not a
-supported second schema.
+The serializer fixes field order, orders normalized paths by UTF-8 bytes, and hashes the exact catalog file bytes with SHA-256 while writing them. Each entry contains an exact safe-integer byte size and a 32-character lowercase MD5. `.shin/catalog.v1.json` and `.shin/catalog.v2.json` are reserved input paths; the latter is reserved only to prevent metadata ambiguity and is not a supported second schema.
 
-The construct associates the catalog digest with the returned `SourceConfig`
-through a module-private `WeakMap`. The custom-resource protocol renders that
-metadata as an optional `SourceCatalogs` array aligned with
-`SourceBucketNames` and `SourceObjectKeys`:
+The construct associates the catalog digest with the returned `SourceConfig` through a module-private `WeakMap`. The custom-resource protocol renders that metadata as an optional `SourceCatalogs` array aligned with `SourceBucketNames` and `SourceObjectKeys`:
 
 ```json
 [{"Version":1,"Sha256":"<64 lowercase hexadecimal characters>"},{}]
 ```
 
-An empty object means untrusted. The complete property is omitted when every
-source is untrusted or `extract=false`. Trusted catalog metadata participates
-in source deduplication. Because the association is private and there is no
-public trust option, a third-party `ISource` cannot add a lookalike
-`SourceConfig` property to opt itself into sparse skipping.
+An empty object means untrusted. The complete property is omitted when every source is untrusted or `extract=false`. Trusted catalog metadata participates in source deduplication. Because the association is private and there is no public trust option, a third-party `ISource` cannot add a lookalike `SourceConfig` property to opt itself into sparse skipping.
 
-The provider treats a missing `SourceCatalogs` property as an all-untrusted
-legacy request. If the property is present, its length must exactly match the
-source arrays. Partial descriptors, unknown fields, unsupported versions, and
-non-lowercase or incorrectly sized digests fail request validation.
+The provider treats a missing `SourceCatalogs` property as an all-untrusted legacy request. If the property is present, its length must exactly match the source arrays. Partial descriptors, unknown fields, unsupported versions, and non-lowercase or incorrectly sized digests fail request validation.
 
-For an untrusted source, the provider never fetches or parses embedded catalog
-contents. Reserved catalog entries are excluded from destination deployment,
-and existing destination objects use the actual-byte decompression, size,
-CRC32, and MD5 comparison path. This applies to `Source.bucket`, local ZIP
-files, `embeddedCatalog:false`, generated data sources, and third-party
-`ISource` implementations.
+For an untrusted source, the provider never fetches or parses embedded catalog contents. Reserved catalog entries are excluded from destination deployment, and existing destination objects use the actual-byte decompression, size, CRC32, and MD5 comparison path. This applies to `Source.bucket`, local ZIP files, `embeddedCatalog:false`, generated data sources, and third-party `ISource` implementations.
 
-For a trusted source, planning requires exactly one v1 catalog and rejects any
-reserved v2 entry. Both compressed and uncompressed catalog sizes are limited
-to 64 MiB. The provider validates the catalog entry size and CRC32, hashes its
-exact decompressed bytes with SHA-256, compares that digest with the template,
-and parses with unknown fields denied. Catalog paths must be unique and already
-canonical; sizes and lowercase MD5s must be well formed; and catalog entries
-must map one-to-one to every non-directory, non-catalog ZIP entry. These checks
-finish before destination listing or mutation.
+For a trusted source, planning requires exactly one v1 catalog and rejects any reserved v2 entry. Both compressed and uncompressed catalog sizes are limited to 64 MiB. The provider validates the catalog entry size and CRC32, hashes its exact decompressed bytes with SHA-256, compares that digest with the template, and parses with unknown fields denied. Catalog paths must be unique and already canonical; sizes and lowercase MD5s must be well formed; and catalog entries must map one-to-one to every non-directory, non-catalog ZIP entry. These checks finish before destination listing or mutation.
 
-Authenticating the catalog fixes every per-file size and MD5 in the template's
-trust boundary. When a trusted entry is read for comparison, direct upload,
-changed upload, retry/replay, or marker materialization, the provider computes
-MD5 alongside its existing size and CRC32 checks and compares it with the
-authenticated entry. The direct streaming body retains its last pending chunk
-until all checks succeed. A mismatch therefore makes the request body fail
-before S3 can commit that object.
+Authenticating the catalog fixes every per-file size and MD5 in the template's trust boundary. When a trusted entry is read for comparison, direct upload, changed upload, retry/replay, or marker materialization, the provider computes MD5 alongside its existing size and CRC32 checks and compares it with the authenticated entry. The direct streaming body retains its last pending chunk until all checks succeed. A mismatch therefore makes the request body fail before S3 can commit that object.
 
-This design deliberately relies on MD5 second-preimage resistance for source
-entry authentication after the SHA-256 catalog binding. It does not add a
-per-file SHA-256 field. Destination sparse skips still compare authenticated
-size/MD5 with the `ETag` exposed by `ListObjectsV2`; the design does not make
-destination ETags collision-resistant or change the limitations of multipart
-and encrypted-object ETags.
+This design deliberately relies on MD5 second-preimage resistance for source entry authentication after the SHA-256 catalog binding. It does not add a per-file SHA-256 field. Destination sparse skips still compare authenticated size/MD5 with the `ETag` exposed by `ListObjectsV2`; the design does not make destination ETags collision-resistant or change the limitations of multipart and encrypted-object ETags.
 
-Catalog structure or catalog-digest failures happen before any destination
-mutation. Entry-byte tampering can instead be discovered during concurrent
-transfers: the mismatched object cannot commit, stale deletion and CloudFront
-invalidation do not run, and the custom resource fails, but earlier valid
-objects may already have uploaded. Deployments are not transactionally rolled
-back. Delete handling does not open source archives and remains independent of
-catalog availability.
+Catalog structure or catalog-digest failures happen before any destination mutation. Entry-byte tampering can instead be discovered during concurrent transfers: the mismatched object cannot commit, stale deletion and CloudFront invalidation do not run, and the custom resource fails, but earlier valid objects may already have uploaded. Deployments are not transactionally rolled back. Delete handling does not open source archives and remains independent of catalog availability.
 
 ## Cataloged Asset Materialization
 
-Cataloged `Source.asset` directories require CDK asset staging. The construct
-checks the truthy `aws:cdk:disable-asset-staging` context before creating any
-scratch directory because otherwise CDK would retain a path that the construct
-must remove.
+Cataloged `Source.asset` directories require CDK asset staging. The construct checks the truthy `aws:cdk:disable-asset-staging` context before creating any scratch directory because otherwise CDK would retain a path that the construct must remove.
 
-The materializer applies the configured CDK `IgnoreStrategy` once, including
-`completelyIgnores()` directory pruning for Git and Docker negation behavior.
-It normalizes backslashes as separators, detects normalized path collisions,
-and rejects included symlinks, sockets, devices, FIFOs, and reserved metadata
-paths. Each included regular file is hard-linked into one private temporary
-directory when possible. Cross-device and explicitly unsupported or forbidden
-link errors fall back to an exclusive copy; unrelated filesystem failures are
-propagated. File identity, mode, size, and modification time are checked around
-hashing and again after CDK staging to detect ordinary concurrent changes.
+The materializer applies the configured CDK `IgnoreStrategy` once, including `completelyIgnores()` directory pruning for Git and Docker negation behavior. It normalizes backslashes as separators, detects normalized path collisions, and rejects included symlinks, sockets, devices, FIFOs, and reserved metadata paths. Each included regular file is hard-linked into one private temporary directory when possible. Cross-device and explicitly unsupported or forbidden link errors fall back to an exclusive copy; unrelated filesystem failures are propagated. File identity, mode, size, and modification time are checked around hashing and again after CDK staging to detect ordinary concurrent changes.
 
-Shin reads each materialized file through one reusable 64 KiB buffer and
-updates MD5 in that pass. It streams the compact catalog to disk while hashing
-the exact bytes, so it never retains a complete source file, compressed file,
-or ZIP archive in memory. CDK then stages the materialized directory as a
-normal `ZIP_DIRECTORY` file asset and owns ZIP creation, including ZIP64
-support. Hash/publication fields such as custom or source hashing, readers,
-deploy-time lifetime, source KMS key, and display name are forwarded, while
-ignore and catalog-only fields are not applied a second time.
+Shin reads each materialized file through one reusable 64 KiB buffer and updates MD5 in that pass. It streams the compact catalog to disk while hashing the exact bytes, so it never retains a complete source file, compressed file, or ZIP archive in memory. CDK then stages the materialized directory as a normal `ZIP_DIRECTORY` file asset and owns ZIP creation, including ZIP64 support. Hash/publication fields such as custom or source hashing, readers, deploy-time lifetime, source KMS key, and display name are forwarded, while ignore and catalog-only fields are not applied a second time.
 
-The temporary materialization tree is removed after synchronous CDK staging on
-success and ordinary failure. Cleanup failures fail synthesis; when construction
-and cleanup both fail, an `AggregateError` preserves both errors. This guarantee
-does not cover process crashes or `SIGKILL`, and the construct does not delete
-scratch directories leaked by older runs.
+The temporary materialization tree is removed after synchronous CDK staging on success and ordinary failure. Cleanup failures fail synthesis; when construction and cleanup both fail, an `AggregateError` preserves both errors. This guarantee does not cover process crashes or `SIGKILL`, and the construct does not delete scratch directories leaked by older runs.
 
-The memory claim is intentionally scoped: Shin performs no whole-asset or
-whole-file buffering. The installed CDK CLI currently reads one complete file
-at a time while publishing a `ZIP_DIRECTORY`, so end-to-end `cdk deploy` peak
-memory can still scale with the largest individual file. It does not scale with
-the complete asset through Shin's materializer.
+The memory claim is intentionally scoped: Shin performs no whole-asset or whole-file buffering. The installed CDK CLI currently reads one complete file at a time while publishing a `ZIP_DIRECTORY`, so end-to-end `cdk deploy` peak memory can still scale with the largest individual file. It does not scale with the complete asset through Shin's materializer.
 
 ## Write Safety
 
@@ -529,7 +379,7 @@ The construct selects reconciliation from the concrete destination bucket's synt
 
 For SSE-S3, the upload stream computes MD5 alongside required source validation and does not request an optional SDK checksum. An ambiguous conditional `409` or `412` uses ordinary `HeadObject` and reports success only when content length and the single-part destination `ETag` match. For KMS/DSSE, the PUT requests stored `FULL_OBJECT` SHA-256, the provider independently computes the expected digest, and reconciliation uses checksum-mode `HeadObject` to require exact length, checksum, and checksum type. Neither strategy reads object or bucket ACLs. Missing evidence or any content difference fails closed.
 
-The normal SSE-S3 path performs no Shin SHA-256 pass and disables optional SDK checksum calculation. The KMS/DSSE path necessarily performs both the provider digest used independently after a lost response and the SDK's stored-checksum calculation. The controlled PR7 run in [benchmark](./benchmark.md#pr7-performance-decision-run) measured that KMS-only cost within -2.2% to +3.4% of the earlier provider duration while retaining a 2.6x to 2.7x provider-time advantage over upstream.
+The normal SSE-S3 path performs no Shin SHA-256 pass and disables optional SDK checksum calculation. The KMS/DSSE path necessarily performs both the provider digest used independently after a lost response and the SDK's stored-checksum calculation. The controlled PR #12 run in [benchmark](./benchmark.md#pr-12-performance-decision-run) measured that KMS-only cost within -2.2% to +3.4% of the earlier provider duration while retaining a 2.6x to 2.7x provider-time advantage over upstream.
 
 The source ZIP ranged-read path still uses source `If-Match` when the source object has an `ETag`; that protects a single deployment from reading a source archive that changes while it is being streamed.
 
@@ -539,26 +389,11 @@ CloudFront invalidations use a bounded caller reference hash derived from the Cl
 
 ## CloudFormation Deadline And Response Protocol
 
-The provider derives absolute monotonic deadlines from each Lambda invocation.
-S3 and CloudFront work stops five seconds before a callback-only reserve begins;
-spawned transfer, source-scheduler, and body tasks are then cancelled and
-drained within that five-second window. The final 45 seconds are reserved only
-for failure/success response serialization and delivery. CloudFront creation,
-polling, and poll delays all use the work deadline rather than a separate fixed
-poll count.
+The provider derives absolute monotonic deadlines from each Lambda invocation. S3 and CloudFront work stops five seconds before a callback-only reserve begins; spawned transfer, source-scheduler, and body tasks are then cancelled and drained within that five-second window. The final 45 seconds are reserved only for failure/success response serialization and delivery. CloudFront creation, polling, and poll delays all use the work deadline rather than a separate fixed poll count.
 
-Before any S3 mutation, the provider validates the custom resource
-`ResourceType`, CloudFront invalidation path/count serialization bounds, and
-the complete serialized success response. CloudFormation limits the entire
-custom-resource response body to 4096 bytes, so an oversized response fails
-before deployment with guidance to set `outputObjectKeys:false`. Failure
-responses dynamically reduce the serialized `Reason` when JSON escaping would
-otherwise exceed the same limit; the full error remains in CloudWatch Logs.
+Before any S3 mutation, the provider validates the custom resource `ResourceType`, CloudFront invalidation path/count serialization bounds, and the complete serialized success response. CloudFormation limits the entire custom-resource response body to 4096 bytes, so an oversized response fails before deployment with guidance to set `outputObjectKeys:false`. Failure responses dynamically reduce the serialized `Reason` when JSON escaping would otherwise exceed the same limit; the full error remains in CloudWatch Logs.
 
-The pre-serialized success body is reused for callback attempts. Callback
-connection errors, request timeouts, and HTTP 5xx responses use bounded
-exponential full-jitter retries within the invocation deadline. HTTP 4xx and
-other non-retryable responses fail immediately.
+The pre-serialized success body is reused for callback attempts. Callback connection errors, request timeouts, and HTTP 5xx responses use bounded exponential full-jitter retries within the invocation deadline. HTTP 4xx and other non-retryable responses fail immediately.
 
 ## IAM Shape
 
