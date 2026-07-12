@@ -1,15 +1,17 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::io;
 
 use anyhow::{Context, Result, anyhow};
 use async_zip::base::read::seek::ZipFileReader;
 use async_zip::{Compression, StoredZipEntry};
 use crc32fast::Hasher as Crc32Hasher;
+use sha2::{Digest, Sha256};
 use tokio::io::AsyncReadExt;
 
 use crate::request::{join_s3_key, normalize_archive_key, source_basename};
 use crate::types::{
     AppState, DeploymentManifest, DeploymentRequest, DeploymentStats, Filters, PlannedAction,
-    PlannedObject, SourceArchive,
+    PlannedObject, SourceArchive, TrustedEntryIntegrity,
 };
 
 use super::archive::{
@@ -24,6 +26,7 @@ use super::{
 
 const S3_SINGLE_COPY_LIMIT: u64 = 5 * 1024 * 1024 * 1024;
 const S3_SINGLE_PUT_LIMIT: u64 = 5 * 1024 * 1024 * 1024;
+const RESERVED_CATALOG_V2_PATH: &str = ".shin/catalog.v2.json";
 
 #[derive(Clone, Debug)]
 pub(super) struct CopyPlan {
@@ -43,20 +46,48 @@ pub(crate) struct ZipEntryPlan {
     pub(super) compressed_size: u64,
     pub(super) compression_code: u16,
     pub(super) crc32: u32,
-    pub(super) catalog_md5: Option<String>,
+    pub(super) trusted_integrity: Option<TrustedEntryIntegrity>,
     pub(super) source_offset: u64,
     pub(super) source_span_end: u64,
 }
 
-#[derive(serde::Deserialize)]
+impl ZipEntryPlan {
+    pub(super) fn validate_trusted_md5(&self, actual_md5: &str) -> io::Result<()> {
+        let Some(expected) = &self.trusted_integrity else {
+            return Ok(());
+        };
+        if expected.size == self.size && expected.md5 == actual_md5 {
+            return Ok(());
+        }
+
+        tracing::warn!(
+            source_index = self.source_index,
+            catalog_trust = "failed",
+            catalog_reason = "entry_mismatch",
+            "source catalog trust evaluated"
+        );
+        Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "authenticated catalog entry does not match source ZIP bytes for `{}`",
+                self.relative_key
+            ),
+        ))
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 struct EmbeddedCatalog {
     version: u32,
     entries: Vec<EmbeddedCatalogEntry>,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 struct EmbeddedCatalogEntry {
     path: String,
+    size: u64,
     md5: String,
 }
 
@@ -64,6 +95,11 @@ pub(super) fn validate_request_lengths(request: &DeploymentRequest) -> Result<()
     if request.source_bucket_names.len() != request.source_object_keys.len() {
         return Err(anyhow!(
             "SourceBucketNames and SourceObjectKeys must be the same length"
+        ));
+    }
+    if request.source_catalogs.len() != request.source_bucket_names.len() {
+        return Err(anyhow!(
+            "SourceCatalogs and SourceBucketNames must be the same length"
         ));
     }
     if request.source_markers.len() != request.source_bucket_names.len() {
@@ -187,7 +223,7 @@ pub(super) fn collect_zip_entry_plans(
             compressed_size,
             compression_code,
             crc32,
-            catalog_md5,
+            trusted_integrity,
             source_offset,
             source_span_end,
         } = &planned.action
@@ -203,7 +239,7 @@ pub(super) fn collect_zip_entry_plans(
                     compressed_size: *compressed_size,
                     compression_code: *compression_code,
                     crc32: *crc32,
-                    catalog_md5: catalog_md5.clone(),
+                    trusted_integrity: trusted_integrity.clone(),
                     source_offset: *source_offset,
                     source_span_end: *source_span_end,
                 });
@@ -252,7 +288,36 @@ async fn add_archive_entries_to_manifest(
         .context("failed to read zip archive central directory")?;
     let zip_file = reader.file().clone();
     let entries = zip_file.entries();
-    let catalog = load_embedded_catalog(source.clone(), request, entries).await;
+    let catalog = if let Some(expected) = &request.source_catalogs[source_index] {
+        match load_authenticated_catalog(source.clone(), request, entries, &expected.sha256).await {
+            Ok(catalog) => {
+                tracing::info!(
+                    source_index,
+                    catalog_trust = "trusted",
+                    catalog_reason = "catalog_authenticated",
+                    "source catalog trust evaluated"
+                );
+                catalog
+            }
+            Err(error) => {
+                tracing::warn!(
+                    source_index,
+                    catalog_trust = "failed",
+                    catalog_reason = "catalog_mismatch",
+                    "source catalog trust evaluated"
+                );
+                return Err(error.context("authenticated source catalog validation failed"));
+            }
+        }
+    } else {
+        tracing::info!(
+            source_index,
+            catalog_trust = "untrusted",
+            catalog_reason = "absent_binding",
+            "source catalog trust evaluated"
+        );
+        HashMap::new()
+    };
     let mut source_offsets = entries
         .iter()
         .map(StoredZipEntry::header_offset)
@@ -264,7 +329,7 @@ async fn add_archive_entries_to_manifest(
         let Some(relative_key) = stored_zip_file_path(stored)? else {
             continue;
         };
-        if relative_key == EMBEDDED_CATALOG_PATH {
+        if is_reserved_catalog_path(&relative_key) {
             continue;
         }
         if !seen.insert(relative_key.clone()) {
@@ -319,7 +384,7 @@ async fn add_archive_entries_to_manifest(
                     compressed_size: stored.compressed_size(),
                     compression_code: u16::from(stored.compression()),
                     crc32: stored.crc32(),
-                    catalog_md5: catalog.get(&relative_key).cloned(),
+                    trusted_integrity: catalog.get(&relative_key).cloned(),
                     source_offset,
                     source_span_end,
                 },
@@ -330,38 +395,27 @@ async fn add_archive_entries_to_manifest(
     Ok(())
 }
 
-async fn load_embedded_catalog(
+async fn load_authenticated_catalog(
     source: std::sync::Arc<super::archive::SourceClient>,
     request: &DeploymentRequest,
     entries: &[StoredZipEntry],
-) -> HashMap<String, String> {
-    let Some(stored) = entries.iter().find(|stored| {
-        stored_zip_file_path(stored).ok().flatten().as_deref() == Some(EMBEDDED_CATALOG_PATH)
-    }) else {
-        return HashMap::new();
-    };
+    expected_sha256: &[u8; 32],
+) -> Result<HashMap<String, TrustedEntryIntegrity>> {
+    let stored = authenticated_catalog_entry(entries)?;
 
     if stored.uncompressed_size() > EMBEDDED_CATALOG_MAX_BYTES
         || stored.compressed_size() > EMBEDDED_CATALOG_MAX_BYTES
     {
-        tracing::debug!(
-            catalog_size = stored.uncompressed_size(),
-            catalog_compressed_size = stored.compressed_size(),
-            "embedded source catalog is too large"
-        );
-        return HashMap::new();
+        return Err(anyhow!("embedded source catalog exceeds its size limit"));
     }
 
-    let Ok(plan) = zip_entry_plan(
+    let plan = zip_entry_plan(
         source.len(),
         0,
         0,
         stored,
         EMBEDDED_CATALOG_PATH.to_string(),
-    ) else {
-        tracing::debug!("embedded source catalog could not be planned");
-        return HashMap::new();
-    };
+    )?;
     let store = SourceBlockStore::new(
         source.clone(),
         std::slice::from_ref(&plan),
@@ -372,69 +426,156 @@ async fn load_embedded_catalog(
             window_bytes: source_window_bytes_for_archive(&request.runtime, source.len(), 1),
         },
     );
-    let Ok(mut reader) = zip_entry_reader(store, plan.clone()) else {
-        tracing::debug!("embedded source catalog could not be opened");
-        return HashMap::new();
-    };
+    let mut reader = zip_entry_reader(store, plan.clone())?;
     let mut bytes = Vec::new();
     let mut crc32 = Crc32Hasher::new();
     let mut total_bytes = 0_u64;
     let mut buffer = vec![0_u8; 64 * 1024];
     loop {
-        let read = match reader.read(&mut buffer).await {
-            Ok(read) => read,
-            Err(error) => {
-                tracing::debug!(%error, "embedded source catalog could not be read");
-                return HashMap::new();
-            }
-        };
+        let read = reader
+            .read(&mut buffer)
+            .await
+            .context("embedded source catalog could not be read")?;
         if read == 0 {
             break;
         }
         let next_bytes = total_bytes.saturating_add(read as u64);
-        if next_bytes > EMBEDDED_CATALOG_MAX_BYTES
-            || validate_zip_entry_size_not_exceeded(&plan, next_bytes).is_err()
-        {
-            tracing::debug!("embedded source catalog exceeded size limit while reading");
-            return HashMap::new();
+        if next_bytes > EMBEDDED_CATALOG_MAX_BYTES {
+            return Err(anyhow!("embedded source catalog exceeds its size limit"));
         }
+        validate_zip_entry_size_not_exceeded(&plan, next_bytes)?;
         crc32.update(&buffer[..read]);
         bytes.extend_from_slice(&buffer[..read]);
         total_bytes = next_bytes;
     }
-    if let Err(error) = validate_zip_entry_output(&plan, total_bytes, crc32.finalize()) {
-        tracing::debug!(%error, "embedded source catalog failed ZIP validation");
-        return HashMap::new();
-    }
-
-    match serde_json::from_slice::<EmbeddedCatalog>(&bytes) {
-        Ok(catalog) => catalog_md5_by_path(catalog),
-        Err(error) => {
-            tracing::debug!(%error, "embedded source catalog could not be parsed");
-            HashMap::new()
-        }
-    }
+    validate_zip_entry_output(&plan, total_bytes, crc32.finalize())?;
+    let catalog = authenticate_catalog_bytes(&bytes, expected_sha256)?;
+    validate_catalog_entries(catalog, entries)
 }
 
-fn catalog_md5_by_path(catalog: EmbeddedCatalog) -> HashMap<String, String> {
+fn authenticated_catalog_entry(entries: &[StoredZipEntry]) -> Result<&StoredZipEntry> {
+    let mut catalogs = Vec::new();
+    let mut reserved_v2_count = 0_usize;
+    for stored in entries {
+        match stored_zip_file_path(stored)?.as_deref() {
+            Some(EMBEDDED_CATALOG_PATH) => catalogs.push(stored),
+            Some(RESERVED_CATALOG_V2_PATH) => reserved_v2_count += 1,
+            _ => {}
+        }
+    }
+    if catalogs.len() != 1 {
+        return Err(anyhow!(
+            "trusted source must contain exactly one embedded v1 catalog"
+        ));
+    }
+    if reserved_v2_count != 0 {
+        return Err(anyhow!(
+            "trusted source contains unsupported reserved catalog metadata"
+        ));
+    }
+    Ok(catalogs[0])
+}
+
+fn authenticate_catalog_bytes(bytes: &[u8], expected_sha256: &[u8; 32]) -> Result<EmbeddedCatalog> {
+    let actual_sha256 = Sha256::digest(bytes);
+    if actual_sha256.as_slice() != expected_sha256 {
+        return Err(anyhow!(
+            "embedded source catalog digest does not match its binding"
+        ));
+    }
+
+    serde_json::from_slice::<EmbeddedCatalog>(bytes)
+        .context("embedded source catalog could not be parsed")
+}
+
+fn validate_catalog_entries(
+    catalog: EmbeddedCatalog,
+    zip_entries: &[StoredZipEntry],
+) -> Result<HashMap<String, TrustedEntryIntegrity>> {
     if catalog.version != EMBEDDED_CATALOG_VERSION {
-        return HashMap::new();
+        return Err(anyhow!(
+            "embedded source catalog uses an unsupported version"
+        ));
     }
 
     let mut result = HashMap::new();
     for entry in catalog.entries {
-        let Ok(path) = normalize_archive_key(&entry.path) else {
+        let path = normalize_archive_key(&entry.path)?;
+        if path != entry.path {
+            return Err(anyhow!(
+                "embedded source catalog contains a non-canonical path"
+            ));
+        }
+        if is_reserved_catalog_path(&path) {
+            return Err(anyhow!(
+                "embedded source catalog contains a reserved metadata path"
+            ));
+        }
+        if !is_lowercase_md5(&entry.md5) {
+            return Err(anyhow!(
+                "embedded source catalog contains a malformed MD5 digest"
+            ));
+        }
+        if result
+            .insert(
+                path,
+                TrustedEntryIntegrity {
+                    size: entry.size,
+                    md5: entry.md5,
+                },
+            )
+            .is_some()
+        {
+            return Err(anyhow!("embedded source catalog contains a duplicate path"));
+        }
+    }
+
+    let mut files = HashMap::new();
+    for stored in zip_entries {
+        let Some(path) = stored_zip_file_path(stored)? else {
             continue;
         };
-        if path == EMBEDDED_CATALOG_PATH {
+        if is_reserved_catalog_path(&path) {
             continue;
         }
-        let Some(md5) = normalize_etag(&entry.md5) else {
-            continue;
-        };
-        result.insert(path, md5);
+        validate_stored_file_entry(stored, &path)?;
+        if files.insert(path, stored.uncompressed_size()).is_some() {
+            return Err(anyhow!(
+                "source ZIP contains a duplicate normalized file path"
+            ));
+        }
     }
-    result
+
+    if result.len() != files.len() {
+        return Err(anyhow!(
+            "embedded source catalog and source ZIP file sets do not match"
+        ));
+    }
+    for (path, integrity) in &result {
+        let Some(zip_size) = files.get(path) else {
+            return Err(anyhow!(
+                "embedded source catalog and source ZIP file sets do not match"
+            ));
+        };
+        if *zip_size != integrity.size {
+            return Err(anyhow!(
+                "embedded source catalog entry size does not match the source ZIP"
+            ));
+        }
+    }
+
+    Ok(result)
+}
+
+fn is_reserved_catalog_path(path: &str) -> bool {
+    path == EMBEDDED_CATALOG_PATH || path == RESERVED_CATALOG_V2_PATH
+}
+
+fn is_lowercase_md5(value: &str) -> bool {
+    value.len() == 32
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 fn zip_entry_plan(
@@ -470,7 +611,7 @@ fn zip_entry_plan(
         compressed_size: stored.compressed_size(),
         compression_code: u16::from(stored.compression()),
         crc32: stored.crc32(),
-        catalog_md5: None,
+        trusted_integrity: None,
         source_offset,
         source_span_end,
     })
@@ -534,11 +675,14 @@ mod tests {
     use std::collections::HashMap;
     use std::io::{Cursor, Write};
 
+    use async_zip::base::read::seek::ZipFileReader;
+    use sha2::{Digest, Sha256};
     use zip::write::{SimpleFileOptions, ZipWriter};
 
     use super::{
-        EmbeddedCatalog, EmbeddedCatalogEntry, S3_SINGLE_COPY_LIMIT, catalog_md5_by_path,
-        collect_copy_plans, collect_zip_entry_plans,
+        EmbeddedCatalog, EmbeddedCatalogEntry, S3_SINGLE_COPY_LIMIT, authenticate_catalog_bytes,
+        authenticated_catalog_entry, collect_copy_plans, collect_zip_entry_plans,
+        validate_catalog_entries,
     };
     use crate::request::compile_filters;
     use crate::types::{
@@ -561,7 +705,7 @@ mod tests {
                     compressed_size: 1,
                     compression_code: 0,
                     crc32: 0,
-                    catalog_md5: None,
+                    trusted_integrity: None,
                     source_offset: 100,
                     source_span_end: 120,
                 },
@@ -579,7 +723,7 @@ mod tests {
                     compressed_size: 1,
                     compression_code: 0,
                     crc32: 0,
-                    catalog_md5: None,
+                    trusted_integrity: None,
                     source_offset: 10,
                     source_span_end: 30,
                 },
@@ -661,34 +805,174 @@ mod tests {
     }
 
     #[test]
-    fn embedded_catalog_normalizes_valid_md5_entries() {
-        let catalog = EmbeddedCatalog {
-            version: 1,
-            entries: vec![
-                EmbeddedCatalogEntry {
-                    path: "index.html".to_string(),
-                    md5: "\"ABC123\"".to_string(),
-                },
-                EmbeddedCatalogEntry {
-                    path: ".shin/catalog.v1.json".to_string(),
-                    md5: "ignored".to_string(),
-                },
+    fn catalog_bytes_require_the_bound_sha256_and_strict_json() {
+        let bytes = br#"{"version":1,"entries":[]}"#;
+        let expected: [u8; 32] = Sha256::digest(bytes).into();
+
+        let catalog = authenticate_catalog_bytes(bytes, &expected).expect("authenticated catalog");
+        assert_eq!(catalog.version, 1);
+
+        let wrong = [0x42; 32];
+        let error = authenticate_catalog_bytes(bytes, &wrong).expect_err("wrong binding must fail");
+        assert!(!error.to_string().contains(&hex_string(&wrong)));
+
+        let unknown = br#"{"version":1,"entries":[],"secret":"do-not-log"}"#;
+        let unknown_digest: [u8; 32] = Sha256::digest(unknown).into();
+        let error = authenticate_catalog_bytes(unknown, &unknown_digest)
+            .expect_err("unknown fields must fail");
+        assert!(!error.to_string().contains("do-not-log"));
+
+        let unknown_entry = br#"{"version":1,"entries":[{"path":"index","size":1,"md5":"00000000000000000000000000000000","extra":"do-not-log"}]}"#;
+        let unknown_entry_digest: [u8; 32] = Sha256::digest(unknown_entry).into();
+        let error = authenticate_catalog_bytes(unknown_entry, &unknown_entry_digest)
+            .expect_err("unknown entry fields must fail");
+        assert!(!error.to_string().contains("do-not-log"));
+    }
+
+    #[tokio::test]
+    async fn trusted_sources_require_exactly_one_v1_catalog_and_no_reserved_v2_entry() {
+        for (entries, should_succeed) in [
+            (vec![("index.html", b"index" as &[u8])], false),
+            (
+                vec![
+                    (".shin/catalog.v1.json", b"one" as &[u8]),
+                    (".shin//catalog.v1.json", b"two" as &[u8]),
+                ],
+                false,
+            ),
+            (
+                vec![
+                    (".shin/catalog.v1.json", b"one" as &[u8]),
+                    (".shin/catalog.v2.json", b"two" as &[u8]),
+                ],
+                false,
+            ),
+            (vec![(".shin/catalog.v1.json", b"one" as &[u8])], true),
+        ] {
+            let bytes = zip_bytes_from_entries(&entries, false);
+            let reader = ZipFileReader::with_tokio(Cursor::new(bytes)).await.unwrap();
+            let zip = reader.file().clone();
+            assert_eq!(
+                authenticated_catalog_entry(zip.entries()).is_ok(),
+                should_succeed
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn authenticated_catalog_requires_a_strict_one_to_one_zip_mapping() {
+        let bytes = zip_bytes_from_entries(
+            &[
+                ("index.html", b"index" as &[u8]),
+                (".shin/catalog.v1.json", b"catalog" as &[u8]),
             ],
+            false,
+        );
+        let reader = ZipFileReader::with_tokio(Cursor::new(bytes)).await.unwrap();
+        let zip = reader.file().clone();
+        let valid = || EmbeddedCatalog {
+            version: 1,
+            entries: vec![EmbeddedCatalogEntry {
+                path: "index.html".to_string(),
+                size: 5,
+                md5: "6a992d5529f459a44fee58c733255e86".to_string(),
+            }],
         };
 
-        let catalog = catalog_md5_by_path(catalog);
+        let mapped = validate_catalog_entries(valid(), zip.entries()).expect("valid mapping");
+        assert_eq!(mapped["index.html"].size, 5);
 
-        assert_eq!(
-            catalog.get("index.html").map(String::as_str),
-            Some("abc123")
+        let mut wrong_version = valid();
+        wrong_version.version = 2;
+        assert!(validate_catalog_entries(wrong_version, zip.entries()).is_err());
+
+        let mut wrong_size = valid();
+        wrong_size.entries[0].size = 6;
+        assert!(validate_catalog_entries(wrong_size, zip.entries()).is_err());
+
+        let mut malformed_md5 = valid();
+        malformed_md5.entries[0].md5 = "ABCDEF".repeat(5) + "AB";
+        assert!(validate_catalog_entries(malformed_md5, zip.entries()).is_err());
+
+        let mut non_canonical = valid();
+        non_canonical.entries[0].path = "nested/../index.html".to_string();
+        assert!(validate_catalog_entries(non_canonical, zip.entries()).is_err());
+
+        let mut duplicate = valid();
+        duplicate.entries.push(EmbeddedCatalogEntry {
+            path: "index.html".to_string(),
+            size: 5,
+            md5: "6a992d5529f459a44fee58c733255e86".to_string(),
+        });
+        assert!(validate_catalog_entries(duplicate, zip.entries()).is_err());
+
+        let mut extra = valid();
+        extra.entries.push(EmbeddedCatalogEntry {
+            path: "extra.html".to_string(),
+            size: 5,
+            md5: "6a992d5529f459a44fee58c733255e86".to_string(),
+        });
+        assert!(validate_catalog_entries(extra, zip.entries()).is_err());
+
+        let missing = EmbeddedCatalog {
+            version: 1,
+            entries: Vec::new(),
+        };
+        assert!(validate_catalog_entries(missing, zip.entries()).is_err());
+    }
+
+    #[tokio::test]
+    async fn provider_mapping_accepts_small_entries_with_zip64_metadata() {
+        let bytes = zip_bytes_from_entries(
+            &[
+                ("index.html", b"index" as &[u8]),
+                (".shin/catalog.v1.json", b"catalog" as &[u8]),
+            ],
+            true,
         );
-        assert!(!catalog.contains_key(".shin/catalog.v1.json"));
+        let reader = ZipFileReader::with_tokio(Cursor::new(bytes)).await.unwrap();
+        let zip = reader.file().clone();
+        let catalog = EmbeddedCatalog {
+            version: 1,
+            entries: vec![EmbeddedCatalogEntry {
+                path: "index.html".to_string(),
+                size: 5,
+                md5: "6a992d5529f459a44fee58c733255e86".to_string(),
+            }],
+        };
+
+        validate_catalog_entries(catalog, zip.entries()).expect("ZIP64 mapping should validate");
+    }
+
+    #[tokio::test]
+    async fn authenticated_mapping_rejects_duplicate_normalized_zip_paths() {
+        let bytes = zip_bytes_from_entries(
+            &[
+                ("a\\b.txt", b"first" as &[u8]),
+                ("a/b.txt", b"second" as &[u8]),
+                (".shin/catalog.v1.json", b"catalog" as &[u8]),
+            ],
+            false,
+        );
+        let reader = ZipFileReader::with_tokio(Cursor::new(bytes)).await.unwrap();
+        let zip = reader.file().clone();
+        let catalog = EmbeddedCatalog {
+            version: 1,
+            entries: vec![EmbeddedCatalogEntry {
+                path: "a/b.txt".to_string(),
+                size: 5,
+                md5: "8b04d5e3775d298e78455efc5ca404d5".to_string(),
+            }],
+        };
+
+        assert!(validate_catalog_entries(catalog, zip.entries()).is_err());
     }
 
     fn copy_request() -> DeploymentRequest {
         DeploymentRequest {
             source_bucket_names: vec!["source-bucket".to_string()],
             source_object_keys: vec!["assets/archive.zip".to_string()],
+            source_catalogs: vec![None],
             source_markers: vec![HashMap::new()],
             source_markers_config: vec![MarkerConfig::default()],
             dest_bucket_name: "destination-bucket".to_string(),
@@ -729,16 +1013,24 @@ mod tests {
     }
 
     fn zip_from_entries(entries: &[(&str, &[u8])]) -> zip::ZipArchive<Cursor<Vec<u8>>> {
+        let bytes = zip_bytes_from_entries(entries, false);
+        zip::ZipArchive::new(Cursor::new(bytes)).unwrap()
+    }
+
+    fn zip_bytes_from_entries(entries: &[(&str, &[u8])], zip64: bool) -> Vec<u8> {
         let cursor = Cursor::new(Vec::new());
         let mut writer = ZipWriter::new(cursor);
-        let options = SimpleFileOptions::default();
+        let options = SimpleFileOptions::default().large_file(zip64);
 
         for (name, bytes) in entries {
             writer.start_file(name, options).unwrap();
             writer.write_all(bytes).unwrap();
         }
 
-        let cursor = writer.finish().unwrap();
-        zip::ZipArchive::new(Cursor::new(cursor.into_inner())).unwrap()
+        writer.finish().unwrap().into_inner()
+    }
+
+    fn hex_string(bytes: &[u8]) -> String {
+        bytes.iter().map(|byte| format!("{byte:02x}")).collect()
     }
 }

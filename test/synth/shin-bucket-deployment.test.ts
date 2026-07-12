@@ -1,4 +1,5 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { App, Stack } from "aws-cdk-lib";
@@ -17,6 +18,19 @@ interface FileAssetManifestEntry {
     packaging?: string;
     path?: string;
   };
+}
+
+function customResourceProperties(stack: Stack): Record<string, unknown> {
+  const template = Template.fromStack(stack).toJSON() as {
+    Resources: Record<string, { Type: string; Properties?: Record<string, unknown> }>;
+  };
+  const resource = Object.values(template.Resources).find(
+    (candidate) => candidate.Type === "Custom::ShinBucketDeployment",
+  );
+  if (!resource?.Properties) {
+    throw new Error("Custom::ShinBucketDeployment resource not found");
+  }
+  return resource.Properties;
 }
 
 test("renders a Rust-backed custom resource", () => {
@@ -160,29 +174,44 @@ test("reuses a shared prebuilt handler for compatible deployments", () => {
 });
 
 test("Source.asset emits an embedded catalog for directory assets", () => {
-  const app = new App({ outdir: join(__dirname, "..", "cdk.out.test-catalog") });
-  const stack = new Stack(app, "CatalogStack");
-  const destinationBucket = new Bucket(stack, "Dest");
+  const outdir = mkdtempSync(join(tmpdir(), "shin-catalog-synth-"));
+  try {
+    const app = new App({ outdir });
+    const stack = new Stack(app, "CatalogStack");
+    const destinationBucket = new Bucket(stack, "Dest");
 
-  new ShinBucketDeployment(stack, "Deploy", {
-    sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
-    destinationBucket,
-    bundling: testBundling(),
-  });
+    new ShinBucketDeployment(stack, "Deploy", {
+      sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
+      destinationBucket,
+      bundling: testBundling(),
+    });
 
-  const assembly = app.synth();
-  const assetManifest = JSON.parse(
-    readFileSync(join(assembly.directory, "CatalogStack.assets.json"), "utf8"),
-  ) as { files?: Record<string, FileAssetManifestEntry> };
-  const fileAsset = Object.values(assetManifest.files ?? {}).find(
-    (asset) => asset.displayName === "Deploy/CatalogedAsset1",
-  );
+    const assembly = app.synth();
+    const assetManifest = JSON.parse(
+      readFileSync(join(assembly.directory, "CatalogStack.assets.json"), "utf8"),
+    ) as { files?: Record<string, FileAssetManifestEntry> };
+    const fileAsset = Object.values(assetManifest.files ?? {}).find(
+      (asset) => asset.displayName === "Deploy/CatalogedAsset1",
+    );
 
-  expect(fileAsset).toBeDefined();
-  const sourcePath = fileAsset?.source?.path;
-  expect(sourcePath).toBeDefined();
-  const zip = readFileSync(join(assembly.directory, sourcePath as string));
-  expect(zip.includes(Buffer.from(".shin/catalog.v1.json"))).toBe(true);
+    expect(fileAsset?.source?.packaging).toBe("zip");
+    const sourcePath = fileAsset?.source?.path;
+    expect(sourcePath).toBeDefined();
+    const stagedDirectory = join(assembly.directory, sourcePath as string);
+    expect(statSync(stagedDirectory).isDirectory()).toBe(true);
+    const catalog = readFileSync(join(stagedDirectory, ".shin", "catalog.v1.json"), "utf8");
+    expect(catalog).toBe(
+      '{"version":1,"entries":[{"path":"app.js","size":24,"md5":"acac2891f40463e08c034c81928ec97b"},{"path":"index.html","size":173,"md5":"4cd451e9f36c4d198898712cbeeea359"}]}',
+    );
+    expect(customResourceProperties(stack).SourceCatalogs).toEqual([
+      {
+        Version: 1,
+        Sha256: createHash("sha256").update(catalog).digest("hex"),
+      },
+    ]);
+  } finally {
+    rmSync(outdir, { recursive: true, force: true });
+  }
 });
 
 test("reuses a shared handler for compatible deployments in the same stack", () => {

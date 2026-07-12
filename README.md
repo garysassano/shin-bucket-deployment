@@ -112,7 +112,7 @@ Unsupported upstream props:
 
 ### Archive Planning
 
-For `extract=true`, the provider reads each source zip's central directory with ranged S3 `GetObject` requests, walks the archive entries, applies filters, and builds the deployment plan from the archive contents. Directory `Source.asset` inputs are packaged with an embedded `.shin/catalog.v1.json` MD5 catalog so unchanged marker-free files can be skipped from destination metadata. Entry data is read through coalesced source blocks with a bounded resident window. Source GET concurrency and the source window are derived from `memoryLimit` by default and can be overridden through `advancedRuntimeTuning` when diagnosing unusual workloads. It does not download the whole archive and does not write the archive or extracted entries to Lambda `/tmp`.
+For `extract=true`, the provider reads each source zip's central directory with ranged S3 `GetObject` requests, walks the archive entries, applies filters, and builds the deployment plan from the archive contents. Directory `Source.asset` inputs include a compact `.shin/catalog.v1.json` size/MD5 catalog whose exact bytes are authenticated by a SHA-256 digest in the CloudFormation template. Only those template-bound catalogs can enable sparse skips. Entry data is read through coalesced source blocks with a bounded resident window. Source GET concurrency and the source window are derived from `memoryLimit` by default and can be overridden through `advancedRuntimeTuning` when diagnosing unusual workloads. It does not download the whole archive and does not write the archive or extracted entries to Lambda `/tmp`.
 
 `ephemeralStorageSize` is accepted for upstream `BucketDeployment` API compatibility, but it is rarely useful for this provider because ZIP planning, extraction, hashing, and uploads avoid Lambda `/tmp`.
 
@@ -122,7 +122,7 @@ For `extract=false`, each source object is copied directly with S3 `CopyObject`.
 
 Before uploading or copying, the provider lists the destination prefix. Destination keys are used to delete stale objects when `destinationLifecycle.onDeploy.deleteStaleObjects` is enabled, and destination `ETag` values are used to skip unchanged objects.
 
-For existing marker-free zip entries with catalog MD5s, the provider compares destination size and `ETag` before reading entry bytes. Without a usable catalog match, it reads and decompresses the entry from ranged source blocks, validates size and CRC32, computes MD5, and compares it with the destination `ETag`. Missing marker-free objects stream directly to S3 without pre-hashing. Entries with deploy-time markers are materialized after decompression and replacement so the final bytes can be hashed and uploaded when changed.
+For existing marker-free zip entries with authenticated catalog MD5s, the provider compares destination size and `ETag` before reading entry bytes. Catalogs in arbitrary ZIPs are untrusted and do not receive this shortcut. Without a trusted catalog match, it reads and decompresses the entry from ranged source blocks, validates size and CRC32, computes MD5, and compares it with the destination `ETag`. Missing marker-free objects stream directly to S3 without pre-hashing. Entries with deploy-time markers are materialized after decompression and replacement so the final bytes can be hashed and uploaded when changed.
 
 ### Memory Model
 
@@ -148,12 +148,12 @@ Uploads or copies may not be skipped correctly for metadata-only changes, multip
 
 Zip entries with deploy-time marker replacements are fully materialized in memory after replacement so the final bytes can be hashed and uploaded. Plain zip entries are read and uploaded in chunks. Cataloged directory assets currently do not support CDK asset `bundling` or symlink-following options; pass `embeddedCatalog: false` to `Source.asset` to use the upstream CDK asset path for those cases.
 
-- It applies to local directory assets only. Local `.zip` files and `Source.bucket` archives are consumed as provided and only benefit from a catalog if they already contain one.
+- It applies to local directory assets only. Local `.zip` files, `Source.bucket` archives, data sources, and third-party sources remain deployable but cannot declare their catalogs trusted.
 - It does not run CDK asset `bundling`. Use your own pre-bundled directory, or pass `embeddedCatalog: false` to delegate packaging to CDK.
-- It currently rejects symlinks instead of following or materializing them.
-- It creates a temporary ZIP during synth/package time on the local machine, not inside the provider Lambda.
+- It rejects symlinks and non-regular files instead of following, materializing, or silently dropping them.
+- It requires CDK asset staging and delegates ZIP/ZIP64 creation to CDK from a temporary materialized directory.
 - It changes the staged ZIP bytes compared with upstream CDK packaging because the catalog entry is added.
-- Catalog MD5s are only valid for marker-free files. Deploy-time marker replacement still requires reading and materializing final bytes.
+- Authenticated catalog MD5s are only used for marker-free destination skips. Every trusted entry that is read is checked against its catalog MD5 before upload or replacement.
 
 ### Object Size and Scope
 

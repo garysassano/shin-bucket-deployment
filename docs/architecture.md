@@ -353,14 +353,15 @@ For `extract=true`:
 2. Read ZIP central directory metadata with ranged `GetObject`.
 3. Walk central-directory entries.
 4. Apply include and exclude filters.
-5. Load the embedded `.shin/catalog.v1.json` catalog when present.
-6. Build a manifest of planned ZIP entries with normalized destination keys, source archive index, entry offsets, compressed size, uncompressed size, CRC32, and optional catalog MD5.
-7. Coalesce planned source spans into shared source blocks, prefetch them with bounded source GET concurrency, and release blocks after all active readers consume their claims.
-8. List the destination prefix once.
-9. Skip existing marker-free cataloged entries when destination size and `ETag` match the catalog.
-10. For missing marker-free destination objects, stream the source entry directly into `PutObject`.
-11. For existing marker-free destination objects without a catalog match, read/decompress the entry through ranged source blocks, validate uncompressed size and CRC32, compute MD5, and compare it with the destination `ETag` from the list response.
-12. Materialize marker entries in memory after decompression and CRC validation, apply replacements, compute MD5 over final bytes, and upload when changed.
+5. Evaluate the index-aligned `SourceCatalogs` binding. Unbound sources ignore embedded catalog contents; bound sources must authenticate exactly one `.shin/catalog.v1.json` entry against the template digest.
+6. Before applying deployment filters, strictly validate an authenticated catalog and require a one-to-one path and size mapping with every non-directory, non-catalog ZIP entry.
+7. Build a manifest of planned ZIP entries with normalized destination keys, source archive index, entry offsets, compressed size, uncompressed size, CRC32, and optional trusted size/MD5 metadata.
+8. Coalesce planned source spans into shared source blocks, prefetch them with bounded source GET concurrency, and release blocks after all active readers consume their claims.
+9. List the destination prefix once.
+10. Skip existing marker-free trusted entries when destination size and `ETag` match the authenticated catalog.
+11. For missing marker-free destination objects, stream the source entry directly into `PutObject`.
+12. For existing marker-free destination objects without a trusted catalog match, read/decompress the entry through ranged source blocks, validate uncompressed size and CRC32, compute MD5, and compare it with the destination `ETag` from the list response.
+13. Materialize marker entries in memory after decompression and authenticated-MD5/CRC validation, apply replacements, compute MD5 over final bytes, and upload when changed.
 
 For `extract=false`:
 
@@ -381,8 +382,8 @@ flowchart LR
   C -->|No| D["Upload without pre-hashing"]
   C -->|Yes| E{"Planned object type"}
   E -->|"extract=false"| F["Expected ETag from source HeadObject"]
-  E -->|"Cataloged ZIP entry without markers"| G["Compare catalog MD5 and size"]
-  E -->|"Uncataloged ZIP entry without markers"| L["Read/decompress entry and compute MD5"]
+  E -->|"Trusted catalog entry without markers"| G["Compare authenticated catalog MD5 and size"]
+  E -->|"Untrusted ZIP entry without markers"| L["Read/decompress entry and compute MD5"]
   E -->|"ZIP entry with markers"| H["Apply replacements and compute final MD5"]
   F --> I{"Expected MD5/ETag equals destination ETag?"}
   G --> I
@@ -394,9 +395,122 @@ flowchart LR
 
 The provider intentionally uses destination `ETag` as the only unchanged-object skip identity. `ListObjectsV2` exposes the destination `ETag`, but it does not expose the actual checksum value needed to compare S3 `ChecksumCRC32`. Using CRC32 for skip decisions would require one checksum-mode `HeadObject` per destination object, which is not worth the request volume for this deployment model.
 
-Directory `Source.asset` inputs are packaged with an embedded source MD5 catalog. Marker-free ZIP entries with catalog MD5s and matching destination size can be skipped without reading ZIP entry bytes. Without an embedded catalog match, marker-free ZIP entries that already exist at the destination must be read and decompressed to compute MD5. Missing marker-free objects skip this pre-hash and stream straight to upload. ZIP entry reads validate declared uncompressed size and CRC32 before the final upload chunk is released. Entries with deploy-time markers are fully materialized in memory, replacements are applied, and MD5 is computed over the final replaced bytes.
+Directory `Source.asset` inputs are packaged with an authenticated source MD5 catalog. Marker-free entries with trusted MD5s and matching destination size can be skipped without reading ZIP entry bytes. Without a trusted catalog match, marker-free entries that already exist at the destination must be read and decompressed to compute MD5. Missing marker-free objects skip this pre-hash and stream straight to upload. ZIP entry reads validate declared uncompressed size, CRC32, and any authenticated MD5 before the final upload chunk is released. Entries with deploy-time markers are fully materialized in memory, their packaged bytes are validated before replacement, and MD5 is then computed over the final replaced bytes.
 
 `extract=false` copies use source and destination `ETag` comparison for skipping. Source object `ETag` comes from a source `HeadObject`; destination `ETag` comes from the single destination list.
+
+## Authenticated Catalog Trust
+
+Cataloged local directories contain compact UTF-8 JSON at
+`.shin/catalog.v1.json`:
+
+```json
+{"version":1,"entries":[{"path":"index.html","size":123,"md5":"..."}]}
+```
+
+The serializer fixes field order, orders normalized paths by UTF-8 bytes, and
+hashes the exact catalog file bytes with SHA-256 while writing them. Each entry
+contains an exact safe-integer byte size and a 32-character lowercase MD5.
+`.shin/catalog.v1.json` and `.shin/catalog.v2.json` are reserved input paths;
+the latter is reserved only to prevent metadata ambiguity and is not a
+supported second schema.
+
+The construct associates the catalog digest with the returned `SourceConfig`
+through a module-private `WeakMap`. The custom-resource protocol renders that
+metadata as an optional `SourceCatalogs` array aligned with
+`SourceBucketNames` and `SourceObjectKeys`:
+
+```json
+[{"Version":1,"Sha256":"<64 lowercase hexadecimal characters>"},{}]
+```
+
+An empty object means untrusted. The complete property is omitted when every
+source is untrusted or `extract=false`. Trusted catalog metadata participates
+in source deduplication. Because the association is private and there is no
+public trust option, a third-party `ISource` cannot add a lookalike
+`SourceConfig` property to opt itself into sparse skipping.
+
+The provider treats a missing `SourceCatalogs` property as an all-untrusted
+legacy request. If the property is present, its length must exactly match the
+source arrays. Partial descriptors, unknown fields, unsupported versions, and
+non-lowercase or incorrectly sized digests fail request validation.
+
+For an untrusted source, the provider never fetches or parses embedded catalog
+contents. Reserved catalog entries are excluded from destination deployment,
+and existing destination objects use the actual-byte decompression, size,
+CRC32, and MD5 comparison path. This applies to `Source.bucket`, local ZIP
+files, `embeddedCatalog:false`, generated data sources, and third-party
+`ISource` implementations.
+
+For a trusted source, planning requires exactly one v1 catalog and rejects any
+reserved v2 entry. Both compressed and uncompressed catalog sizes are limited
+to 64 MiB. The provider validates the catalog entry size and CRC32, hashes its
+exact decompressed bytes with SHA-256, compares that digest with the template,
+and parses with unknown fields denied. Catalog paths must be unique and already
+canonical; sizes and lowercase MD5s must be well formed; and catalog entries
+must map one-to-one to every non-directory, non-catalog ZIP entry. These checks
+finish before destination listing or mutation.
+
+Authenticating the catalog fixes every per-file size and MD5 in the template's
+trust boundary. When a trusted entry is read for comparison, direct upload,
+changed upload, retry/replay, or marker materialization, the provider computes
+MD5 alongside its existing size and CRC32 checks and compares it with the
+authenticated entry. The direct streaming body retains its last pending chunk
+until all checks succeed. A mismatch therefore makes the request body fail
+before S3 can commit that object.
+
+This design deliberately relies on MD5 second-preimage resistance for source
+entry authentication after the SHA-256 catalog binding. It does not add a
+per-file SHA-256 field. Destination sparse skips still compare authenticated
+size/MD5 with the `ETag` exposed by `ListObjectsV2`; the design does not make
+destination ETags collision-resistant or change the limitations of multipart
+and encrypted-object ETags.
+
+Catalog structure or catalog-digest failures happen before any destination
+mutation. Entry-byte tampering can instead be discovered during concurrent
+transfers: the mismatched object cannot commit, stale deletion and CloudFront
+invalidation do not run, and the custom resource fails, but earlier valid
+objects may already have uploaded. Deployments are not transactionally rolled
+back. Delete handling does not open source archives and remains independent of
+catalog availability.
+
+## Cataloged Asset Materialization
+
+Cataloged `Source.asset` directories require CDK asset staging. The construct
+checks the truthy `aws:cdk:disable-asset-staging` context before creating any
+scratch directory because otherwise CDK would retain a path that the construct
+must remove.
+
+The materializer applies the configured CDK `IgnoreStrategy` once, including
+`completelyIgnores()` directory pruning for Git and Docker negation behavior.
+It normalizes backslashes as separators, detects normalized path collisions,
+and rejects included symlinks, sockets, devices, FIFOs, and reserved metadata
+paths. Each included regular file is hard-linked into one private temporary
+directory when possible. Cross-device and explicitly unsupported or forbidden
+link errors fall back to an exclusive copy; unrelated filesystem failures are
+propagated. File identity, mode, size, and modification time are checked around
+hashing and again after CDK staging to detect ordinary concurrent changes.
+
+Shin reads each materialized file through one reusable 64 KiB buffer and
+updates MD5 in that pass. It streams the compact catalog to disk while hashing
+the exact bytes, so it never retains a complete source file, compressed file,
+or ZIP archive in memory. CDK then stages the materialized directory as a
+normal `ZIP_DIRECTORY` file asset and owns ZIP creation, including ZIP64
+support. Hash/publication fields such as custom or source hashing, readers,
+deploy-time lifetime, source KMS key, and display name are forwarded, while
+ignore and catalog-only fields are not applied a second time.
+
+The temporary materialization tree is removed after synchronous CDK staging on
+success and ordinary failure. Cleanup failures fail synthesis; when construction
+and cleanup both fail, an `AggregateError` preserves both errors. This guarantee
+does not cover process crashes or `SIGKILL`, and the construct does not delete
+scratch directories leaked by older runs.
+
+The memory claim is intentionally scoped: Shin performs no whole-asset or
+whole-file buffering. The installed CDK CLI currently reads one complete file
+at a time while publishing a `ZIP_DIRECTORY`, so end-to-end `cdk deploy` peak
+memory can still scale with the largest individual file. It does not scale with
+the complete asset through Shin's materializer.
 
 ## Write Safety
 
@@ -441,7 +555,7 @@ The provider role uses source grants from each bound CDK source and destination 
 
 The older extract path downloaded each source ZIP from S3, wrote the full archive to Lambda `/tmp`, opened it with `ZipArchive`, and reread the temporary file for planning, fallback hashing, and upload streaming.
 
-The current path reads the ZIP central directory and entry bodies through S3 ranges. Directory assets are packaged with the same embedded catalog shape used by `s3-unspool`. Entry source spans are planned into coalesced blocks, prefetched with bounded source GET concurrency, shared by concurrent readers, retained while claimed, and reopened for retryable upload bodies. This removes the full-archive ephemeral-storage dependency and makes source ZIP size independent of Lambda `/tmp`. Replacement-expanded entries still must fit in memory because their final bytes are only known after marker substitution.
+The current path reads the ZIP central directory and entry bodies through S3 ranges. Directory assets use a compact v1 size/MD5 catalog derived from the `s3-unspool` optimization, with an additional template-bound SHA-256 trust layer. Entry source spans are planned into coalesced blocks, prefetched with bounded source GET concurrency, shared by concurrent readers, retained while claimed, and reopened for retryable upload bodies. This removes the full-archive ephemeral-storage dependency and makes source ZIP size independent of Lambda `/tmp`. Replacement-expanded entries still must fit in memory because their final bytes are only known after marker substitution.
 
 The current implementation intentionally adopted these `s3-unspool` ideas:
 
@@ -451,7 +565,7 @@ The current implementation intentionally adopted these `s3-unspool` ideas:
 - read central-directory metadata through ranges
 - reopen entry streams from ranges so upload bodies are retryable
 - use separate S3 clients for source reads and destination writes
-- use embedded source MD5 catalogs for sparse unchanged skips
+- use authenticated embedded source MD5 catalogs for sparse unchanged skips
 - coalesce adjacent source spans into shared source blocks
 - prefetch source blocks with bounded source GET concurrency
 - bound resident source block data and release blocks by reader claims
@@ -463,16 +577,16 @@ The current implementation intentionally adopted these `s3-unspool` ideas:
 - derive source GET concurrency and source block window from Lambda memory unless explicitly configured
 - emit structured source scheduler and destination `PutObject` diagnostics as provider logs
 
-The remaining catalog caveat is packaging compatibility. Cataloged directory assets are produced by this construct's `Source.asset` wrapper. If callers need CDK asset bundling or symlink-following behavior that the wrapper does not currently implement, they can pass `embeddedCatalog: false` and use the upstream CDK asset path without catalog sparse skips.
+The remaining catalog caveat is packaging compatibility. Cataloged directory assets are produced by this construct's `Source.asset` wrapper. If callers need CDK asset bundling or symlink-following behavior that the wrapper does not currently implement, they can pass `embeddedCatalog: false` and use the upstream CDK asset path without trusted catalog sparse skips.
 
 Cataloged asset packaging limitations:
 
 - Local directory assets are cataloged by default; local `.zip` files and `Source.bucket` archives are not rewritten.
-- Existing catalogs in caller-provided ZIPs are consumed by the provider if present, but this construct does not inject catalogs into those ZIPs.
+- Existing catalogs in caller-provided ZIPs are treated as untrusted metadata and never enable catalog sparse skips.
 - CDK asset `bundling` is not run by the cataloged wrapper. Use a pre-bundled directory or `embeddedCatalog: false`.
-- Symlinks are rejected by cataloged packaging until follow/materialization semantics are implemented.
-- The cataloged wrapper creates a temporary ZIP during synth/package time and changes the staged ZIP content hash compared with upstream CDK packaging.
-- Catalog MD5 entries are only used for marker-free files; deploy-time marker replacement invalidates package-time MD5s.
+- Symlinks and non-regular files are rejected by cataloged packaging until explicit materialization semantics are implemented.
+- The cataloged wrapper creates a temporary directory, then delegates ZIP and ZIP64 creation to CDK; the catalog changes the staged asset hash compared with upstream packaging.
+- Authenticated catalog MD5 entries enable sparse skips only for marker-free files. Marker inputs are validated before replacement, then compared with the destination using the final replaced MD5.
 
 ## Diagnostics
 
@@ -527,12 +641,12 @@ Destination upload diagnostics field reference:
 | `extract=false` | Copy mode stays separate from ZIP extraction. |
 | `destinationLifecycle` | Destination listing, stale-object deletion, destination-change cleanup, and Delete cleanup remain provider-owned. |
 | CloudFront invalidation | Runs after S3 deployment and is outside the extraction engine. |
-| CDK asset packaging | Directory assets are packaged by this construct to embed the catalog. Bundled assets and symlink-following options should use `embeddedCatalog: false` until cataloged packaging supports them. |
+| CDK asset packaging | Directory assets are boundedly materialized by this construct, authenticated in the template, and staged as CDK `ZIP_DIRECTORY` assets. Bundled assets and symlink-following options should use `embeddedCatalog: false`. |
 
 ## Limits
 
 - Skip decisions assume simple single-part static objects where S3 `ETag` is the MD5 of object bytes.
-- Without a source MD5 catalog match, unchanged existing ZIP entries must be read and hashed during deployment.
+- Without an authenticated source MD5 catalog match, unchanged existing ZIP entries must be read and hashed during deployment.
 - Metadata-only changes may be skipped when content identity is unchanged.
 - Multipart objects, SSE-KMS/SSE-C objects, and objects written by other tools may not expose usable content identity.
 - Source ZIP archives do not need to fit in Lambda memory or ephemeral storage; marker-free ZIP entries stream in chunks.
@@ -540,7 +654,7 @@ Destination upload diagnostics field reference:
 - Each extracted ZIP entry must fit S3's single-request `PutObject` limit.
 - `advancedRuntimeTuning.sourceBlockBytes` must be at least 30 bytes so ZIP local file headers can fit in one source block.
 - Very small Lambda memory settings reduce source GET concurrency and source window capacity unless explicitly overridden.
-- Cataloged asset packaging currently rejects bundled directory assets and symlinks.
+- Cataloged asset packaging requires CDK staging and rejects bundled directory assets, symlinks, and non-regular files.
 - The provider is a static asset deployment engine, not a general-purpose sync engine with byte-range diffs or persistent manifests.
 
 ## Next Architecture Targets

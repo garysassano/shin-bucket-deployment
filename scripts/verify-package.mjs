@@ -9,6 +9,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -33,6 +34,7 @@ const requiredFiles = [
 const forbiddenTarballPrefixes = [
   "package/benchmarks/",
   "package/docs/",
+  "package/lib/trusted-source-catalog",
   "package/rust/",
   "package/scenarios/",
   "package/src/",
@@ -331,6 +333,55 @@ function verifyStagedProviderArchive(consumerDir, assemblyDir) {
   );
 }
 
+function verifyCatalogedConsumerAsset(assemblyDir) {
+  const manifest = JSON.parse(readFileSync(join(assemblyDir, "ConsumerStack.assets.json"), "utf8"));
+  const catalogAssets = Object.values(manifest.files ?? {}).filter((asset) => {
+    const stagedPath = asset.source?.path;
+    return (
+      asset.source?.packaging === "zip" &&
+      typeof stagedPath === "string" &&
+      existsSync(join(assemblyDir, stagedPath, ".shin", "catalog.v1.json"))
+    );
+  });
+  assert(
+    catalogAssets.length === 1,
+    `Expected one cataloged ZIP_DIRECTORY asset, found ${catalogAssets.length}.`,
+  );
+  const catalogAsset = catalogAssets[0];
+  const stagedDirectory = join(assemblyDir, catalogAsset.source.path);
+  assert(statSync(stagedDirectory).isDirectory(), "Cataloged asset was not staged as a directory.");
+  const catalogBytes = readFileSync(join(stagedDirectory, ".shin", "catalog.v1.json"));
+  const catalog = JSON.parse(catalogBytes.toString("utf8"));
+  assert(catalog.version === 1, "Cataloged asset did not contain the authenticated v1 schema.");
+  assert(
+    catalog.entries.length === 1 &&
+      catalog.entries[0].path === "index.html" &&
+      catalog.entries[0].size === 2 &&
+      catalog.entries[0].md5 === "444bcb3a3fcf8389296c49467f27e1d6",
+    "Cataloged asset contained unexpected entry metadata.",
+  );
+
+  const template = JSON.parse(
+    readFileSync(join(assemblyDir, "ConsumerStack.template.json"), "utf8"),
+  );
+  const deployment = Object.values(template.Resources ?? {}).find(
+    (resource) => resource.Type === "Custom::ShinBucketDeployment",
+  );
+  assert(deployment, "Consumer template is missing the Shin custom resource.");
+  const sourceCatalogs = deployment.Properties?.SourceCatalogs;
+  assert(Array.isArray(sourceCatalogs), "Consumer template is missing SourceCatalogs.");
+  assert(
+    sourceCatalogs.length === deployment.Properties.SourceBucketNames.length,
+    "SourceCatalogs is not aligned with the source arrays.",
+  );
+  assert(
+    sourceCatalogs.length === 1 &&
+      sourceCatalogs[0].Version === 1 &&
+      sourceCatalogs[0].Sha256 === createHash("sha256").update(catalogBytes).digest("hex"),
+    "Consumer template catalog digest does not match the staged catalog bytes.",
+  );
+}
+
 function verifyConsumerInstall(tarball, workDir) {
   const consumerDir = join(workDir, "consumer");
   mkdirSync(consumerDir, { recursive: true });
@@ -338,6 +389,8 @@ function verifyConsumerInstall(tarball, workDir) {
     join(consumerDir, "package.json"),
     JSON.stringify({ private: true, type: "commonjs" }, null, 2),
   );
+  mkdirSync(join(consumerDir, "site"));
+  writeFileSync(join(consumerDir, "site", "index.html"), "ok");
 
   run(
     "npm",
@@ -389,7 +442,7 @@ function verifyConsumerInstall(tarball, workDir) {
       'const stack = new Stack(app, "ConsumerStack");',
       'const bucket = new Bucket(stack, "Bucket");',
       'new ShinBucketDeployment(stack, "Deploy", {',
-      '  sources: [Source.data("index.html", "ok")],',
+      '  sources: [Source.asset("site")],',
       "  destinationBucket: bucket,",
       "});",
       "app.synth();",
@@ -407,7 +460,7 @@ function verifyConsumerInstall(tarball, workDir) {
     'const stack = new Stack(app, "ConsumerStack");',
     'const bucket = new Bucket(stack, "Bucket");',
     'new ShinBucketDeployment(stack, "Deploy", {',
-    '  sources: [Source.data("index.html", "ok")],',
+    '  sources: [Source.asset("site")],',
     "  destinationBucket: bucket,",
     "});",
     "app.synth();",
@@ -416,6 +469,7 @@ function verifyConsumerInstall(tarball, workDir) {
   writeFileSync(join(consumerDir, "synth.cjs"), synthLines.join("\n"));
   run("node", ["synth.cjs"], { cwd: consumerDir });
   verifyStagedProviderArchive(consumerDir, join(workDir, "cdk.out-cjs"));
+  verifyCatalogedConsumerAsset(join(workDir, "cdk.out-cjs"));
 
   writeFileSync(
     join(consumerDir, "synth.mjs"),
@@ -428,7 +482,7 @@ function verifyConsumerInstall(tarball, workDir) {
       'const stack = new Stack(app, "ConsumerStack");',
       'const bucket = new Bucket(stack, "Bucket");',
       'new ShinBucketDeployment(stack, "Deploy", {',
-      '  sources: [Source.data("index.html", "ok")],',
+      '  sources: [Source.asset("site")],',
       "  destinationBucket: bucket,",
       "});",
       "app.synth();",
@@ -437,6 +491,7 @@ function verifyConsumerInstall(tarball, workDir) {
   );
   run("node", ["synth.mjs"], { cwd: consumerDir });
   verifyStagedProviderArchive(consumerDir, join(workDir, "cdk.out-esm"));
+  verifyCatalogedConsumerAsset(join(workDir, "cdk.out-esm"));
 }
 
 function main() {

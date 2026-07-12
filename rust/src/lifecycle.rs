@@ -156,6 +156,7 @@ mod tests {
         DeploymentRequest {
             source_bucket_names: vec!["source".to_string()],
             source_object_keys: vec!["source.zip".to_string()],
+            source_catalogs: vec![None],
             source_markers: vec![HashMap::new()],
             source_markers_config: vec![Default::default()],
             dest_bucket_name: bucket.to_string(),
