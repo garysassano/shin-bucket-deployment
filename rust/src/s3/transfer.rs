@@ -518,8 +518,15 @@ async fn upload_payload(
             .key(destination_key);
         if context.checksum_strategy == DestinationChecksumStrategy::KmsSha256 {
             request = request.checksum_algorithm(ChecksumAlgorithm::Sha256);
+            if let Some(checksum) = payload.body_state().checksum_sha256() {
+                request = request.checksum_sha256(checksum);
+            }
         }
         let request = apply_put_precondition(request, precondition.as_ref());
+        let request_checksum_calculation = request_checksum_calculation(
+            context.checksum_strategy,
+            payload.body_state().checksum_sha256().is_some(),
+        );
 
         match apply_put_content_type(request, destination_key)
             .body(body)
@@ -527,7 +534,7 @@ async fn upload_payload(
             .config_override(
                 aws_sdk_s3::config::Builder::new()
                     .retry_config(RetryConfig::disabled())
-                    .request_checksum_calculation(RequestChecksumCalculation::WhenRequired),
+                    .request_checksum_calculation(request_checksum_calculation),
             )
             .send()
             .await
@@ -597,6 +604,21 @@ async fn upload_payload(
     Err(last_error
         .map(|error| anyhow!(error))
         .unwrap_or_else(|| anyhow!("failed to upload {destination_key}")))
+}
+
+fn request_checksum_calculation(
+    checksum_strategy: DestinationChecksumStrategy,
+    checksum_precomputed: bool,
+) -> RequestChecksumCalculation {
+    if checksum_strategy == DestinationChecksumStrategy::KmsSha256 && !checksum_precomputed {
+        // Streaming ZIP entries do not have a checksum until their first complete read. Ask the
+        // SDK to place SHA-256 in an aws-chunked trailer while UploadBodyState independently hashes
+        // the same bytes for ambiguous-write reconciliation. Byte-backed payloads and retries use
+        // the already-computed header instead and avoid a second hash calculation.
+        RequestChecksumCalculation::WhenSupported
+    } else {
+        RequestChecksumCalculation::WhenRequired
+    }
 }
 
 fn put_precondition_for_destination(
@@ -1202,8 +1224,8 @@ mod tests {
         PutContext, PutDiagnostics, PutPrecondition, PutRetryCoordinator, UploadPayload,
         catalog_skips_zip_entry, copy_source_object, digest_async_reader, duration_millis_u64,
         join_transfer_tasks, md5_hex, put_precondition_for_destination, put_retry_cap_millis,
-        quoted_etag, read_async_reader_to_vec, sha256_base64, should_compare_marker_free_entry,
-        upload_payload,
+        quoted_etag, read_async_reader_to_vec, request_checksum_calculation, sha256_base64,
+        should_compare_marker_free_entry, upload_payload,
     };
 
     struct DropSignal(Arc<AtomicBool>);
@@ -1401,7 +1423,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn kms_put_requests_sha256_checksum() {
+    async fn kms_byte_put_sends_precomputed_sha256_checksum() {
         let replay = StaticReplayClient::new(vec![error_event(400, "InvalidRequest")]);
         let client = replay_s3_client(replay.clone());
         let diagnostics = PutDiagnostics::default();
@@ -1432,6 +1454,28 @@ mod tests {
             request.headers().get("x-amz-sdk-checksum-algorithm"),
             Some("SHA256")
         );
+        assert_eq!(
+            request.headers().get("x-amz-checksum-sha256"),
+            Some(sha256_base64(b"hello").as_str())
+        );
+    }
+
+    #[test]
+    fn only_first_streaming_kms_attempt_enables_sdk_checksum_calculation() {
+        assert_eq!(
+            request_checksum_calculation(DestinationChecksumStrategy::KmsSha256, false),
+            aws_sdk_s3::config::RequestChecksumCalculation::WhenSupported
+        );
+        for (strategy, checksum_precomputed) in [
+            (DestinationChecksumStrategy::KmsSha256, true),
+            (DestinationChecksumStrategy::SseS3Etag, false),
+            (DestinationChecksumStrategy::SseS3Etag, true),
+        ] {
+            assert_eq!(
+                request_checksum_calculation(strategy, checksum_precomputed),
+                aws_sdk_s3::config::RequestChecksumCalculation::WhenRequired
+            );
+        }
     }
 
     #[tokio::test]
