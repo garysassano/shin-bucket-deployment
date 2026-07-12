@@ -33,7 +33,7 @@ pub(crate) struct RawDeletePreviousObjectsOnChange {
 pub(crate) struct RawSourceCatalog {
     #[serde(
         default,
-        deserialize_with = "deserialize_present",
+        deserialize_with = "deserialize_present_u32ish",
         skip_serializing_if = "Option::is_none"
     )]
     pub(crate) version: Option<u32>,
@@ -393,6 +393,48 @@ where
     T::deserialize(deserializer).map(Some)
 }
 
+fn deserialize_present_u32ish<'de, D>(deserializer: D) -> std::result::Result<Option<u32>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct U32ishVisitor;
+
+    impl serde::de::Visitor<'_> for U32ishVisitor {
+        type Value = u32;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("an unsigned 32-bit integer or a string containing one")
+        }
+
+        fn visit_u64<E>(self, value: u64) -> std::result::Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            u32::try_from(value)
+                .map_err(|_| E::invalid_value(serde::de::Unexpected::Unsigned(value), &self))
+        }
+
+        fn visit_i64<E>(self, value: i64) -> std::result::Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            u32::try_from(value)
+                .map_err(|_| E::invalid_value(serde::de::Unexpected::Signed(value), &self))
+        }
+
+        fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            value
+                .parse::<u32>()
+                .map_err(|_| E::invalid_value(serde::de::Unexpected::Str(value), &self))
+        }
+    }
+
+    deserializer.deserialize_any(U32ishVisitor).map(Some)
+}
+
 fn deserialize_boolish<'de, D>(deserializer: D) -> std::result::Result<bool, D::Error>
 where
     D: Deserializer<'de>,
@@ -567,11 +609,12 @@ mod tests {
     #[test]
     fn source_catalogs_accept_aligned_trusted_and_untrusted_entries() {
         let mut props = minimal_request();
-        props["SourceBucketNames"] = json!(["first", "second"]);
-        props["SourceObjectKeys"] = json!(["first.zip", "second.zip"]);
+        props["SourceBucketNames"] = json!(["first", "second", "third"]);
+        props["SourceObjectKeys"] = json!(["first.zip", "second.zip", "third.zip"]);
         props["SourceCatalogs"] = json!([
             {},
-            { "Version": 1, "Sha256": "ab".repeat(32) }
+            { "Version": 1, "Sha256": "ab".repeat(32) },
+            { "Version": "1", "Sha256": "cd".repeat(32) }
         ]);
 
         let raw: RawDeploymentRequest = serde_json::from_value(props).unwrap();
@@ -581,6 +624,10 @@ mod tests {
         assert_eq!(
             request.source_catalogs[1].as_ref().unwrap().sha256,
             [0xab; 32]
+        );
+        assert_eq!(
+            request.source_catalogs[2].as_ref().unwrap().sha256,
+            [0xcd; 32]
         );
     }
 
@@ -620,7 +667,7 @@ mod tests {
             json!({ "Version": null, "Sha256": null }),
             json!({ "Version": null }),
             json!({ "Sha256": null }),
-            json!({ "Version": "1", "Sha256": "ab".repeat(32) }),
+            json!({ "Version": "not-a-version", "Sha256": "ab".repeat(32) }),
             json!({ "Version": 1, "Sha256": 123 }),
         ] {
             let mut props = minimal_request();
