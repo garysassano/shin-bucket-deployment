@@ -13,8 +13,9 @@ use crate::s3::{
     default_source_window_memory_budget_mb,
 };
 use crate::types::{
-    DeletePreviousObjectsOnChange, DeploymentRequest, Filters, MarkerConfig, PreviousDestination,
-    PutObjectRetryJitter, PutObjectRetryOptions, RuntimeOptions, TrustedSourceCatalog,
+    DeletePreviousObjectsOnChange, DeploymentRequest, DestinationChecksumStrategy, Filters,
+    MarkerConfig, PreviousDestination, PutObjectRetryJitter, PutObjectRetryOptions, RuntimeOptions,
+    TrustedSourceCatalog,
 };
 
 const DEFAULT_AVAILABLE_MEMORY_MB: u64 = 1024;
@@ -70,9 +71,7 @@ pub(crate) struct RawDeploymentRequest {
     #[serde(default = "default_true", deserialize_with = "deserialize_boolish")]
     pub(crate) wait_for_distribution_invalidation: bool,
     #[serde(default)]
-    pub(crate) user_metadata: HashMap<String, String>,
-    #[serde(default)]
-    pub(crate) system_metadata: HashMap<String, String>,
+    pub(crate) destination_checksum_strategy: Option<DestinationChecksumStrategy>,
     #[serde(default = "default_true", deserialize_with = "deserialize_boolish")]
     pub(crate) delete_stale_objects_on_deployment: bool,
     #[serde(default)]
@@ -173,8 +172,9 @@ pub(crate) fn parse_request(raw: &RawDeploymentRequest) -> Result<DeploymentRequ
             .clone()
             .unwrap_or_else(|| vec![default_distribution_path]),
         wait_for_distribution_invalidation: raw.wait_for_distribution_invalidation,
-        user_metadata: raw.user_metadata.clone(),
-        system_metadata: raw.system_metadata.clone(),
+        destination_checksum_strategy: raw.destination_checksum_strategy.ok_or_else(|| {
+            anyhow!("DestinationChecksumStrategy is required for destination writes")
+        })?,
         delete_stale_objects_on_deployment: raw.delete_stale_objects_on_deployment,
         exclude: raw.exclude.clone(),
         include: raw.include.clone(),
@@ -577,7 +577,8 @@ mod tests {
         json!({
             "SourceBucketNames": ["source-bucket"],
             "SourceObjectKeys": ["source.zip"],
-            "DestinationBucketName": "dest-bucket"
+            "DestinationBucketName": "dest-bucket",
+            "DestinationChecksumStrategy": "sse-s3-etag"
         })
     }
 
@@ -601,9 +602,36 @@ mod tests {
         assert_eq!(request.runtime.source_get_concurrency, 4);
         assert_eq!(request.runtime.max_parallel_transfers, 32);
         assert_eq!(
+            request.destination_checksum_strategy,
+            DestinationChecksumStrategy::SseS3Etag
+        );
+        assert_eq!(
             request.runtime.put_object_retry.jitter,
             PutObjectRetryJitter::Full
         );
+    }
+
+    #[test]
+    fn destination_checksum_strategy_is_required_and_exact() {
+        let mut missing = minimal_request();
+        missing
+            .as_object_mut()
+            .unwrap()
+            .remove("DestinationChecksumStrategy");
+        let raw: RawDeploymentRequest = serde_json::from_value(missing).unwrap();
+        assert!(parse_request(&raw).is_err());
+
+        let mut kms = minimal_request();
+        kms["DestinationChecksumStrategy"] = json!("kms-sha256");
+        let request = parse_request(&serde_json::from_value(kms).unwrap()).unwrap();
+        assert_eq!(
+            request.destination_checksum_strategy,
+            DestinationChecksumStrategy::KmsSha256
+        );
+
+        let mut unknown = minimal_request();
+        unknown["DestinationChecksumStrategy"] = json!("sha256");
+        assert!(serde_json::from_value::<RawDeploymentRequest>(unknown).is_err());
     }
 
     #[test]

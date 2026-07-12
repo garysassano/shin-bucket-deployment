@@ -24,7 +24,7 @@ use tokio::sync::{Notify, Semaphore, mpsc};
 use tokio::task::JoinHandle;
 use tokio::time::{Instant, timeout_at};
 
-use crate::types::AppState;
+use crate::types::{AppState, DestinationChecksumStrategy};
 
 use super::planner::ZipEntryPlan;
 use super::{ZIP_ENTRY_BODY_CHUNK_BYTES, ZIP_ENTRY_BODY_PIPE_CHUNKS, ZIP_ENTRY_READ_CHUNK_BYTES};
@@ -43,11 +43,16 @@ type BodyError = Box<dyn std::error::Error + Send + Sync>;
 
 #[derive(Debug, Default)]
 pub(crate) struct UploadBodyState {
+    etag_md5: OnceLock<String>,
     checksum_sha256: OnceLock<String>,
     validation_error: OnceLock<String>,
 }
 
 impl UploadBodyState {
+    pub(crate) fn etag_md5(&self) -> Option<&str> {
+        self.etag_md5.get().map(String::as_str)
+    }
+
     pub(crate) fn checksum_sha256(&self) -> Option<&str> {
         self.checksum_sha256.get().map(String::as_str)
     }
@@ -56,7 +61,11 @@ impl UploadBodyState {
         self.validation_error.get().map(String::as_str)
     }
 
-    pub(crate) fn record_checksum(&self, checksum: String) {
+    pub(crate) fn record_etag_md5(&self, etag: String) {
+        let _ = self.etag_md5.set(etag);
+    }
+
+    pub(crate) fn record_checksum_sha256(&self, checksum: String) {
         let _ = self.checksum_sha256.set(checksum);
     }
 
@@ -1485,6 +1494,7 @@ pub(crate) fn zip_entry_body(
     plan: ZipEntryPlan,
     content_length: u64,
     body_state: Arc<UploadBodyState>,
+    checksum_strategy: DestinationChecksumStrategy,
 ) -> ByteStream {
     let attempts = Arc::new(AtomicUsize::new(0));
     ByteStream::new(SdkBody::retryable(move || {
@@ -1496,6 +1506,7 @@ pub(crate) fn zip_entry_body(
             plan.clone(),
             content_length,
             Arc::clone(&body_state),
+            checksum_strategy,
         )
     }))
 }
@@ -1505,12 +1516,19 @@ fn zip_entry_sdk_body(
     plan: ZipEntryPlan,
     content_length: u64,
     body_state: Arc<UploadBodyState>,
+    checksum_strategy: DestinationChecksumStrategy,
 ) -> SdkBody {
     let (sender, receiver) = mpsc::channel(ZIP_ENTRY_BODY_PIPE_CHUNKS);
     let body_store = Arc::clone(&store);
     let task = tokio::spawn(async move {
-        if let Err(error) =
-            send_zip_entry_chunks(body_store, plan, sender.clone(), Arc::clone(&body_state)).await
+        if let Err(error) = send_zip_entry_chunks(
+            body_store,
+            plan,
+            sender.clone(),
+            Arc::clone(&body_state),
+            checksum_strategy,
+        )
+        .await
         {
             if error
                 .downcast_ref::<io::Error>()
@@ -1553,10 +1571,14 @@ async fn send_zip_entry_chunks(
     plan: ZipEntryPlan,
     sender: mpsc::Sender<std::result::Result<Bytes, BodyError>>,
     body_state: Arc<UploadBodyState>,
+    checksum_strategy: DestinationChecksumStrategy,
 ) -> std::result::Result<(), BodyError> {
     let mut reader = zip_entry_reader(store, plan.clone()).map_err(boxed_body_error)?;
-    let mut md5 = Md5::new();
-    let mut sha256 = Sha256::new();
+    let mut md5 = (checksum_strategy == DestinationChecksumStrategy::SseS3Etag
+        || plan.trusted_integrity.is_some())
+    .then(Md5::new);
+    let mut sha256 =
+        (checksum_strategy == DestinationChecksumStrategy::KmsSha256).then(Sha256::new);
     let mut crc32 = Crc32Hasher::new();
     let mut bytes = 0_u64;
     let mut buffer = vec![0_u8; ZIP_ENTRY_READ_CHUNK_BYTES];
@@ -1575,8 +1597,12 @@ async fn send_zip_entry_chunks(
         }
         let next_bytes = bytes.saturating_add(bytes_read as u64);
         validate_zip_entry_size_not_exceeded(&plan, next_bytes).map_err(boxed_body_error)?;
-        md5.update(&buffer[..bytes_read]);
-        sha256.update(&buffer[..bytes_read]);
+        if let Some(md5) = md5.as_mut() {
+            md5.update(&buffer[..bytes_read]);
+        }
+        if let Some(sha256) = sha256.as_mut() {
+            sha256.update(&buffer[..bytes_read]);
+        }
         crc32.update(&buffer[..bytes_read]);
         pending.clear();
         pending.extend_from_slice(&buffer[..bytes_read]);
@@ -1584,9 +1610,17 @@ async fn send_zip_entry_chunks(
     }
 
     validate_zip_entry_output(&plan, bytes, crc32.finalize()).map_err(boxed_body_error)?;
-    plan.validate_trusted_md5(&finalize_md5(md5))
-        .map_err(boxed_body_error)?;
-    body_state.record_checksum(BASE64_STANDARD.encode(sha256.finalize()));
+    if let Some(md5) = md5 {
+        let etag_md5 = finalize_md5(md5);
+        plan.validate_trusted_md5(&etag_md5)
+            .map_err(boxed_body_error)?;
+        if checksum_strategy == DestinationChecksumStrategy::SseS3Etag {
+            body_state.record_etag_md5(etag_md5);
+        }
+    }
+    if let Some(sha256) = sha256 {
+        body_state.record_checksum_sha256(BASE64_STANDARD.encode(sha256.finalize()));
+    }
     if !pending.is_empty()
         && !append_and_send_body_chunks(&mut body_chunk, &pending, &sender).await?
     {
@@ -1755,7 +1789,7 @@ mod tests {
     };
     use crate::s3::planner::ZipEntryPlan;
     use crate::s3::{DEFAULT_SOURCE_BLOCK_BYTES, DEFAULT_SOURCE_BLOCK_MERGE_GAP_BYTES};
-    use crate::types::TrustedEntryIntegrity;
+    use crate::types::{DestinationChecksumStrategy, TrustedEntryIntegrity};
 
     struct DropSignal(Arc<AtomicBool>);
 
@@ -1809,10 +1843,15 @@ mod tests {
         let store = ready_store_for_plan(&zip, &plan);
         let (sender, _receiver) = tokio::sync::mpsc::channel(1);
 
-        let error =
-            send_zip_entry_chunks(store, plan, sender, Arc::new(UploadBodyState::default()))
-                .await
-                .unwrap_err();
+        let error = send_zip_entry_chunks(
+            store,
+            plan,
+            sender,
+            Arc::new(UploadBodyState::default()),
+            DestinationChecksumStrategy::SseS3Etag,
+        )
+        .await
+        .unwrap_err();
 
         assert!(error.to_string().contains("CRC32"));
     }
@@ -1828,10 +1867,15 @@ mod tests {
         let store = ready_store_for_plan(&zip, &plan);
         let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
 
-        let error =
-            send_zip_entry_chunks(store, plan, sender, Arc::new(UploadBodyState::default()))
-                .await
-                .expect_err("trusted MD5 mismatch must fail the body");
+        let error = send_zip_entry_chunks(
+            store,
+            plan,
+            sender,
+            Arc::new(UploadBodyState::default()),
+            DestinationChecksumStrategy::SseS3Etag,
+        )
+        .await
+        .expect_err("trusted MD5 mismatch must fail the body");
 
         assert!(error.to_string().contains("authenticated catalog entry"));
         assert!(
@@ -1840,6 +1884,43 @@ mod tests {
                 .contains("00000000000000000000000000000000")
         );
         assert!(receiver.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn streamed_checksum_work_is_selected_by_destination_strategy() {
+        let zip = zip_from_entry("index.txt", b"hello zipped world");
+
+        let sse_plan = zip_plan_from_archive(&zip, "index.txt");
+        let sse_store = ready_store_for_plan(&zip, &sse_plan);
+        let (sse_sender, _sse_receiver) = tokio::sync::mpsc::channel(2);
+        let sse_state = Arc::new(UploadBodyState::default());
+        send_zip_entry_chunks(
+            sse_store,
+            sse_plan,
+            sse_sender,
+            Arc::clone(&sse_state),
+            DestinationChecksumStrategy::SseS3Etag,
+        )
+        .await
+        .expect("SSE-S3 stream");
+        assert!(sse_state.etag_md5().is_some());
+        assert!(sse_state.checksum_sha256().is_none());
+
+        let kms_plan = zip_plan_from_archive(&zip, "index.txt");
+        let kms_store = ready_store_for_plan(&zip, &kms_plan);
+        let (kms_sender, _kms_receiver) = tokio::sync::mpsc::channel(2);
+        let kms_state = Arc::new(UploadBodyState::default());
+        send_zip_entry_chunks(
+            kms_store,
+            kms_plan,
+            kms_sender,
+            Arc::clone(&kms_state),
+            DestinationChecksumStrategy::KmsSha256,
+        )
+        .await
+        .expect("KMS stream");
+        assert!(kms_state.etag_md5().is_none());
+        assert!(kms_state.checksum_sha256().is_some());
     }
 
     #[tokio::test(start_paused = true)]

@@ -10,8 +10,8 @@ use tokio::io::AsyncReadExt;
 
 use crate::request::{join_s3_key, normalize_archive_key, source_basename};
 use crate::types::{
-    AppState, DeploymentManifest, DeploymentRequest, DeploymentStats, Filters, ObjectMetadata,
-    PlannedAction, PlannedObject, SourceArchive, TrustedEntryIntegrity,
+    AppState, DeploymentManifest, DeploymentRequest, DeploymentStats, Filters, PlannedAction,
+    PlannedObject, SourceArchive, TrustedEntryIntegrity,
 };
 
 use super::archive::{
@@ -179,8 +179,6 @@ pub(super) fn collect_copy_plans(
     manifest: &DeploymentManifest,
     request: &DeploymentRequest,
     destination_objects: &HashMap<String, DestinationObject>,
-    metadata: &ObjectMetadata,
-    previous_metadata: Option<&ObjectMetadata>,
 ) -> Result<Vec<CopyPlan>> {
     let mut plans = Vec::new();
 
@@ -189,13 +187,12 @@ pub(super) fn collect_copy_plans(
             PlannedAction::CopyObject { source_index, size } => {
                 let destination_key =
                     join_s3_key(&request.dest_bucket_prefix, &planned.relative_key);
-                let metadata_changed = previous_metadata.is_none_or(|previous| {
-                    !previous.semantically_matches(metadata, &destination_key)
-                });
-                let content_changed = planned.expected_etag.as_deref().is_none_or(|etag| {
-                    !destination_etag_matches(destination_objects, &planned.relative_key, etag)
-                });
-                if !metadata_changed && !content_changed {
+                let content_changed = request.destination_checksum_strategy
+                    == crate::types::DestinationChecksumStrategy::KmsSha256
+                    || planned.expected_etag.as_deref().is_none_or(|etag| {
+                        !destination_etag_matches(destination_objects, &planned.relative_key, etag)
+                    });
+                if !content_changed {
                     continue;
                 }
                 validate_copy_object_size(&planned.relative_key, size)?;
@@ -660,7 +657,6 @@ fn validate_stored_file_entry(stored: &StoredZipEntry, path: &str) -> Result<()>
 
 pub(super) fn validate_deployment_preflight(
     request: &DeploymentRequest,
-    metadata: &ObjectMetadata,
     manifest: &DeploymentManifest,
 ) -> Result<()> {
     let mut total_output_bytes = 0_u64;
@@ -676,25 +672,22 @@ pub(super) fn validate_deployment_preflight(
 
         let size = match planned.action {
             PlannedAction::CopyObject { source_index, size } => {
-                let source_bucket =
-                    request
-                        .source_bucket_names
-                        .get(source_index)
-                        .ok_or_else(|| {
-                            anyhow!("copy plan references missing source index {source_index}")
-                        })?;
-                let source_key = request
+                request
+                    .source_bucket_names
+                    .get(source_index)
+                    .ok_or_else(|| {
+                        anyhow!("copy plan references missing source index {source_index}")
+                    })?;
+                request
                     .source_object_keys
                     .get(source_index)
                     .ok_or_else(|| {
                         anyhow!("copy plan references missing source index {source_index}")
                     })?;
-                metadata.validate_copy_for_key(&destination_key, source_bucket, source_key)?;
                 validate_copy_object_size(&planned.relative_key, size)?;
                 size
             }
             PlannedAction::ZipEntry { size, .. } => {
-                metadata.validate_for_key(&destination_key)?;
                 if size > S3_SINGLE_PUT_LIMIT {
                     return Err(anyhow!(
                         "entry `{}` is {size} bytes, larger than the S3 single PutObject limit",
@@ -789,8 +782,8 @@ mod tests {
     use crate::request::compile_filters;
     use crate::s3::destination::DestinationObject;
     use crate::types::{
-        DeploymentManifest, DeploymentRequest, MarkerConfig, PlannedAction, PlannedObject,
-        PutObjectRetryJitter, PutObjectRetryOptions, RuntimeOptions,
+        DeploymentManifest, DeploymentRequest, DestinationChecksumStrategy, MarkerConfig,
+        PlannedAction, PlannedObject, PutObjectRetryJitter, PutObjectRetryOptions, RuntimeOptions,
     };
 
     #[test]
@@ -860,9 +853,7 @@ mod tests {
         );
 
         let request = copy_request();
-        let metadata = crate::types::ObjectMetadata::from_request(&request).unwrap();
-        let plans = collect_copy_plans(&manifest, &request, &HashMap::new(), &metadata, None)
-            .expect("valid copy");
+        let plans = collect_copy_plans(&manifest, &request, &HashMap::new()).expect("valid copy");
 
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].expected_etag.as_deref(), Some("abc123"));
@@ -870,7 +861,7 @@ mod tests {
     }
 
     #[test]
-    fn metadata_only_copy_updates_bypass_matching_destination_etags() {
+    fn kms_destinations_bypass_matching_destination_etags() {
         let mut manifest = DeploymentManifest::new();
         manifest.insert(
             "archive.zip".to_string(),
@@ -891,47 +882,29 @@ mod tests {
             },
         )]);
         let request = copy_request();
-        let previous = crate::types::ObjectMetadata::from_request(&request).unwrap();
-        let mut current = previous.clone();
-        current
-            .user_metadata
-            .insert("release".to_string(), "updated".to_string());
-
-        let unchanged = collect_copy_plans(
-            &manifest,
-            &request,
-            &destination,
-            &previous,
-            Some(&previous),
-        )
-        .unwrap();
+        let unchanged = collect_copy_plans(&manifest, &request, &destination).unwrap();
         assert!(unchanged.is_empty());
 
-        let create =
-            collect_copy_plans(&manifest, &request, &destination, &previous, None).unwrap();
-        assert_eq!(create.len(), 1, "Create has no prior metadata identity");
-
-        let changed =
-            collect_copy_plans(&manifest, &request, &destination, &current, Some(&previous))
-                .unwrap();
-        assert_eq!(changed.len(), 1);
+        let mut kms_request = request;
+        kms_request.destination_checksum_strategy = DestinationChecksumStrategy::KmsSha256;
+        let kms = collect_copy_plans(&manifest, &kms_request, &destination).unwrap();
+        assert_eq!(kms.len(), 1, "KMS destination ETags are not plaintext MD5");
     }
 
     #[test]
     fn destination_key_preflight_uses_the_complete_utf8_byte_length() {
         let request = copy_request();
-        let metadata = crate::types::ObjectMetadata::from_request(&request).unwrap();
         let manifest = manifest_with_key(&"é".repeat(512));
-        validate_deployment_preflight(&request, &metadata, &manifest)
+        validate_deployment_preflight(&request, &manifest)
             .expect_err("prefix plus a 1024-byte relative key must exceed the limit");
 
         let mut root_request = request;
         root_request.dest_bucket_prefix.clear();
-        validate_deployment_preflight(&root_request, &metadata, &manifest)
+        validate_deployment_preflight(&root_request, &manifest)
             .expect("an exact 1024-byte UTF-8 key is valid");
 
         let oversized = manifest_with_key(&format!("{}a", "é".repeat(512)));
-        assert!(validate_deployment_preflight(&root_request, &metadata, &oversized).is_err());
+        assert!(validate_deployment_preflight(&root_request, &oversized).is_err());
     }
 
     #[test]
@@ -944,7 +917,6 @@ mod tests {
     #[test]
     fn deployment_preflight_rejects_entries_larger_than_single_put_limit() {
         let request = copy_request();
-        let metadata = crate::types::ObjectMetadata::from_request(&request).unwrap();
         let manifest = DeploymentManifest::from([(
             "large.bin".to_string(),
             PlannedObject {
@@ -964,7 +936,7 @@ mod tests {
             },
         )]);
 
-        assert!(validate_deployment_preflight(&request, &metadata, &manifest).is_err());
+        assert!(validate_deployment_preflight(&request, &manifest).is_err());
     }
 
     #[test]
@@ -983,8 +955,7 @@ mod tests {
         );
 
         let request = copy_request();
-        let metadata = crate::types::ObjectMetadata::from_request(&request).unwrap();
-        let error = collect_copy_plans(&manifest, &request, &HashMap::new(), &metadata, None)
+        let error = collect_copy_plans(&manifest, &request, &HashMap::new())
             .expect_err("oversized source should be rejected");
 
         assert!(
@@ -1187,8 +1158,7 @@ mod tests {
             distribution_id: None,
             distribution_paths: vec!["/*".to_string()],
             wait_for_distribution_invalidation: true,
-            user_metadata: HashMap::new(),
-            system_metadata: HashMap::new(),
+            destination_checksum_strategy: DestinationChecksumStrategy::SseS3Etag,
             delete_stale_objects_on_deployment: true,
             exclude: Vec::new(),
             include: Vec::new(),

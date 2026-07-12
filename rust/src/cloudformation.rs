@@ -20,7 +20,7 @@ use crate::lifecycle::{
 };
 use crate::request::{RawDeploymentRequest, parse_old_destination, parse_request};
 use crate::s3::{bucket_has_competing_owner, delete_prefix, delete_prefix_excluding, deploy};
-use crate::types::{AppState, DeploymentStats, ObjectMetadata, ResponsePayload, duration_ms};
+use crate::types::{AppState, DeploymentStats, ResponsePayload, duration_ms};
 
 const MAX_FAILURE_REASON_BYTES: usize = 1024;
 const MAX_CLOUDFORMATION_RESPONSE_BYTES: usize = 4096;
@@ -225,13 +225,6 @@ async fn process_request(
     validate_response_body_size(&success_body, request.output_object_keys)?;
 
     let previous_destination = old_resource_properties.map(parse_old_destination);
-    let previous_metadata = if request_type == "Update" {
-        let old =
-            old_resource_properties.context("Update event is missing OldResourceProperties")?;
-        Some(ObjectMetadata::from_request(&parse_request(old)?)?)
-    } else {
-        None
-    };
     preflight_invalidation_requests(request_type, &request, previous_destination.as_ref())?;
 
     let stats = Arc::new(DeploymentStats::default());
@@ -244,7 +237,6 @@ async fn process_request(
             deadlines,
         },
         previous_destination.as_ref(),
-        previous_metadata.as_ref(),
         &request,
         Arc::clone(&stats),
     )
@@ -363,7 +355,6 @@ async fn process_request_inner(
     request_type: &str,
     execution: RequestExecution<'_>,
     previous_destination: Option<&crate::types::PreviousDestination>,
-    previous_metadata: Option<&ObjectMetadata>,
     request: &crate::types::DeploymentRequest,
     stats: Arc<DeploymentStats>,
 ) -> Result<()> {
@@ -407,14 +398,7 @@ async fn process_request_inner(
     }
 
     if matches!(request_type, "Create" | "Update") {
-        deploy(
-            state,
-            request,
-            previous_metadata,
-            Arc::clone(&stats),
-            deadlines,
-        )
-        .await?;
+        deploy(state, request, Arc::clone(&stats), deadlines).await?;
     }
 
     if request_type == "Update"
@@ -1089,6 +1073,7 @@ mod tests {
             "SourceBucketNames": ["source"],
             "SourceObjectKeys": ["asset.zip"],
             "DestinationBucketName": "destination",
+            "DestinationChecksumStrategy": "sse-s3-etag",
             "DistributionId": "distribution",
             "DistributionPaths": paths
         }))

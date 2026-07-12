@@ -49,6 +49,7 @@ const RUNTIME_COLUMNS: Array<Column<TelemetryRow>> = [
   { header: "Max memory MiB", value: (row) => row.record.maxMemoryMb },
   { header: "Available MiB", value: (row) => row.summary.availableMemoryMb },
   { header: "Max transfers", value: (row) => row.summary.maxParallelTransfers },
+  { header: "Checksum strategy", value: (row) => row.summary.destinationChecksumStrategy },
   { header: "Row", value: (row) => row.line },
 ];
 

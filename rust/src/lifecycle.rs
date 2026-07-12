@@ -146,8 +146,8 @@ mod tests {
     use std::collections::HashMap;
 
     use crate::types::{
-        DeletePreviousObjectsOnChange, DeploymentRequest, PutObjectRetryJitter,
-        PutObjectRetryOptions, RuntimeOptions,
+        DeletePreviousObjectsOnChange, DeploymentRequest, DestinationChecksumStrategy,
+        PutObjectRetryJitter, PutObjectRetryOptions, RuntimeOptions,
     };
 
     use super::*;
@@ -166,8 +166,7 @@ mod tests {
             distribution_id: None,
             distribution_paths: vec!["/*".to_string()],
             wait_for_distribution_invalidation: true,
-            user_metadata: HashMap::new(),
-            system_metadata: HashMap::new(),
+            destination_checksum_strategy: DestinationChecksumStrategy::SseS3Etag,
             delete_stale_objects_on_deployment: true,
             exclude: Vec::new(),
             include: Vec::new(),

@@ -16,7 +16,7 @@ import {
 } from "aws-cdk-lib/aws-cloudfront";
 import { S3BucketOrigin } from "aws-cdk-lib/aws-cloudfront-origins";
 import { Bucket } from "aws-cdk-lib/aws-s3";
-import { CacheControl, ShinBucketDeployment, Source } from "../../../src";
+import { ShinBucketDeployment, Source } from "../../../src";
 
 class CloudFrontAsyncShinBucketDeploymentStack extends Stack {
   constructor(scope: App, id: string, props?: StackProps) {
@@ -71,11 +71,6 @@ class CloudFrontAsyncShinBucketDeploymentStack extends Stack {
       destinationKeyPrefix: "site",
       distribution,
       waitForDistributionInvalidation: false,
-      cacheControl: [
-        CacheControl.setPublic(),
-        CacheControl.maxAge(Duration.days(365)),
-        CacheControl.immutable(),
-      ],
     });
 
     new CfnOutput(this, "BucketName", {

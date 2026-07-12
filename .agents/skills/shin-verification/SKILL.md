@@ -103,7 +103,7 @@ The default suite includes:
 
 - simple create/update/destroy
 - root-prefix deployment without `destinationKeyPrefix`
-- metadata and include/exclude filters
+- include/exclude filters
 - marker replacement
 - stale-object cleanup during deployment
 - stale-object retention with `onDeploy.deleteStaleObjects=false`
@@ -112,7 +112,7 @@ The default suite includes:
 - explicit previous-object deletion on destination change and current-object deletion on Delete
 - duplicate source overwrite order
 - larger archive ranged-read path
-- KMS-encrypted destination bucket
+- customer-managed KMS, AWS-managed KMS, and managed DSSE destination buckets
 - CloudFront sync/async invalidation with explicit and default invalidation paths
 
 Lifecycle scenarios and assertions must use the public phase names

@@ -11,6 +11,21 @@ Keep benchmark evidence and verification evidence separate:
 - `docs/verification.md` is the latest `ShinBucketDeployment` correctness snapshot.
 - Do not use benchmark rows or upstream AWS `BucketDeployment` comparison rows as verification evidence.
 
+Treat performance as a primary product constraint. Shin must materially outperform
+upstream AWS CDK `BucketDeployment` on its target workloads; correctness alone is
+not sufficient for a performance-sensitive data-path change.
+
+- Do not add an unmeasured per-byte or per-object pass, hash, network request,
+  payload copy, allocation, or whole-entry materialization to a normal path.
+- Reuse bytes, digests, listings, and validation work already produced by the
+  transfer path whenever possible.
+- Before merging or releasing a performance-relevant provider change, collect
+  comparable before/after Shin evidence and an upstream AWS CDK baseline with
+  the relevant provider telemetry. If evidence is still pending, say so
+  explicitly instead of presenting the change as performance-accepted.
+- Keep those measurements in benchmark evidence; correctness scenarios and
+  `docs/verification.md` do not establish a performance win.
+
 Never commit raw AWS evidence or identifiers:
 
 - account IDs

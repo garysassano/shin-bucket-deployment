@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
 use aws_sdk_s3::Client as S3Client;
+use aws_sdk_s3::config::RequestChecksumCalculation;
 use aws_sdk_s3::config::retry::RetryConfig;
 use aws_sdk_s3::error::ProvideErrorMetadata;
 use aws_sdk_s3::error::SdkError;
@@ -14,6 +15,7 @@ use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::{ChecksumAlgorithm, ChecksumMode, ChecksumType, MetadataDirective};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use bytes::Bytes;
 use crc32fast::Hasher as Crc32Hasher;
 use fastrand::Rng;
 use md5::{Digest as Md5Digest, Md5};
@@ -26,7 +28,7 @@ use tokio::time::timeout_at;
 use crate::deadline::InvocationDeadlines;
 use crate::replace::replace_markers_bounded;
 use crate::types::{
-    AppState, DeploymentRequest, DeploymentStats, MarkerConfig, ObjectMetadata,
+    AppState, DeploymentRequest, DeploymentStats, DestinationChecksumStrategy, MarkerConfig,
     PutObjectRetryJitter, PutObjectRetryOptions, SourceArchive,
 };
 
@@ -34,14 +36,14 @@ use super::archive::{
     SourceBlockOptions, SourceBlockStore, UploadBodyState, validate_zip_entry_output,
     validate_zip_entry_size_not_exceeded, zip_entry_body, zip_entry_reader,
 };
+use super::content_type::{apply_copy_content_type, apply_put_content_type};
 use super::destination::{DestinationObject, destination_md5_and_size_match};
-use super::metadata::{apply_copy_metadata, apply_put_metadata};
 use super::planner::{CopyPlan, ZipEntryPlan};
 use super::{S3_SINGLE_PUT_LIMIT, ZIP_ENTRY_READ_CHUNK_BYTES, source_window_bytes_for_archive};
 
 enum UploadPayload {
     Bytes {
-        bytes: Vec<u8>,
+        bytes: Bytes,
         body_state: Arc<UploadBodyState>,
     },
     ZipEntry {
@@ -57,16 +59,13 @@ pub(super) struct TransferExecution {
     pub(super) deadlines: InvocationDeadlines,
 }
 
-pub(super) struct ObjectSemantics<'a> {
-    pub(super) current: &'a ObjectMetadata,
-    pub(super) previous: Option<&'a ObjectMetadata>,
-}
-
 impl UploadPayload {
     fn from_bytes(bytes: Vec<u8>) -> Self {
         let body_state = Arc::new(UploadBodyState::default());
-        body_state.record_checksum(sha256_base64(&bytes));
-        Self::Bytes { bytes, body_state }
+        Self::Bytes {
+            bytes: Bytes::from(bytes),
+            body_state,
+        }
     }
 
     fn from_zip_entry(
@@ -95,11 +94,20 @@ impl UploadPayload {
             | UploadPayload::ZipEntry { body_state, .. } => body_state,
         }
     }
+
+    fn prepare_checksum(&self, checksum_strategy: DestinationChecksumStrategy) {
+        if checksum_strategy == DestinationChecksumStrategy::KmsSha256
+            && self.body_state().checksum_sha256().is_none()
+            && let UploadPayload::Bytes { bytes, body_state } = self
+        {
+            body_state.record_checksum_sha256(sha256_base64(bytes));
+        }
+    }
 }
 
 struct PreparedUploadPayload {
     payload: UploadPayload,
-    etag: String,
+    etag: Option<String>,
 }
 
 #[derive(Default)]
@@ -132,7 +140,7 @@ struct PutRetryCoordinator {
 struct PutContext<'a> {
     destination_s3: &'a S3Client,
     destination_bucket: &'a str,
-    metadata: &'a ObjectMetadata,
+    checksum_strategy: DestinationChecksumStrategy,
     retry: &'a PutObjectRetryOptions,
     retry_coordinator: &'a PutRetryCoordinator,
     diagnostics: &'a PutDiagnostics,
@@ -148,7 +156,6 @@ enum PutPrecondition {
 pub(super) async fn execute_copy_plans(
     state: &AppState,
     destination_bucket: &str,
-    metadata: &ObjectMetadata,
     copy_plans: Vec<CopyPlan>,
     max_parallel_transfers: usize,
     execution: TransferExecution,
@@ -166,7 +173,6 @@ pub(super) async fn execute_copy_plans(
             }
         };
         let state = state.clone();
-        let metadata = metadata.clone();
         let destination_bucket = destination_bucket.to_string();
         let copied_bytes = plan.size.unwrap_or(0);
         let stats = Arc::clone(&stats);
@@ -180,7 +186,6 @@ pub(super) async fn execute_copy_plans(
                 &plan.source_key,
                 plan.expected_etag.as_deref(),
                 &plan.destination_key,
-                &metadata,
             )
             .await?;
             stats.add_copied_object(copied_bytes);
@@ -195,15 +200,10 @@ pub(super) async fn upload_zip_entries(
     state: &AppState,
     archives: &[SourceArchive],
     request: &DeploymentRequest,
-    semantics: ObjectSemantics<'_>,
     zip_plans: BTreeMap<usize, Vec<ZipEntryPlan>>,
     destination_objects: &HashMap<String, DestinationObject>,
     execution: TransferExecution,
 ) -> Result<()> {
-    let ObjectSemantics {
-        current: metadata,
-        previous: previous_metadata,
-    } = semantics;
     let TransferExecution { stats, deadlines } = execution;
     let semaphore = Arc::new(Semaphore::new(
         request.runtime.max_parallel_transfers.max(1),
@@ -224,9 +224,7 @@ pub(super) async fn upload_zip_entries(
                     plan,
                     &request.source_markers[plan.source_index],
                     destination_objects.get(&plan.relative_key),
-                    previous_metadata.is_none_or(|previous| {
-                        !previous.semantically_matches(metadata, &plan.destination_key)
-                    }),
+                    request.destination_checksum_strategy,
                     &stats,
                 )
             })
@@ -271,7 +269,6 @@ pub(super) async fn upload_zip_entries(
             };
             let store = store.clone();
             let state = state.clone();
-            let metadata = metadata.clone();
             let destination_bucket = request.dest_bucket_name.clone();
             let source_markers = request.source_markers[plan.source_index].clone();
             let source_marker_config = request.source_markers_config[plan.source_index].clone();
@@ -279,9 +276,7 @@ pub(super) async fn upload_zip_entries(
             let put_diagnostics = put_diagnostics.clone();
             let put_retry_coordinator = put_retry_coordinator.clone();
             let put_retry = request.runtime.put_object_retry.clone();
-            let metadata_changed = previous_metadata.is_none_or(|previous| {
-                !previous.semantically_matches(&metadata, &plan.destination_key)
-            });
+            let checksum_strategy = request.destination_checksum_strategy;
             let stats = Arc::clone(&stats);
 
             tasks.spawn(async move {
@@ -292,7 +287,7 @@ pub(super) async fn upload_zip_entries(
                     &source_markers,
                     &source_marker_config,
                     destination_object.as_ref(),
-                    metadata_changed,
+                    checksum_strategy,
                     &stats,
                 )
                 .await?
@@ -305,7 +300,7 @@ pub(super) async fn upload_zip_entries(
                     PutContext {
                         destination_s3: &state.destination_s3,
                         destination_bucket: &destination_bucket,
-                        metadata: &metadata,
+                        checksum_strategy,
                         retry: &put_retry,
                         retry_coordinator: &put_retry_coordinator,
                         diagnostics: &put_diagnostics,
@@ -334,89 +329,14 @@ pub(super) async fn upload_zip_entries(
     body_drain_result
 }
 
-pub(super) async fn preflight_marker_outputs(
-    archives: &[SourceArchive],
-    request: &DeploymentRequest,
-    zip_plans: &BTreeMap<usize, Vec<ZipEntryPlan>>,
-    deadlines: InvocationDeadlines,
-) -> Result<()> {
-    for (archive_index, plans) in zip_plans {
-        let marked_plans = plans
-            .iter()
-            .filter(|plan| !request.source_markers[plan.source_index].is_empty())
-            .cloned()
-            .collect::<Vec<_>>();
-        if marked_plans.is_empty() {
-            continue;
-        }
-
-        let source = archives
-            .get(*archive_index)
-            .with_context(|| {
-                format!("missing source archive for marker preflight {archive_index}")
-            })?
-            .source
-            .clone();
-        let source_window_bytes =
-            source_window_bytes_for_archive(&request.runtime, source.len(), marked_plans.len());
-        let store = SourceBlockStore::new(
-            source,
-            &marked_plans,
-            SourceBlockOptions {
-                block_bytes: request.runtime.source_block_bytes,
-                merge_gap_bytes: request.runtime.source_block_merge_gap_bytes,
-                get_concurrency: request.runtime.source_get_concurrency,
-                window_bytes: source_window_bytes,
-            },
-        );
-        let mut scheduler = tokio::spawn(store.clone().run_scheduler());
-        let validation = timeout_at(deadlines.work(), async {
-            for plan in &marked_plans {
-                prepare_zip_entry_for_comparison(
-                    store.clone(),
-                    plan,
-                    &request.source_markers[plan.source_index],
-                    &request.source_markers_config[plan.source_index],
-                )
-                .await?;
-            }
-            Ok::<(), anyhow::Error>(())
-        })
-        .await;
-
-        match validation {
-            Ok(Ok(())) => {
-                timeout_at(deadlines.work(), &mut scheduler)
-                    .await
-                    .context("marker preflight scheduler exceeded the deployment work deadline")?
-                    .context("marker preflight scheduler panicked")?;
-            }
-            Ok(Err(error)) => {
-                scheduler.abort();
-                let _ = scheduler.await;
-                return Err(error).context("marker replacement preflight failed");
-            }
-            Err(_) => {
-                scheduler.abort();
-                let _ = scheduler.await;
-                return Err(anyhow!(
-                    "marker replacement preflight exceeded the deployment work deadline"
-                ));
-            }
-        }
-    }
-
-    Ok(())
-}
-
 fn catalog_skips_zip_entry(
     plan: &ZipEntryPlan,
     source_markers: &HashMap<String, String>,
     destination_object: Option<&DestinationObject>,
-    metadata_changed: bool,
+    checksum_strategy: DestinationChecksumStrategy,
     stats: &DeploymentStats,
 ) -> bool {
-    let skip = !metadata_changed
+    let skip = checksum_strategy == DestinationChecksumStrategy::SseS3Etag
         && source_markers.is_empty()
         && plan
             .trusted_integrity
@@ -437,19 +357,11 @@ async fn prepare_zip_entry_upload(
     source_markers: &HashMap<String, String>,
     source_marker_config: &MarkerConfig,
     destination_object: Option<&DestinationObject>,
-    metadata_changed: bool,
+    checksum_strategy: DestinationChecksumStrategy,
     stats: &DeploymentStats,
 ) -> Result<Option<UploadPayload>> {
-    if source_markers.is_empty() && destination_object.is_none() {
-        return Ok(Some(UploadPayload::from_zip_entry(
-            store.clone(),
-            plan.clone(),
-            plan.size,
-        )));
-    }
-
     if source_markers.is_empty()
-        && (metadata_changed || (plan.trusted_integrity.is_some() && destination_object.is_some()))
+        && !should_compare_marker_free_entry(plan, destination_object, checksum_strategy)
     {
         return Ok(Some(UploadPayload::from_zip_entry(
             store.clone(),
@@ -458,24 +370,25 @@ async fn prepare_zip_entry_upload(
         )));
     }
 
-    if source_markers.is_empty()
-        && destination_object
-            .and_then(|object| object.size)
-            .is_some_and(|size| size != plan.size)
+    if checksum_strategy == DestinationChecksumStrategy::SseS3Etag
+        || plan.trusted_integrity.is_some()
     {
-        return Ok(Some(UploadPayload::from_zip_entry(
-            store.clone(),
-            plan.clone(),
-            plan.size,
-        )));
+        stats.add_md5_hash_attempt();
     }
+    let prepared = prepare_zip_entry_for_comparison(
+        store.clone(),
+        plan,
+        source_markers,
+        source_marker_config,
+        checksum_strategy,
+    )
+    .await?;
 
-    stats.add_md5_hash_attempt();
-    let prepared =
-        prepare_zip_entry_for_comparison(store.clone(), plan, source_markers, source_marker_config)
-            .await?;
-
-    if prepared_upload_matches_destination(destination_object, &prepared.etag, metadata_changed) {
+    if prepared
+        .etag
+        .as_deref()
+        .is_some_and(|etag| destination_object_etag_matches(destination_object, etag))
+    {
         stats.add_md5_skip();
         stats.add_skipped_object();
         return Ok(None);
@@ -485,7 +398,20 @@ async fn prepare_zip_entry_upload(
         store.retain_zip_entry_for_replay(plan);
     }
 
+    if let Some(etag) = prepared.etag {
+        prepared.payload.body_state().record_etag_md5(etag);
+    }
     Ok(Some(prepared.payload))
+}
+
+fn should_compare_marker_free_entry(
+    plan: &ZipEntryPlan,
+    destination_object: Option<&DestinationObject>,
+    checksum_strategy: DestinationChecksumStrategy,
+) -> bool {
+    checksum_strategy == DestinationChecksumStrategy::SseS3Etag
+        && plan.trusted_integrity.is_none()
+        && destination_object.is_some_and(|object| object.size == Some(plan.size))
 }
 
 async fn copy_source_object(
@@ -495,7 +421,6 @@ async fn copy_source_object(
     source_key: &str,
     expected_etag: Option<&str>,
     destination_key: &str,
-    metadata: &ObjectMetadata,
 ) -> Result<()> {
     let copy_source = format!(
         "{}/{}",
@@ -516,14 +441,13 @@ async fn copy_source_object(
         .bucket(destination_bucket)
         .key(destination_key)
         .copy_source(copy_source)
-        .checksum_algorithm(ChecksumAlgorithm::Sha256)
         .metadata_directive(MetadataDirective::Replace);
 
     if let Some(etag) = expected_etag {
         builder = builder.copy_source_if_match(quoted_etag(etag));
     }
 
-    apply_copy_metadata(builder, metadata, destination_key)
+    apply_copy_content_type(builder, destination_key)
         .send()
         .await
         .with_context(|| {
@@ -542,12 +466,13 @@ async fn prepare_zip_entry_for_comparison(
     plan: &ZipEntryPlan,
     source_markers: &HashMap<String, String>,
     source_marker_config: &MarkerConfig,
+    checksum_strategy: DestinationChecksumStrategy,
 ) -> Result<PreparedUploadPayload> {
     if source_markers.is_empty() {
         let etag = hash_zip_entry_reader(store.clone(), plan.clone()).await?;
         Ok(PreparedUploadPayload {
             payload: UploadPayload::from_zip_entry(store, plan.clone(), plan.size),
-            etag,
+            etag: Some(etag),
         })
     } else {
         let bytes = read_zip_entry_to_vec(store, plan.clone()).await?;
@@ -557,7 +482,8 @@ async fn prepare_zip_entry_for_comparison(
             source_marker_config,
             usize::try_from(S3_SINGLE_PUT_LIMIT).unwrap_or(usize::MAX),
         )?;
-        let etag = md5_hex(&replaced);
+        let etag = (checksum_strategy == DestinationChecksumStrategy::SseS3Etag)
+            .then(|| md5_hex(&replaced));
         validate_put_object_size(plan, replaced.len())?;
         Ok(PreparedUploadPayload {
             payload: UploadPayload::from_bytes(replaced),
@@ -572,6 +498,7 @@ async fn upload_payload(
     payload: UploadPayload,
     precondition: Option<PutPrecondition>,
 ) -> Result<()> {
+    payload.prepare_checksum(context.checksum_strategy);
     let mut last_error = None;
 
     let max_attempts = context.retry.max_attempts.max(1);
@@ -583,20 +510,24 @@ async fn upload_payload(
             .retry_coordinator
             .wait_for_throttle_cooldown(context.diagnostics)
             .await;
-        let body = payload_body(&payload);
-        let request = context
+        let body = payload_body(&payload, context.checksum_strategy);
+        let mut request = context
             .destination_s3
             .put_object()
             .bucket(context.destination_bucket)
-            .key(destination_key)
-            .checksum_algorithm(ChecksumAlgorithm::Sha256);
+            .key(destination_key);
+        if context.checksum_strategy == DestinationChecksumStrategy::KmsSha256 {
+            request = request.checksum_algorithm(ChecksumAlgorithm::Sha256);
+        }
         let request = apply_put_precondition(request, precondition.as_ref());
 
-        match apply_put_metadata(request, context.metadata, destination_key)
+        match apply_put_content_type(request, destination_key)
             .body(body)
             .customize()
             .config_override(
-                aws_sdk_s3::config::Builder::new().retry_config(RetryConfig::disabled()),
+                aws_sdk_s3::config::Builder::new()
+                    .retry_config(RetryConfig::disabled())
+                    .request_checksum_calculation(RequestChecksumCalculation::WhenRequired),
             )
             .send()
             .await
@@ -709,7 +640,10 @@ fn is_conditional_put_conflict(error: &SdkError<PutObjectError>) -> bool {
     )
 }
 
-fn payload_body(payload: &UploadPayload) -> ByteStream {
+fn payload_body(
+    payload: &UploadPayload,
+    checksum_strategy: DestinationChecksumStrategy,
+) -> ByteStream {
     match payload {
         UploadPayload::Bytes { bytes, .. } => ByteStream::from(bytes.clone()),
         UploadPayload::ZipEntry {
@@ -722,6 +656,7 @@ fn payload_body(payload: &UploadPayload) -> ByteStream {
             plan.clone(),
             *content_length,
             Arc::clone(body_state),
+            checksum_strategy,
         ),
     }
 }
@@ -737,18 +672,22 @@ async fn reconcile_conditional_put(
     destination_key: &str,
     payload: &UploadPayload,
 ) -> bool {
-    let Some(expected_checksum) = payload.body_state().checksum_sha256() else {
+    let expected_identity = match context.checksum_strategy {
+        DestinationChecksumStrategy::SseS3Etag => payload.body_state().etag_md5(),
+        DestinationChecksumStrategy::KmsSha256 => payload.body_state().checksum_sha256(),
+    };
+    let Some(expected_identity) = expected_identity else {
         return false;
     };
-    let head = match context
+    let mut head_request = context
         .destination_s3
         .head_object()
         .bucket(context.destination_bucket)
-        .key(destination_key)
-        .checksum_mode(ChecksumMode::Enabled)
-        .send()
-        .await
-    {
+        .key(destination_key);
+    if context.checksum_strategy == DestinationChecksumStrategy::KmsSha256 {
+        head_request = head_request.checksum_mode(ChecksumMode::Enabled);
+    }
+    let head = match head_request.send().await {
         Ok(head) => head,
         Err(error) => {
             tracing::warn!(
@@ -764,65 +703,24 @@ async fn reconcile_conditional_put(
         .content_length()
         .and_then(|size| u64::try_from(size).ok())
         == Some(payload.content_length());
-    let checksum_matches = head.checksum_sha256() == Some(expected_checksum)
-        && head.checksum_type() == Some(&ChecksumType::FullObject);
-    let metadata_matches = context.metadata.matches_head_object(&head, destination_key);
-    if !size_matches || !checksum_matches || !metadata_matches {
+    let content_identity_matches = match context.checksum_strategy {
+        DestinationChecksumStrategy::SseS3Etag => {
+            head.e_tag().map(|etag| etag.trim_matches('"')) == Some(expected_identity)
+        }
+        DestinationChecksumStrategy::KmsSha256 => {
+            head.checksum_sha256() == Some(expected_identity)
+                && head.checksum_type() == Some(&ChecksumType::FullObject)
+        }
+    };
+    if !size_matches || !content_identity_matches {
         return false;
     }
-
-    let acl = match context
-        .destination_s3
-        .get_object_acl()
-        .bucket(context.destination_bucket)
-        .key(destination_key)
-        .send()
-        .await
-    {
-        Ok(acl) => acl,
-        Err(error) => {
-            tracing::warn!(
-                destination_key,
-                error = %error,
-                "could not verify the ACL while reconciling an ambiguous PutObject result"
-            );
-            return false;
-        }
-    };
-    let bucket_owner_id = if context.metadata.requires_bucket_owner_acl_identity() {
-        match context
-            .destination_s3
-            .get_bucket_acl()
-            .bucket(context.destination_bucket)
-            .send()
-            .await
-        {
-            Ok(bucket_acl) => bucket_acl
-                .owner()
-                .and_then(|owner| owner.id())
-                .map(ToOwned::to_owned),
-            Err(error) => {
-                tracing::warn!(
-                    destination_key,
-                    error = %error,
-                    "could not identify the bucket owner while reconciling an ambiguous PutObject result"
-                );
-                return false;
-            }
-        }
-    } else {
-        None
-    };
-    let reconciled = context
-        .metadata
-        .matches_object_acl(&acl, bucket_owner_id.as_deref());
-    if reconciled {
-        tracing::info!(
-            destination_key,
-            "conditional PutObject conflict matched the exact intended object"
-        );
-    }
-    reconciled
+    tracing::info!(
+        destination_key,
+        strategy = ?context.checksum_strategy,
+        "conditional PutObject conflict matched the intended object"
+    );
+    true
 }
 
 fn destination_object_etag_matches(
@@ -830,14 +728,6 @@ fn destination_object_etag_matches(
     expected_etag: &str,
 ) -> bool {
     destination_object.and_then(|object| object.etag.as_deref()) == Some(expected_etag)
-}
-
-fn prepared_upload_matches_destination(
-    destination_object: Option<&DestinationObject>,
-    expected_etag: &str,
-    metadata_changed: bool,
-) -> bool {
-    !metadata_changed && destination_object_etag_matches(destination_object, expected_etag)
 }
 
 fn validate_put_object_size(plan: &ZipEntryPlan, output_len: usize) -> Result<()> {
@@ -904,7 +794,7 @@ async fn read_async_reader_to_vec(
     plan: &ZipEntryPlan,
 ) -> Result<(Vec<u8>, u64, u32)> {
     let mut bytes = Vec::new();
-    let mut md5 = Md5::new();
+    let mut md5 = plan.trusted_integrity.is_some().then(Md5::new);
     let mut crc32 = Crc32Hasher::new();
     let mut total_bytes = 0_u64;
     let mut buffer = vec![0; ZIP_ENTRY_READ_CHUNK_BYTES];
@@ -916,7 +806,9 @@ async fn read_async_reader_to_vec(
         }
         let next_bytes = total_bytes.saturating_add(bytes_read as u64);
         validate_zip_entry_size_not_exceeded(plan, next_bytes)?;
-        md5.update(&buffer[..bytes_read]);
+        if let Some(md5) = md5.as_mut() {
+            md5.update(&buffer[..bytes_read]);
+        }
         crc32.update(&buffer[..bytes_read]);
         bytes.extend_from_slice(&buffer[..bytes_read]);
         total_bytes = next_bytes;
@@ -924,7 +816,9 @@ async fn read_async_reader_to_vec(
 
     let crc32 = crc32.finalize();
     validate_zip_entry_output(plan, total_bytes, crc32)?;
-    plan.validate_trusted_md5(&finalize_md5(md5))?;
+    if let Some(md5) = md5 {
+        plan.validate_trusted_md5(&finalize_md5(md5))?;
+    }
     Ok((bytes, total_bytes, crc32))
 }
 
@@ -1283,7 +1177,6 @@ fn put_error_message(error: &SdkError<PutObjectError>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use std::future::pending;
     use std::io::Cursor;
     use std::sync::Arc;
@@ -1301,15 +1194,16 @@ mod tests {
     use crate::deadline::InvocationDeadlines;
     use crate::s3::planner::ZipEntryPlan;
     use crate::types::{
-        DeploymentStats, ObjectMetadata, PutObjectRetryJitter, PutObjectRetryOptions,
-        TrustedEntryIntegrity,
+        AppState, DeploymentStats, DestinationChecksumStrategy, PutObjectRetryJitter,
+        PutObjectRetryOptions, TrustedEntryIntegrity,
     };
 
     use super::{
         PutContext, PutDiagnostics, PutPrecondition, PutRetryCoordinator, UploadPayload,
-        catalog_skips_zip_entry, digest_async_reader, duration_millis_u64, join_transfer_tasks,
-        md5_hex, prepared_upload_matches_destination, put_precondition_for_destination,
-        put_retry_cap_millis, quoted_etag, read_async_reader_to_vec, sha256_base64, upload_payload,
+        catalog_skips_zip_entry, copy_source_object, digest_async_reader, duration_millis_u64,
+        join_transfer_tasks, md5_hex, put_precondition_for_destination, put_retry_cap_millis,
+        quoted_etag, read_async_reader_to_vec, sha256_base64, should_compare_marker_free_entry,
+        upload_payload,
     };
 
     struct DropSignal(Arc<AtomicBool>);
@@ -1341,7 +1235,7 @@ mod tests {
             &plan,
             &Default::default(),
             Some(&object),
-            false,
+            DestinationChecksumStrategy::SseS3Etag,
             &stats,
         ));
 
@@ -1353,103 +1247,113 @@ mod tests {
             &plan,
             &Default::default(),
             Some(&object),
-            false,
+            DestinationChecksumStrategy::SseS3Etag,
             &stats,
         ));
         assert!(!catalog_skips_zip_entry(
             &plan,
             &Default::default(),
             Some(&object),
-            true,
+            DestinationChecksumStrategy::KmsSha256,
             &stats,
         ));
     }
 
     #[test]
-    fn metadata_changes_disable_hash_based_extracted_entry_skips() {
+    fn kms_existing_untrusted_entries_skip_the_useless_md5_comparison_pass() {
+        let plan = integrity_plan(b"hello", None);
         let object = DestinationObject {
-            etag: Some("5d41402abc4b2a76b9719d911017c592".to_string()),
+            etag: Some("kms-etag-is-not-plaintext-md5".to_string()),
             size: Some(5),
         };
 
-        assert!(prepared_upload_matches_destination(
+        assert!(should_compare_marker_free_entry(
+            &plan,
             Some(&object),
-            "5d41402abc4b2a76b9719d911017c592",
-            false,
+            DestinationChecksumStrategy::SseS3Etag,
         ));
-        assert!(!prepared_upload_matches_destination(
+        assert!(!should_compare_marker_free_entry(
+            &plan,
             Some(&object),
-            "5d41402abc4b2a76b9719d911017c592",
-            true,
+            DestinationChecksumStrategy::KmsSha256,
         ));
     }
 
     #[tokio::test]
-    async fn ambiguous_put_failure_then_conflict_converges_only_for_exact_committed_object() {
-        let exact_checksum = sha256_base64(b"hello");
+    async fn sse_s3_conflict_reconciliation_uses_md5_etag_without_acl_reads() {
         let exact_headers = vec![
             ("content-length", "5"),
-            ("content-type", "text/plain"),
-            ("x-amz-checksum-sha256", exact_checksum.as_str()),
-            ("x-amz-checksum-type", "FULL_OBJECT"),
-            ("x-amz-meta-release", "stable"),
+            ("etag", "\"5d41402abc4b2a76b9719d911017c592\""),
         ];
-
-        let (result, requests) = run_ambiguous_put(exact_headers).await;
-        result.expect("an exact committed object should reconcile");
-        assert_eq!(requests, vec!["PUT", "PUT", "HEAD", "GET"]);
+        let (result, requests, checksum_mode_requested) =
+            run_ambiguous_put(DestinationChecksumStrategy::SseS3Etag, exact_headers).await;
+        result.expect("an exact SSE-S3 object should reconcile");
+        assert_eq!(requests, vec!["PUT", "PUT", "HEAD"]);
+        assert!(!checksum_mode_requested);
 
         for mismatched_headers in [
             vec![
                 ("content-length", "6"),
-                ("content-type", "text/plain"),
-                ("x-amz-checksum-sha256", exact_checksum.as_str()),
-                ("x-amz-checksum-type", "FULL_OBJECT"),
-                ("x-amz-meta-release", "stable"),
+                ("etag", "\"5d41402abc4b2a76b9719d911017c592\""),
             ],
             vec![
                 ("content-length", "5"),
-                ("content-type", "text/plain"),
+                ("etag", "\"00000000000000000000000000000000\""),
+            ],
+        ] {
+            let (result, requests, _) =
+                run_ambiguous_put(DestinationChecksumStrategy::SseS3Etag, mismatched_headers).await;
+            assert!(result.is_err());
+            assert_eq!(requests, vec!["PUT", "PUT", "HEAD"]);
+        }
+    }
+
+    #[tokio::test]
+    async fn kms_conflict_reconciliation_requires_full_object_sha256() {
+        let exact_checksum = sha256_base64(b"hello");
+        let exact_headers = vec![
+            ("content-length", "5"),
+            ("x-amz-checksum-sha256", exact_checksum.as_str()),
+            ("x-amz-checksum-type", "FULL_OBJECT"),
+        ];
+
+        let (result, requests, checksum_mode_requested) =
+            run_ambiguous_put(DestinationChecksumStrategy::KmsSha256, exact_headers).await;
+        result.expect("an exact KMS object should reconcile");
+        assert_eq!(requests, vec!["PUT", "PUT", "HEAD"]);
+        assert!(checksum_mode_requested);
+
+        for mismatched_headers in [
+            vec![
+                ("content-length", "6"),
+                ("x-amz-checksum-sha256", exact_checksum.as_str()),
+                ("x-amz-checksum-type", "FULL_OBJECT"),
+            ],
+            vec![
+                ("content-length", "5"),
                 (
                     "x-amz-checksum-sha256",
                     "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
                 ),
                 ("x-amz-checksum-type", "FULL_OBJECT"),
-                ("x-amz-meta-release", "stable"),
             ],
             vec![
                 ("content-length", "5"),
-                ("content-type", "text/plain"),
                 ("x-amz-checksum-sha256", exact_checksum.as_str()),
-                ("x-amz-checksum-type", "FULL_OBJECT"),
-                ("x-amz-meta-release", "canary"),
+                ("x-amz-checksum-type", "COMPOSITE"),
             ],
         ] {
-            let (result, requests) = run_ambiguous_put(mismatched_headers).await;
+            let (result, requests, _) =
+                run_ambiguous_put(DestinationChecksumStrategy::KmsSha256, mismatched_headers).await;
             assert!(result.is_err());
             assert_eq!(requests, vec!["PUT", "PUT", "HEAD"]);
         }
-
-        let (result, requests) = run_ambiguous_put_with_acl(
-            vec![
-                ("content-length", "5"),
-                ("content-type", "text/plain"),
-                ("x-amz-checksum-sha256", exact_checksum.as_str()),
-                ("x-amz-checksum-type", "FULL_OBJECT"),
-                ("x-amz-meta-release", "stable"),
-            ],
-            public_read_acl_xml(),
-        )
-        .await;
-        assert!(result.is_err());
-        assert_eq!(requests, vec!["PUT", "PUT", "HEAD", "GET"]);
     }
 
     #[tokio::test]
     async fn permanent_put_4xx_is_not_retried() {
         let replay = StaticReplayClient::new(vec![error_event(400, "InvalidRequest")]);
         let client = replay_s3_client(replay.clone());
-        let metadata = test_metadata();
         let diagnostics = PutDiagnostics::default();
         let stats = DeploymentStats::default();
         let retry_coordinator = PutRetryCoordinator::new();
@@ -1459,14 +1363,14 @@ mod tests {
             PutContext {
                 destination_s3: &client,
                 destination_bucket: "destination",
-                metadata: &metadata,
+                checksum_strategy: DestinationChecksumStrategy::SseS3Etag,
                 retry: &retry,
                 retry_coordinator: &retry_coordinator,
                 diagnostics: &diagnostics,
                 stats: &stats,
             },
             "file.txt",
-            UploadPayload::from_bytes(b"hello".to_vec()),
+            test_payload(DestinationChecksumStrategy::SseS3Etag),
             None,
         )
         .await;
@@ -1479,13 +1383,27 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["PUT"]
         );
+        let request = replay.actual_requests().next().expect("one PUT request");
+        for checksum_header in [
+            "x-amz-sdk-checksum-algorithm",
+            "x-amz-checksum-crc32",
+            "x-amz-checksum-crc32c",
+            "x-amz-checksum-crc64nvme",
+            "x-amz-checksum-sha1",
+            "x-amz-checksum-sha256",
+        ] {
+            assert!(
+                request.headers().get(checksum_header).is_none(),
+                "ordinary SSE-S3 PUT unexpectedly sent {checksum_header}"
+            );
+        }
+        assert_eq!(request.headers().get("content-type"), Some("text/plain"));
     }
 
     #[tokio::test]
-    async fn each_application_put_attempt_uses_one_sdk_attempt() {
-        let replay = StaticReplayClient::new(vec![error_event(500, "InternalError")]);
+    async fn kms_put_requests_sha256_checksum() {
+        let replay = StaticReplayClient::new(vec![error_event(400, "InvalidRequest")]);
         let client = replay_s3_client(replay.clone());
-        let metadata = test_metadata();
         let diagnostics = PutDiagnostics::default();
         let stats = DeploymentStats::default();
         let retry_coordinator = PutRetryCoordinator::new();
@@ -1496,14 +1414,97 @@ mod tests {
             PutContext {
                 destination_s3: &client,
                 destination_bucket: "destination",
-                metadata: &metadata,
+                checksum_strategy: DestinationChecksumStrategy::KmsSha256,
                 retry: &retry,
                 retry_coordinator: &retry_coordinator,
                 diagnostics: &diagnostics,
                 stats: &stats,
             },
             "file.txt",
-            UploadPayload::from_bytes(b"hello".to_vec()),
+            test_payload(DestinationChecksumStrategy::KmsSha256),
+            None,
+        )
+        .await;
+
+        assert!(result.is_err());
+        let request = replay.actual_requests().next().expect("one PUT request");
+        assert_eq!(
+            request.headers().get("x-amz-sdk-checksum-algorithm"),
+            Some("SHA256")
+        );
+    }
+
+    #[tokio::test]
+    async fn copy_sets_inferred_content_type_without_requesting_a_checksum() {
+        let replay = StaticReplayClient::new(vec![copy_success_event()]);
+        let destination_s3 = replay_s3_client(replay.clone());
+        let state = AppState {
+            source_s3: destination_s3.clone(),
+            destination_s3,
+            cloudfront: aws_sdk_cloudfront::Client::from_conf(
+                aws_sdk_cloudfront::Config::builder()
+                    .behavior_version_latest()
+                    .region(aws_sdk_cloudfront::config::Region::new("us-east-1"))
+                    .credentials_provider(aws_sdk_cloudfront::config::Credentials::new(
+                        "test-access-key",
+                        "test-secret-key",
+                        None,
+                        None,
+                        "shin-bucket-deployment-test",
+                    ))
+                    .build(),
+            ),
+            http: reqwest::Client::new(),
+        };
+
+        copy_source_object(
+            &state,
+            "destination",
+            "source",
+            "archive.zip",
+            Some("source-etag"),
+            "site/file.txt",
+        )
+        .await
+        .expect("copy should succeed");
+
+        let request = replay.actual_requests().next().expect("one COPY request");
+        assert_eq!(request.headers().get("content-type"), Some("text/plain"));
+        assert_eq!(
+            request.headers().get("x-amz-metadata-directive"),
+            Some("REPLACE")
+        );
+        assert!(request.headers().get("x-amz-checksum-algorithm").is_none());
+        assert!(
+            request
+                .headers()
+                .get("x-amz-sdk-checksum-algorithm")
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn each_application_put_attempt_uses_one_sdk_attempt() {
+        let replay = StaticReplayClient::new(vec![error_event(500, "InternalError")]);
+        let client = replay_s3_client(replay.clone());
+        let diagnostics = PutDiagnostics::default();
+        let stats = DeploymentStats::default();
+        let retry_coordinator = PutRetryCoordinator::new();
+        let mut retry = test_retry_options();
+        retry.max_attempts = 1;
+
+        let result = upload_payload(
+            PutContext {
+                destination_s3: &client,
+                destination_bucket: "destination",
+                checksum_strategy: DestinationChecksumStrategy::SseS3Etag,
+                retry: &retry,
+                retry_coordinator: &retry_coordinator,
+                diagnostics: &diagnostics,
+                stats: &stats,
+            },
+            "file.txt",
+            test_payload(DestinationChecksumStrategy::SseS3Etag),
             None,
         )
         .await;
@@ -1663,22 +1664,16 @@ mod tests {
         }
     }
 
-    async fn run_ambiguous_put(headers: Vec<(&str, &str)>) -> (Result<()>, Vec<String>) {
-        run_ambiguous_put_with_acl(headers, private_acl_xml()).await
-    }
-
-    async fn run_ambiguous_put_with_acl(
+    async fn run_ambiguous_put(
+        checksum_strategy: DestinationChecksumStrategy,
         headers: Vec<(&str, &str)>,
-        acl_xml: &'static str,
-    ) -> (Result<()>, Vec<String>) {
+    ) -> (Result<()>, Vec<String>, bool) {
         let replay = StaticReplayClient::new(vec![
             error_event(500, "InternalError"),
             error_event(412, "PreconditionFailed"),
             head_event(headers),
-            acl_event(acl_xml),
         ]);
         let client = replay_s3_client(replay.clone());
-        let metadata = test_metadata();
         let diagnostics = PutDiagnostics::default();
         let stats = DeploymentStats::default();
         let retry_coordinator = PutRetryCoordinator::new();
@@ -1687,14 +1682,14 @@ mod tests {
             PutContext {
                 destination_s3: &client,
                 destination_bucket: "destination",
-                metadata: &metadata,
+                checksum_strategy,
                 retry: &retry,
                 retry_coordinator: &retry_coordinator,
                 diagnostics: &diagnostics,
                 stats: &stats,
             },
             "file.txt",
-            UploadPayload::from_bytes(b"hello".to_vec()),
+            test_payload(checksum_strategy),
             Some(PutPrecondition::IfNoneMatch),
         )
         .await;
@@ -1702,7 +1697,10 @@ mod tests {
             .actual_requests()
             .map(|request| request.method().to_string())
             .collect();
-        (result, requests)
+        let checksum_mode_requested = replay.actual_requests().any(|request| {
+            request.method() == "HEAD" && request.headers().get("x-amz-checksum-mode").is_some()
+        });
+        (result, requests, checksum_mode_requested)
     }
 
     fn replay_s3_client(replay: StaticReplayClient) -> aws_sdk_s3::Client {
@@ -1753,7 +1751,7 @@ mod tests {
         )
     }
 
-    fn acl_event(xml: &'static str) -> ReplayEvent {
+    fn copy_success_event() -> ReplayEvent {
         ReplayEvent::new(
             Request::builder()
                 .uri("https://s3.test/expected")
@@ -1762,33 +1760,21 @@ mod tests {
             Response::builder()
                 .status(200)
                 .header("content-type", "application/xml")
-                .body(SdkBody::from(xml.as_bytes()))
+                .body(SdkBody::from(
+                    b"<CopyObjectResult><ETag>&quot;copied&quot;</ETag><LastModified>2026-07-12T00:00:00Z</LastModified></CopyObjectResult>"
+                        .to_vec(),
+                ))
                 .unwrap(),
         )
     }
 
-    fn private_acl_xml() -> &'static str {
-        r#"<AccessControlPolicy xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Owner><ID>owner</ID></Owner><AccessControlList><Grant><Grantee xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="CanonicalUser"><ID>owner</ID></Grantee><Permission>FULL_CONTROL</Permission></Grant></AccessControlList></AccessControlPolicy>"#
-    }
-
-    fn public_read_acl_xml() -> &'static str {
-        r#"<AccessControlPolicy xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Owner><ID>owner</ID></Owner><AccessControlList><Grant><Grantee xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="CanonicalUser"><ID>owner</ID></Grantee><Permission>FULL_CONTROL</Permission></Grant><Grant><Grantee xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="Group"><URI>http://acs.amazonaws.com/groups/global/AllUsers</URI></Grantee><Permission>READ</Permission></Grant></AccessControlList></AccessControlPolicy>"#
-    }
-
-    fn test_metadata() -> ObjectMetadata {
-        ObjectMetadata {
-            user_metadata: HashMap::from([("release".to_string(), "stable".to_string())]),
-            cache_control: None,
-            content_disposition: None,
-            content_encoding: None,
-            content_language: None,
-            content_type: None,
-            server_side_encryption: None,
-            storage_class: None,
-            website_redirect_location: None,
-            sse_kms_key_id: None,
-            acl: None,
+    fn test_payload(checksum_strategy: DestinationChecksumStrategy) -> UploadPayload {
+        let payload = UploadPayload::from_bytes(b"hello".to_vec());
+        payload.body_state().record_etag_md5(md5_hex(b"hello"));
+        if checksum_strategy == DestinationChecksumStrategy::KmsSha256 {
+            payload.prepare_checksum(checksum_strategy);
         }
+        payload
     }
 
     fn test_retry_options() -> PutObjectRetryOptions {

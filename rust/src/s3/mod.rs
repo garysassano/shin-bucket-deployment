@@ -5,11 +5,11 @@ use tokio::time::timeout_at;
 
 use crate::deadline::InvocationDeadlines;
 use crate::request::compile_filters;
-use crate::types::{AppState, DeploymentRequest, DeploymentStats, ObjectMetadata, RuntimeOptions};
+use crate::types::{AppState, DeploymentRequest, DeploymentStats, RuntimeOptions};
 
 pub(crate) mod archive;
+mod content_type;
 mod destination;
-mod metadata;
 mod planner;
 mod transfer;
 
@@ -123,7 +123,6 @@ pub(crate) fn source_window_bytes_for_archive(
 pub(crate) async fn deploy(
     state: &AppState,
     request: &DeploymentRequest,
-    previous_metadata: Option<&ObjectMetadata>,
     stats: Arc<DeploymentStats>,
     deadlines: InvocationDeadlines,
 ) -> Result<()> {
@@ -131,20 +130,16 @@ pub(crate) async fn deploy(
     planner::validate_request_lengths(request)?;
 
     let filters = compile_filters(&request.exclude, &request.include)?;
-    let metadata = ObjectMetadata::from_request(request)?;
     let (archives, deployment_manifest) = timeout_at(
         deadlines.work(),
         planner::plan_deployment(state, request, &filters, &stats),
     )
     .await
     .context("S3 deployment planning exceeded the deployment work deadline")??;
-    planner::validate_deployment_preflight(request, &metadata, &deployment_manifest)?;
+    planner::validate_deployment_preflight(request, &deployment_manifest)?;
     let zip_plans = request.extract.then(|| {
         planner::collect_zip_entry_plans(&deployment_manifest, &request.dest_bucket_prefix)
     });
-    if let Some(zip_plans) = zip_plans.as_ref() {
-        transfer::preflight_marker_outputs(&archives, request, zip_plans, deadlines).await?;
-    }
     stats.add_planned_entries(
         u64::try_from(deployment_manifest.len())
             .context("deployment manifest entry count cannot be represented safely")?,
@@ -166,10 +161,6 @@ pub(crate) async fn deploy(
             state,
             &archives,
             request,
-            transfer::ObjectSemantics {
-                current: &metadata,
-                previous: previous_metadata,
-            },
             zip_plans,
             &destination_plan.objects,
             transfer::TransferExecution {
@@ -179,17 +170,11 @@ pub(crate) async fn deploy(
         )
         .await?;
     } else {
-        let copy_plans = planner::collect_copy_plans(
-            &deployment_manifest,
-            request,
-            &destination_plan.objects,
-            &metadata,
-            previous_metadata,
-        )?;
+        let copy_plans =
+            planner::collect_copy_plans(&deployment_manifest, request, &destination_plan.objects)?;
         transfer::execute_copy_plans(
             state,
             &request.dest_bucket_name,
-            &metadata,
             copy_plans,
             request.runtime.max_parallel_transfers,
             transfer::TransferExecution {
@@ -323,8 +308,9 @@ mod aws_integration_tests {
                 distribution_id: None,
                 distribution_paths: None,
                 wait_for_distribution_invalidation: true,
-                user_metadata: HashMap::new(),
-                system_metadata: HashMap::new(),
+                destination_checksum_strategy: Some(
+                    crate::types::DestinationChecksumStrategy::SseS3Etag,
+                ),
                 delete_stale_objects_on_deployment: true,
                 exclude: Vec::new(),
                 include: Vec::new(),
@@ -351,7 +337,6 @@ mod aws_integration_tests {
             deploy(
                 &state,
                 &request,
-                None,
                 std::sync::Arc::new(crate::types::DeploymentStats::default()),
                 InvocationDeadlines::from_remaining_at(
                     TokioInstant::now(),
@@ -365,7 +350,6 @@ mod aws_integration_tests {
             deploy(
                 &state,
                 &request,
-                None,
                 std::sync::Arc::new(crate::types::DeploymentStats::default()),
                 InvocationDeadlines::from_remaining_at(
                     TokioInstant::now(),

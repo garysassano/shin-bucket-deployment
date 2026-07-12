@@ -70,8 +70,7 @@ pub(crate) struct DeploymentRequest {
     pub(crate) distribution_id: Option<String>,
     pub(crate) distribution_paths: Vec<String>,
     pub(crate) wait_for_distribution_invalidation: bool,
-    pub(crate) user_metadata: HashMap<String, String>,
-    pub(crate) system_metadata: HashMap<String, String>,
+    pub(crate) destination_checksum_strategy: DestinationChecksumStrategy,
     pub(crate) delete_stale_objects_on_deployment: bool,
     pub(crate) exclude: Vec<String>,
     pub(crate) include: Vec<String>,
@@ -81,6 +80,13 @@ pub(crate) struct DeploymentRequest {
     pub(crate) delete_previous_objects_on_change: Option<DeletePreviousObjectsOnChange>,
     pub(crate) invalidate_previous_distribution_on_change: Option<String>,
     pub(crate) runtime: RuntimeOptions,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum DestinationChecksumStrategy {
+    SseS3Etag,
+    KmsSha256,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -141,21 +147,6 @@ pub(crate) enum PutObjectRetryJitter {
 pub(crate) struct Filters {
     pub(crate) exclude: Vec<globset::GlobMatcher>,
     pub(crate) include: Vec<globset::GlobMatcher>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ObjectMetadata {
-    pub(crate) user_metadata: HashMap<String, String>,
-    pub(crate) cache_control: Option<String>,
-    pub(crate) content_disposition: Option<String>,
-    pub(crate) content_encoding: Option<String>,
-    pub(crate) content_language: Option<String>,
-    pub(crate) content_type: Option<String>,
-    pub(crate) server_side_encryption: Option<String>,
-    pub(crate) storage_class: Option<String>,
-    pub(crate) website_redirect_location: Option<String>,
-    pub(crate) sse_kms_key_id: Option<String>,
-    pub(crate) acl: Option<String>,
 }
 
 pub(crate) struct PlannedObject {
@@ -249,6 +240,7 @@ pub(crate) struct DeploymentStatsSnapshot<'a> {
     pub(crate) request_type: &'a str,
     pub(crate) status: &'a str,
     pub(crate) extract: bool,
+    pub(crate) destination_checksum_strategy: DestinationChecksumStrategy,
     pub(crate) delete_stale_objects_on_deployment: bool,
     pub(crate) available_memory_mb: u64,
     pub(crate) max_parallel_transfers: usize,
@@ -498,6 +490,7 @@ impl DeploymentStats {
             request_type,
             status,
             extract: request.extract,
+            destination_checksum_strategy: request.destination_checksum_strategy,
             delete_stale_objects_on_deployment: request.delete_stale_objects_on_deployment,
             available_memory_mb: request.runtime.available_memory_mb,
             max_parallel_transfers: request.runtime.max_parallel_transfers,

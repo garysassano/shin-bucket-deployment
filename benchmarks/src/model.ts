@@ -27,6 +27,7 @@ export type ProviderSummary = {
   readonly requestType?: string | null;
   readonly status?: string | null;
   readonly extract?: boolean | null;
+  readonly destinationChecksumStrategy?: string | null;
   readonly deleteStaleObjectsOnDeployment?: boolean | null;
   /** Historical provider snapshots before the destination lifecycle rename. */
   readonly prune?: boolean | null;

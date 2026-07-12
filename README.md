@@ -2,9 +2,9 @@
 
 Rust-backed alternative to AWS CDK's official [`BucketDeployment`](https://docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.aws_s3_deployment.BucketDeployment.html) construct.
 
-`ShinBucketDeployment` is a near drop-in replacement for `BucketDeployment`, intended for S3 static asset deployment when you want a purpose-built Rust provider and fewer full-archive extraction costs than the upstream construct.
+`ShinBucketDeployment` is a focused replacement for the common static-asset subset of `BucketDeployment`, intended for S3 deployment when you want a purpose-built Rust provider and fewer full-archive extraction costs than the upstream construct.
 
-The published package ships prebuilt Rust provider binaries for both Lambda architectures (`arm64` and `x86_64`), so consumers do not need a Rust toolchain. Swapping from the upstream construct is a one-line import change.
+The published package ships prebuilt Rust provider binaries for both Lambda architectures (`arm64` and `x86_64`), so consumers do not need a Rust toolchain. Common deployments can migrate with an import change plus removal of any unsupported object-metadata props.
 
 ## Quick Start
 
@@ -16,14 +16,14 @@ npm install shin-bucket-deployment
 
 ### Migrating from `BucketDeployment`
 
-The props map closely to the upstream construct, so migration is usually a one-line import change:
+The operational props map closely to the upstream construct, so a deployment that does not configure per-object metadata can usually migrate with this import change:
 
 ```diff
 -import { BucketDeployment, Source } from "aws-cdk-lib/aws-s3-deployment";
 +import { ShinBucketDeployment as BucketDeployment, Source } from "shin-bucket-deployment";
 ```
 
-See [What It Supports](#what-it-supports) for the small set of upstream props that are intentionally unsupported.
+See [What It Supports](#what-it-supports) for the intentionally narrow public surface.
 
 ### Example
 
@@ -66,7 +66,7 @@ The official `BucketDeployment` is a good default for many stacks, but its provi
 | Leaner runtime              | This custom resource provider runs on the [Lambda Rust runtime](https://github.com/aws/aws-lambda-rust-runtime) (`provided.al2023`) rather than the Python runtime used by the upstream provider. In practice, the lower runtime overhead can mean faster cold starts and lower memory footprint. See [lambda-perf](https://maxday.github.io/lambda-perf/). |
 | Direct AWS SDK operations   | Copy, upload, delete, and CloudFront invalidation are executed through SDK calls instead of shelling out to `aws s3 cp` / `aws s3 sync`.                                                                                                                                                                                                                    |
 | Archive-aware planning      | For extracted assets, the provider plans directly from the zip archive instead of extracting the whole archive to a working directory before syncing.                                                                                                                                                                                                       |
-| Semantic update decisions   | The provider combines content identity with normalized old/new object settings, so metadata-only updates rewrite objects while unchanged settings retain the fast `ETag`-based path.                                                                                                                                                                         |
+| Encryption-aware writes     | SSE-S3 destinations use the cheap single-part MD5/`ETag` path; KMS and DSSE destinations store full-object SHA-256 only where encrypted `ETag`s cannot prove content identity.                                                                                                                                                                                  |
 | Marker-free streaming path  | Missing sources without deploy-time markers stream directly from archive entries; replacement buffers are only used for sources that declare markers.                                                                                                                                                                                                       |
 | Safer destination moves     | Opt-in cleanup deploys new content first, infers the old prefix, and preserves overlapping current namespaces. See [changing a destination safely](docs/architecture.md#changing-a-destination-safely).                                                                                                                                                     |
 
@@ -85,28 +85,30 @@ The official `BucketDeployment` is a good default for many stacks, but its provi
 
 The construct follows the upstream `BucketDeployment` API where the behavior maps cleanly to the Rust provider.
 
-| Area            | Supported                                                                                                                                                                                                                    |
-| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Sources         | `sources`, `Source.data`, `Source.jsonData`, `Source.yamlData`, `embeddedCatalog`                                                                                                                                            |
-| Destination     | `destinationBucket`, `destinationKeyPrefix`, `deployedBucket`, `objectKeys`                                                                                                                                                  |
-| Filtering       | `include`, `exclude`                                                                                                                                                                                                         |
-| Lifecycle       | `destinationLifecycle`                                                                                                                                                                                                       |
-| Update behavior | `extract`, `outputObjectKeys`                                                                                                                                                                                                |
-| S3 metadata     | `accessControl`, `cacheControl`, `contentDisposition`, `contentEncoding`, `contentLanguage`, `contentType`, `metadata`, `serverSideEncryption`, `serverSideEncryptionAwsKmsKeyId`, `storageClass`, `websiteRedirectLocation` |
-| CloudFront      | `distribution`, `distributionPaths`, `waitForDistributionInvalidation`                                                                                                                                                       |
-| Provider Lambda | `architecture`, `bundling`, `ephemeralStorageSize`, `logGroup`, `logRetention`, `memoryLimit`, `role`, `securityGroups`, `vpc`, `vpcSubnets`                                                                                 |
-| Runtime tuning  | `maxParallelTransfers`, `advancedRuntimeTuning`                                                                                                                                                                              |
+| Area            | Supported                                                                                                                                            |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Sources         | `sources`, `Source.data`, `Source.jsonData`, `Source.yamlData`, `embeddedCatalog`                                                                    |
+| Destination     | CDK-created `destinationBucket`, `destinationKeyPrefix`, `deployedBucket`, `objectKeys`                                                              |
+| Filtering       | `include`, `exclude`                                                                                                                                 |
+| Lifecycle       | `destinationLifecycle`                                                                                                                               |
+| Update behavior | `extract`, `outputObjectKeys`                                                                                                                        |
+| Object headers  | Automatic `Content-Type` inference from the final key, with `application/octet-stream` fallback; no configurable per-object metadata                 |
+| CloudFront      | `distribution`, `distributionPaths`, `waitForDistributionInvalidation`                                                                               |
+| Provider Lambda | `architecture`, `bundling`, `logGroup`, `memoryLimit`, `role`, `securityGroups`, `vpc`, `vpcSubnets`                                                 |
+| Runtime tuning  | `maxParallelTransfers`, `advancedRuntimeTuning`                                                                                                      |
 
 Unsupported upstream props:
 
-| Prop                                    | Reason                                                                                                                          |
-| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `expires`                               | Prefer `cacheControl` for deployment-time cache behavior.                                                                       |
-| `prune`                                 | Replaced by `destinationLifecycle.onDeploy.deleteStaleObjects`.                                                                  |
-| `retainOnDelete`                        | Replaced by the explicit `destinationLifecycle.onChange` and `destinationLifecycle.onDelete` settings.                          |
-| `serverSideEncryptionCustomerAlgorithm` | SSE-C is intentionally not implemented; use SSE-S3 or SSE-KMS.                                                                  |
-| `signContent`                           | The provider uses AWS SDK calls directly, not the upstream AWS CLI upload path.                                                 |
-| `useEfs`                                | EFS is not needed because the provider streams data with bounded memory instead of staging archives or extracted files on disk. |
+| Prop | Reason |
+| --- | --- |
+| `accessControl`, `cacheControl`, `contentDisposition`, `contentEncoding`, `contentLanguage`, `contentType`, `expires`, `metadata`, `storageClass`, `websiteRedirectLocation` | Object metadata is intentionally outside the deployment contract. Configure cache behavior in CloudFront and storage/lifecycle behavior on the bucket. |
+| `serverSideEncryption`, `serverSideEncryptionAwsKmsKeyId`, `serverSideEncryptionCustomerAlgorithm` | Configure default encryption on `destinationBucket`; SSE-C is not supported. |
+| `ephemeralStorageSize` | The provider does not stage archives or extracted files in Lambda `/tmp`. |
+| `logRetention` | This legacy upstream prop is not exposed; provide `logGroup` with the desired retention policy. |
+| `prune` | Replaced by `destinationLifecycle.onDeploy.deleteStaleObjects`. |
+| `retainOnDelete` | Replaced by the explicit `destinationLifecycle.onChange` and `destinationLifecycle.onDelete` settings. |
+| `signContent` | The provider uses AWS SDK calls directly, not the upstream AWS CLI upload path. |
+| `useEfs` | EFS is not needed because the provider streams data with bounded memory instead of staging archives or extracted files on disk. |
 
 ## How It Works
 
@@ -114,19 +116,19 @@ Unsupported upstream props:
 
 For `extract=true`, the provider reads each source zip's central directory with ranged S3 `GetObject` requests, walks the archive entries, applies filters, and builds the deployment plan from the archive contents. Directory `Source.asset` inputs include a compact `.shin/catalog.v1.json` size/MD5 catalog whose exact bytes are authenticated by a SHA-256 digest in the CloudFormation template. Only those template-bound catalogs can enable sparse skips. Entry data is read through coalesced source blocks with a bounded resident window. Source GET concurrency and the source window are derived from `memoryLimit` by default and can be overridden through `advancedRuntimeTuning` when diagnosing unusual workloads. It does not download the whole archive and does not write the archive or extracted entries to Lambda `/tmp`.
 
-`ephemeralStorageSize` is accepted for upstream `BucketDeployment` API compatibility, but it is rarely useful for this provider because ZIP planning, extraction, hashing, and uploads avoid Lambda `/tmp`.
-
 For `extract=false`, each source object is copied directly with S3 `CopyObject`.
 
 ### Change Detection
 
-Before uploading or copying, the provider lists the destination prefix. Destination keys are used to delete stale objects when `destinationLifecycle.onDeploy.deleteStaleObjects` is enabled, and destination `ETag` values are used to skip unchanged objects.
+At synthesis, Shin inspects the concrete CDK-created destination bucket's default encryption rule. Default or `AES256` encryption selects the `sse-s3-etag` strategy. KMS and DSSE select `kms-sha256`. Imported buckets and tokenized, unknown, or multi-rule encryption configurations are rejected because the provider cannot choose a sound strategy from them. An explicit KMS key ID must match the bucket's grantable L2 `encryptionKey`. Customer keys use CDK key grants; AWS-managed S3 key permissions are constrained by account/Region, `alias/aws/s3`, and regional S3 service conditions. No runtime `GetBucketEncryption` request is needed.
 
-For existing marker-free zip entries with authenticated catalog MD5s, the provider compares destination size and `ETag` before reading entry bytes. Catalogs in arbitrary ZIPs are untrusted and do not receive this shortcut. Without a trusted catalog match, it reads and decompresses the entry from ranged source blocks, validates size and CRC32, computes MD5, and compares it with the destination `ETag`. Missing marker-free objects stream directly to S3 without pre-hashing. Entries with deploy-time markers are materialized after decompression and replacement so the final bytes can be hashed and uploaded when changed.
+Before uploading or copying, the provider lists the destination prefix. Destination keys are used to delete stale objects when `destinationLifecycle.onDeploy.deleteStaleObjects` is enabled. For SSE-S3 destinations, existing marker-free ZIP entries with authenticated catalog MD5s can be skipped from destination size and `ETag` without reading entry bytes. Untrusted existing entries are read once for MD5 comparison, while missing entries stream directly to S3 without a pre-hash pass. The upload stream calculates MD5 alongside required ZIP validation, so ambiguous writes can reconcile against a single-part destination `ETag` without requesting an additional stored checksum.
 
-On Update, normalized user metadata and every supported system setting from CloudFormation `OldResourceProperties` participate in the decision. A change to metadata, cache headers, an explicit content type, ACL, storage class, encryption, or website redirect forces replacement even when object bytes are unchanged, for both extracted uploads and `extract=false` copies. Content type is compared after resolving the final key, and implicit `private` ACL / `STANDARD` storage defaults are normalized, so spelling out an already-effective default does not cause a useless rewrite. On Create there is no prior semantic identity to trust, so a matching pre-existing destination object is rewritten to converge its settings.
+KMS and DSSE destination `ETag`s are not treated as plaintext MD5. Those destinations bypass catalog/destination MD5 shortcuts and avoid a useless comparison read before upload; authenticated source MD5 is still validated when present. Extracted PUTs request a stored full-object SHA-256 checksum, while `extract=false` objects use direct `CopyObject` without requesting an unused checksum. Content identity is the only skip input; there is no separate old/new object-property identity.
 
-Extracted uploads store a full-object SHA-256 checksum. If a retry receives an ambiguous conditional `409` or `412`, the provider reads the destination with checksum mode and accepts it only when size, SHA-256, all `HeadObject`-visible settings, user metadata, and the effective object ACL exactly match. Otherwise the deployment fails closed instead of assuming that a lost response committed the intended object.
+If a conditional PUT retry receives an ambiguous `409` or `412`, SSE-S3 reconciliation requires exact length plus the streamed MD5 as the single-part `ETag`, using an ordinary `HeadObject`. KMS/DSSE reconciliation uses checksum-mode `HeadObject` and requires exact length plus the stored `FULL_OBJECT` SHA-256. Neither path performs ACL reads. Missing evidence or any content mismatch fails closed instead of assuming that a lost response committed the intended object.
+
+PUT and COPY always set `Content-Type` from the final object key, falling back to `application/octet-stream`. Other object metadata is left to bucket defaults, bucket policy, lifecycle configuration, and CloudFront cache policy rather than custom-resource properties.
 
 ### Memory Model
 
@@ -144,9 +146,7 @@ The provider logs one sanitized `shin_deployment_summary` JSON line per custom-r
 
 ### `ETag`-based Skips
 
-The byte-identity optimization depends on S3 `ETag` values behaving like MD5 content hashes. That is generally true for simple single-part static objects, but not for all S3 configurations.
-
-CloudFormation object-setting changes independently disable skips, so metadata-only property updates are not lost. Multipart objects, SSE-KMS or SSE-C objects, and objects written by other tools may still lack an MD5-like `ETag`; those cases can cause extra transfers. Out-of-band destination metadata drift is not discovered when the CloudFormation settings themselves are unchanged because normal planning intentionally avoids one metadata request per object.
+The fast destination skip path depends on S3 `ETag` values behaving like MD5 content hashes. Shin uses it only for the default/SSE-S3 strategy and single-request static-object model. KMS and DSSE destinations deliberately transfer without this shortcut because their `ETag`s cannot prove plaintext identity. Multipart or externally written SSE-S3 objects with non-MD5 `ETag`s can cause extra transfers.
 
 ### Cataloged `Source.asset` Assets
 
@@ -163,7 +163,7 @@ Zip entries with deploy-time marker replacements are fully materialized in memor
 
 Source archives are read with S3 ranges and do not need to fit in Lambda memory or ephemeral storage. Individual files inside the asset ZIP, including marker-expanded output, must be <= 5 GiB because extracted uploads currently use S3 `PutObject`, not multipart upload.
 
-Before destination mutation, the provider validates the complete final key against S3's [1024-byte UTF-8 key limit](https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html), checks archive and aggregate size arithmetic, rejects oversized single-request uploads and copies, and checks user/system metadata plus controlled request headers against S3's [2 KiB metadata and 8 KiB request-header limits](https://docs.aws.amazon.com/AmazonS3/latest/userguide/UsingMetadata.html). Marker-bearing entries undergo a complete validation/replacement pass so the actual expanded length is known before any write; until the streaming replacement work lands, transfer can read and materialize those entries a second time. Two KiB of the request-header budget is conservatively reserved for SDK signing, conditional, and checksum headers.
+Before destination mutation, the provider validates the complete final key against S3's [1024-byte UTF-8 key limit](https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html), checks archive and aggregate size arithmetic, and rejects oversized single-request uploads and copies. A marker-bearing entry is decompressed, validated, replaced, and size-checked once immediately before its own PUT; earlier independent writes may already have completed. Marker output remains whole-entry materialized until the streaming replacement work lands.
 
 This construct targets static asset deployment to S3. It is not a general-purpose sync engine and does not provide byte-range diffing, persistent manifests, or non-S3 backend behavior.
 
