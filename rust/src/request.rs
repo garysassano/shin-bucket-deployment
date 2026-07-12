@@ -31,9 +31,17 @@ pub(crate) struct RawDeletePreviousObjectsOnChange {
 #[serde(deny_unknown_fields)]
 #[serde(rename_all = "PascalCase")]
 pub(crate) struct RawSourceCatalog {
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_present",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub(crate) version: Option<u32>,
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_present",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub(crate) sha256: Option<String>,
 }
 
@@ -377,6 +385,14 @@ fn default_true() -> bool {
     true
 }
 
+fn deserialize_present<'de, D, T>(deserializer: D) -> std::result::Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
 fn deserialize_boolish<'de, D>(deserializer: D) -> std::result::Result<bool, D::Error>
 where
     D: Deserializer<'de>,
@@ -596,6 +612,21 @@ mod tests {
         }]);
 
         assert!(serde_json::from_value::<RawDeploymentRequest>(props).is_err());
+    }
+
+    #[test]
+    fn source_catalogs_reject_null_or_wrong_typed_descriptor_fields() {
+        for descriptor in [
+            json!({ "Version": null, "Sha256": null }),
+            json!({ "Version": null }),
+            json!({ "Sha256": null }),
+            json!({ "Version": "1", "Sha256": "ab".repeat(32) }),
+            json!({ "Version": 1, "Sha256": 123 }),
+        ] {
+            let mut props = minimal_request();
+            props["SourceCatalogs"] = json!([descriptor]);
+            assert!(serde_json::from_value::<RawDeploymentRequest>(props).is_err());
+        }
     }
 
     #[test]
