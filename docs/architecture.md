@@ -529,7 +529,7 @@ The construct selects reconciliation from the concrete destination bucket's synt
 
 For SSE-S3, the upload stream computes MD5 alongside required source validation and does not request an optional SDK checksum. An ambiguous conditional `409` or `412` uses ordinary `HeadObject` and reports success only when content length and the single-part destination `ETag` match. For KMS/DSSE, the PUT requests stored `FULL_OBJECT` SHA-256, the provider independently computes the expected digest, and reconciliation uses checksum-mode `HeadObject` to require exact length, checksum, and checksum type. Neither strategy reads object or bucket ACLs. Missing evidence or any content difference fails closed.
 
-The normal SSE-S3 path performs no Shin SHA-256 pass and disables optional SDK checksum calculation. The KMS/DSSE path necessarily performs both the provider digest used independently after a lost response and the SDK's stored-checksum calculation. That KMS-only duplicate SHA-256 work remains an explicit performance cost to measure against the correctness requirement.
+The normal SSE-S3 path performs no Shin SHA-256 pass and disables optional SDK checksum calculation. The KMS/DSSE path necessarily performs both the provider digest used independently after a lost response and the SDK's stored-checksum calculation. The controlled PR7 run in [benchmark](./benchmark.md#pr7-performance-decision-run) measured that KMS-only cost within -2.2% to +3.4% of the earlier provider duration while retaining a 2.6x to 2.7x provider-time advantage over upstream.
 
 The source ZIP ranged-read path still uses source `If-Match` when the source object has an `ETag`; that protects a single deployment from reading a source archive that changes while it is being streamed.
 
@@ -677,6 +677,6 @@ Destination upload diagnostics field reference:
 
 The highest-value architecture work is now:
 
-1. Build a benchmark runner that captures local wall time, CloudFormation timing, provider logs, S3 request counts, bytes read/written, and destination object state.
-2. Expand structured provider telemetry to include planning, skip, stale-object deletion, and invalidation counters.
+1. Promote the benchmark methodology to repeated canonical runs and add CI regression checks that can detect provider-time, memory, transfer, retry, and request-count regressions without committing raw AWS evidence.
+2. Expand structured provider telemetry where needed for stable performance gates, especially request counts and encryption-strategy-specific work.
 3. Add cataloged packaging support for CDK asset bundling or keep the current explicit fallback if the compatibility surface is too large.

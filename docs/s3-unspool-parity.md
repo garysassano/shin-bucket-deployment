@@ -93,10 +93,11 @@ Use `Source.asset(path, { embeddedCatalog: false })` to opt out of cataloged pac
 
 ## Verification
 
-Local verification currently covers:
+Verification currently covers:
 
 - Rust compile and unit tests for ranged entry reads, strategy-selected CRC/MD5/SHA-256 work, strict catalog authentication and mapping, exact strategy-specific lost-response reconciliation, request preflight, destination planning, ZIP64 metadata, and bounded marker replacement.
 - TypeScript synthesis tests for encryption-strategy derivation, unsupported metadata API rejection, bounded materialization, cleanup, custom-resource bindings and IAM, and CDK `ZIP_DIRECTORY` asset output.
 - TypeScript build, typecheck, lint, and Vitest suite.
+- Deployed AWS assertions for ranged extraction, filters, marker replacement, overwrite order, lifecycle behavior, inferred content type, and stored `FULL_OBJECT` SHA-256 under customer KMS, AWS-managed KMS, and DSSE.
 
 The latest sanitized correctness status, including which provider architecture ran in AWS, is maintained in [verification](./verification.md). Historical performance rows remain in `benchmarks/results.jsonl` and are not correctness evidence.
