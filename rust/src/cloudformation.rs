@@ -206,7 +206,7 @@ async fn process_request(
     old_resource_properties: Option<&RawDeploymentRequest>,
     deadlines: InvocationDeadlines,
 ) -> Result<Vec<u8>> {
-    let request = parse_request(resource_properties);
+    let request = parse_request(resource_properties)?;
     let physical_resource_id = match request_type {
         "Create" => format!("aws.cdk.cargobucketdeployment.{}", Uuid::new_v4()),
         "Update" | "Delete" => physical_resource_id
@@ -1077,7 +1077,7 @@ mod tests {
             "DistributionPaths": paths
         }))
         .expect("raw deployment request");
-        parse_request(&raw)
+        parse_request(&raw).expect("valid request")
     }
 
     #[tokio::test]

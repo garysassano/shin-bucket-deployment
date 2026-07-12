@@ -26,6 +26,7 @@ import type {
   SourceConfig,
 } from "aws-cdk-lib/aws-s3-deployment";
 import { Construct } from "constructs";
+import { trustedSourceCatalog } from "./cataloged-source";
 import { ValidationError } from "./errors";
 
 const CUSTOM_RESOURCE_OWNER_TAG = "aws-cdk:cr-owned";
@@ -715,6 +716,18 @@ export class ShinBucketDeployment extends Construct {
         SourceObjectKeys: Lazy.uncachedList({
           produce: () => this.sources.map((source) => source.zipObjectKey),
         }),
+        SourceCatalogs: Lazy.uncachedAny({
+          produce: () => {
+            if (props.extract === false) {
+              return undefined;
+            }
+            const catalogs = this.sources.map((source) => trustedSourceCatalog(source));
+            if (!catalogs.some((catalog) => catalog !== undefined)) {
+              return undefined;
+            }
+            return catalogs.map((catalog) => catalog ?? {});
+          },
+        }),
         SourceMarkers: Lazy.uncachedAny(
           {
             produce: () => {
@@ -1201,9 +1214,13 @@ function validatePutObjectRetryProps(
 function sourceConfigEqual(stack: Stack, a: SourceConfig, b: SourceConfig) {
   const resolveName = (config: SourceConfig) =>
     JSON.stringify(stack.resolve(config.bucket.bucketName));
+  const aCatalog = trustedSourceCatalog(a);
+  const bCatalog = trustedSourceCatalog(b);
   return (
     resolveName(a) === resolveName(b) &&
     a.zipObjectKey === b.zipObjectKey &&
+    aCatalog?.Version === bCatalog?.Version &&
+    aCatalog?.Sha256 === bCatalog?.Sha256 &&
     a.markers === undefined &&
     b.markers === undefined
   );

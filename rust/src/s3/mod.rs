@@ -293,6 +293,7 @@ mod aws_integration_tests {
             let request = parse_request(&RawDeploymentRequest {
                 source_bucket_names: vec![source_bucket.clone(), source_bucket.clone()],
                 source_object_keys: vec![plain_zip_key.to_string(), marker_zip_key.to_string()],
+                source_catalogs: None,
                 source_markers: vec![HashMap::new(), marker_map()],
                 source_markers_config: vec![MarkerConfig::default(), MarkerConfig::default()],
                 destination_bucket_name: destination_bucket.clone(),
@@ -325,7 +326,7 @@ mod aws_integration_tests {
                 put_object_slowdown_retry_base_delay_ms: Some(100),
                 put_object_slowdown_retry_max_delay_ms: Some(1_000),
                 put_object_retry_jitter: None,
-            });
+            })?;
 
             deploy(
                 &state,

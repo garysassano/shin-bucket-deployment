@@ -14,6 +14,7 @@ use crc32fast::Hasher as Crc32Hasher;
 use futures_util::FutureExt;
 use futures_util::stream::{FuturesUnordered, StreamExt};
 use http_body::{Body, Frame, SizeHint};
+use md5::{Digest as Md5Digest, Md5};
 use tokio::io::{AsyncBufRead, AsyncRead, AsyncReadExt, AsyncSeek, ReadBuf, SeekFrom};
 use tokio::sync::futures::OwnedNotified;
 use tokio::sync::{Notify, Semaphore, mpsc};
@@ -1511,6 +1512,7 @@ async fn send_zip_entry_chunks(
     sender: mpsc::Sender<std::result::Result<Bytes, BodyError>>,
 ) -> std::result::Result<(), BodyError> {
     let mut reader = zip_entry_reader(store, plan.clone()).map_err(boxed_body_error)?;
+    let mut md5 = Md5::new();
     let mut crc32 = Crc32Hasher::new();
     let mut bytes = 0_u64;
     let mut buffer = vec![0_u8; ZIP_ENTRY_READ_CHUNK_BYTES];
@@ -1529,6 +1531,7 @@ async fn send_zip_entry_chunks(
         }
         let next_bytes = bytes.saturating_add(bytes_read as u64);
         validate_zip_entry_size_not_exceeded(&plan, next_bytes).map_err(boxed_body_error)?;
+        md5.update(&buffer[..bytes_read]);
         crc32.update(&buffer[..bytes_read]);
         pending.clear();
         pending.extend_from_slice(&buffer[..bytes_read]);
@@ -1536,6 +1539,8 @@ async fn send_zip_entry_chunks(
     }
 
     validate_zip_entry_output(&plan, bytes, crc32.finalize()).map_err(boxed_body_error)?;
+    plan.validate_trusted_md5(&finalize_md5(md5))
+        .map_err(boxed_body_error)?;
     if !pending.is_empty()
         && !append_and_send_body_chunks(&mut body_chunk, &pending, &sender).await?
     {
@@ -1551,6 +1556,19 @@ async fn send_zip_entry_chunks(
     }
 
     Ok(())
+}
+
+fn finalize_md5(hasher: Md5) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+
+    let digest = hasher.finalize();
+    let bytes: &[u8] = digest.as_ref();
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push(HEX[(byte >> 4) as usize] as char);
+        output.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    output
 }
 
 async fn append_and_send_body_chunks(
@@ -1691,6 +1709,7 @@ mod tests {
     };
     use crate::s3::planner::ZipEntryPlan;
     use crate::s3::{DEFAULT_SOURCE_BLOCK_BYTES, DEFAULT_SOURCE_BLOCK_MERGE_GAP_BYTES};
+    use crate::types::TrustedEntryIntegrity;
 
     struct DropSignal(Arc<AtomicBool>);
 
@@ -1749,6 +1768,30 @@ mod tests {
             .unwrap_err();
 
         assert!(error.to_string().contains("CRC32"));
+    }
+
+    #[tokio::test]
+    async fn direct_stream_withholds_completion_when_authenticated_md5_mismatches() {
+        let zip = zip_from_entry("tampered.txt", b"tampered source bytes");
+        let mut plan = zip_plan_from_archive(&zip, "tampered.txt");
+        plan.trusted_integrity = Some(TrustedEntryIntegrity {
+            size: plan.size,
+            md5: "00000000000000000000000000000000".to_string(),
+        });
+        let store = ready_store_for_plan(&zip, &plan);
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+
+        let error = send_zip_entry_chunks(store, plan, sender)
+            .await
+            .expect_err("trusted MD5 mismatch must fail the body");
+
+        assert!(error.to_string().contains("authenticated catalog entry"));
+        assert!(
+            !error
+                .to_string()
+                .contains("00000000000000000000000000000000")
+        );
+        assert!(receiver.try_recv().is_err());
     }
 
     #[tokio::test(start_paused = true)]
@@ -1817,7 +1860,7 @@ mod tests {
             compressed_size: 1,
             compression_code: 0,
             crc32: 0,
-            catalog_md5: None,
+            trusted_integrity: None,
             source_offset: 0,
             source_span_end: 64,
         };
@@ -1912,7 +1955,7 @@ mod tests {
             compressed_size: file.compressed_size(),
             compression_code: 8,
             crc32: file.crc32(),
-            catalog_md5: None,
+            trusted_integrity: None,
             source_offset: file.header_start(),
             source_span_end: data_start + file.compressed_size(),
         }
@@ -1941,7 +1984,7 @@ mod tests {
             compressed_size: source_span_end - source_offset,
             compression_code: 0,
             crc32: 0,
-            catalog_md5: None,
+            trusted_integrity: None,
             source_offset,
             source_span_end,
         }

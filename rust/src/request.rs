@@ -14,7 +14,7 @@ use crate::s3::{
 };
 use crate::types::{
     DeletePreviousObjectsOnChange, DeploymentRequest, Filters, MarkerConfig, PreviousDestination,
-    PutObjectRetryJitter, PutObjectRetryOptions, RuntimeOptions,
+    PutObjectRetryJitter, PutObjectRetryOptions, RuntimeOptions, TrustedSourceCatalog,
 };
 
 const DEFAULT_AVAILABLE_MEMORY_MB: u64 = 1024;
@@ -27,11 +27,31 @@ pub(crate) struct RawDeletePreviousObjectsOnChange {
     pub(crate) destination_bucket_name: String,
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+#[serde(rename_all = "PascalCase")]
+pub(crate) struct RawSourceCatalog {
+    #[serde(
+        default,
+        deserialize_with = "deserialize_present_u32ish",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub(crate) version: Option<u32>,
+    #[serde(
+        default,
+        deserialize_with = "deserialize_present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub(crate) sha256: Option<String>,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub(crate) struct RawDeploymentRequest {
     pub(crate) source_bucket_names: Vec<String>,
     pub(crate) source_object_keys: Vec<String>,
+    #[serde(default)]
+    pub(crate) source_catalogs: Option<Vec<RawSourceCatalog>>,
     #[serde(default)]
     pub(crate) source_markers: Vec<HashMap<String, String>>,
     #[serde(default)]
@@ -117,9 +137,10 @@ impl Filters {
     }
 }
 
-pub(crate) fn parse_request(raw: &RawDeploymentRequest) -> DeploymentRequest {
+pub(crate) fn parse_request(raw: &RawDeploymentRequest) -> Result<DeploymentRequest> {
     let mut source_markers = raw.source_markers.clone();
     let mut source_markers_config = raw.source_markers_config.clone();
+    let source_catalogs = parse_source_catalogs(raw)?;
 
     if source_markers.is_empty() {
         source_markers = vec![HashMap::new(); raw.source_bucket_names.len()];
@@ -136,9 +157,10 @@ pub(crate) fn parse_request(raw: &RawDeploymentRequest) -> DeploymentRequest {
 
     let default_distribution_path = default_distribution_path(&dest_bucket_prefix);
 
-    DeploymentRequest {
+    Ok(DeploymentRequest {
         source_bucket_names: raw.source_bucket_names.clone(),
         source_object_keys: raw.source_object_keys.clone(),
+        source_catalogs,
         source_markers,
         source_markers_config,
         dest_bucket_name: raw.destination_bucket_name.clone(),
@@ -168,7 +190,55 @@ pub(crate) fn parse_request(raw: &RawDeploymentRequest) -> DeploymentRequest {
             .invalidate_previous_distribution_on_change
             .clone(),
         runtime: runtime_options(raw),
+    })
+}
+
+fn parse_source_catalogs(raw: &RawDeploymentRequest) -> Result<Vec<Option<TrustedSourceCatalog>>> {
+    let Some(catalogs) = &raw.source_catalogs else {
+        return Ok(vec![None; raw.source_bucket_names.len()]);
+    };
+    if catalogs.len() != raw.source_bucket_names.len() {
+        return Err(anyhow!(
+            "SourceCatalogs and SourceBucketNames must be the same length"
+        ));
     }
+
+    catalogs
+        .iter()
+        .enumerate()
+        .map(|(source_index, catalog)| match (&catalog.version, &catalog.sha256) {
+            (None, None) => Ok(None),
+            (Some(1), Some(sha256)) => parse_sha256(sha256)
+                .map(|sha256| Some(TrustedSourceCatalog { sha256 }))
+                .ok_or_else(|| {
+                    anyhow!(
+                        "SourceCatalogs entry {source_index} has a malformed SHA-256 digest"
+                    )
+                }),
+            (Some(_), Some(_)) => Err(anyhow!(
+                "SourceCatalogs entry {source_index} uses an unsupported catalog version"
+            )),
+            _ => Err(anyhow!(
+                "SourceCatalogs entry {source_index} must contain both Version and Sha256 or neither"
+            )),
+        })
+        .collect()
+}
+
+fn parse_sha256(value: &str) -> Option<[u8; 32]> {
+    if value.len() != 64
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return None;
+    }
+
+    let mut digest = [0_u8; 32];
+    for (index, byte) in digest.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&value[index * 2..index * 2 + 2], 16).ok()?;
+    }
+    Some(digest)
 }
 
 fn runtime_options(raw: &RawDeploymentRequest) -> RuntimeOptions {
@@ -313,6 +383,56 @@ fn default_distribution_path(dest_bucket_prefix: &str) -> String {
 
 fn default_true() -> bool {
     true
+}
+
+fn deserialize_present<'de, D, T>(deserializer: D) -> std::result::Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
+fn deserialize_present_u32ish<'de, D>(deserializer: D) -> std::result::Result<Option<u32>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct U32ishVisitor;
+
+    impl serde::de::Visitor<'_> for U32ishVisitor {
+        type Value = u32;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("an unsigned 32-bit integer or a string containing one")
+        }
+
+        fn visit_u64<E>(self, value: u64) -> std::result::Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            u32::try_from(value)
+                .map_err(|_| E::invalid_value(serde::de::Unexpected::Unsigned(value), &self))
+        }
+
+        fn visit_i64<E>(self, value: i64) -> std::result::Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            u32::try_from(value)
+                .map_err(|_| E::invalid_value(serde::de::Unexpected::Signed(value), &self))
+        }
+
+        fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            value
+                .parse::<u32>()
+                .map_err(|_| E::invalid_value(serde::de::Unexpected::Str(value), &self))
+        }
+    }
+
+    deserializer.deserialize_any(U32ishVisitor).map(Some)
 }
 
 fn deserialize_boolish<'de, D>(deserializer: D) -> std::result::Result<bool, D::Error>
@@ -465,7 +585,7 @@ mod tests {
     fn deserializes_minimal_request_with_defaults() {
         let raw: RawDeploymentRequest =
             serde_json::from_value(minimal_request()).expect("minimal request should deserialize");
-        let request = parse_request(&raw);
+        let request = parse_request(&raw).expect("valid request");
 
         assert!(request.extract);
         assert!(!request.delete_current_objects_on_delete);
@@ -474,6 +594,7 @@ mod tests {
         assert!(request.destination_owner_id.is_none());
         assert!(request.delete_previous_objects_on_change.is_none());
         assert!(request.invalidate_previous_distribution_on_change.is_none());
+        assert_eq!(request.source_catalogs, vec![None]);
         assert_eq!(request.distribution_paths, vec!["/*"]);
         assert_eq!(request.runtime.available_memory_mb, 1024);
         assert_eq!(request.runtime.source_window_memory_budget_mb, 1024);
@@ -483,6 +604,91 @@ mod tests {
             request.runtime.put_object_retry.jitter,
             PutObjectRetryJitter::Full
         );
+    }
+
+    #[test]
+    fn source_catalogs_accept_aligned_trusted_and_untrusted_entries() {
+        let mut props = minimal_request();
+        props["SourceBucketNames"] = json!(["first", "second", "third"]);
+        props["SourceObjectKeys"] = json!(["first.zip", "second.zip", "third.zip"]);
+        props["SourceCatalogs"] = json!([
+            {},
+            { "Version": 1, "Sha256": "ab".repeat(32) },
+            { "Version": "1", "Sha256": "cd".repeat(32) }
+        ]);
+
+        let raw: RawDeploymentRequest = serde_json::from_value(props).unwrap();
+        let request = parse_request(&raw).expect("valid catalog descriptors");
+
+        assert!(request.source_catalogs[0].is_none());
+        assert_eq!(
+            request.source_catalogs[1].as_ref().unwrap().sha256,
+            [0xab; 32]
+        );
+        assert_eq!(
+            request.source_catalogs[2].as_ref().unwrap().sha256,
+            [0xcd; 32]
+        );
+    }
+
+    #[test]
+    fn source_catalogs_reject_misaligned_partial_unsupported_and_malformed_entries() {
+        for catalogs in [
+            json!([]),
+            json!([{ "Version": 1 }]),
+            json!([{ "Sha256": "ab".repeat(32) }]),
+            json!([{ "Version": 2, "Sha256": "ab".repeat(32) }]),
+            json!([{ "Version": 1, "Sha256": "AB".repeat(32) }]),
+            json!([{ "Version": 1, "Sha256": "ab".repeat(31) }]),
+            json!([{ "Version": 1, "Sha256": "not-hex" }]),
+        ] {
+            let mut props = minimal_request();
+            props["SourceCatalogs"] = catalogs;
+            let raw: RawDeploymentRequest = serde_json::from_value(props).unwrap();
+            assert!(parse_request(&raw).is_err());
+        }
+    }
+
+    #[test]
+    fn source_catalogs_reject_unknown_descriptor_fields() {
+        let mut props = minimal_request();
+        props["SourceCatalogs"] = json!([{
+            "Version": 1,
+            "Sha256": "ab".repeat(32),
+            "Trusted": true
+        }]);
+
+        assert!(serde_json::from_value::<RawDeploymentRequest>(props).is_err());
+    }
+
+    #[test]
+    fn source_catalogs_reject_null_or_wrong_typed_descriptor_fields() {
+        for descriptor in [
+            json!({ "Version": null, "Sha256": null }),
+            json!({ "Version": null }),
+            json!({ "Sha256": null }),
+            json!({ "Version": "not-a-version", "Sha256": "ab".repeat(32) }),
+            json!({ "Version": 1, "Sha256": 123 }),
+        ] {
+            let mut props = minimal_request();
+            props["SourceCatalogs"] = json!([descriptor]);
+            assert!(serde_json::from_value::<RawDeploymentRequest>(props).is_err());
+        }
+    }
+
+    #[test]
+    fn source_catalog_validation_errors_do_not_expose_digest_values() {
+        let secret_digest = "A".repeat(64);
+        let mut props = minimal_request();
+        props["SourceCatalogs"] = json!([{
+            "Version": 1,
+            "Sha256": secret_digest
+        }]);
+        let raw: RawDeploymentRequest = serde_json::from_value(props).unwrap();
+
+        let error = parse_request(&raw).expect_err("uppercase digest must fail");
+
+        assert!(!error.to_string().contains(&secret_digest));
     }
 
     #[test]
@@ -517,7 +723,7 @@ mod tests {
 
         let raw: RawDeploymentRequest = serde_json::from_value(props)
             .expect("marker config string booleans should deserialize");
-        let request = parse_request(&raw);
+        let request = parse_request(&raw).expect("valid request");
 
         assert!(request.source_markers_config[0].json_escape);
     }
@@ -541,7 +747,7 @@ mod tests {
 
         let raw: RawDeploymentRequest =
             serde_json::from_value(props).expect("string booleans should deserialize");
-        let request = parse_request(&raw);
+        let request = parse_request(&raw).expect("valid request");
 
         assert!(request.extract);
         assert!(request.delete_current_objects_on_delete);
@@ -568,7 +774,7 @@ mod tests {
         props["PutObjectRetryJitter"] = json!("none");
 
         let raw: RawDeploymentRequest = serde_json::from_value(props).unwrap();
-        let request = parse_request(&raw);
+        let request = parse_request(&raw).expect("valid request");
 
         assert_eq!(request.runtime.available_memory_mb, 1024);
         assert_eq!(request.runtime.max_parallel_transfers, 12);
@@ -607,7 +813,7 @@ mod tests {
         props["InvalidatePreviousDistributionOnChange"] = json!("old-distribution");
 
         let raw: RawDeploymentRequest = serde_json::from_value(props).unwrap();
-        let request = parse_request(&raw);
+        let request = parse_request(&raw).expect("valid request");
 
         assert_eq!(request.destination_owner_id.as_deref(), Some("owner-123"));
         assert_eq!(
@@ -641,7 +847,7 @@ mod tests {
         props["SourceBlockBytes"] = json!("1");
 
         let raw: RawDeploymentRequest = serde_json::from_value(props).unwrap();
-        let request = parse_request(&raw);
+        let request = parse_request(&raw).expect("valid request");
 
         assert_eq!(request.runtime.source_block_bytes, 30);
     }

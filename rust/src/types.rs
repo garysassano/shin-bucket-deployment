@@ -60,6 +60,7 @@ where
 pub(crate) struct DeploymentRequest {
     pub(crate) source_bucket_names: Vec<String>,
     pub(crate) source_object_keys: Vec<String>,
+    pub(crate) source_catalogs: Vec<Option<TrustedSourceCatalog>>,
     pub(crate) source_markers: Vec<HashMap<String, String>>,
     pub(crate) source_markers_config: Vec<MarkerConfig>,
     pub(crate) dest_bucket_name: String,
@@ -80,6 +81,17 @@ pub(crate) struct DeploymentRequest {
     pub(crate) delete_previous_objects_on_change: Option<DeletePreviousObjectsOnChange>,
     pub(crate) invalidate_previous_distribution_on_change: Option<String>,
     pub(crate) runtime: RuntimeOptions,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct TrustedSourceCatalog {
+    pub(crate) sha256: [u8; 32],
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct TrustedEntryIntegrity {
+    pub(crate) size: u64,
+    pub(crate) md5: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -164,7 +176,7 @@ pub(crate) enum PlannedAction {
         compressed_size: u64,
         compression_code: u16,
         crc32: u32,
-        catalog_md5: Option<String>,
+        trusted_integrity: Option<TrustedEntryIntegrity>,
         source_offset: u64,
         source_span_end: u64,
     },

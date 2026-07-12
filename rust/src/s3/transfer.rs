@@ -293,10 +293,12 @@ fn catalog_skips_zip_entry(
 ) -> bool {
     let skip = source_markers.is_empty()
         && plan
-            .catalog_md5
-            .as_deref()
+            .trusted_integrity
+            .as_ref()
             .zip(destination_object)
-            .is_some_and(|(md5, object)| destination_md5_and_size_match(object, md5, plan.size));
+            .is_some_and(|(integrity, object)| {
+                destination_md5_and_size_match(object, &integrity.md5, integrity.size)
+            });
     if skip {
         stats.add_catalog_skip();
     }
@@ -319,7 +321,8 @@ async fn prepare_zip_entry_upload(
         }));
     }
 
-    if source_markers.is_empty() && plan.catalog_md5.is_some() && destination_object.is_some() {
+    if source_markers.is_empty() && plan.trusted_integrity.is_some() && destination_object.is_some()
+    {
         return Ok(Some(UploadPayload::ZipEntry {
             store: store.clone(),
             plan: plan.clone(),
@@ -619,7 +622,9 @@ async fn digest_async_reader(
 
     let crc32 = crc32.finalize();
     validate_zip_entry_output(plan, bytes, crc32)?;
-    Ok((finalize_md5(hasher), bytes, crc32))
+    let md5 = finalize_md5(hasher);
+    plan.validate_trusted_md5(&md5)?;
+    Ok((md5, bytes, crc32))
 }
 
 async fn read_async_reader_to_vec(
@@ -627,6 +632,7 @@ async fn read_async_reader_to_vec(
     plan: &ZipEntryPlan,
 ) -> Result<(Vec<u8>, u64, u32)> {
     let mut bytes = Vec::new();
+    let mut md5 = Md5::new();
     let mut crc32 = Crc32Hasher::new();
     let mut total_bytes = 0_u64;
     let mut buffer = vec![0; ZIP_ENTRY_READ_CHUNK_BYTES];
@@ -638,6 +644,7 @@ async fn read_async_reader_to_vec(
         }
         let next_bytes = total_bytes.saturating_add(bytes_read as u64);
         validate_zip_entry_size_not_exceeded(plan, next_bytes)?;
+        md5.update(&buffer[..bytes_read]);
         crc32.update(&buffer[..bytes_read]);
         bytes.extend_from_slice(&buffer[..bytes_read]);
         total_bytes = next_bytes;
@@ -645,6 +652,7 @@ async fn read_async_reader_to_vec(
 
     let crc32 = crc32.finalize();
     validate_zip_entry_output(plan, total_bytes, crc32)?;
+    plan.validate_trusted_md5(&finalize_md5(md5))?;
     Ok((bytes, total_bytes, crc32))
 }
 
@@ -985,6 +993,7 @@ fn put_error_message(error: &SdkError<PutObjectError>) -> String {
 #[cfg(test)]
 mod tests {
     use std::future::pending;
+    use std::io::Cursor;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::Duration;
@@ -995,11 +1004,15 @@ mod tests {
 
     use super::super::destination::DestinationObject;
     use crate::deadline::InvocationDeadlines;
-    use crate::types::{PutObjectRetryJitter, PutObjectRetryOptions};
+    use crate::s3::planner::ZipEntryPlan;
+    use crate::types::{
+        DeploymentStats, PutObjectRetryJitter, PutObjectRetryOptions, TrustedEntryIntegrity,
+    };
 
     use super::{
-        PutPrecondition, PutRetryCoordinator, duration_millis_u64, join_transfer_tasks, md5_hex,
-        put_precondition_for_destination, put_retry_cap_millis, quoted_etag,
+        PutPrecondition, PutRetryCoordinator, catalog_skips_zip_entry, digest_async_reader,
+        duration_millis_u64, join_transfer_tasks, md5_hex, put_precondition_for_destination,
+        put_retry_cap_millis, quoted_etag, read_async_reader_to_vec,
     };
 
     struct DropSignal(Arc<AtomicBool>);
@@ -1016,6 +1029,62 @@ mod tests {
             md5_hex(b"hello"),
             "5d41402abc4b2a76b9719d911017c592".to_string()
         );
+    }
+
+    #[test]
+    fn only_authenticated_catalog_integrity_enables_sparse_skips() {
+        let object = DestinationObject {
+            etag: Some("5d41402abc4b2a76b9719d911017c592".to_string()),
+            size: Some(5),
+        };
+        let stats = DeploymentStats::default();
+        let mut plan = integrity_plan(b"hello", None);
+
+        assert!(!catalog_skips_zip_entry(
+            &plan,
+            &Default::default(),
+            Some(&object),
+            &stats,
+        ));
+
+        plan.trusted_integrity = Some(TrustedEntryIntegrity {
+            size: 5,
+            md5: "5d41402abc4b2a76b9719d911017c592".to_string(),
+        });
+        assert!(catalog_skips_zip_entry(
+            &plan,
+            &Default::default(),
+            Some(&object),
+            &stats,
+        ));
+    }
+
+    #[tokio::test]
+    async fn trusted_md5_is_checked_for_comparison_and_marker_materialization_reads() {
+        let bytes = b"authenticated bytes";
+        let correct = md5_hex(bytes);
+        let valid = integrity_plan(bytes, Some(correct));
+
+        digest_async_reader(Box::pin(Cursor::new(bytes)), &valid)
+            .await
+            .expect("comparison read should validate");
+        read_async_reader_to_vec(Box::pin(Cursor::new(bytes)), &valid)
+            .await
+            .expect("marker materialization read should validate");
+
+        let invalid = integrity_plan(bytes, Some("00000000000000000000000000000000".to_string()));
+        let comparison_error = digest_async_reader(Box::pin(Cursor::new(bytes)), &invalid)
+            .await
+            .expect_err("comparison read must reject mismatched bytes");
+        let marker_error = read_async_reader_to_vec(Box::pin(Cursor::new(bytes)), &invalid)
+            .await
+            .expect_err("marker read must reject mismatched bytes");
+        for error in [comparison_error, marker_error] {
+            let message = error.to_string();
+            assert!(!message.contains("00000000000000000000000000000000"));
+            assert!(!message.contains(&md5_hex(bytes)));
+            assert!(!message.contains("authenticated bytes"));
+        }
     }
 
     #[test]
@@ -1115,5 +1184,23 @@ mod tests {
 
         assert!(result.is_err());
         assert!(dropped.load(Ordering::Acquire));
+    }
+
+    fn integrity_plan(bytes: &[u8], md5: Option<String>) -> ZipEntryPlan {
+        ZipEntryPlan {
+            source_index: 0,
+            relative_key: "entry.txt".to_string(),
+            destination_key: "entry.txt".to_string(),
+            size: bytes.len() as u64,
+            compressed_size: bytes.len() as u64,
+            compression_code: 0,
+            crc32: crc32fast::hash(bytes),
+            trusted_integrity: md5.map(|md5| TrustedEntryIntegrity {
+                size: bytes.len() as u64,
+                md5,
+            }),
+            source_offset: 0,
+            source_span_end: bytes.len() as u64,
+        }
     }
 }
