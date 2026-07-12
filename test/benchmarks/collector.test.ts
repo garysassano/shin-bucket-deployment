@@ -116,6 +116,7 @@ describe("benchmark result collector", () => {
       event: "shin_deployment_summary",
       requestType: "Create",
       status: "success",
+      destinationChecksumStrategy: "sse-s3-etag",
       maxParallelTransfers: 32,
       durationMs: 3632,
       counts: { uploadedObjects: 2585 },
@@ -300,6 +301,7 @@ describe("benchmark result collector", () => {
           providerSummary: {
             requestType: "Create",
             status: "success",
+            destinationChecksumStrategy: "sse-s3-etag",
             durationMs: 3207,
             phaseMs: { plan: 328, destinationList: 34, transfer: 2843, delete: 0 },
             counts: { uploadedObjects: 2585, skippedObjects: 0, catalogSkips: 0 },
@@ -319,7 +321,7 @@ describe("benchmark result collector", () => {
     expect(table).toContain("## tiny-many / 1024 MiB / parallel 32");
     expect(table).toContain("### Runtime");
     expect(table).toContain(
-      "| cold-create | baseline | Create | success | 2584 | 8178618 | 66.1 | 120.069 | 3.261 | 3207 | 3.386 | 0.124 | 97 | null | null | 1 |",
+      "| cold-create | baseline | Create | success | 2584 | 8178618 | 66.1 | 120.069 | 3.261 | 3207 | 3.386 | 0.124 | 97 | null | null | sse-s3-etag | 1 |",
     );
     expect(table).toContain("### Provider Phase Timing");
     expect(table).toContain("| cold-create | 328 | 34 | 2843 | 0 | null | null |");

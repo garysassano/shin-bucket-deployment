@@ -13,6 +13,8 @@ pnpm verify destroy --concurrency 4
 
 Deploy runs ordered update chains serially within each chain and runs independent chains concurrently. Use `--concurrency 1` when debugging one chain at a time.
 
+The `kms-destination`, `kms-managed-destination`, and `dsse-managed-destination` scenarios exercise the strong stored-checksum path with a customer-managed key, the AWS-managed S3 KMS key, and managed DSSE respectively.
+
 `pnpm benchmark` runs only the named benchmark scenario and expands the requested config matrix:
 
 ```bash

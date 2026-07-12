@@ -13,7 +13,7 @@ The provider Lambda:
 - does not download the full ZIP to memory
 - does not write the source ZIP or extracted entries to Lambda `/tmp`
 - lists the destination prefix once with `ListObjectsV2`
-- skips unchanged objects when destination metadata is sufficient
+- skips unchanged objects when destination content identity is sufficient
 - uploads changed extracted objects with `PutObject`
 - copies `extract=false` sources with `CopyObject`
 - deletes destination keys not present in the plan when `destinationLifecycle.onDeploy.deleteStaleObjects` is enabled
@@ -24,7 +24,7 @@ Runtime tuning defaults:
 | Setting | Default | Purpose |
 | --- | ---: | --- |
 | `maxParallelTransfers` | 32 | Bounds copy, hash, upload, and related transfer work. |
-| `ephemeralStorageSize` | CDK Lambda default | Accepted for upstream API compatibility, but usually not useful because the provider avoids Lambda `/tmp`. |
+| `memoryLimit` | 1024 MiB | Sizes the Lambda and drives adaptive source-read defaults. |
 
 Most deployments should tune only `memoryLimit` and, when needed, `maxParallelTransfers`. Source block/window and `PutObject` retry settings remain available under `advancedRuntimeTuning` as support and benchmark escape hatches:
 
@@ -44,7 +44,7 @@ Fixed ZIP entry streaming defaults intentionally match the local `s3-unspool` ex
 
 | Internal setting | Default | Purpose |
 | --- | ---: | --- |
-| ZIP entry read buffer | 64 KiB | Pulls decompressed entry bytes for size validation, CRC32, MD5, marker input, and upload production. |
+| ZIP entry read buffer | 64 KiB | Pulls decompressed entry bytes for size/CRC validation, strategy-selected MD5 or SHA-256, marker input, and upload production. |
 | ZIP entry S3 body chunk | 256 KiB | Size of each `Bytes` frame offered to the destination `PutObject` body. |
 | ZIP entry body pipe capacity | 1 MiB | Backpressure between entry production and the SDK upload body consumer. |
 
@@ -100,9 +100,9 @@ Verification deploy/destroy can run independent scenario chains concurrently wit
 | --- | --- | --- |
 | `simple` | `scenarios/apps/basic/simple-app.ts` | Plain deployment under a destination prefix. |
 | `root-prefix` | `scenarios/apps/basic/root-prefix-app.ts` | Deployment without `destinationKeyPrefix`, writing at bucket root. |
-| `marker-replacement` | `scenarios/apps/metadata/marker-replacement-app.ts` | Deploy-time marker replacement across asset, data, JSON, and YAML sources. |
-| `metadata-and-filters` | `scenarios/apps/metadata/metadata-and-filters-app.ts` | Include/exclude filters and S3 metadata mapping. |
-| `source-overwrite-order` | `scenarios/apps/metadata/source-overwrite-order-app.ts` | Duplicate source keys where later sources win. |
+| `marker-replacement` | `scenarios/apps/content/marker-replacement-app.ts` | Deploy-time marker replacement across asset, data, JSON, and YAML sources. |
+| `filters` | `scenarios/apps/content/filters-app.ts` | Include/exclude filter behavior. |
+| `source-overwrite-order` | `scenarios/apps/content/source-overwrite-order-app.ts` | Duplicate source keys where later sources win. |
 | `stale-object-cleanup-initial` / `stale-object-cleanup-updated` | `scenarios/apps/updates/stale-object-cleanup-initial-app.ts`, `scenarios/apps/updates/stale-object-cleanup-updated-app.ts` | Ordered update chain that removes destination objects absent from the updated source plan. |
 | `stale-object-retention-initial` / `stale-object-retention-updated` | `scenarios/apps/updates/stale-object-retention-initial-app.ts`, `scenarios/apps/updates/stale-object-retention-updated-app.ts` | Ordered update chain with stale-object deletion disabled, preserving destination objects absent from the updated source plan. |
 | `default-retention-initial` / `default-retention-updated` | `scenarios/apps/retention/default-retention-initial-app.ts`, `scenarios/apps/retention/default-retention-updated-app.ts` | Ordered update chain proving that the default retains previous destination objects and current objects on Delete. |
@@ -110,6 +110,8 @@ Verification deploy/destroy can run independent scenario chains concurrently wit
 | `extract-false` | `scenarios/apps/basic/extract-false-app.ts` | Archive copy mode with `extract=false`. |
 | `large-archive` | `scenarios/apps/scale/large-archive-app.ts` | Larger archive ranged-read path. |
 | `kms-destination` | `scenarios/apps/security/kms-destination-app.ts` | KMS-encrypted destination bucket. |
+| `kms-managed-destination` | `scenarios/apps/security/kms-managed-destination-app.ts` | AWS-managed S3 KMS destination for the stored-checksum path. |
+| `dsse-managed-destination` | `scenarios/apps/security/dsse-managed-destination-app.ts` | Managed DSSE destination for the stored-checksum path. |
 | `cloudfront-sync` | `scenarios/apps/cloudfront/cloudfront-sync-app.ts` | CloudFront invalidation with explicit paths and synchronous stack wait. |
 | `cloudfront-async` | `scenarios/apps/cloudfront/cloudfront-async-app.ts` | CloudFront invalidation with default paths and asynchronous stack completion. |
 | `assets` | `benchmarks/apps/assets-app.ts` | Deterministic benchmark asset bundles. |
@@ -349,27 +351,30 @@ CloudFront caller references.
 
 For `extract=true`:
 
-1. `HeadObject` the source ZIP.
-2. Read ZIP central directory metadata with ranged `GetObject`.
-3. Walk central-directory entries.
-4. Apply include and exclude filters.
-5. Evaluate the index-aligned `SourceCatalogs` binding. Unbound sources ignore embedded catalog contents; bound sources must authenticate exactly one `.shin/catalog.v1.json` entry against the template digest.
-6. Before applying deployment filters, strictly validate an authenticated catalog and require a one-to-one path and size mapping with every non-directory, non-catalog ZIP entry.
-7. Build a manifest of planned ZIP entries with normalized destination keys, source archive index, entry offsets, compressed size, uncompressed size, CRC32, and optional trusted size/MD5 metadata.
-8. Coalesce planned source spans into shared source blocks, prefetch them with bounded source GET concurrency, and release blocks after all active readers consume their claims.
-9. List the destination prefix once.
-10. Skip existing marker-free trusted entries when destination size and `ETag` match the authenticated catalog.
-11. For missing marker-free destination objects, stream the source entry directly into `PutObject`.
-12. For existing marker-free destination objects without a trusted catalog match, read/decompress the entry through ranged source blocks, validate uncompressed size and CRC32, compute MD5, and compare it with the destination `ETag` from the list response.
-13. Materialize marker entries in memory after decompression and authenticated-MD5/CRC validation, apply replacements, compute MD5 over final bytes, and upload when changed.
+1. Accept the synthesis-selected destination checksum strategy: `sse-s3-etag` for default/AES256 buckets or `kms-sha256` for KMS/DSSE buckets.
+2. `HeadObject` the source ZIP.
+3. Read ZIP central directory metadata with ranged `GetObject`.
+4. Validate entry counts, aggregate compressed/uncompressed sizes, and every central-directory span with checked arithmetic.
+5. Walk central-directory entries and apply include and exclude filters.
+6. Evaluate the index-aligned `SourceCatalogs` binding. Unbound sources ignore embedded catalog contents; bound sources must authenticate exactly one `.shin/catalog.v1.json` entry against the template digest.
+7. Before applying deployment filters, strictly validate an authenticated catalog and require a one-to-one path and size mapping with every non-directory, non-catalog ZIP entry.
+8. Build a manifest of planned ZIP entries with normalized destination keys, source archive index, entry offsets, compressed size, uncompressed size, CRC32, and optional trusted size/MD5 metadata.
+9. Preflight every final UTF-8 destination key, single-request object size, archive span, and aggregate output total before destination mutation.
+10. Coalesce planned source spans into shared source blocks, prefetch them with bounded source GET concurrency, and release blocks after all active readers consume their claims.
+11. List the destination prefix once.
+12. On SSE-S3 destinations, skip existing marker-free trusted entries when destination size and `ETag` match the authenticated catalog. Existing untrusted entries are read/decompressed once for CRC/size/MD5 comparison; missing entries avoid that precomparison pass.
+13. On KMS/DSSE destinations, do not use destination `ETag` as plaintext MD5 and do not perform a useless precomparison read. Trusted entries still validate their catalog MD5 while streaming; untrusted entries do not compute MD5.
+14. Materialize each marker-bearing entry once immediately before its own PUT, validate and replace it, enforce the expanded size limit, and compare final MD5 only on SSE-S3 destinations.
+15. Set inferred `Content-Type` on every PUT. SSE-S3 uploads retain streamed MD5 for ambiguous-write reconciliation without storing another checksum. KMS/DSSE uploads request stored full-object SHA-256 and calculate the independent expected digest while streaming.
 
 For `extract=false`:
 
 1. `HeadObject` each source object.
 2. Build copy plans using the source object `ETag` as the expected content identity.
-3. List the destination prefix once.
-4. Skip copies whose destination `ETag` matches.
-5. Run changed copies with `CopyObject` and `MetadataDirective=REPLACE`.
+3. Preflight final keys and known source sizes.
+4. List the destination prefix once.
+5. On SSE-S3 destinations, skip copies whose destination `ETag` matches the source identity. On KMS/DSSE destinations, copy because encrypted destination `ETag`s do not provide that comparison.
+6. Run copies with `CopyObject`, `MetadataDirective=REPLACE`, and inferred `Content-Type`. No unused copy checksum is requested.
 
 Destination listing is also used for stale-object cleanup. With `destinationLifecycle.onDeploy.deleteStaleObjects` enabled, objects under the destination prefix that are not in the current deployment plan are removed with `DeleteObjects` in 1000-key chunks.
 
@@ -377,27 +382,31 @@ Destination listing is also used for stale-object cleanup. With `destinationLife
 
 ```mermaid
 flowchart LR
-  A["Planned object"] --> B["Destination ListObjectsV2 metadata"]
-  B --> C{"Destination object exists?"}
-  C -->|No| D["Upload without pre-hashing"]
-  C -->|Yes| E{"Planned object type"}
-  E -->|"extract=false"| F["Expected ETag from source HeadObject"]
-  E -->|"Trusted catalog entry without markers"| G["Compare authenticated catalog MD5 and size"]
-  E -->|"Untrusted ZIP entry without markers"| L["Read/decompress entry and compute MD5"]
-  E -->|"ZIP entry with markers"| H["Apply replacements and compute final MD5"]
-  F --> I{"Expected MD5/ETag equals destination ETag?"}
-  G --> I
-  L --> I
-  H --> I
-  I -->|Yes| J["Skip upload or copy"]
-  I -->|No| K["Upload or copy"]
+  A["Planned object"] --> B["Destination ListObjectsV2 content identity"]
+  B --> C{"Destination strategy"}
+  C -->|"KMS or DSSE"| K["Upload or copy without ETag precomparison"]
+  C -->|"default or SSE-S3"| D{"Destination object exists?"}
+  D -->|No| E["Upload without pre-hashing"]
+  D -->|Yes| F{"Planned object type"}
+  F -->|"extract=false"| G["Expected ETag from source HeadObject"]
+  F -->|"Trusted catalog entry without markers"| H["Compare authenticated catalog MD5 and size"]
+  F -->|"Untrusted ZIP entry without markers"| I["Read/decompress entry and compute MD5"]
+  F -->|"ZIP entry with markers"| J["Materialize replacements and compute final MD5"]
+  G --> L{"Expected MD5/ETag equals destination ETag?"}
+  H --> L
+  I --> L
+  J --> L
+  L -->|Yes| M["Skip upload or copy"]
+  L -->|No| K
 ```
 
-The provider intentionally uses destination `ETag` as the only unchanged-object skip identity. `ListObjectsV2` exposes the destination `ETag`, but it does not expose the actual checksum value needed to compare S3 `ChecksumCRC32`. Using CRC32 for skip decisions would require one checksum-mode `HeadObject` per destination object, which is not worth the request volume for this deployment model.
+The provider's skip identity is content only. It does not expose configurable per-object metadata and does not parse `OldResourceProperties` for object settings. Every PUT and COPY infers `Content-Type` from the final key with an `application/octet-stream` fallback; cache behavior belongs in CloudFront, while encryption, storage, and lifecycle defaults belong on the bucket.
 
-Directory `Source.asset` inputs are packaged with an authenticated source MD5 catalog. Marker-free entries with trusted MD5s and matching destination size can be skipped without reading ZIP entry bytes. Without a trusted catalog match, marker-free entries that already exist at the destination must be read and decompressed to compute MD5. Missing marker-free objects skip this pre-hash and stream straight to upload. ZIP entry reads validate declared uncompressed size, CRC32, and any authenticated MD5 before the final upload chunk is released. Entries with deploy-time markers are fully materialized in memory, their packaged bytes are validated before replacement, and MD5 is then computed over the final replaced bytes.
+`ListObjectsV2` exposes destination `ETag`, but not the actual checksum value needed to compare stored SHA-256. Performing one checksum-mode `HeadObject` per destination object would defeat the single-list deployment model. Shin therefore uses catalog/MD5 skips only for default/SSE-S3 destinations and reserves checksum-mode `HeadObject` for reconciling ambiguous KMS/DSSE writes.
 
-`extract=false` copies use source and destination `ETag` comparison for skipping. Source object `ETag` comes from a source `HeadObject`; destination `ETag` comes from the single destination list.
+Directory `Source.asset` inputs are packaged with an authenticated source MD5 catalog. On SSE-S3 destinations, marker-free entries with trusted MD5s and matching destination size can be skipped without reading ZIP entry bytes. Without a trusted catalog match, existing marker-free entries are read and decompressed to compute MD5; missing entries stream straight to upload. On KMS/DSSE destinations, entries stream without a destination-comparison pass because encrypted `ETag`s are not plaintext MD5. ZIP entry reads always validate declared uncompressed size and CRC32, and validate authenticated MD5 whenever present, before the final upload chunk is released. Marker entries are materialized once immediately before their own PUT; the deployment no longer performs a global marker preflight that doubles source reads.
+
+`extract=false` copies use source and destination `ETag` comparison only on SSE-S3 destinations. Source object `ETag` comes from a source `HeadObject`; destination `ETag` comes from the single destination list. KMS/DSSE destinations copy without treating their destination `ETag` as plaintext identity.
 
 ## Authenticated Catalog Trust
 
@@ -514,11 +523,17 @@ the complete asset through Shin's materializer.
 
 ## Write Safety
 
-Extracted uploads use destination preconditions derived from the destination listing. Missing destination keys are uploaded with `If-None-Match: *`; existing destination keys with a listed `ETag` are uploaded with `If-Match` for that `ETag`; existing keys without a usable `ETag` fall back to plain `PutObject`. This keeps the deployment optimistic-concurrency-safe without adding extra destination requests. A `PreconditionFailed` response means the destination changed after planning and the deployment should fail rather than overwrite a concurrent writer.
+Extracted uploads use destination preconditions derived from the destination listing. Missing destination keys are uploaded with `If-None-Match: *`; existing destination keys with a listed `ETag` are uploaded with `If-Match` for that `ETag`; existing keys without a usable `ETag` fall back to plain `PutObject`. Every application-level `PutObject` attempt disables SDK retries, so permanent 4xx responses and source CRC/archive validation failures cannot be replayed underneath the typed retry policy.
+
+The construct selects reconciliation from the concrete destination bucket's synthesized encryption rule. Default or `AES256` encryption uses `sse-s3-etag`; `aws:kms` and `aws:kms:dsse` use `kms-sha256`. Selection is lazy so post-construction L1 or Aspect mutations are visible at synthesis. Imported buckets and tokenized, unknown, or multi-rule encryption are rejected because no public declaration or runtime guess can safely replace inspection. A configured `KMSMasterKeyID` must resolve to the same ARN as the bucket's L2 `encryptionKey`; a late L1-injected customer key without a matching grantable construct is rejected. Customer-managed KMS grants come from the bucket construct. AWS-managed S3 key access is granted separately for `kms:Decrypt` and `kms:GenerateDataKey`, constrained to the current account/Region key ARN, the `alias/aws/s3` resource alias, and requests made through regional S3. The runtime does not call `GetBucketEncryption`.
+
+For SSE-S3, the upload stream computes MD5 alongside required source validation and does not request an optional SDK checksum. An ambiguous conditional `409` or `412` uses ordinary `HeadObject` and reports success only when content length and the single-part destination `ETag` match. For KMS/DSSE, the PUT requests stored `FULL_OBJECT` SHA-256, the provider independently computes the expected digest, and reconciliation uses checksum-mode `HeadObject` to require exact length, checksum, and checksum type. Neither strategy reads object or bucket ACLs. Missing evidence or any content difference fails closed.
+
+The normal SSE-S3 path performs no Shin SHA-256 pass and disables optional SDK checksum calculation. The KMS/DSSE path necessarily performs both the provider digest used independently after a lost response and the SDK's stored-checksum calculation. The controlled PR7 run in [benchmark](./benchmark.md#pr7-performance-decision-run) measured that KMS-only cost within -2.2% to +3.4% of the earlier provider duration while retaining a 2.6x to 2.7x provider-time advantage over upstream.
 
 The source ZIP ranged-read path still uses source `If-Match` when the source object has an `ETag`; that protects a single deployment from reading a source archive that changes while it is being streamed.
 
-`extract=false` remains on the `CopyObject` path. Its skip decision uses `ETag`, and changed copies overwrite the destination object.
+`extract=false` remains on the `CopyObject` path. SSE-S3 skip decisions use `ETag`; KMS/DSSE copies do not use encrypted destination `ETag`s as plaintext identity. Copy requests do not ask S3 to calculate a checksum that Shin never consumes.
 
 CloudFront invalidations use a bounded caller reference hash derived from the CloudFormation request identity (`StackId`, `RequestId`, and logical resource id) plus the distribution id and invalidation paths. CloudFormation documents `StackId` plus `RequestId` as a way to uniquely identify a request on a custom resource, and CloudFront documents `CallerReference` as the idempotency value that prevents accidentally resubmitting an identical invalidation request. If Lambda retries the same custom-resource event after creating the invalidation but before sending the CloudFormation response, CloudFront returns the existing invalidation instead of creating a duplicate. The upstream CDK `BucketDeployment` provider currently uses a fresh `uuid4()` caller reference for each invocation; this provider intentionally uses the request-derived caller reference to make same-event retries idempotent at the CloudFront API boundary.
 
@@ -547,7 +562,7 @@ other non-retryable responses fail immediately.
 
 ## IAM Shape
 
-The provider role uses source grants from each bound CDK source and destination grants from the target bucket. Destination object write/delete permissions are scoped to `destinationKeyPrefix` when the prefix is concrete. Destination `ListBucket` is likewise scoped with `s3:prefix` for both deployment cleanup and `onDelete.deleteObjects`. A root or unresolved prefix requires bucket-wide object/list scope.
+The provider role uses source grants from each bound CDK source and destination grants from the target bucket. Destination object read/write/delete permissions are scoped to `destinationKeyPrefix` when the prefix is concrete. Destination `ListBucket` is likewise scoped with `s3:prefix` for both deployment cleanup and `onDelete.deleteObjects`. Customer KMS keys use CDK's key grants. Every handler also receives an AWS-managed S3 KMS statement limited by key ARN, `alias/aws/s3`, and `kms:ViaService`; it is inert for other keys/services and preserves `GenerateDataKey`/`Decrypt` authorization across a late transition to the managed key. Reconciliation does not require `GetObjectAcl` or `GetBucketAcl`. A root or unresolved prefix requires bucket-wide object/list scope.
 
 `onChange.deleteObjects` grants List/Delete and ownership-tag access across the selected old bucket because `OldResourceProperties` does not reveal the old prefix until runtime. The provider derives that prefix from the Update event and validates the selected bucket before using the grant. Omitting `fromBucket` reuses the current bucket; a changed old bucket must be passed explicitly. Current CloudFront permissions cover an unchanged distribution, while `onChange.invalidateDistribution` grants distribution-specific invalidation access independently of object deletion.
 
@@ -586,11 +601,11 @@ Cataloged asset packaging limitations:
 - CDK asset `bundling` is not run by the cataloged wrapper. Use a pre-bundled directory or `embeddedCatalog: false`.
 - Symlinks and non-regular files are rejected by cataloged packaging until explicit materialization semantics are implemented.
 - The cataloged wrapper creates a temporary directory, then delegates ZIP and ZIP64 creation to CDK; the catalog changes the staged asset hash compared with upstream packaging.
-- Authenticated catalog MD5 entries enable sparse skips only for marker-free files. Marker inputs are validated before replacement, then compared with the destination using the final replaced MD5.
+- Authenticated catalog MD5 entries enable sparse skips only for marker-free files on SSE-S3 destinations. Marker inputs are validated before replacement; final replaced MD5 is used for SSE-S3 comparison and omitted on untrusted KMS/DSSE paths.
 
 ## Diagnostics
 
-Each extracted deployment logs the effective source schedule and a final source diagnostics record per source archive. These records include planned entries and blocks, planned and fetched source bytes, source amplification, ranged `GetObject` attempts/retries/errors, block hits/misses/releases/refetches, split wait counters for in-flight fetches versus source-window capacity, replay-claim counters, resident source-window high-water, active ZIP entry reader high-water, and active source GET high-water. The upload path also logs destination `PutObject` retry settings plus failed attempts, retry attempts, throttled attempts, retry wait milliseconds, and failures grouped by error code.
+Each extracted deployment logs the effective source schedule and a final source diagnostics record per source archive. These records include planned entries and blocks, planned and fetched source bytes, source amplification, ranged `GetObject` attempts/retries/errors, block hits/misses/releases/refetches, split wait counters for in-flight fetches versus source-window capacity, replay-claim counters, resident source-window high-water, active ZIP entry reader high-water, and active source GET high-water. The aggregate deployment summary records `destinationChecksumStrategy`, and the upload path also logs destination `PutObject` retry settings plus failed attempts, retry attempts, throttled attempts, retry wait milliseconds, and failures grouped by error code.
 
 Diagnostics are emitted to CloudWatch Logs through structured `tracing` fields. They are not returned in the CloudFormation custom-resource response because that response has a small practical size limit and is already used for `objectKeys` and `deployedBucket` outputs.
 
@@ -637,7 +652,7 @@ Destination upload diagnostics field reference:
 | Deploy-time marker replacement | Marker entries are materialized after ranged extraction so final replaced bytes can be hashed and uploaded. |
 | Multiple sources with override order | The provider builds one manifest across sources before pruning and upload decisions. |
 | Include/exclude filters | Filters are applied while walking ZIP entries. |
-| S3 metadata and content type handling | Upload and copy requests apply CDK metadata options. |
+| Object metadata and content type | Configurable object metadata is intentionally omitted. Upload and copy infer `Content-Type` from the final key with a binary fallback. Bucket and CloudFront policy own cache, encryption, storage, and lifecycle behavior. |
 | `extract=false` | Copy mode stays separate from ZIP extraction. |
 | `destinationLifecycle` | Destination listing, stale-object deletion, destination-change cleanup, and Delete cleanup remain provider-owned. |
 | CloudFront invalidation | Runs after S3 deployment and is outside the extraction engine. |
@@ -645,13 +660,14 @@ Destination upload diagnostics field reference:
 
 ## Limits
 
-- Skip decisions assume simple single-part static objects where S3 `ETag` is the MD5 of object bytes.
-- Without an authenticated source MD5 catalog match, unchanged existing ZIP entries must be read and hashed during deployment.
-- Metadata-only changes may be skipped when content identity is unchanged.
-- Multipart objects, SSE-KMS/SSE-C objects, and objects written by other tools may not expose usable content identity.
+- SSE-S3 byte-skip decisions assume simple single-part static objects where S3 `ETag` is the MD5 of object bytes.
+- Without an authenticated source MD5 catalog match, unchanged existing SSE-S3 ZIP entries must be read and hashed during deployment.
+- KMS/DSSE destinations do not use destination `ETag` as plaintext identity and can perform extra transfers; SSE-C is unsupported.
+- Imported buckets and tokenized, unknown, or multi-rule synthesized encryption configurations are rejected.
 - Source ZIP archives do not need to fit in Lambda memory or ephemeral storage; marker-free ZIP entries stream in chunks.
 - Marker-replaced entries must fit in Lambda memory after replacement.
 - Each extracted ZIP entry must fit S3's single-request `PutObject` limit.
+- Final destination keys must fit S3's 1024-byte UTF-8 limit.
 - `advancedRuntimeTuning.sourceBlockBytes` must be at least 30 bytes so ZIP local file headers can fit in one source block.
 - Very small Lambda memory settings reduce source GET concurrency and source window capacity unless explicitly overridden.
 - Cataloged asset packaging requires CDK staging and rejects bundled directory assets, symlinks, and non-regular files.
@@ -661,6 +677,6 @@ Destination upload diagnostics field reference:
 
 The highest-value architecture work is now:
 
-1. Build a benchmark runner that captures local wall time, CloudFormation timing, provider logs, S3 request counts, bytes read/written, and destination object state.
-2. Expand structured provider telemetry to include planning, skip, stale-object deletion, and invalidation counters.
+1. Promote the benchmark methodology to repeated canonical runs and add CI regression checks that can detect provider-time, memory, transfer, retry, and request-count regressions without committing raw AWS evidence.
+2. Expand structured provider telemetry where needed for stable performance gates, especially request counts and encryption-strategy-specific work.
 3. Add cataloged packaging support for CDK asset bundling or keep the current explicit fallback if the compatibility surface is too large.

@@ -1,68 +1,72 @@
 # Verification
 
-This page is the human-readable verification snapshot for `ShinBucketDeployment` correctness. Benchmarks and AWS CDK `BucketDeployment` comparisons are tracked separately in `docs/benchmark.md` and `benchmarks/results.jsonl`. Verification does not keep append-only history; replace this page when a new full verification run becomes the current snapshot.
-
-Runbooks, evidence collection rules, and sanitization rules live in the repo-local agent skill at `.agents/skills/shin-verification/SKILL.md`.
+This page is the current human-readable correctness snapshot for
+`ShinBucketDeployment`. Performance evidence and AWS CDK `BucketDeployment`
+comparisons remain separate in [benchmark](./benchmark.md). Verification is
+replaced rather than appended; runbooks and sanitization rules live in
+`.agents/skills/shin-verification/SKILL.md`.
 
 > [!IMPORTANT]
-> The 2026-07-12 full AWS suite verifies the final authenticated-catalog provider
-> across all 19 ordered scenario phases and 14 stacks. It includes authenticated
-> sparse skips, trusted large-object streaming, mixed trusted/untrusted sources,
-> lifecycle changes, KMS, and synchronous/asynchronous CloudFront updates. The
-> packaged x86_64 runtime path remains locally verified but was not deployed in
-> this AWS run.
+> The current PR7 release candidate has complete local and AWS correctness
+> evidence. The AWS run used the rebuilt arm64 provider from `7a910f4`; both
+> packaged architectures were rebuilt afterward from the same commit. Raw AWS
+> output and identifiers remain outside git.
 
 ## Current Snapshot
 
 | Field | Value |
 | --- | --- |
 | Latest verification date | 2026-07-12 |
-| Latest verification baseline | `aa9aa8c` (`fix: accept cloudformation catalog versions`) |
-| Region | Full AWS correctness suite in `eu-central-1`; deterministic local catalog/materialization gates |
-| Latest verification runs | `2026-07-12-aws-trusted-catalogs` and `2026-07-12-local-trusted-catalogs` |
-| Cleanup | The initial four preflight-failed stacks were recovered and removed. After the successful rerun, all 14 verification stacks were destroyed and all 14 scenario buckets were confirmed absent, including the intentionally retained lifecycle bucket after explicit cleanup. |
-| Raw evidence | Not committed; raw AWS output remains in scratch only |
-| Scenario runner | `pnpm verify list`, `pnpm verify synth`, `pnpm verify deploy`, or `pnpm verify destroy`; concurrent runs isolate CDK output per scenario |
+| Current verification baseline | `7a910f4` (`fix: send stored SHA-256 for KMS uploads`) on `fix/object-semantic-correctness` |
+| Current verification category | Deterministic local gates plus deployed AWS end-to-end verification |
+| Latest current run | `2026-07-12-aws-pr7-release-candidate` |
+| AWS status for current code | Pass: 21 ordered phases across 16 stacks, followed by independent state assertions |
+| Provider architecture exercised in AWS | arm64 |
+| Packaged provider architectures | arm64 and x86_64 rebuilt from the same provider source |
+| Cleanup | All verification and benchmark stacks destroyed; the intentionally retained lifecycle-test bucket was emptied and deleted; final scoped stack count was zero |
+| Raw evidence | Raw CDK logs, CloudWatch output, responses, and identifiers were kept in scratch only and are not committed |
+| Scenario runner | `pnpm verify list`, `pnpm verify synth`, `pnpm verify deploy`, or `pnpm verify destroy`; ordered update chains remain serial within concurrent groups |
 
 ## Current Coverage
 
-| Priority | Area | Latest Evidence | Status |
+| Priority | Area | Current Evidence | Status |
 | --- | --- | --- | --- |
-| P0 | Rust provider tests | CloudFormation protocol/lifecycle coverage plus strict catalog request parsing, SHA-256 authentication, one-to-one ZIP mapping, ZIP64 metadata, trusted MD5 checks, direct-body completion withholding, marker reads, and sparse-skip trust boundaries. | Pass as of 2026-07-12 local catalog gates |
-| P0 | S3 algorithm integration | Ignored Rust S3-to-S3 generated ZIP integration test with 2,500 generated files and bounded-memory ranged reads. | Pass as of 2026-05-02 |
-| P0 | TypeScript tests | CDK synthesis plus deterministic catalog bytes, ignore behavior, path/special-file rejection, hard-link fallback, cleanup aggregation, disabled staging, protocol alignment/deduplication, 64 KiB reads, and a 256 MiB sparse-file RSS regression. | Pass as of 2026-07-12 local catalog gates |
-| P0 | Build and lint | TypeScript build/package/typecheck/lint/tests, Rust fmt/clippy/all-feature tests, package smoke test, npm audit, cargo audit, cargo deny, actionlint, and Taplo. | Pass as of 2026-07-12 local catalog gates |
-| P0 | Scenario synthesis | All 19 default `ShinBucketDeployment` verification scenarios synthesize locally with aligned trusted/untrusted `SourceCatalogs`. | Pass as of 2026-07-12 local catalog gates |
-| P0 | Packaged provider runtime | Rebuilt packaged arm64 provider completed the full AWS suite; both packaged architectures pass local archive/package verification. | arm64 AWS pass as of 2026-07-12; x86_64 AWS refresh required |
-| P0 | AWS end-to-end simple deployment | Create, root-prefix deployment, S3 object checks, and destroy with the provider Lambda running in AWS. | Pass as of 2026-07-12 full AWS suite |
-| P0 | AWS end-to-end update/delete behavior | Ordered chains verify default stale-object deletion, explicit stale-object retention, previous-namespace deletion after a destination change, preservation of retained namespaces, current-object deletion on custom-resource Delete, and final stack absence. | Pass as of 2026-07-12 full AWS suite |
-| P0 | AWS end-to-end metadata/replacement behavior | Include/exclude filters, system/user metadata, SSE-S3 metadata, deploy-time marker replacement, JSON/YAML/data sources, JSON escaping, and source overwrite order. | Pass as of 2026-07-12 full AWS suite |
-| P0 | AWS end-to-end KMS destination | KMS-encrypted destination bucket deploys and stored objects report `aws:kms`. | Pass as of 2026-07-12 full AWS suite |
-| P0 | AWS end-to-end CloudFront invalidation | Primed sync and async distributions served the updated probe after explicit token changes; sync used explicit paths and async used prefix-derived default paths. | Pass as of 2026-07-12 full AWS suite |
-| P0 | Destination replacement IAM | Sparse/stale-object cleanup update can read existing destination objects before conditional replacement writes. | Pass after `4f5f0ca` |
-| P1 | Destination KMS grant synthesis | KMS-encrypted destination buckets synthesize provider-role decrypt/describe/encrypt/re-encrypt/data-key permissions through CDK bucket grants. | Pass as of 2026-05-15 local synthesis test |
-| P1 | Authenticated catalog trust | Only module-bound local directory assets receive `SourceCatalogs`; unbound catalogs cannot sparse-skip, trusted catalogs are strict and template-authenticated, and trusted entry bytes are MD5-checked on every read. AWS logs recorded authenticated and deliberately untrusted sources, no trust failures, and authenticated sparse skips during ordered updates. | Pass as of 2026-07-12 local and AWS verification |
-| P2 | Metadata-only update identity | Same object bytes with changed user metadata are skipped because metadata is not part of skip identity. | Known limitation |
+| P0 | Rust provider tests | 115 tests discovered: 114 passed and one credential-gated generated-S3 integration test was ignored. Coverage includes strategy-selected MD5/SHA-256 work, CRC/catalog validation, content-type fallback, no-checksum COPY, SDK checksum selection, one SDK attempt per application PUT attempt, and SSE-S3/KMS lost-response wire replay. | Local pass |
+| P0 | TypeScript and release-script tests | 86 Vitest tests cover construct synthesis, encryption strategy derivation, KMS IAM, removed-prop rejection, assets, lifecycle, and validation; five Node release tests passed. | Local pass |
+| P0 | Build and static checks | TypeScript build, published-package build, no-emit typecheck, Biome, Rust fmt/check, all-feature Clippy with warnings denied, package smoke verification, dependency audit/deny checks, workflow checks, and clean diff validation passed. | Local pass |
+| P0 | Scenario synthesis | All 21 default verification phases list and synthesize, including customer-managed KMS, AWS-managed KMS, and managed DSSE destination scenarios. The removed metadata-update chain is no longer part of the product contract. | Local pass |
+| P0 | Public object contract | The public props use a positive operational allowlist. Configurable object metadata, legacy `logRetention`, and unused `ephemeralStorageSize` are rejected; PUT/COPY infer `Content-Type` with a deterministic binary fallback. AWS assertions confirmed HTML, text, ZIP, and binary results. | Local and AWS pass |
+| P0 | Encryption strategy | Default/AES256 buckets synthesize `sse-s3-etag`; KMS/DSSE variants synthesize `kms-sha256`. Imported, unknown, tokenized-algorithm, multi-rule, and ungrantable L1 customer-key shapes are rejected. | Local pass |
+| P0 | KMS and DSSE writes | Customer KMS, AWS-managed S3 KMS, and managed DSSE uploads completed in AWS. Checksum-mode `HeadObject` independently confirmed exact content length, encryption mode, stored SHA-256, and `FULL_OBJECT` checksum type; object bodies also matched. | AWS pass |
+| P0 | Managed-key authorization | Synthesis constrains `kms:Decrypt` and `kms:GenerateDataKey` to current account/Region KMS keys, `alias/aws/s3`, and regional S3 via-service use. Customer keys use CDK key grants. Real customer-managed and AWS-managed writes exercised both authorization paths. | Local and AWS pass |
+| P0 | Content, filtering, and scale | AWS state assertions covered simple/root deployment, include/exclude filters, marker replacement and JSON escaping, duplicate-source overwrite order, `extract=false`, and the 24 MiB ranged-read object. | AWS pass |
+| P0 | Destination lifecycle | Ordered AWS chains proved stale deletion, stale retention when `onDeploy.deleteStaleObjects=false`, default previous-prefix retention, explicit `onChange.deleteObjects`, and terminal `onDelete.deleteObjects`. | AWS pass |
+| P0 | CloudFront invalidation | Both distributions were primed with long-TTL cached content, redeployed with distinct updated tokens, and checked again. The synchronous path served updated content when the stack returned; the asynchronous path converged within the bounded poll. | AWS pass |
+| P0 | Lost-response convergence | SSE-S3 replay accepts only exact length plus streamed MD5/single-part ETag without checksum mode or ACL reads. KMS replay accepts only exact length plus stored `FULL_OBJECT` SHA-256 with checksum mode. | Deterministic local pass; AWS fault injection not performed |
 
-## Latest Verification Snapshot
+## Latest Verification Runs
 
-| Run | Category | Scenario | Status | Evidence |
+| Run | Category | Scope | Status | Evidence |
 | --- | --- | --- | --- | --- |
-| `2026-07-12-aws-trusted-catalogs` | aws | All 19 ordered default phases across 14 stacks at `aa9aa8c` | Pass | The first attempt exposed CloudFormation's string representation for the catalog version before destination work; the parser was corrected, the four failed stacks were recovered and removed, and the complete suite then passed. Fourteen sanitized state groups verified S3 placement/content, metadata and filters, marker replacement, source overwrite order, stale cleanup/retention, destination-change and Delete cleanup, `extract=false`, a 24 MiB trusted direct stream, KMS encryption, and primed sync/async CloudFront updates. Provider logs recorded 15 authenticated catalog evaluations, 22 deliberately untrusted evaluations, no trust failures, and four authenticated sparse skips. All 14 final stacks were destroyed and all 14 scenario buckets were confirmed absent. |
-| `2026-07-12-local-trusted-catalogs` | local | Full static, unit, package, audit, and default-scenario synthesis gates at `aa9aa8c` | Pass | 98 Rust tests passed with one credential-gated AWS integration test ignored. Catalog coverage includes aligned numeric and CloudFormation-string descriptors, malformed descriptors, exact SHA-256 binding, strict JSON and path/size/MD5 mapping, ZIP64 metadata, untrusted fallback, trusted sparse skips, comparison/marker reads, and direct-stream body failure before completion. TypeScript build/package/typecheck/lint, 60 Vitest tests, five Node release-script tests, both provider architectures, installed-tarball CommonJS/ESM directory consumers, audits, workflow/TOML checks, and all 19 default scenario syntheses passed. |
-| `2026-07-11-local-protocol-reliability` | local | Full static, unit, package, audit, and default-scenario synthesis gates at `2c7c6d6` | Pass | 86 Rust tests passed with one credential-gated AWS integration test ignored. Deterministic protocol tests covered callback 2xx/4xx/5xx/connection/timeout handling, 4096/4097-byte response boundaries, escaped failure sizing, deadline cancellation/drain, `ResourceType`, and CloudFront path/poll limits. TypeScript build/typecheck/lint, 43 Vitest tests, five Node release tests, both rebuilt provider architectures, package smoke verification, audits, workflow/TOML checks, and all 19 default scenario syntheses passed. |
-| `2026-07-11-targeted-lifecycle-aws` | aws | `stale-object-cleanup-initial` → `stale-object-cleanup-updated`; `stale-object-retention-initial` → `stale-object-retention-updated`; `object-deletion-initial` → `object-deletion-updated` → `object-deletion-bucket-only` | Pass | The packaged arm64 provider ran in AWS. Default deployment cleanup deleted the stale object, disabling it retained the stale object, destination-change cleanup removed the previous object while preserving the current child namespace, Delete removed the current object, and all three stacks were destroyed and confirmed absent. |
-| `2026-07-11-local-lifecycle-contract` | local | Full static, unit, package, audit, and default-scenario synthesis gates | Pass | TypeScript build/typecheck/lint/tests, Rust fmt/check/clippy/tests, package smoke verification for both provider architectures, npm/cargo audits, cargo deny, actionlint, Taplo checks, benchmark report generation and collector tests, and all 19 default verification scenario syntheses passed. |
-| `2026-05-15-aws-end-to-end-verification` | aws | Full ShinBucketDeployment AWS end-to-end suite | Pass | Concurrent deploy created or updated all 14 verification stacks; sanitized assertions passed for S3 object placement, metadata/filtering, marker replacement, stale-object cleanup, retention, delete cleanup, extract=false, source overwrite order, large archive, KMS encryption, CloudFront sync/async invalidations, and final stack absence. |
-| `2026-05-15-local-unit-synth-verification` | local | Local unit/static/synthesis suite | Pass | Rust formatting/check/tests, TypeScript build/typecheck/lint/tests, and every public ShinBucketDeployment example used by AWS verification synthesized during deploy/destroy. |
-| `2026-05-15-runner-concurrency-fix` | local/aws | Verification runner concurrent CDK output isolation | Pass | Initial concurrent deploy/destroy attempts exposed `cdk.out` synth lock contention; runner now passes per-scenario `--output` directories and the fresh concurrent deploy/destroy completed with zero remaining verification stacks. |
-
-Historical verification rows were removed in favor of keeping only this latest human-readable snapshot.
+| `2026-07-12-local-pr7-release-candidate` | local | Provider source through `7a910f4` and the PR7 TypeScript/scenario candidate | Pass | 114 Rust tests passed with one AWS-only test ignored; 86 Vitest and five Node tests passed; build/package/typecheck/lint/clippy/package gates passed; all 21 scenarios listed and synthesized; both Lambda architectures rebuilt. |
+| `2026-07-12-aws-pr7-release-candidate` | aws | 21 phases across 16 stacks using the rebuilt arm64 provider | Pass and cleaned | Every custom resource reached CloudFormation success. Independent assertions then verified content, inferred types, filters, markers, source order, ranged reads, lifecycle state, exact KMS/DSSE checksums, and sync/async CloudFront invalidation. All stacks and the retained bucket were removed. |
+| `2026-07-12-aws-object-semantics` | aws, historical | 21 phases across 15 stacks at `b40def8` | Superseded for current-code status | The run passed and cleaned up, but it exercised the removed metadata semantics, universal SHA-256, ACL reconciliation, and global marker preflight. It is not current PR7 evidence. |
 
 ## Known Limitations
 
-- Metadata-only updates remain a known limitation until metadata participates in skip identity or forces replacement.
-- CloudFormation deadline and callback failure injection has current deterministic local coverage but has not been rerun as an AWS fault-injection scenario.
-- Cross-bucket lifecycle moves and changed-distribution invalidation have local coverage but still need a current targeted AWS rerun.
-- The packaged x86_64 provider passes local artifact and consumer smoke verification but has not been refreshed in AWS.
-- Raw AWS evidence is intentionally excluded from git. Update this page with sanitized results after a new full verification run.
+- The deployed AWS run exercised arm64. The x86_64 provider was rebuilt from the
+  same source and passed package validation, but was not separately deployed.
+- Lost-response convergence is covered with deterministic S3 wire replay rather
+  than an injected AWS network failure. The real KMS/DSSE run confirms that the
+  stored checksum needed by that reconciliation path exists and matches.
+- KMS/DSSE destination ETags are not treated as plaintext MD5. Existing
+  encrypted objects can transfer again instead of using the SSE-S3 catalog/ETag
+  shortcut; avoiding a checksum-mode `HeadObject` per destination object keeps
+  the normal deployment request count bounded.
+- Marker output is materialized as a whole entry. Validation occurs once
+  immediately before that entry's PUT, so earlier independent writes may have
+  completed before a later marker entry fails.
+- Imported buckets, SSE-C, and encryption configurations whose strategy cannot
+  be proven at synthesis remain intentionally unsupported.
+- Raw AWS evidence remains intentionally excluded from git. Performance results
+  and their separate caveats are maintained in [benchmark](./benchmark.md).

@@ -2,11 +2,12 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { App, Stack } from "aws-cdk-lib";
+import { App, Aspects, CfnParameter, Stack } from "aws-cdk-lib";
 import { Match, Template } from "aws-cdk-lib/assertions";
 import { Key } from "aws-cdk-lib/aws-kms";
 import { Architecture } from "aws-cdk-lib/aws-lambda";
-import { Bucket, BucketEncryption, BucketNamespace } from "aws-cdk-lib/aws-s3";
+import { Bucket, BucketEncryption, BucketNamespace, CfnBucket } from "aws-cdk-lib/aws-s3";
+import type { IConstruct } from "constructs";
 import { expect, test } from "vitest";
 import { ShinBucketDeployment, Source } from "../../src";
 import { testBundling } from "../support/bundling";
@@ -60,6 +61,7 @@ test("renders a Rust-backed custom resource", () => {
     },
     Extract: true,
     DeleteStaleObjectsOnDeployment: true,
+    DestinationChecksumStrategy: "sse-s3-etag",
     AvailableMemoryMb: 1024,
   });
 }, 120_000);
@@ -309,9 +311,210 @@ test("scopes destination object permissions to the destination prefix", () => {
             },
           },
         }),
+        Match.objectLike({
+          Action: "s3:GetBucketTagging",
+          Resource: Match.objectLike({ "Fn::GetAtt": Match.arrayWith(["DestC383B82A", "Arn"]) }),
+        }),
       ]),
     },
   });
+  const rendered = JSON.stringify(template.toJSON());
+  expect(rendered).not.toContain("s3:GetObjectAcl");
+  expect(rendered).not.toContain("s3:GetBucketAcl");
+  expect(rendered).not.toContain("s3:PutObjectAcl");
+});
+
+test.each([
+  ["default", undefined, "sse-s3-etag"],
+  ["S3 managed", BucketEncryption.S3_MANAGED, "sse-s3-etag"],
+  ["KMS", BucketEncryption.KMS, "kms-sha256"],
+  ["KMS managed", BucketEncryption.KMS_MANAGED, "kms-sha256"],
+  ["DSSE", BucketEncryption.DSSE, "kms-sha256"],
+  ["DSSE managed", BucketEncryption.DSSE_MANAGED, "kms-sha256"],
+] as const)("derives the destination checksum strategy for %s encryption", (_, encryption, expected) => {
+  const stack = new Stack();
+  const destinationBucket = new Bucket(stack, "Dest", encryption ? { encryption } : {});
+
+  new ShinBucketDeployment(stack, "Deploy", {
+    sources: [Source.data("index.html", "ok")],
+    destinationBucket,
+    bundling: testBundling(),
+  });
+
+  expect(customResourceProperties(stack).DestinationChecksumStrategy).toBe(expected);
+});
+
+test("grants checksum-mode access to the AWS-managed S3 KMS key", () => {
+  const stack = new Stack();
+  const destinationBucket = new Bucket(stack, "Dest", {
+    encryption: BucketEncryption.KMS_MANAGED,
+  });
+  new ShinBucketDeployment(stack, "Deploy", {
+    sources: [Source.data("index.html", "ok")],
+    destinationBucket,
+    bundling: testBundling(),
+  });
+
+  Template.fromStack(stack).hasResourceProperties("AWS::IAM::Policy", {
+    PolicyDocument: {
+      Statement: Match.arrayWith([
+        Match.objectLike({
+          Action: Match.arrayWith(["kms:Decrypt", "kms:GenerateDataKey"]),
+          Condition: {
+            "ForAnyValue:StringEquals": {
+              "kms:ResourceAliases": "alias/aws/s3",
+            },
+            StringEquals: {
+              "kms:ViaService": Match.anyValue(),
+            },
+          },
+          Effect: "Allow",
+          Resource: Match.anyValue(),
+        }),
+      ]),
+    },
+  });
+});
+
+test("resolves destination encryption lazily after L1 mutation", () => {
+  const stack = new Stack();
+  const destinationBucket = new Bucket(stack, "Dest");
+  new ShinBucketDeployment(stack, "Deploy", {
+    sources: [Source.data("index.html", "ok")],
+    destinationBucket,
+    bundling: testBundling(),
+  });
+
+  const resource = destinationBucket.node.defaultChild;
+  if (!CfnBucket.isCfnBucket(resource)) {
+    throw new Error("expected destination CfnBucket");
+  }
+  resource.bucketEncryption = {
+    serverSideEncryptionConfiguration: [
+      { serverSideEncryptionByDefault: { sseAlgorithm: "aws:kms" } },
+    ],
+  };
+
+  expect(customResourceProperties(stack).DestinationChecksumStrategy).toBe("kms-sha256");
+});
+
+test("resolves destination encryption after an Aspect mutation", () => {
+  const stack = new Stack();
+  const destinationBucket = new Bucket(stack, "Dest");
+  new ShinBucketDeployment(stack, "Deploy", {
+    sources: [Source.data("index.html", "ok")],
+    destinationBucket,
+    bundling: testBundling(),
+  });
+
+  const resource = destinationBucket.node.defaultChild;
+  if (!CfnBucket.isCfnBucket(resource)) {
+    throw new Error("expected destination CfnBucket");
+  }
+  Aspects.of(stack).add({
+    visit(node: IConstruct) {
+      if (node === resource) {
+        resource.bucketEncryption = {
+          serverSideEncryptionConfiguration: [
+            { serverSideEncryptionByDefault: { sseAlgorithm: "aws:kms" } },
+          ],
+        };
+      }
+    },
+  });
+
+  expect(customResourceProperties(stack).DestinationChecksumStrategy).toBe("kms-sha256");
+});
+
+test("rejects unknown and uninspectable destination encryption", () => {
+  const unknownStack = new Stack();
+  const unknownBucket = new Bucket(unknownStack, "Dest");
+  new ShinBucketDeployment(unknownStack, "Deploy", {
+    sources: [Source.data("index.html", "ok")],
+    destinationBucket: unknownBucket,
+    bundling: testBundling(),
+  });
+  const resource = unknownBucket.node.defaultChild;
+  if (!CfnBucket.isCfnBucket(resource)) {
+    throw new Error("expected destination CfnBucket");
+  }
+  resource.bucketEncryption = {
+    serverSideEncryptionConfiguration: [
+      { serverSideEncryptionByDefault: { sseAlgorithm: "future:algorithm" } },
+    ],
+  };
+  expect(() => customResourceProperties(unknownStack)).toThrow(/AES256, aws:kms, or aws:kms:dsse/);
+
+  const importedStack = new Stack();
+  const imported = Bucket.fromBucketName(importedStack, "Imported", "imported-bucket");
+  expect(
+    () =>
+      new ShinBucketDeployment(importedStack, "Deploy", {
+        sources: [Source.data("index.html", "ok")],
+        destinationBucket: imported as Bucket,
+        bundling: testBundling(),
+      }),
+  ).toThrow(/CDK-created Bucket/);
+});
+
+test.each([
+  "multiple rules",
+  "tokenized algorithm",
+] as const)("rejects %s in destination encryption", (configuration) => {
+  const stack = new Stack();
+  const destinationBucket = new Bucket(stack, "Dest");
+  new ShinBucketDeployment(stack, "Deploy", {
+    sources: [Source.data("index.html", "ok")],
+    destinationBucket,
+    bundling: testBundling(),
+  });
+  const resource = destinationBucket.node.defaultChild;
+  if (!CfnBucket.isCfnBucket(resource)) {
+    throw new Error("expected destination CfnBucket");
+  }
+  resource.bucketEncryption = {
+    serverSideEncryptionConfiguration:
+      configuration === "multiple rules"
+        ? [
+            { serverSideEncryptionByDefault: { sseAlgorithm: "AES256" } },
+            { serverSideEncryptionByDefault: { sseAlgorithm: "aws:kms" } },
+          ]
+        : [
+            {
+              serverSideEncryptionByDefault: {
+                sseAlgorithm: new CfnParameter(stack, "Algorithm").valueAsString,
+              },
+            },
+          ],
+  };
+
+  expect(() => customResourceProperties(stack)).toThrow(/one inspectable default encryption rule/);
+});
+
+test("rejects an L1-injected customer KMS key without a matching L2 grant", () => {
+  const stack = new Stack();
+  const destinationBucket = new Bucket(stack, "Dest");
+  new ShinBucketDeployment(stack, "Deploy", {
+    sources: [Source.data("index.html", "ok")],
+    destinationBucket,
+    bundling: testBundling(),
+  });
+  const resource = destinationBucket.node.defaultChild;
+  if (!CfnBucket.isCfnBucket(resource)) {
+    throw new Error("expected destination CfnBucket");
+  }
+  resource.bucketEncryption = {
+    serverSideEncryptionConfiguration: [
+      {
+        serverSideEncryptionByDefault: {
+          kmsMasterKeyId: new CfnParameter(stack, "InjectedKeyArn").valueAsString,
+          sseAlgorithm: "aws:kms",
+        },
+      },
+    ],
+  };
+
+  expect(() => customResourceProperties(stack)).toThrow(/match destinationBucket\.encryptionKey/);
 });
 
 test("supports account-regional destination buckets", () => {

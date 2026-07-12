@@ -14,6 +14,20 @@ description: |
 
 This skill is for performance and efficiency evidence only. It does not establish correctness verification status for `ShinBucketDeployment`.
 
+Performance is a primary product constraint for this repository. Shin is
+expected to materially outperform upstream AWS CDK `BucketDeployment` on its
+target workloads. For a provider data-path change, treat any new per-byte or
+per-object pass, digest, S3 request, payload copy, allocation, or whole-entry
+materialization as a regression risk that requires evidence. Prefer designs
+that reuse bytes, listings, validation, and digests already produced by the
+transfer path.
+
+Do not mark a performance-relevant change ready to merge or release from local
+correctness gates alone. Collect comparable before/after Shin results plus the
+upstream AWS CDK baseline and the telemetry needed to explain the result. If
+those measurements have not run, record the performance decision as pending;
+do not substitute verification evidence for benchmark evidence.
+
 ## Source Of Truth
 
 - `docs/benchmark.md` is the human benchmark page.
@@ -211,6 +225,11 @@ Do not infer S3 throttling from local source block counters alone:
 - Destination S3 throttling requires `putObject.throttledAttempts` or retry evidence.
 
 For parameter sweeps, report both performance and pressure counters. For `maxParallelTransfers` sweeps, include at least provider duration, billed duration, max memory, CDK deploy time, local wall time, source fetched bytes, block waits split by reason when available, block refetches, replay claims after release, active reader high-water, resident bytes high-water, and PutObject retry/throttle counters.
+
+For checksum/encryption-path changes, record `destinationChecksumStrategy` and
+keep SSE-S3 and KMS/DSSE results separate. Include the transferred/skipped object
+counts, MD5/catalog skip counters, source fetched bytes, provider duration, and
+memory so strategy-specific extra passes or transfers remain visible.
 
 ## Benchmark Human Page
 

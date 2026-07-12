@@ -37,7 +37,7 @@ class KmsDestinationShinBucketDeploymentStack extends Stack {
     });
 
     new CfnOutput(this, "HeadKmsProbeCommand", {
-      value: `aws s3api head-object --bucket ${websiteBucket.bucketName} --key kms-site/runtime/kms.txt`,
+      value: `aws s3api head-object --bucket ${websiteBucket.bucketName} --key kms-site/runtime/kms.txt --checksum-mode ENABLED`,
     });
   }
 }

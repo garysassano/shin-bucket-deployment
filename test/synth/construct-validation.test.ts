@@ -221,8 +221,21 @@ describe("ShinBucketDeployment validation and option coverage", () => {
   });
 
   test.each([
+    ["accessControl", "public-read", /does not support accessControl/],
+    ["cacheControl", [], /does not support cacheControl/],
+    ["contentDisposition", "inline", /does not support contentDisposition/],
+    ["contentEncoding", "gzip", /does not support contentEncoding/],
+    ["contentLanguage", "en", /does not support contentLanguage/],
+    ["contentType", "text/plain", /does not support contentType/],
+    ["metadata", { release: "stable" }, /does not support metadata/],
+    ["serverSideEncryption", "AES256", /does not support serverSideEncryption/],
+    ["serverSideEncryptionAwsKmsKeyId", "key", /serverSideEncryptionAwsKmsKeyId/],
+    ["storageClass", "STANDARD", /does not support storageClass/],
+    ["websiteRedirectLocation", "/index.html", /does not support websiteRedirectLocation/],
     ["useEfs", true, /does not support useEfs/],
     ["signContent", true, /does not support signContent/],
+    ["logRetention", 7, /legacy logRetention prop/],
+    ["ephemeralStorageSize", {}, /does not support ephemeralStorageSize/],
     [
       "serverSideEncryptionCustomerAlgorithm",
       "AES256",

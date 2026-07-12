@@ -1073,6 +1073,7 @@ mod tests {
             "SourceBucketNames": ["source"],
             "SourceObjectKeys": ["asset.zip"],
             "DestinationBucketName": "destination",
+            "DestinationChecksumStrategy": "sse-s3-etag",
             "DistributionId": "distribution",
             "DistributionPaths": paths
         }))

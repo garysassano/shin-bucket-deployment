@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import {
+  ArnFormat,
   type AssetHashType,
   type BundlingFileAccess,
   type BundlingOutput,
@@ -18,7 +19,7 @@ import {
 import type { IDistribution } from "aws-cdk-lib/aws-cloudfront";
 import { Effect, type IRole, PolicyStatement } from "aws-cdk-lib/aws-iam";
 import { Architecture, Code, Function as LambdaFunction, Runtime } from "aws-cdk-lib/aws-lambda";
-import { Bucket, BucketGrants, type IBucket } from "aws-cdk-lib/aws-s3";
+import { Bucket, BucketGrants, CfnBucket, type IBucket } from "aws-cdk-lib/aws-s3";
 import type {
   BucketDeploymentProps,
   ISource,
@@ -332,15 +333,33 @@ export interface ShinBucketDeploymentDestinationLifecycle {
 }
 
 export interface ShinBucketDeploymentProps
-  extends Omit<
+  extends Pick<
     BucketDeploymentProps,
-    | "expires"
-    | "prune"
-    | "retainOnDelete"
-    | "signContent"
-    | "serverSideEncryptionCustomerAlgorithm"
-    | "useEfs"
+    | "sources"
+    | "destinationKeyPrefix"
+    | "extract"
+    | "exclude"
+    | "include"
+    | "distribution"
+    | "distributionPaths"
+    | "waitForDistributionInvalidation"
+    | "logGroup"
+    | "memoryLimit"
+    | "role"
+    | "vpc"
+    | "vpcSubnets"
+    | "outputObjectKeys"
+    | "securityGroups"
   > {
+  /**
+   * CDK-created destination bucket.
+   *
+   * Shin inspects the synthesized bucket encryption configuration to select
+   * the cheapest sound conditional-write reconciliation strategy. Imported or
+   * otherwise uninspectable buckets are rejected.
+   */
+  readonly destinationBucket: Bucket;
+
   /**
    * Lambda architecture for the Rust provider.
    * @default Architecture.ARM_64
@@ -403,7 +422,7 @@ export interface ShinBucketDeploymentProps
  */
 export class ShinBucketDeployment extends Construct {
   private readonly cr: CustomResource;
-  private readonly destinationBucket: IBucket;
+  private readonly destinationBucket: Bucket;
   private readonly sources: SourceConfig[];
   private _deployedBucket?: IBucket;
   private requestDestinationArn = false;
@@ -503,34 +522,71 @@ export class ShinBucketDeployment extends Construct {
       }
     }
 
-    if (maybeUnsupported.useEfs) {
+    if (maybeUnsupported.useEfs !== undefined) {
       throw new ValidationError(
         literalString("ShinBucketDeploymentUseEfsUnsupported"),
-        "ShinBucketDeployment does not support useEfs; the provider keeps source archives in Lambda memory.",
+        "ShinBucketDeployment does not support useEfs; the provider uses bounded ranged reads without staging archives or extracted files on disk.",
         this,
       );
     }
 
-    if (maybeUnsupported.signContent) {
+    if (maybeUnsupported.signContent !== undefined) {
       throw new ValidationError(
         literalString("ShinBucketDeploymentSignContentUnsupported"),
-        "ShinBucketDeployment does not support signContent in this prototype.",
+        "ShinBucketDeployment does not support signContent; the provider uses AWS SDK operations rather than the upstream AWS CLI upload path.",
         this,
       );
     }
 
-    if (maybeUnsupported.serverSideEncryptionCustomerAlgorithm) {
+    if (maybeUnsupported.serverSideEncryptionCustomerAlgorithm !== undefined) {
       throw new ValidationError(
         literalString("ShinBucketDeploymentSseCustomerAlgorithmUnsupported"),
-        "ShinBucketDeployment does not support serverSideEncryptionCustomerAlgorithm in this prototype.",
+        "ShinBucketDeployment does not support serverSideEncryptionCustomerAlgorithm; configure supported default encryption on destinationBucket.",
         this,
       );
     }
 
-    if (maybeUnsupported.expires) {
+    if (maybeUnsupported.expires !== undefined) {
       throw new ValidationError(
         literalString("ShinBucketDeploymentExpiresUnsupported"),
-        "ShinBucketDeployment does not support expires in this prototype.",
+        "ShinBucketDeployment does not support expires; configurable per-object metadata is outside its deployment contract.",
+        this,
+      );
+    }
+
+    if (maybeUnsupported.logRetention !== undefined) {
+      throw new ValidationError(
+        literalString("ShinBucketDeploymentLogRetentionUnsupported"),
+        "ShinBucketDeployment does not support the legacy logRetention prop; use logGroup instead.",
+        this,
+      );
+    }
+
+    if (maybeUnsupported.ephemeralStorageSize !== undefined) {
+      throw new ValidationError(
+        literalString("ShinBucketDeploymentEphemeralStorageUnsupported"),
+        "ShinBucketDeployment does not support ephemeralStorageSize because the provider does not use Lambda temporary storage.",
+        this,
+      );
+    }
+
+    const removedContentSettings = [
+      ["accessControl", maybeUnsupported.accessControl],
+      ["cacheControl", maybeUnsupported.cacheControl],
+      ["contentDisposition", maybeUnsupported.contentDisposition],
+      ["contentEncoding", maybeUnsupported.contentEncoding],
+      ["contentLanguage", maybeUnsupported.contentLanguage],
+      ["contentType", maybeUnsupported.contentType],
+      ["metadata", maybeUnsupported.metadata],
+      ["serverSideEncryption", maybeUnsupported.serverSideEncryption],
+      ["serverSideEncryptionAwsKmsKeyId", maybeUnsupported.serverSideEncryptionAwsKmsKeyId],
+      ["storageClass", maybeUnsupported.storageClass],
+      ["websiteRedirectLocation", maybeUnsupported.websiteRedirectLocation],
+    ].flatMap(([name, value]) => (value === undefined ? [] : [name]));
+    if (removedContentSettings.length > 0) {
+      throw new ValidationError(
+        literalString("ShinBucketDeploymentContentSettingsUnsupported"),
+        `ShinBucketDeployment does not support ${removedContentSettings.join(", ")}. Configure encryption on destinationBucket and cache/storage/lifecycle policy separately; Shin does not deploy configurable object metadata and infers content type from each object key.`,
         this,
       );
     }
@@ -582,6 +638,10 @@ export class ShinBucketDeployment extends Construct {
     validatePutObjectRetryProps(this, putObjectRetryTuning);
 
     this.destinationBucket = props.destinationBucket;
+    const destinationBucketResource = inspectableDestinationBucketResource(
+      this,
+      this.destinationBucket,
+    );
     const deleteObjectsOnChange = props.destinationLifecycle?.onChange?.deleteObjects === true;
     const previousDestinationBucket = deleteObjectsOnChange
       ? (props.destinationLifecycle?.onChange?.fromBucket ?? this.destinationBucket)
@@ -644,6 +704,11 @@ export class ShinBucketDeployment extends Construct {
         resources: [this.destinationBucket.bucketArn],
       }),
     );
+    // A managed-key bucket has no IKey for BucketGrants to target. Keep this
+    // tightly conditioned statement on every handler so a later L1/Aspect
+    // transition to alias/aws/s3 remains authorized; it is inert for every
+    // other key and service.
+    this.handlerFunction.addToRolePolicy(awsManagedS3KmsPolicyStatement(this));
 
     if (previousDestinationBucket) {
       const previousGrants = BucketGrants.fromBucket(previousDestinationBucket);
@@ -658,10 +723,6 @@ export class ShinBucketDeployment extends Construct {
           resources: [previousDestinationBucket.bucketArn],
         }),
       );
-    }
-
-    if (props.accessControl) {
-      this.destinationBucket.grantPutAcl(this.handlerFunction, destinationObjectKeyPattern);
     }
 
     if (props.distribution) {
@@ -766,6 +827,10 @@ export class ShinBucketDeployment extends Construct {
         ),
         DestinationBucketName: this.destinationBucket.bucketName,
         DestinationBucketKeyPrefix: props.destinationKeyPrefix,
+        DestinationChecksumStrategy: Lazy.uncachedString({
+          produce: () =>
+            destinationChecksumStrategy(this, this.destinationBucket, destinationBucketResource),
+        }),
         DestinationOwnerId: Lazy.string({
           produce: () => this.cr.node.addr.slice(-8),
         }),
@@ -782,8 +847,6 @@ export class ShinBucketDeployment extends Construct {
         DeleteStaleObjectsOnDeployment: deleteStaleObjectsOnDeploy,
         Exclude: props.exclude,
         Include: props.include,
-        UserMetadata: props.metadata ? mapUserMetadata(props.metadata) : undefined,
-        SystemMetadata: mapSystemMetadata(props),
         DistributionId: props.distribution?.distributionRef.distributionId,
         DistributionPaths: props.distributionPaths,
         OutputObjectKeys: props.outputObjectKeys ?? true,
@@ -890,13 +953,11 @@ interface SharedHandlerOptions {
   readonly architecture: Architecture;
   readonly timeout: Duration;
   readonly memorySize: number;
-  readonly ephemeralStorageSize: ShinBucketDeploymentProps["ephemeralStorageSize"];
   readonly role: ShinBucketDeploymentProps["role"];
   readonly vpc: ShinBucketDeploymentProps["vpc"];
   readonly vpcSubnets: ShinBucketDeploymentProps["vpcSubnets"];
   readonly securityGroups: ShinBucketDeploymentProps["securityGroups"];
   readonly environment: Record<string, string>;
-  readonly logRetention: ShinBucketDeploymentProps["logRetention"];
   readonly logGroup: ShinBucketDeploymentProps["logGroup"];
 }
 
@@ -951,7 +1012,6 @@ function getOrCreateHandler(
     architecture,
     timeout: PROVIDER_TIMEOUT,
     memorySize: props.memoryLimit ?? DEFAULT_MEMORY_LIMIT_MB,
-    ephemeralStorageSize: props.ephemeralStorageSize,
     role: props.role,
     vpc: props.vpc,
     vpcSubnets: props.vpcSubnets,
@@ -960,7 +1020,6 @@ function getOrCreateHandler(
     environment: {
       RUST_BACKTRACE: "1",
     },
-    logRetention: props.logRetention,
     logGroup: props.logGroup,
   };
 
@@ -984,13 +1043,11 @@ function createPrebuiltHandler(
     architecture: shared.architecture,
     timeout: shared.timeout,
     memorySize: shared.memorySize,
-    ephemeralStorageSize: shared.ephemeralStorageSize,
     role: shared.role,
     vpc: shared.vpc,
     vpcSubnets: shared.vpcSubnets,
     securityGroups: shared.securityGroups,
     environment: shared.environment,
-    ...(shared.logRetention ? { logRetention: shared.logRetention } : {}),
     logGroup: shared.logGroup,
   });
 }
@@ -1015,13 +1072,11 @@ function createCompiledHandler(
     bundling: props.bundling,
     timeout: shared.timeout,
     memorySize: shared.memorySize,
-    ephemeralStorageSize: shared.ephemeralStorageSize,
     role: shared.role,
     vpc: shared.vpc,
     vpcSubnets: shared.vpcSubnets,
     securityGroups: shared.securityGroups,
     environment: shared.environment,
-    ...(shared.logRetention ? { logRetention: shared.logRetention } : {}),
     logGroup: shared.logGroup,
   });
 }
@@ -1049,10 +1104,8 @@ function renderHandlerConfigHash(
   const config = {
     architecture: architecture.name,
     bundling: normalizeSingletonValue(props.bundling),
-    ephemeralStorageSize: normalizeSingletonValue(props.ephemeralStorageSize),
     handlerSource,
     logGroup: normalizeSingletonValue(props.logGroup),
-    logRetention: normalizeSingletonValue(props.logRetention),
     memoryLimit: normalizeSingletonValue(props.memoryLimit ?? DEFAULT_MEMORY_LIMIT_MB),
     role: normalizeSingletonValue(props.role),
     securityGroups:
@@ -1137,6 +1190,30 @@ function destinationListPolicyStatement(
     actions: ["s3:ListBucket"],
     resources: [bucketArn],
     conditions: prefix ? { StringEquals: { "s3:prefix": prefix } } : undefined,
+  });
+}
+
+function awsManagedS3KmsPolicyStatement(scope: Construct): PolicyStatement {
+  const stack = Stack.of(scope);
+  return new PolicyStatement({
+    effect: Effect.ALLOW,
+    actions: ["kms:Decrypt", "kms:GenerateDataKey"],
+    resources: [
+      stack.formatArn({
+        service: "kms",
+        resource: "key",
+        resourceName: "*",
+        arnFormat: ArnFormat.SLASH_RESOURCE_NAME,
+      }),
+    ],
+    conditions: {
+      "ForAnyValue:StringEquals": {
+        "kms:ResourceAliases": "alias/aws/s3",
+      },
+      StringEquals: {
+        "kms:ViaService": `s3.${stack.region}.${stack.urlSuffix}`,
+      },
+    },
   });
 }
 
@@ -1226,56 +1303,87 @@ function sourceConfigEqual(stack: Stack, a: SourceConfig, b: SourceConfig) {
   );
 }
 
-function mapUserMetadata(metadata: { [key: string]: string }) {
-  const normalized: Record<string, string> = {};
-
-  for (const [key, value] of Object.entries(metadata)) {
-    normalized[key.toLowerCase()] = value;
+function inspectableDestinationBucketResource(scope: Construct, bucket: Bucket): CfnBucket {
+  const resource = bucket.node.defaultChild;
+  if (!CfnBucket.isCfnBucket(resource)) {
+    throw new ValidationError(
+      literalString("ShinBucketDeploymentDestinationBucketInspectable"),
+      "destinationBucket must be a CDK-created Bucket whose CfnBucket encryption configuration can be inspected.",
+      scope,
+    );
   }
-
-  return normalized;
+  return resource;
 }
 
-function mapSystemMetadata(metadata: ShinBucketDeploymentProps) {
-  const res: { [key: string]: string } = {};
-
-  if (metadata.cacheControl) {
-    res["cache-control"] = metadata.cacheControl.map((c) => c.value).join(", ");
+function destinationChecksumStrategy(
+  scope: Construct,
+  bucket: Bucket,
+  bucketResource: CfnBucket,
+): "sse-s3-etag" | "kms-sha256" {
+  const resolved = Stack.of(scope).resolve(bucketResource.bucketEncryption) as unknown;
+  if (resolved === undefined) {
+    return "sse-s3-etag";
   }
-  if (metadata.contentDisposition) {
-    res["content-disposition"] = metadata.contentDisposition;
+  if (!isRecord(resolved)) {
+    throw unsupportedDestinationEncryption(scope);
   }
-  if (metadata.contentEncoding) {
-    res["content-encoding"] = metadata.contentEncoding;
+  const rules = resolved.serverSideEncryptionConfiguration;
+  if (!Array.isArray(rules) || rules.length !== 1 || !isRecord(rules[0])) {
+    throw unsupportedDestinationEncryption(scope);
   }
-  if (metadata.contentLanguage) {
-    res["content-language"] = metadata.contentLanguage;
+  const encryption = rules[0].serverSideEncryptionByDefault;
+  if (!isRecord(encryption) || typeof encryption.sseAlgorithm !== "string") {
+    throw unsupportedDestinationEncryption(scope);
   }
-  if (metadata.contentType) {
-    res["content-type"] = metadata.contentType;
+  switch (encryption.sseAlgorithm) {
+    case "AES256":
+      return "sse-s3-etag";
+    case "aws:kms":
+    case "aws:kms:dsse":
+      validateDestinationKmsKey(scope, bucket, encryption.kmsMasterKeyId);
+      return "kms-sha256";
+    default:
+      throw unsupportedDestinationEncryption(scope);
   }
-  if (metadata.serverSideEncryption) {
-    res.sse = metadata.serverSideEncryption;
-  }
-  if (metadata.storageClass) {
-    res["storage-class"] = metadata.storageClass;
-  }
-  if (metadata.websiteRedirectLocation) {
-    res["website-redirect"] = metadata.websiteRedirectLocation;
-  }
-  if (metadata.serverSideEncryptionAwsKmsKeyId) {
-    res["sse-kms-key-id"] = metadata.serverSideEncryptionAwsKmsKeyId;
-  }
-  if (metadata.accessControl) {
-    res.acl = toKebabCase(metadata.accessControl.toString());
-  }
-
-  return Object.keys(res).length === 0 ? undefined : res;
 }
 
-function toKebabCase(value: string): string {
-  return value
-    .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
-    .replace(/_/g, "-")
-    .toLowerCase();
+function validateDestinationKmsKey(
+  scope: Construct,
+  bucket: Bucket,
+  kmsMasterKeyId: unknown,
+): void {
+  if (kmsMasterKeyId === undefined) {
+    return;
+  }
+  const encryptionKey = bucket.encryptionKey;
+  if (!encryptionKey) {
+    throw unsupportedDestinationKmsKey(scope);
+  }
+  const stack = Stack.of(scope);
+  if (
+    stableStringify(stack.resolve(kmsMasterKeyId)) !==
+    stableStringify(stack.resolve(encryptionKey.keyArn))
+  ) {
+    throw unsupportedDestinationKmsKey(scope);
+  }
+}
+
+function unsupportedDestinationKmsKey(scope: Construct): ValidationError {
+  return new ValidationError(
+    literalString("ShinBucketDeploymentDestinationKmsKeyUnsupported"),
+    "destinationBucket KMSMasterKeyID must be omitted for the AWS-managed S3 key or match destinationBucket.encryptionKey so CDK can grant the provider access.",
+    scope,
+  );
+}
+
+function unsupportedDestinationEncryption(scope: Construct): ValidationError {
+  return new ValidationError(
+    literalString("ShinBucketDeploymentDestinationEncryptionUnsupported"),
+    "destinationBucket must synthesize one inspectable default encryption rule using AES256, aws:kms, or aws:kms:dsse.",
+    scope,
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
