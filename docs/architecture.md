@@ -1,6 +1,6 @@
 # Architecture
 
-This document is the source of truth for the current `ShinBucketDeployment` provider architecture. See [s3-unspool parity](./s3-unspool-parity.md) for the optimization comparison matrix.
+This document is the source of truth for the current `ShinBucketDeployment` provider architecture.
 
 ## Runtime Shape
 
@@ -40,7 +40,7 @@ Most deployments should tune only `memoryLimit` and, when needed, `maxParallelTr
 | `advancedRuntimeTuning.putObjectRetry.slowdownBaseDelayMs` / `slowdownMaxDelayMs` | 1000 / 30000 | Capped throttling `PutObject` retry delay. |
 | `advancedRuntimeTuning.putObjectRetry.jitter` | `full` | Jitter mode for computed `PutObject` retry delays; `none` is also supported. |
 
-Fixed ZIP entry streaming defaults intentionally match the local `s3-unspool` extraction path:
+Fixed ZIP entry streaming defaults keep per-transfer memory bounded:
 
 | Internal setting | Default | Purpose |
 | --- | ---: | --- |
@@ -570,9 +570,9 @@ The provider role uses source grants from each bound CDK source and destination 
 
 The older extract path downloaded each source ZIP from S3, wrote the full archive to Lambda `/tmp`, opened it with `ZipArchive`, and reread the temporary file for planning, fallback hashing, and upload streaming.
 
-The current path reads the ZIP central directory and entry bodies through S3 ranges. Directory assets use a compact v1 size/MD5 catalog derived from the `s3-unspool` optimization, with an additional template-bound SHA-256 trust layer. Entry source spans are planned into coalesced blocks, prefetched with bounded source GET concurrency, shared by concurrent readers, retained while claimed, and reopened for retryable upload bodies. This removes the full-archive ephemeral-storage dependency and makes source ZIP size independent of Lambda `/tmp`. Replacement-expanded entries still must fit in memory because their final bytes are only known after marker substitution.
+The current path reads the ZIP central directory and entry bodies through S3 ranges. Directory assets use a compact v1 size/MD5 catalog with an additional template-bound SHA-256 trust layer. Entry source spans are planned into coalesced blocks, prefetched with bounded source GET concurrency, shared by concurrent readers, retained while claimed, and reopened for retryable upload bodies. This removes the full-archive ephemeral-storage dependency and makes source ZIP size independent of Lambda `/tmp`. Replacement-expanded entries still must fit in memory because their final bytes are only known after marker substitution.
 
-The current implementation intentionally adopted these `s3-unspool` ideas:
+The current implementation:
 
 - avoid local archive staging
 - avoid full archive loading

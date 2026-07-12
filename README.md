@@ -139,7 +139,7 @@ PUT and COPY always set `Content-Type` from the final object key, falling back t
 
 ### Memory Model
 
-Marker-free ZIP entry streaming uses the same small-buffer defaults as the local `s3-unspool` extraction path: 64 KiB entry read buffers, 256 KiB S3 body chunks, and a 1 MiB body pipe between entry production and the SDK upload body. With the default 32 parallel transfers, this keeps entry stream buffering around 44 MiB, leaving the 1024 MiB default provider Lambda memory for the Rust runtime, AWS SDK, source block window, and ZIP metadata.
+Marker-free ZIP entry streaming uses small-buffer defaults: 64 KiB entry read buffers, 256 KiB S3 body chunks, and a 1 MiB body pipe between entry production and the SDK upload body. With the default 32 parallel transfers, this keeps entry stream buffering around 44 MiB, leaving the 1024 MiB default provider Lambda memory for the Rust runtime, AWS SDK, source block window, and ZIP metadata.
 
 At the default 1024 MiB memory limit, adaptive source scheduling reserves about 64 MiB for runtime/base overhead, 384 MiB for 32 transfer workers, 32 MiB for four in-flight source range requests, and 2 KiB per ZIP entry for metadata. The remaining source block window is clamped to the actual source ZIP size and capped by the adaptive model; for large enough archives it is about 160 MiB minus the file reserve after large-archive RSS slack. The 1024 MiB default was selected from historical exploratory measurements whose methodology is now being revalidated; it is not a performance guarantee.
 
