@@ -29,6 +29,9 @@ pub(crate) const PUT_OBJECT_RETRY_BASE_DELAY_MS: u64 = 250;
 pub(crate) const PUT_OBJECT_RETRY_MAX_DELAY_MS: u64 = 5_000;
 pub(crate) const PUT_OBJECT_SLOWDOWN_RETRY_BASE_DELAY_MS: u64 = 1_000;
 pub(crate) const PUT_OBJECT_SLOWDOWN_RETRY_MAX_DELAY_MS: u64 = 30_000;
+pub(crate) const S3_OBJECT_KEY_MAX_BYTES: usize = 1024;
+pub(crate) const S3_SINGLE_COPY_LIMIT: u64 = 5 * 1024 * 1024 * 1024;
+pub(crate) const S3_SINGLE_PUT_LIMIT: u64 = 5 * 1024 * 1024 * 1024;
 const ADAPTIVE_CACHE_BASE_OVERHEAD: u64 = 64 * 1024 * 1024;
 const ADAPTIVE_CACHE_WORKER_OVERHEAD: u64 = 12 * 1024 * 1024;
 const ADAPTIVE_CACHE_FILE_OVERHEAD: u64 = 2 * 1024;
@@ -120,6 +123,7 @@ pub(crate) fn source_window_bytes_for_archive(
 pub(crate) async fn deploy(
     state: &AppState,
     request: &DeploymentRequest,
+    previous_metadata: Option<&ObjectMetadata>,
     stats: Arc<DeploymentStats>,
     deadlines: InvocationDeadlines,
 ) -> Result<()> {
@@ -127,14 +131,24 @@ pub(crate) async fn deploy(
     planner::validate_request_lengths(request)?;
 
     let filters = compile_filters(&request.exclude, &request.include)?;
-    let metadata = ObjectMetadata::from_request(request);
+    let metadata = ObjectMetadata::from_request(request)?;
     let (archives, deployment_manifest) = timeout_at(
         deadlines.work(),
         planner::plan_deployment(state, request, &filters, &stats),
     )
     .await
     .context("S3 deployment planning exceeded the deployment work deadline")??;
-    stats.add_planned_entries(deployment_manifest.len() as u64);
+    planner::validate_deployment_preflight(request, &metadata, &deployment_manifest)?;
+    let zip_plans = request.extract.then(|| {
+        planner::collect_zip_entry_plans(&deployment_manifest, &request.dest_bucket_prefix)
+    });
+    if let Some(zip_plans) = zip_plans.as_ref() {
+        transfer::preflight_marker_outputs(&archives, request, zip_plans, deadlines).await?;
+    }
+    stats.add_planned_entries(
+        u64::try_from(deployment_manifest.len())
+            .context("deployment manifest entry count cannot be represented safely")?,
+    );
     stats.add_plan_millis(crate::types::duration_ms(started.elapsed()));
 
     let started = std::time::Instant::now();
@@ -147,14 +161,15 @@ pub(crate) async fn deploy(
     stats.add_destination_list_millis(crate::types::duration_ms(started.elapsed()));
 
     let started = std::time::Instant::now();
-    if request.extract {
-        let zip_plans =
-            planner::collect_zip_entry_plans(&deployment_manifest, &request.dest_bucket_prefix);
+    if let Some(zip_plans) = zip_plans {
         transfer::upload_zip_entries(
             state,
             &archives,
             request,
-            &metadata,
+            transfer::ObjectSemantics {
+                current: &metadata,
+                previous: previous_metadata,
+            },
             zip_plans,
             &destination_plan.objects,
             transfer::TransferExecution {
@@ -164,8 +179,13 @@ pub(crate) async fn deploy(
         )
         .await?;
     } else {
-        let copy_plans =
-            planner::collect_copy_plans(&deployment_manifest, request, &destination_plan.objects)?;
+        let copy_plans = planner::collect_copy_plans(
+            &deployment_manifest,
+            request,
+            &destination_plan.objects,
+            &metadata,
+            previous_metadata,
+        )?;
         transfer::execute_copy_plans(
             state,
             &request.dest_bucket_name,
@@ -331,6 +351,7 @@ mod aws_integration_tests {
             deploy(
                 &state,
                 &request,
+                None,
                 std::sync::Arc::new(crate::types::DeploymentStats::default()),
                 InvocationDeadlines::from_remaining_at(
                     TokioInstant::now(),
@@ -344,6 +365,7 @@ mod aws_integration_tests {
             deploy(
                 &state,
                 &request,
+                None,
                 std::sync::Arc::new(crate::types::DeploymentStats::default()),
                 InvocationDeadlines::from_remaining_at(
                     TokioInstant::now(),

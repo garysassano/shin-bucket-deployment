@@ -10,8 +10,8 @@ use tokio::io::AsyncReadExt;
 
 use crate::request::{join_s3_key, normalize_archive_key, source_basename};
 use crate::types::{
-    AppState, DeploymentManifest, DeploymentRequest, DeploymentStats, Filters, PlannedAction,
-    PlannedObject, SourceArchive, TrustedEntryIntegrity,
+    AppState, DeploymentManifest, DeploymentRequest, DeploymentStats, Filters, ObjectMetadata,
+    PlannedAction, PlannedObject, SourceArchive, TrustedEntryIntegrity,
 };
 
 use super::archive::{
@@ -21,11 +21,10 @@ use super::archive::{
 use super::destination::{DestinationObject, destination_etag_matches, normalize_etag};
 use super::{
     EMBEDDED_CATALOG_MAX_BYTES, EMBEDDED_CATALOG_PATH, EMBEDDED_CATALOG_VERSION,
+    S3_OBJECT_KEY_MAX_BYTES, S3_SINGLE_COPY_LIMIT, S3_SINGLE_PUT_LIMIT,
     source_window_bytes_for_archive,
 };
 
-const S3_SINGLE_COPY_LIMIT: u64 = 5 * 1024 * 1024 * 1024;
-const S3_SINGLE_PUT_LIMIT: u64 = 5 * 1024 * 1024 * 1024;
 const RESERVED_CATALOG_V2_PATH: &str = ".shin/catalog.v2.json";
 
 #[derive(Clone, Debug)]
@@ -180,29 +179,35 @@ pub(super) fn collect_copy_plans(
     manifest: &DeploymentManifest,
     request: &DeploymentRequest,
     destination_objects: &HashMap<String, DestinationObject>,
+    metadata: &ObjectMetadata,
+    previous_metadata: Option<&ObjectMetadata>,
 ) -> Result<Vec<CopyPlan>> {
     let mut plans = Vec::new();
 
     for planned in manifest.values() {
         match planned.action {
-            PlannedAction::CopyObject { source_index, size }
-                if planned.expected_etag.as_deref().is_none_or(|etag| {
+            PlannedAction::CopyObject { source_index, size } => {
+                let destination_key =
+                    join_s3_key(&request.dest_bucket_prefix, &planned.relative_key);
+                let metadata_changed = previous_metadata.is_none_or(|previous| {
+                    !previous.semantically_matches(metadata, &destination_key)
+                });
+                let content_changed = planned.expected_etag.as_deref().is_none_or(|etag| {
                     !destination_etag_matches(destination_objects, &planned.relative_key, etag)
-                }) =>
-            {
+                });
+                if !metadata_changed && !content_changed {
+                    continue;
+                }
                 validate_copy_object_size(&planned.relative_key, size)?;
                 plans.push(CopyPlan {
                     source_bucket: request.source_bucket_names[source_index].clone(),
                     source_key: request.source_object_keys[source_index].clone(),
                     expected_etag: planned.expected_etag.clone(),
-                    destination_key: join_s3_key(
-                        &request.dest_bucket_prefix,
-                        &planned.relative_key,
-                    ),
+                    destination_key,
                     size,
                 });
             }
-            PlannedAction::ZipEntry { .. } | PlannedAction::CopyObject { .. } => {}
+            PlannedAction::ZipEntry { .. } => {}
         }
     }
 
@@ -288,6 +293,7 @@ async fn add_archive_entries_to_manifest(
         .context("failed to read zip archive central directory")?;
     let zip_file = reader.file().clone();
     let entries = zip_file.entries();
+    validate_archive_directory(entries, source.len())?;
     let catalog = if let Some(expected) = &request.source_catalogs[source_index] {
         match load_authenticated_catalog(source.clone(), request, entries, &expected.sha256).await {
             Ok(catalog) => {
@@ -652,6 +658,101 @@ fn validate_stored_file_entry(stored: &StoredZipEntry, path: &str) -> Result<()>
     Ok(())
 }
 
+pub(super) fn validate_deployment_preflight(
+    request: &DeploymentRequest,
+    metadata: &ObjectMetadata,
+    manifest: &DeploymentManifest,
+) -> Result<()> {
+    let mut total_output_bytes = 0_u64;
+    for planned in manifest.values() {
+        let destination_key = join_s3_key(&request.dest_bucket_prefix, &planned.relative_key);
+        let key_bytes = destination_key.len();
+        if key_bytes > S3_OBJECT_KEY_MAX_BYTES {
+            return Err(anyhow!(
+                "destination key for `{}` is {key_bytes} UTF-8 bytes, larger than the S3 1024-byte limit",
+                planned.relative_key
+            ));
+        }
+
+        let size = match planned.action {
+            PlannedAction::CopyObject { source_index, size } => {
+                let source_bucket =
+                    request
+                        .source_bucket_names
+                        .get(source_index)
+                        .ok_or_else(|| {
+                            anyhow!("copy plan references missing source index {source_index}")
+                        })?;
+                let source_key = request
+                    .source_object_keys
+                    .get(source_index)
+                    .ok_or_else(|| {
+                        anyhow!("copy plan references missing source index {source_index}")
+                    })?;
+                metadata.validate_copy_for_key(&destination_key, source_bucket, source_key)?;
+                validate_copy_object_size(&planned.relative_key, size)?;
+                size
+            }
+            PlannedAction::ZipEntry { size, .. } => {
+                metadata.validate_for_key(&destination_key)?;
+                if size > S3_SINGLE_PUT_LIMIT {
+                    return Err(anyhow!(
+                        "entry `{}` is {size} bytes, larger than the S3 single PutObject limit",
+                        planned.relative_key
+                    ));
+                }
+                Some(size)
+            }
+        };
+        if let Some(size) = size {
+            total_output_bytes = total_output_bytes
+                .checked_add(size)
+                .ok_or_else(|| anyhow!("deployment output size arithmetic overflowed"))?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_archive_directory(entries: &[StoredZipEntry], source_len: u64) -> Result<()> {
+    let _entry_count = u64::try_from(entries.len())
+        .map_err(|_| anyhow!("source ZIP entry count cannot be represented safely"))?;
+    let mut totals = (0_u64, 0_u64);
+
+    for stored in entries {
+        totals =
+            checked_archive_totals(totals, stored.compressed_size(), stored.uncompressed_size())?;
+        let span_end = stored
+            .header_offset()
+            .checked_add(stored.header_size())
+            .and_then(|offset| offset.checked_add(stored.compressed_size()))
+            .ok_or_else(|| anyhow!("source ZIP central directory arithmetic overflowed"))?;
+        if span_end > source_len {
+            return Err(anyhow!(
+                "source ZIP central directory references data beyond the source object"
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn checked_archive_totals(
+    current: (u64, u64),
+    compressed_size: u64,
+    uncompressed_size: u64,
+) -> Result<(u64, u64)> {
+    Ok((
+        current
+            .0
+            .checked_add(compressed_size)
+            .ok_or_else(|| anyhow!("source ZIP compressed-size total overflowed"))?,
+        current
+            .1
+            .checked_add(uncompressed_size)
+            .ok_or_else(|| anyhow!("source ZIP uncompressed-size total overflowed"))?,
+    ))
+}
+
 fn validate_copy_object_size(path: &str, size: Option<u64>) -> Result<()> {
     let Some(size) = size else {
         return Ok(());
@@ -680,11 +781,13 @@ mod tests {
     use zip::write::{SimpleFileOptions, ZipWriter};
 
     use super::{
-        EmbeddedCatalog, EmbeddedCatalogEntry, S3_SINGLE_COPY_LIMIT, authenticate_catalog_bytes,
-        authenticated_catalog_entry, collect_copy_plans, collect_zip_entry_plans,
-        validate_catalog_entries,
+        EmbeddedCatalog, EmbeddedCatalogEntry, S3_SINGLE_COPY_LIMIT, S3_SINGLE_PUT_LIMIT,
+        authenticate_catalog_bytes, authenticated_catalog_entry, checked_archive_totals,
+        collect_copy_plans, collect_zip_entry_plans, validate_catalog_entries,
+        validate_deployment_preflight,
     };
     use crate::request::compile_filters;
+    use crate::s3::destination::DestinationObject;
     use crate::types::{
         DeploymentManifest, DeploymentRequest, MarkerConfig, PlannedAction, PlannedObject,
         PutObjectRetryJitter, PutObjectRetryOptions, RuntimeOptions,
@@ -756,12 +859,112 @@ mod tests {
             },
         );
 
-        let plans =
-            collect_copy_plans(&manifest, &copy_request(), &HashMap::new()).expect("valid copy");
+        let request = copy_request();
+        let metadata = crate::types::ObjectMetadata::from_request(&request).unwrap();
+        let plans = collect_copy_plans(&manifest, &request, &HashMap::new(), &metadata, None)
+            .expect("valid copy");
 
         assert_eq!(plans.len(), 1);
         assert_eq!(plans[0].expected_etag.as_deref(), Some("abc123"));
         assert_eq!(plans[0].destination_key, "site/archive.zip");
+    }
+
+    #[test]
+    fn metadata_only_copy_updates_bypass_matching_destination_etags() {
+        let mut manifest = DeploymentManifest::new();
+        manifest.insert(
+            "archive.zip".to_string(),
+            PlannedObject {
+                relative_key: "archive.zip".to_string(),
+                expected_etag: Some("abc123".to_string()),
+                action: PlannedAction::CopyObject {
+                    source_index: 0,
+                    size: Some(1024),
+                },
+            },
+        );
+        let destination = HashMap::from([(
+            "archive.zip".to_string(),
+            DestinationObject {
+                etag: Some("abc123".to_string()),
+                size: Some(1024),
+            },
+        )]);
+        let request = copy_request();
+        let previous = crate::types::ObjectMetadata::from_request(&request).unwrap();
+        let mut current = previous.clone();
+        current
+            .user_metadata
+            .insert("release".to_string(), "updated".to_string());
+
+        let unchanged = collect_copy_plans(
+            &manifest,
+            &request,
+            &destination,
+            &previous,
+            Some(&previous),
+        )
+        .unwrap();
+        assert!(unchanged.is_empty());
+
+        let create =
+            collect_copy_plans(&manifest, &request, &destination, &previous, None).unwrap();
+        assert_eq!(create.len(), 1, "Create has no prior metadata identity");
+
+        let changed =
+            collect_copy_plans(&manifest, &request, &destination, &current, Some(&previous))
+                .unwrap();
+        assert_eq!(changed.len(), 1);
+    }
+
+    #[test]
+    fn destination_key_preflight_uses_the_complete_utf8_byte_length() {
+        let request = copy_request();
+        let metadata = crate::types::ObjectMetadata::from_request(&request).unwrap();
+        let manifest = manifest_with_key(&"é".repeat(512));
+        validate_deployment_preflight(&request, &metadata, &manifest)
+            .expect_err("prefix plus a 1024-byte relative key must exceed the limit");
+
+        let mut root_request = request;
+        root_request.dest_bucket_prefix.clear();
+        validate_deployment_preflight(&root_request, &metadata, &manifest)
+            .expect("an exact 1024-byte UTF-8 key is valid");
+
+        let oversized = manifest_with_key(&format!("{}a", "é".repeat(512)));
+        assert!(validate_deployment_preflight(&root_request, &metadata, &oversized).is_err());
+    }
+
+    #[test]
+    fn archive_aggregate_size_arithmetic_is_checked() {
+        assert_eq!(checked_archive_totals((1, 2), 3, 4).unwrap(), (4, 6));
+        assert!(checked_archive_totals((u64::MAX, 0), 1, 0).is_err());
+        assert!(checked_archive_totals((0, u64::MAX), 0, 1).is_err());
+    }
+
+    #[test]
+    fn deployment_preflight_rejects_entries_larger_than_single_put_limit() {
+        let request = copy_request();
+        let metadata = crate::types::ObjectMetadata::from_request(&request).unwrap();
+        let manifest = DeploymentManifest::from([(
+            "large.bin".to_string(),
+            PlannedObject {
+                relative_key: "large.bin".to_string(),
+                expected_etag: None,
+                action: PlannedAction::ZipEntry {
+                    archive_index: 0,
+                    source_index: 0,
+                    size: S3_SINGLE_PUT_LIMIT + 1,
+                    compressed_size: 1,
+                    compression_code: 0,
+                    crc32: 0,
+                    trusted_integrity: None,
+                    source_offset: 0,
+                    source_span_end: 1,
+                },
+            },
+        )]);
+
+        assert!(validate_deployment_preflight(&request, &metadata, &manifest).is_err());
     }
 
     #[test]
@@ -779,7 +982,9 @@ mod tests {
             },
         );
 
-        let error = collect_copy_plans(&manifest, &copy_request(), &HashMap::new())
+        let request = copy_request();
+        let metadata = crate::types::ObjectMetadata::from_request(&request).unwrap();
+        let error = collect_copy_plans(&manifest, &request, &HashMap::new(), &metadata, None)
             .expect_err("oversized source should be rejected");
 
         assert!(
@@ -1010,6 +1215,20 @@ mod tests {
                 },
             },
         }
+    }
+
+    fn manifest_with_key(key: &str) -> DeploymentManifest {
+        DeploymentManifest::from([(
+            key.to_string(),
+            PlannedObject {
+                relative_key: key.to_string(),
+                expected_etag: None,
+                action: PlannedAction::CopyObject {
+                    source_index: 0,
+                    size: Some(1),
+                },
+            },
+        )])
     }
 
     fn zip_from_entries(entries: &[(&str, &[u8])]) -> zip::ZipArchive<Cursor<Vec<u8>>> {

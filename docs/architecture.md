@@ -102,6 +102,7 @@ Verification deploy/destroy can run independent scenario chains concurrently wit
 | `root-prefix` | `scenarios/apps/basic/root-prefix-app.ts` | Deployment without `destinationKeyPrefix`, writing at bucket root. |
 | `marker-replacement` | `scenarios/apps/metadata/marker-replacement-app.ts` | Deploy-time marker replacement across asset, data, JSON, and YAML sources. |
 | `metadata-and-filters` | `scenarios/apps/metadata/metadata-and-filters-app.ts` | Include/exclude filters and S3 metadata mapping. |
+| `metadata-update-initial` / `metadata-update-updated` | `scenarios/apps/updates/metadata-update-initial-app.ts`, `scenarios/apps/updates/metadata-update-updated-app.ts` | Ordered update chain proving that identical extracted and copied bytes are rewritten when object settings change. |
 | `source-overwrite-order` | `scenarios/apps/metadata/source-overwrite-order-app.ts` | Duplicate source keys where later sources win. |
 | `stale-object-cleanup-initial` / `stale-object-cleanup-updated` | `scenarios/apps/updates/stale-object-cleanup-initial-app.ts`, `scenarios/apps/updates/stale-object-cleanup-updated-app.ts` | Ordered update chain that removes destination objects absent from the updated source plan. |
 | `stale-object-retention-initial` / `stale-object-retention-updated` | `scenarios/apps/updates/stale-object-retention-initial-app.ts`, `scenarios/apps/updates/stale-object-retention-updated-app.ts` | Ordered update chain with stale-object deletion disabled, preserving destination objects absent from the updated source plan. |
@@ -349,27 +350,31 @@ CloudFront caller references.
 
 For `extract=true`:
 
-1. `HeadObject` the source ZIP.
-2. Read ZIP central directory metadata with ranged `GetObject`.
-3. Walk central-directory entries.
-4. Apply include and exclude filters.
-5. Evaluate the index-aligned `SourceCatalogs` binding. Unbound sources ignore embedded catalog contents; bound sources must authenticate exactly one `.shin/catalog.v1.json` entry against the template digest.
-6. Before applying deployment filters, strictly validate an authenticated catalog and require a one-to-one path and size mapping with every non-directory, non-catalog ZIP entry.
-7. Build a manifest of planned ZIP entries with normalized destination keys, source archive index, entry offsets, compressed size, uncompressed size, CRC32, and optional trusted size/MD5 metadata.
-8. Coalesce planned source spans into shared source blocks, prefetch them with bounded source GET concurrency, and release blocks after all active readers consume their claims.
-9. List the destination prefix once.
-10. Skip existing marker-free trusted entries when destination size and `ETag` match the authenticated catalog.
-11. For missing marker-free destination objects, stream the source entry directly into `PutObject`.
-12. For existing marker-free destination objects without a trusted catalog match, read/decompress the entry through ranged source blocks, validate uncompressed size and CRC32, compute MD5, and compare it with the destination `ETag` from the list response.
-13. Materialize marker entries in memory after decompression and authenticated-MD5/CRC validation, apply replacements, compute MD5 over final bytes, and upload when changed.
+1. Normalize current object settings and, on Update, the settings from CloudFormation `OldResourceProperties`.
+2. `HeadObject` the source ZIP.
+3. Read ZIP central directory metadata with ranged `GetObject`.
+4. Validate entry counts, aggregate compressed/uncompressed sizes, and every central-directory span with checked arithmetic.
+5. Walk central-directory entries and apply include and exclude filters.
+6. Evaluate the index-aligned `SourceCatalogs` binding. Unbound sources ignore embedded catalog contents; bound sources must authenticate exactly one `.shin/catalog.v1.json` entry against the template digest.
+7. Before applying deployment filters, strictly validate an authenticated catalog and require a one-to-one path and size mapping with every non-directory, non-catalog ZIP entry.
+8. Build a manifest of planned ZIP entries with normalized destination keys, source archive index, entry offsets, compressed size, uncompressed size, CRC32, and optional trusted size/MD5 metadata.
+9. Preflight every final UTF-8 destination key, single-request object size, metadata field, and controlled request header before destination mutation. Fully validate and replace every marker-bearing entry in a read-only pass so its actual expanded size is included.
+10. Coalesce planned source spans into shared source blocks, prefetch them with bounded source GET concurrency, and release blocks after all active readers consume their claims.
+11. List the destination prefix once.
+12. If old/new object settings differ for a final key, bypass every content-based skip and rewrite that object.
+13. Otherwise, skip existing marker-free trusted entries when destination size and `ETag` match the authenticated catalog.
+14. For missing marker-free destination objects, stream the source entry directly into `PutObject` while calculating and storing a full-object SHA-256 checksum.
+15. For existing marker-free destination objects without a trusted catalog match, read/decompress the entry through ranged source blocks, validate uncompressed size and CRC32, compute MD5, and compare it with the destination `ETag` from the list response.
+16. Materialize marker entries in memory after decompression and authenticated-MD5/CRC validation, apply bounded replacements, compute MD5 and SHA-256 over final bytes, and upload when changed.
 
 For `extract=false`:
 
 1. `HeadObject` each source object.
 2. Build copy plans using the source object `ETag` as the expected content identity.
-3. List the destination prefix once.
-4. Skip copies whose destination `ETag` matches.
-5. Run changed copies with `CopyObject` and `MetadataDirective=REPLACE`.
+3. Preflight final keys, known source sizes, metadata, and the encoded `x-amz-copy-source` request header.
+4. List the destination prefix once.
+5. Skip copies whose destination `ETag` matches only when old/new object settings also match.
+6. Run changed copies with `CopyObject`, `MetadataDirective=REPLACE`, and SHA-256 checksum calculation.
 
 Destination listing is also used for stale-object cleanup. With `destinationLifecycle.onDeploy.deleteStaleObjects` enabled, objects under the destination prefix that are not in the current deployment plan are removed with `DeleteObjects` in 1000-key chunks.
 
@@ -377,7 +382,9 @@ Destination listing is also used for stale-object cleanup. With `destinationLife
 
 ```mermaid
 flowchart LR
-  A["Planned object"] --> B["Destination ListObjectsV2 metadata"]
+  A["Planned object"] --> M{"Create, or old/new object settings changed?"}
+  M -->|Yes| K["Upload or copy"]
+  M -->|No| B["Destination ListObjectsV2 metadata"]
   B --> C{"Destination object exists?"}
   C -->|No| D["Upload without pre-hashing"]
   C -->|Yes| E{"Planned object type"}
@@ -393,11 +400,13 @@ flowchart LR
   I -->|No| K["Upload or copy"]
 ```
 
-The provider intentionally uses destination `ETag` as the only unchanged-object skip identity. `ListObjectsV2` exposes the destination `ETag`, but it does not expose the actual checksum value needed to compare S3 `ChecksumCRC32`. Using CRC32 for skip decisions would require one checksum-mode `HeadObject` per destination object, which is not worth the request volume for this deployment model.
+The provider uses destination `ETag` as its normal byte-identity signal, but it is not the complete semantic skip identity. On Update, normalized user metadata and every supported system setting are compared against `OldResourceProperties`; a difference bypasses all `ETag` and catalog skips. Content type is resolved from the final key, and implicit `private` ACL / `STANDARD` storage defaults are normalized before comparison. Create has no old semantic identity, so it bypasses content-only skips for pre-existing objects and converges the requested settings.
 
-Directory `Source.asset` inputs are packaged with an authenticated source MD5 catalog. Marker-free entries with trusted MD5s and matching destination size can be skipped without reading ZIP entry bytes. Without a trusted catalog match, marker-free entries that already exist at the destination must be read and decompressed to compute MD5. Missing marker-free objects skip this pre-hash and stream straight to upload. ZIP entry reads validate declared uncompressed size, CRC32, and any authenticated MD5 before the final upload chunk is released. Entries with deploy-time markers are fully materialized in memory, their packaged bytes are validated before replacement, and MD5 is then computed over the final replaced bytes.
+`ListObjectsV2` exposes destination `ETag`, but not the actual checksum value needed to compare S3 `ChecksumCRC32` or SHA-256. Performing one checksum-mode `HeadObject` per destination object would defeat the single-list deployment model, so checksum reads are reserved for reconciling ambiguous conditional writes.
 
-`extract=false` copies use source and destination `ETag` comparison for skipping. Source object `ETag` comes from a source `HeadObject`; destination `ETag` comes from the single destination list.
+Directory `Source.asset` inputs are packaged with an authenticated source MD5 catalog. Marker-free entries with trusted MD5s and matching destination size can be skipped without reading ZIP entry bytes. Without a trusted catalog match, marker-free entries that already exist at the destination must be read and decompressed to compute MD5. Missing marker-free objects skip this pre-hash and stream straight to upload. ZIP entry reads validate declared uncompressed size, CRC32, and any authenticated MD5 before the final upload chunk is released. Entries with deploy-time markers are fully materialized and validated in a read-only preflight before destination listing, then may be materialized a second time for comparison/upload. This preserves the before-mutation marker-size guarantee at the cost of temporary duplicate source work until the deterministic streaming replacement pass replaces both stages.
+
+`extract=false` copies use source and destination `ETag` comparison for byte skipping. Source object `ETag` comes from a source `HeadObject`; destination `ETag` comes from the single destination list. A normalized object-setting change independently forces `CopyObject` with replacement metadata even when those values match.
 
 ## Authenticated Catalog Trust
 
@@ -514,7 +523,9 @@ the complete asset through Shin's materializer.
 
 ## Write Safety
 
-Extracted uploads use destination preconditions derived from the destination listing. Missing destination keys are uploaded with `If-None-Match: *`; existing destination keys with a listed `ETag` are uploaded with `If-Match` for that `ETag`; existing keys without a usable `ETag` fall back to plain `PutObject`. This keeps the deployment optimistic-concurrency-safe without adding extra destination requests. A `PreconditionFailed` response means the destination changed after planning and the deployment should fail rather than overwrite a concurrent writer.
+Extracted uploads use destination preconditions derived from the destination listing. Missing destination keys are uploaded with `If-None-Match: *`; existing destination keys with a listed `ETag` are uploaded with `If-Match` for that `ETag`; existing keys without a usable `ETag` fall back to plain `PutObject`. Every application-level `PutObject` attempt disables SDK retries, so permanent 4xx responses and source CRC/archive validation failures cannot be replayed underneath the typed retry policy.
+
+Each extracted upload requests and records a full-object SHA-256 checksum. A conditional `409` or `412` can be ambiguous after a prior successful response was lost. In that case, the provider uses checksum-mode `HeadObject` plus `GetObjectAcl` and, when required for a bucket-owner canned ACL, `GetBucketAcl`. It reports success only when content length, full-object SHA-256, all visible system and user metadata, and the effective canned ACL exactly match the intended object. Missing checksum evidence, inaccessible metadata, or any difference fails closed.
 
 The source ZIP ranged-read path still uses source `If-Match` when the source object has an `ETag`; that protects a single deployment from reading a source archive that changes while it is being streamed.
 
@@ -547,7 +558,7 @@ other non-retryable responses fail immediately.
 
 ## IAM Shape
 
-The provider role uses source grants from each bound CDK source and destination grants from the target bucket. Destination object write/delete permissions are scoped to `destinationKeyPrefix` when the prefix is concrete. Destination `ListBucket` is likewise scoped with `s3:prefix` for both deployment cleanup and `onDelete.deleteObjects`. A root or unresolved prefix requires bucket-wide object/list scope.
+The provider role uses source grants from each bound CDK source and destination grants from the target bucket. Destination object read/write/delete permissions, including `GetObjectAcl` for exact conditional-write reconciliation, are scoped to `destinationKeyPrefix` when the prefix is concrete. Destination `ListBucket` is likewise scoped with `s3:prefix` for both deployment cleanup and `onDelete.deleteObjects`. `GetBucketAcl` is limited to the destination bucket and is used only to distinguish cross-account bucket-owner canned ACLs during reconciliation. A root or unresolved prefix requires bucket-wide object/list scope.
 
 `onChange.deleteObjects` grants List/Delete and ownership-tag access across the selected old bucket because `OldResourceProperties` does not reveal the old prefix until runtime. The provider derives that prefix from the Update event and validates the selected bucket before using the grant. Omitting `fromBucket` reuses the current bucket; a changed old bucket must be passed explicitly. Current CloudFront permissions cover an unchanged distribution, while `onChange.invalidateDistribution` grants distribution-specific invalidation access independently of object deletion.
 
@@ -645,13 +656,14 @@ Destination upload diagnostics field reference:
 
 ## Limits
 
-- Skip decisions assume simple single-part static objects where S3 `ETag` is the MD5 of object bytes.
+- Normal byte-skip decisions assume simple single-part static objects where S3 `ETag` is the MD5 of object bytes; CloudFormation object-setting changes independently force rewrites.
 - Without an authenticated source MD5 catalog match, unchanged existing ZIP entries must be read and hashed during deployment.
-- Metadata-only changes may be skipped when content identity is unchanged.
+- Out-of-band destination metadata drift is not detected when CloudFormation object settings are unchanged.
 - Multipart objects, SSE-KMS/SSE-C objects, and objects written by other tools may not expose usable content identity.
 - Source ZIP archives do not need to fit in Lambda memory or ephemeral storage; marker-free ZIP entries stream in chunks.
 - Marker-replaced entries must fit in Lambda memory after replacement.
 - Each extracted ZIP entry must fit S3's single-request `PutObject` limit.
+- Final destination keys must fit S3's 1024-byte UTF-8 limit; user/system metadata each fit 2 KiB; controlled request headers fit within 8 KiB after a conservative 2 KiB SDK/signing reserve.
 - `advancedRuntimeTuning.sourceBlockBytes` must be at least 30 bytes so ZIP local file headers can fit in one source block.
 - Very small Lambda memory settings reduce source GET concurrency and source window capacity unless explicitly overridden.
 - Cataloged asset packaging requires CDK staging and rejects bundled directory assets, symlinks, and non-regular files.

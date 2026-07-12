@@ -36,11 +36,13 @@ aws-sdk-s3 = { version = "1", default-features = false, features = [
   "rt-tokio",
   "sigv4a",
 ] }
+base64 = "0.22"
 bytes = "1"
 crc32fast = "1"
 fastrand = "2"
 futures-util = "0.3"
 globset = "0.4"
+http = "1"
 http-body = "1"
 lambda_runtime = "1"
 md-5 = "0.11"
@@ -66,6 +68,7 @@ urlencoding = "2"
 uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
+aws-smithy-http-client = { version = "1", features = ["test-util"] }
 tokio = { version = "1", features = ["test-util"] }
 zip = { version = "8", default-features = false, features = [
   "deflate",

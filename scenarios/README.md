@@ -13,6 +13,8 @@ pnpm verify destroy --concurrency 4
 
 Deploy runs ordered update chains serially within each chain and runs independent chains concurrently. Use `--concurrency 1` when debugging one chain at a time.
 
+The `metadata-update-initial` → `metadata-update-updated` chain keeps extracted and `extract=false` source bytes identical while changing user/system object settings. It is the end-to-end regression scenario for semantic metadata rewrites.
+
 `pnpm benchmark` runs only the named benchmark scenario and expands the requested config matrix:
 
 ```bash

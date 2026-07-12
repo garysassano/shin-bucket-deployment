@@ -8,8 +8,7 @@ This document tracks how `ShinBucketDeployment` maps `s3-unspool` ideas into the
 | --- | --- |
 | `s3-unspool` version | `0.1.0-beta.6` |
 | `s3-unspool` commit | `a699d18` (`refactor: improve Rust interface API (#24)`) |
-| Local checkout | `/Users/sassanog/git/s3-unspool` |
-| Last parity review | 2026-05-08 |
+| Last parity review | 2026-07-12 |
 
 This matrix is point-in-time documentation. Re-check it when `s3-unspool` changes options, reports, scheduler behavior, or conditional-write semantics.
 
@@ -34,14 +33,14 @@ This matrix is point-in-time documentation. Re-check it when `s3-unspool` change
 | Embedded MD5 catalog runtime support | Implemented only for template-authenticated `.shin/catalog.v1.json` entries. Unbound catalog contents are ignored. |
 | Cataloged asset production | Implemented for local directory `Source.asset` inputs with an exact catalog SHA-256 binding in the CloudFormation template. |
 | Catalog sparse skip | Implemented. Marker-free files with authenticated catalog size/MD5 and matching destination size/ETag are skipped without reading entry data. |
-| Destination write preconditions | Implemented for extracted uploads. Missing destination keys use `If-None-Match: *`; existing keys with listed `ETag`s use `If-Match`; existing keys without usable `ETag`s fall back to plain `PutObject`. |
-| `PutObject` retry/backoff | Implemented with capped retry delays, full/no jitter, and a shared throttle cooldown. |
+| Destination write preconditions | Implemented for extracted uploads. Missing destination keys use `If-None-Match: *`; existing keys with listed `ETag`s use `If-Match`; existing keys without usable `ETag`s fall back to plain `PutObject`. Ambiguous conflicts converge only after exact size, SHA-256, metadata, and ACL reconciliation. |
+| `PutObject` retry/backoff | Implemented with one SDK attempt per typed application attempt, retryable-error classification, capped delays, full/no jitter, and a shared throttle cooldown. |
 | Runtime tuning surface | Implemented for transfer concurrency, source block/window settings, source GET concurrency, and PUT retry policy. |
 | Adaptive source tuning | Implemented. Source GET concurrency and source block window default from the provider Lambda memory size. |
 | Structured diagnostics counters | Implemented as provider logs for source GET attempts/retries/errors, bytes/amplification, block hits/waits/releases/refetches, split wait reasons, replay-claim counters, resident source-window high-water, active reader and active GET high-water, conditional write conflicts, and PUT retry/failure counters. |
 | `DestinationCleanup` policy | Mapped to `destinationLifecycle.onDeploy.deleteStaleObjects`: `true` behaves like `DeleteExtra`; `false` behaves like `KeepExtra`. |
 | `ComparisonMode` policy | Mapped to authenticated-catalog-then-hash behavior for marker-free ZIP entries. Untrusted sources always hash; there is no public trust or force-hash mode. |
-| `ConflictPolicy` policy | Mapped to CloudFormation fail-fast behavior. Conditional destination write conflicts are counted in the sanitized provider summary and fail the custom-resource request instead of being reported and continued. |
+| `ConflictPolicy` policy | Mapped to exact convergence followed by CloudFormation fail-fast behavior. An ambiguous conditional conflict succeeds only when checksum-mode `HeadObject` and ACL reads prove the intended object; every other conflict is counted and fails the custom-resource request. |
 | `AdaptiveSourceWindow` | Implemented as equivalent internal memory-derived source-window sizing. Public CDK users set `memoryLimit`; low-level overrides remain under `advancedRuntimeTuning`. |
 | Read-only option accessors | Not applicable. This construct exposes synthesized CloudFormation properties instead of a public Rust `SyncOptions` value. |
 
@@ -55,7 +54,7 @@ This matrix is point-in-time documentation. Re-check it when `s3-unspool` change
 | `include` / `exclude` | Preserved while walking ZIP entries and stale-object deletion candidates. |
 | `destinationLifecycle.onDeploy.deleteStaleObjects` | Maps the upstream `prune` behavior to destination listing and batched `DeleteObjects`. |
 | `destinationLifecycle.onChange` / `onDelete` | Separately opts into deleting old objects, invalidating a changed old distribution, or deleting destination objects on Delete. Old-object deletion derives the old prefix from `OldResourceProperties`; changed old resources are explicit synthesis-time inputs. |
-| S3 metadata props | Preserved for upload and copy requests. |
+| S3 metadata props | Preserved for upload and copy requests. Normalized old/new settings force extracted uploads and `extract=false` copies when semantics change, even if bytes match; Create treats pre-existing metadata as unknown. |
 | CloudFront invalidation | Preserved after S3 deployment. |
 | `deployedBucket` and `objectKeys` | Preserved through custom-resource response data. |
 
@@ -96,8 +95,8 @@ Use `Source.asset(path, { embeddedCatalog: false })` to opt out of cataloged pac
 
 Local verification currently covers:
 
-- Rust compile and unit tests for ranged entry reads, decompression, CRC/MD5 validation, strict catalog authentication and mapping, destination planning, ZIP64 metadata, and marker replacement.
-- TypeScript synthesis tests for bounded materialization, cleanup, custom-resource bindings, and CDK `ZIP_DIRECTORY` asset output.
+- Rust compile and unit tests for ranged entry reads, decompression, CRC/MD5/SHA-256 validation, strict catalog authentication and mapping, Create/Update semantic metadata decisions, exact lost-response reconciliation, request preflight, destination planning, ZIP64 metadata, and bounded marker replacement.
+- TypeScript synthesis tests for bounded materialization, cleanup, custom-resource bindings and IAM, and CDK `ZIP_DIRECTORY` asset output.
 - TypeScript build, typecheck, lint, and Vitest suite.
 
-The 2026-05-02 AWS evidence predates template-authenticated catalogs and does not verify this trust flow. No new AWS run was performed for this change. Historical performance rows remain in `benchmarks/results.jsonl` and are not correctness evidence.
+The latest sanitized correctness status, including which provider architecture ran in AWS, is maintained in [verification](./verification.md). Historical performance rows remain in `benchmarks/results.jsonl` and are not correctness evidence.

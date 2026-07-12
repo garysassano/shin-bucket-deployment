@@ -5,10 +5,20 @@ use serde_json::Value;
 
 use crate::types::MarkerConfig;
 
+#[cfg(test)]
 pub(crate) fn replace_markers(
     bytes: Vec<u8>,
     markers: &HashMap<String, String>,
     config: &MarkerConfig,
+) -> Result<Vec<u8>> {
+    replace_markers_bounded(bytes, markers, config, usize::MAX)
+}
+
+pub(crate) fn replace_markers_bounded(
+    bytes: Vec<u8>,
+    markers: &HashMap<String, String>,
+    config: &MarkerConfig,
+    max_output_bytes: usize,
 ) -> Result<Vec<u8>> {
     if markers.is_empty() {
         return Ok(bytes);
@@ -18,7 +28,7 @@ pub(crate) fn replace_markers(
     let mut output = bytes;
 
     for (needle, replacement) in replacements {
-        output = replace_all(output, &needle, &replacement);
+        output = replace_all(output, &needle, &replacement, max_output_bytes)?;
     }
 
     Ok(output)
@@ -56,12 +66,35 @@ fn json_escape_marker_value(value: &str) -> Result<String> {
     Ok(escaped[1..escaped.len() - 1].to_string())
 }
 
-fn replace_all(input: Vec<u8>, needle: &[u8], replacement: &[u8]) -> Vec<u8> {
+fn replace_all(
+    input: Vec<u8>,
+    needle: &[u8],
+    replacement: &[u8],
+    max_output_bytes: usize,
+) -> Result<Vec<u8>> {
     if needle.is_empty() {
-        return input;
+        return Ok(input);
     }
 
-    let mut result = Vec::with_capacity(input.len());
+    let occurrences = count_non_overlapping(&input, needle);
+    let removed = occurrences
+        .checked_mul(needle.len())
+        .ok_or_else(|| anyhow::anyhow!("marker replacement size arithmetic overflowed"))?;
+    let added = occurrences
+        .checked_mul(replacement.len())
+        .ok_or_else(|| anyhow::anyhow!("marker replacement size arithmetic overflowed"))?;
+    let output_len = input
+        .len()
+        .checked_sub(removed)
+        .and_then(|len| len.checked_add(added))
+        .ok_or_else(|| anyhow::anyhow!("marker replacement size arithmetic overflowed"))?;
+    if output_len > max_output_bytes {
+        return Err(anyhow::anyhow!(
+            "marker-expanded object is {output_len} bytes, larger than the configured output limit"
+        ));
+    }
+
+    let mut result = Vec::with_capacity(output_len);
     let mut cursor = 0usize;
 
     while let Some(index) = find_subslice(&input[cursor..], needle) {
@@ -72,7 +105,17 @@ fn replace_all(input: Vec<u8>, needle: &[u8], replacement: &[u8]) -> Vec<u8> {
     }
 
     result.extend_from_slice(&input[cursor..]);
-    result
+    Ok(result)
+}
+
+fn count_non_overlapping(haystack: &[u8], needle: &[u8]) -> usize {
+    let mut count = 0_usize;
+    let mut cursor = 0_usize;
+    while let Some(index) = find_subslice(&haystack[cursor..], needle) {
+        count = count.saturating_add(1);
+        cursor = cursor.saturating_add(index).saturating_add(needle.len());
+    }
+    count
 }
 
 fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -193,5 +236,15 @@ mod tests {
             String::from_utf8(rendered).expect("output should be valid utf-8"),
             r#"{"stackName":"ShinBucketDeploymentTokenDemo"}"#,
         );
+    }
+
+    #[test]
+    fn bounded_replacement_rejects_expansion_before_allocating_the_result() {
+        let markers = HashMap::from([("x".to_string(), "expanded".to_string())]);
+
+        let error = replace_markers_bounded(b"xx".to_vec(), &markers, &MarkerConfig::default(), 15)
+            .expect_err("16-byte expansion must be rejected");
+
+        assert!(error.to_string().contains("16 bytes"));
     }
 }

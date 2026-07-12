@@ -621,6 +621,7 @@ export class ShinBucketDeployment extends Construct {
       this.handlerFunction,
       destinationObjectKeyPattern,
       "s3:GetObject",
+      "s3:GetObjectAcl",
       "s3:PutObject",
       "s3:PutObjectLegalHold",
       "s3:PutObjectRetention",
@@ -640,7 +641,7 @@ export class ShinBucketDeployment extends Construct {
     this.handlerFunction.addToRolePolicy(
       new PolicyStatement({
         effect: Effect.ALLOW,
-        actions: ["s3:GetBucketTagging"],
+        actions: ["s3:GetBucketAcl", "s3:GetBucketTagging"],
         resources: [this.destinationBucket.bucketArn],
       }),
     );

@@ -5,43 +5,50 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
+use aws_sdk_s3::Client as S3Client;
+use aws_sdk_s3::config::retry::RetryConfig;
 use aws_sdk_s3::error::ProvideErrorMetadata;
 use aws_sdk_s3::error::SdkError;
 use aws_sdk_s3::operation::put_object::PutObjectError;
 use aws_sdk_s3::primitives::ByteStream;
-use aws_sdk_s3::types::MetadataDirective;
+use aws_sdk_s3::types::{ChecksumAlgorithm, ChecksumMode, ChecksumType, MetadataDirective};
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use crc32fast::Hasher as Crc32Hasher;
 use fastrand::Rng;
 use md5::{Digest as Md5Digest, Md5};
+use sha2::Sha256;
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use tokio::time::timeout_at;
 
 use crate::deadline::InvocationDeadlines;
-use crate::replace::replace_markers;
+use crate::replace::replace_markers_bounded;
 use crate::types::{
     AppState, DeploymentRequest, DeploymentStats, MarkerConfig, ObjectMetadata,
     PutObjectRetryJitter, PutObjectRetryOptions, SourceArchive,
 };
 
 use super::archive::{
-    SourceBlockOptions, SourceBlockStore, validate_zip_entry_output,
+    SourceBlockOptions, SourceBlockStore, UploadBodyState, validate_zip_entry_output,
     validate_zip_entry_size_not_exceeded, zip_entry_body, zip_entry_reader,
 };
 use super::destination::{DestinationObject, destination_md5_and_size_match};
 use super::metadata::{apply_copy_metadata, apply_put_metadata};
 use super::planner::{CopyPlan, ZipEntryPlan};
-use super::{ZIP_ENTRY_READ_CHUNK_BYTES, source_window_bytes_for_archive};
+use super::{S3_SINGLE_PUT_LIMIT, ZIP_ENTRY_READ_CHUNK_BYTES, source_window_bytes_for_archive};
 
 enum UploadPayload {
     Bytes {
         bytes: Vec<u8>,
+        body_state: Arc<UploadBodyState>,
     },
     ZipEntry {
         store: Arc<SourceBlockStore>,
         plan: ZipEntryPlan,
         content_length: u64,
+        body_state: Arc<UploadBodyState>,
     },
 }
 
@@ -50,11 +57,42 @@ pub(super) struct TransferExecution {
     pub(super) deadlines: InvocationDeadlines,
 }
 
+pub(super) struct ObjectSemantics<'a> {
+    pub(super) current: &'a ObjectMetadata,
+    pub(super) previous: Option<&'a ObjectMetadata>,
+}
+
 impl UploadPayload {
+    fn from_bytes(bytes: Vec<u8>) -> Self {
+        let body_state = Arc::new(UploadBodyState::default());
+        body_state.record_checksum(sha256_base64(&bytes));
+        Self::Bytes { bytes, body_state }
+    }
+
+    fn from_zip_entry(
+        store: Arc<SourceBlockStore>,
+        plan: ZipEntryPlan,
+        content_length: u64,
+    ) -> Self {
+        Self::ZipEntry {
+            store,
+            plan,
+            content_length,
+            body_state: Arc::new(UploadBodyState::default()),
+        }
+    }
+
     fn content_length(&self) -> u64 {
         match self {
-            UploadPayload::Bytes { bytes } => u64::try_from(bytes.len()).unwrap_or(u64::MAX),
+            UploadPayload::Bytes { bytes, .. } => u64::try_from(bytes.len()).unwrap_or(u64::MAX),
             UploadPayload::ZipEntry { content_length, .. } => *content_length,
+        }
+    }
+
+    fn body_state(&self) -> &UploadBodyState {
+        match self {
+            UploadPayload::Bytes { body_state, .. }
+            | UploadPayload::ZipEntry { body_state, .. } => body_state,
         }
     }
 }
@@ -92,7 +130,7 @@ struct PutRetryCoordinator {
 }
 
 struct PutContext<'a> {
-    state: &'a AppState,
+    destination_s3: &'a S3Client,
     destination_bucket: &'a str,
     metadata: &'a ObjectMetadata,
     retry: &'a PutObjectRetryOptions,
@@ -157,11 +195,15 @@ pub(super) async fn upload_zip_entries(
     state: &AppState,
     archives: &[SourceArchive],
     request: &DeploymentRequest,
-    metadata: &ObjectMetadata,
+    semantics: ObjectSemantics<'_>,
     zip_plans: BTreeMap<usize, Vec<ZipEntryPlan>>,
     destination_objects: &HashMap<String, DestinationObject>,
     execution: TransferExecution,
 ) -> Result<()> {
+    let ObjectSemantics {
+        current: metadata,
+        previous: previous_metadata,
+    } = semantics;
     let TransferExecution { stats, deadlines } = execution;
     let semaphore = Arc::new(Semaphore::new(
         request.runtime.max_parallel_transfers.max(1),
@@ -182,6 +224,9 @@ pub(super) async fn upload_zip_entries(
                     plan,
                     &request.source_markers[plan.source_index],
                     destination_objects.get(&plan.relative_key),
+                    previous_metadata.is_none_or(|previous| {
+                        !previous.semantically_matches(metadata, &plan.destination_key)
+                    }),
                     &stats,
                 )
             })
@@ -234,6 +279,9 @@ pub(super) async fn upload_zip_entries(
             let put_diagnostics = put_diagnostics.clone();
             let put_retry_coordinator = put_retry_coordinator.clone();
             let put_retry = request.runtime.put_object_retry.clone();
+            let metadata_changed = previous_metadata.is_none_or(|previous| {
+                !previous.semantically_matches(&metadata, &plan.destination_key)
+            });
             let stats = Arc::clone(&stats);
 
             tasks.spawn(async move {
@@ -244,6 +292,7 @@ pub(super) async fn upload_zip_entries(
                     &source_markers,
                     &source_marker_config,
                     destination_object.as_ref(),
+                    metadata_changed,
                     &stats,
                 )
                 .await?
@@ -254,7 +303,7 @@ pub(super) async fn upload_zip_entries(
                 let precondition = put_precondition_for_destination(destination_object.as_ref());
                 upload_payload(
                     PutContext {
-                        state: &state,
+                        destination_s3: &state.destination_s3,
                         destination_bucket: &destination_bucket,
                         metadata: &metadata,
                         retry: &put_retry,
@@ -285,13 +334,90 @@ pub(super) async fn upload_zip_entries(
     body_drain_result
 }
 
+pub(super) async fn preflight_marker_outputs(
+    archives: &[SourceArchive],
+    request: &DeploymentRequest,
+    zip_plans: &BTreeMap<usize, Vec<ZipEntryPlan>>,
+    deadlines: InvocationDeadlines,
+) -> Result<()> {
+    for (archive_index, plans) in zip_plans {
+        let marked_plans = plans
+            .iter()
+            .filter(|plan| !request.source_markers[plan.source_index].is_empty())
+            .cloned()
+            .collect::<Vec<_>>();
+        if marked_plans.is_empty() {
+            continue;
+        }
+
+        let source = archives
+            .get(*archive_index)
+            .with_context(|| {
+                format!("missing source archive for marker preflight {archive_index}")
+            })?
+            .source
+            .clone();
+        let source_window_bytes =
+            source_window_bytes_for_archive(&request.runtime, source.len(), marked_plans.len());
+        let store = SourceBlockStore::new(
+            source,
+            &marked_plans,
+            SourceBlockOptions {
+                block_bytes: request.runtime.source_block_bytes,
+                merge_gap_bytes: request.runtime.source_block_merge_gap_bytes,
+                get_concurrency: request.runtime.source_get_concurrency,
+                window_bytes: source_window_bytes,
+            },
+        );
+        let mut scheduler = tokio::spawn(store.clone().run_scheduler());
+        let validation = timeout_at(deadlines.work(), async {
+            for plan in &marked_plans {
+                prepare_zip_entry_for_comparison(
+                    store.clone(),
+                    plan,
+                    &request.source_markers[plan.source_index],
+                    &request.source_markers_config[plan.source_index],
+                )
+                .await?;
+            }
+            Ok::<(), anyhow::Error>(())
+        })
+        .await;
+
+        match validation {
+            Ok(Ok(())) => {
+                timeout_at(deadlines.work(), &mut scheduler)
+                    .await
+                    .context("marker preflight scheduler exceeded the deployment work deadline")?
+                    .context("marker preflight scheduler panicked")?;
+            }
+            Ok(Err(error)) => {
+                scheduler.abort();
+                let _ = scheduler.await;
+                return Err(error).context("marker replacement preflight failed");
+            }
+            Err(_) => {
+                scheduler.abort();
+                let _ = scheduler.await;
+                return Err(anyhow!(
+                    "marker replacement preflight exceeded the deployment work deadline"
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn catalog_skips_zip_entry(
     plan: &ZipEntryPlan,
     source_markers: &HashMap<String, String>,
     destination_object: Option<&DestinationObject>,
+    metadata_changed: bool,
     stats: &DeploymentStats,
 ) -> bool {
-    let skip = source_markers.is_empty()
+    let skip = !metadata_changed
+        && source_markers.is_empty()
         && plan
             .trusted_integrity
             .as_ref()
@@ -311,23 +437,25 @@ async fn prepare_zip_entry_upload(
     source_markers: &HashMap<String, String>,
     source_marker_config: &MarkerConfig,
     destination_object: Option<&DestinationObject>,
+    metadata_changed: bool,
     stats: &DeploymentStats,
 ) -> Result<Option<UploadPayload>> {
     if source_markers.is_empty() && destination_object.is_none() {
-        return Ok(Some(UploadPayload::ZipEntry {
-            store: store.clone(),
-            plan: plan.clone(),
-            content_length: plan.size,
-        }));
+        return Ok(Some(UploadPayload::from_zip_entry(
+            store.clone(),
+            plan.clone(),
+            plan.size,
+        )));
     }
 
-    if source_markers.is_empty() && plan.trusted_integrity.is_some() && destination_object.is_some()
+    if source_markers.is_empty()
+        && (metadata_changed || (plan.trusted_integrity.is_some() && destination_object.is_some()))
     {
-        return Ok(Some(UploadPayload::ZipEntry {
-            store: store.clone(),
-            plan: plan.clone(),
-            content_length: plan.size,
-        }));
+        return Ok(Some(UploadPayload::from_zip_entry(
+            store.clone(),
+            plan.clone(),
+            plan.size,
+        )));
     }
 
     if source_markers.is_empty()
@@ -335,11 +463,11 @@ async fn prepare_zip_entry_upload(
             .and_then(|object| object.size)
             .is_some_and(|size| size != plan.size)
     {
-        return Ok(Some(UploadPayload::ZipEntry {
-            store: store.clone(),
-            plan: plan.clone(),
-            content_length: plan.size,
-        }));
+        return Ok(Some(UploadPayload::from_zip_entry(
+            store.clone(),
+            plan.clone(),
+            plan.size,
+        )));
     }
 
     stats.add_md5_hash_attempt();
@@ -347,7 +475,7 @@ async fn prepare_zip_entry_upload(
         prepare_zip_entry_for_comparison(store.clone(), plan, source_markers, source_marker_config)
             .await?;
 
-    if destination_object_etag_matches(destination_object, &prepared.etag) {
+    if prepared_upload_matches_destination(destination_object, &prepared.etag, metadata_changed) {
         stats.add_md5_skip();
         stats.add_skipped_object();
         return Ok(None);
@@ -388,6 +516,7 @@ async fn copy_source_object(
         .bucket(destination_bucket)
         .key(destination_key)
         .copy_source(copy_source)
+        .checksum_algorithm(ChecksumAlgorithm::Sha256)
         .metadata_directive(MetadataDirective::Replace);
 
     if let Some(etag) = expected_etag {
@@ -417,19 +546,21 @@ async fn prepare_zip_entry_for_comparison(
     if source_markers.is_empty() {
         let etag = hash_zip_entry_reader(store.clone(), plan.clone()).await?;
         Ok(PreparedUploadPayload {
-            payload: UploadPayload::ZipEntry {
-                store,
-                plan: plan.clone(),
-                content_length: plan.size,
-            },
+            payload: UploadPayload::from_zip_entry(store, plan.clone(), plan.size),
             etag,
         })
     } else {
         let bytes = read_zip_entry_to_vec(store, plan.clone()).await?;
-        let replaced = replace_markers(bytes, source_markers, source_marker_config)?;
+        let replaced = replace_markers_bounded(
+            bytes,
+            source_markers,
+            source_marker_config,
+            usize::try_from(S3_SINGLE_PUT_LIMIT).unwrap_or(usize::MAX),
+        )?;
         let etag = md5_hex(&replaced);
+        validate_put_object_size(plan, replaced.len())?;
         Ok(PreparedUploadPayload {
-            payload: UploadPayload::Bytes { bytes: replaced },
+            payload: UploadPayload::from_bytes(replaced),
             etag,
         })
     }
@@ -454,15 +585,19 @@ async fn upload_payload(
             .await;
         let body = payload_body(&payload);
         let request = context
-            .state
             .destination_s3
             .put_object()
             .bucket(context.destination_bucket)
-            .key(destination_key);
+            .key(destination_key)
+            .checksum_algorithm(ChecksumAlgorithm::Sha256);
         let request = apply_put_precondition(request, precondition.as_ref());
 
         match apply_put_metadata(request, context.metadata, destination_key)
             .body(body)
+            .customize()
+            .config_override(
+                aws_sdk_s3::config::Builder::new().retry_config(RetryConfig::disabled()),
+            )
             .send()
             .await
         {
@@ -470,7 +605,12 @@ async fn upload_payload(
                 context.stats.add_uploaded_object(payload.content_length());
                 return Ok(());
             }
-            Err(error) if !is_conditional_put_conflict(&error) && attempt < max_attempts => {
+            Err(error)
+                if !is_conditional_put_conflict(&error)
+                    && payload.body_state().validation_error().is_none()
+                    && is_retryable_put_error(&error)
+                    && attempt < max_attempts =>
+            {
                 let code = put_error_code(&error);
                 let throttled = code.as_deref().is_some_and(is_put_throttle_error_code);
                 context.diagnostics.record_failure(&error, throttled);
@@ -508,6 +648,15 @@ async fn upload_payload(
                 context.diagnostics.record_failure(&error, throttled);
                 if is_conditional_put_conflict(&error) {
                     context.stats.add_conditional_conflict();
+                    if reconcile_conditional_put(&context, destination_key, &payload).await {
+                        context.stats.add_uploaded_object(payload.content_length());
+                        return Ok(());
+                    }
+                }
+                if let Some(validation_error) = payload.body_state().validation_error() {
+                    return Err(anyhow!(validation_error.to_string())).with_context(|| {
+                        format!("source validation failed while uploading {destination_key}")
+                    });
                 }
                 return Err(error).with_context(|| format!("failed to upload {destination_key}"));
             }
@@ -562,12 +711,18 @@ fn is_conditional_put_conflict(error: &SdkError<PutObjectError>) -> bool {
 
 fn payload_body(payload: &UploadPayload) -> ByteStream {
     match payload {
-        UploadPayload::Bytes { bytes } => ByteStream::from(bytes.clone()),
+        UploadPayload::Bytes { bytes, .. } => ByteStream::from(bytes.clone()),
         UploadPayload::ZipEntry {
             store,
             plan,
             content_length,
-        } => zip_entry_body(store.clone(), plan.clone(), *content_length),
+            body_state,
+        } => zip_entry_body(
+            store.clone(),
+            plan.clone(),
+            *content_length,
+            Arc::clone(body_state),
+        ),
     }
 }
 
@@ -577,11 +732,128 @@ fn retain_payload_for_replay(payload: &UploadPayload) {
     }
 }
 
+async fn reconcile_conditional_put(
+    context: &PutContext<'_>,
+    destination_key: &str,
+    payload: &UploadPayload,
+) -> bool {
+    let Some(expected_checksum) = payload.body_state().checksum_sha256() else {
+        return false;
+    };
+    let head = match context
+        .destination_s3
+        .head_object()
+        .bucket(context.destination_bucket)
+        .key(destination_key)
+        .checksum_mode(ChecksumMode::Enabled)
+        .send()
+        .await
+    {
+        Ok(head) => head,
+        Err(error) => {
+            tracing::warn!(
+                destination_key,
+                error = %error,
+                "could not reconcile an ambiguous conditional PutObject result"
+            );
+            return false;
+        }
+    };
+
+    let size_matches = head
+        .content_length()
+        .and_then(|size| u64::try_from(size).ok())
+        == Some(payload.content_length());
+    let checksum_matches = head.checksum_sha256() == Some(expected_checksum)
+        && head.checksum_type() == Some(&ChecksumType::FullObject);
+    let metadata_matches = context.metadata.matches_head_object(&head, destination_key);
+    if !size_matches || !checksum_matches || !metadata_matches {
+        return false;
+    }
+
+    let acl = match context
+        .destination_s3
+        .get_object_acl()
+        .bucket(context.destination_bucket)
+        .key(destination_key)
+        .send()
+        .await
+    {
+        Ok(acl) => acl,
+        Err(error) => {
+            tracing::warn!(
+                destination_key,
+                error = %error,
+                "could not verify the ACL while reconciling an ambiguous PutObject result"
+            );
+            return false;
+        }
+    };
+    let bucket_owner_id = if context.metadata.requires_bucket_owner_acl_identity() {
+        match context
+            .destination_s3
+            .get_bucket_acl()
+            .bucket(context.destination_bucket)
+            .send()
+            .await
+        {
+            Ok(bucket_acl) => bucket_acl
+                .owner()
+                .and_then(|owner| owner.id())
+                .map(ToOwned::to_owned),
+            Err(error) => {
+                tracing::warn!(
+                    destination_key,
+                    error = %error,
+                    "could not identify the bucket owner while reconciling an ambiguous PutObject result"
+                );
+                return false;
+            }
+        }
+    } else {
+        None
+    };
+    let reconciled = context
+        .metadata
+        .matches_object_acl(&acl, bucket_owner_id.as_deref());
+    if reconciled {
+        tracing::info!(
+            destination_key,
+            "conditional PutObject conflict matched the exact intended object"
+        );
+    }
+    reconciled
+}
+
 fn destination_object_etag_matches(
     destination_object: Option<&DestinationObject>,
     expected_etag: &str,
 ) -> bool {
     destination_object.and_then(|object| object.etag.as_deref()) == Some(expected_etag)
+}
+
+fn prepared_upload_matches_destination(
+    destination_object: Option<&DestinationObject>,
+    expected_etag: &str,
+    metadata_changed: bool,
+) -> bool {
+    !metadata_changed && destination_object_etag_matches(destination_object, expected_etag)
+}
+
+fn validate_put_object_size(plan: &ZipEntryPlan, output_len: usize) -> Result<()> {
+    let output_len = u64::try_from(output_len)
+        .map_err(|_| anyhow!("marker-expanded output size cannot be represented safely"))?;
+    if output_len > S3_SINGLE_PUT_LIMIT {
+        return Err(anyhow!(
+            "marker-expanded entry `{}` is {output_len} bytes, larger than the S3 single PutObject limit",
+            plan.relative_key
+        ));
+    }
+    Ok(())
+}
+
+fn sha256_base64(bytes: &[u8]) -> String {
+    BASE64_STANDARD.encode(Sha256::digest(bytes))
 }
 
 async fn hash_zip_entry_reader(store: Arc<SourceBlockStore>, plan: ZipEntryPlan) -> Result<String> {
@@ -739,6 +1011,25 @@ fn put_retry_cap_millis(attempt: usize, throttled: bool, retry: &PutObjectRetryO
     let shift = u32::try_from(attempt.saturating_sub(1)).unwrap_or(u32::MAX);
     let multiplier = 1_u64.checked_shl(shift).unwrap_or(u64::MAX);
     base.saturating_mul(multiplier).min(max)
+}
+
+fn is_retryable_put_error(error: &SdkError<PutObjectError>) -> bool {
+    match error {
+        SdkError::ServiceError(service) => {
+            let status = service.raw().status().as_u16();
+            status == 408
+                || status == 429
+                || status >= 500
+                || service.err().code().is_some_and(is_put_throttle_error_code)
+        }
+        SdkError::TimeoutError(_) | SdkError::DispatchFailure(_) => true,
+        SdkError::ResponseError(response) => {
+            let status = response.raw().status().as_u16();
+            status == 408 || status == 429 || status >= 500
+        }
+        SdkError::ConstructionFailure(_) => false,
+        _ => false,
+    }
 }
 
 fn put_retry_delay_bounds(throttled: bool, retry: &PutObjectRetryOptions) -> (u64, u64) {
@@ -992,6 +1283,7 @@ fn put_error_message(error: &SdkError<PutObjectError>) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::future::pending;
     use std::io::Cursor;
     use std::sync::Arc;
@@ -999,6 +1291,9 @@ mod tests {
     use std::time::Duration;
 
     use anyhow::Result;
+    use aws_sdk_s3::primitives::SdkBody;
+    use aws_smithy_http_client::test_util::{ReplayEvent, StaticReplayClient};
+    use http::{Request, Response};
     use tokio::task::JoinSet;
     use tokio::time::Instant as TokioInstant;
 
@@ -1006,13 +1301,15 @@ mod tests {
     use crate::deadline::InvocationDeadlines;
     use crate::s3::planner::ZipEntryPlan;
     use crate::types::{
-        DeploymentStats, PutObjectRetryJitter, PutObjectRetryOptions, TrustedEntryIntegrity,
+        DeploymentStats, ObjectMetadata, PutObjectRetryJitter, PutObjectRetryOptions,
+        TrustedEntryIntegrity,
     };
 
     use super::{
-        PutPrecondition, PutRetryCoordinator, catalog_skips_zip_entry, digest_async_reader,
-        duration_millis_u64, join_transfer_tasks, md5_hex, put_precondition_for_destination,
-        put_retry_cap_millis, quoted_etag, read_async_reader_to_vec,
+        PutContext, PutDiagnostics, PutPrecondition, PutRetryCoordinator, UploadPayload,
+        catalog_skips_zip_entry, digest_async_reader, duration_millis_u64, join_transfer_tasks,
+        md5_hex, prepared_upload_matches_destination, put_precondition_for_destination,
+        put_retry_cap_millis, quoted_etag, read_async_reader_to_vec, sha256_base64, upload_payload,
     };
 
     struct DropSignal(Arc<AtomicBool>);
@@ -1044,6 +1341,7 @@ mod tests {
             &plan,
             &Default::default(),
             Some(&object),
+            false,
             &stats,
         ));
 
@@ -1055,8 +1353,169 @@ mod tests {
             &plan,
             &Default::default(),
             Some(&object),
+            false,
             &stats,
         ));
+        assert!(!catalog_skips_zip_entry(
+            &plan,
+            &Default::default(),
+            Some(&object),
+            true,
+            &stats,
+        ));
+    }
+
+    #[test]
+    fn metadata_changes_disable_hash_based_extracted_entry_skips() {
+        let object = DestinationObject {
+            etag: Some("5d41402abc4b2a76b9719d911017c592".to_string()),
+            size: Some(5),
+        };
+
+        assert!(prepared_upload_matches_destination(
+            Some(&object),
+            "5d41402abc4b2a76b9719d911017c592",
+            false,
+        ));
+        assert!(!prepared_upload_matches_destination(
+            Some(&object),
+            "5d41402abc4b2a76b9719d911017c592",
+            true,
+        ));
+    }
+
+    #[tokio::test]
+    async fn ambiguous_put_failure_then_conflict_converges_only_for_exact_committed_object() {
+        let exact_checksum = sha256_base64(b"hello");
+        let exact_headers = vec![
+            ("content-length", "5"),
+            ("content-type", "text/plain"),
+            ("x-amz-checksum-sha256", exact_checksum.as_str()),
+            ("x-amz-checksum-type", "FULL_OBJECT"),
+            ("x-amz-meta-release", "stable"),
+        ];
+
+        let (result, requests) = run_ambiguous_put(exact_headers).await;
+        result.expect("an exact committed object should reconcile");
+        assert_eq!(requests, vec!["PUT", "PUT", "HEAD", "GET"]);
+
+        for mismatched_headers in [
+            vec![
+                ("content-length", "6"),
+                ("content-type", "text/plain"),
+                ("x-amz-checksum-sha256", exact_checksum.as_str()),
+                ("x-amz-checksum-type", "FULL_OBJECT"),
+                ("x-amz-meta-release", "stable"),
+            ],
+            vec![
+                ("content-length", "5"),
+                ("content-type", "text/plain"),
+                (
+                    "x-amz-checksum-sha256",
+                    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+                ),
+                ("x-amz-checksum-type", "FULL_OBJECT"),
+                ("x-amz-meta-release", "stable"),
+            ],
+            vec![
+                ("content-length", "5"),
+                ("content-type", "text/plain"),
+                ("x-amz-checksum-sha256", exact_checksum.as_str()),
+                ("x-amz-checksum-type", "FULL_OBJECT"),
+                ("x-amz-meta-release", "canary"),
+            ],
+        ] {
+            let (result, requests) = run_ambiguous_put(mismatched_headers).await;
+            assert!(result.is_err());
+            assert_eq!(requests, vec!["PUT", "PUT", "HEAD"]);
+        }
+
+        let (result, requests) = run_ambiguous_put_with_acl(
+            vec![
+                ("content-length", "5"),
+                ("content-type", "text/plain"),
+                ("x-amz-checksum-sha256", exact_checksum.as_str()),
+                ("x-amz-checksum-type", "FULL_OBJECT"),
+                ("x-amz-meta-release", "stable"),
+            ],
+            public_read_acl_xml(),
+        )
+        .await;
+        assert!(result.is_err());
+        assert_eq!(requests, vec!["PUT", "PUT", "HEAD", "GET"]);
+    }
+
+    #[tokio::test]
+    async fn permanent_put_4xx_is_not_retried() {
+        let replay = StaticReplayClient::new(vec![error_event(400, "InvalidRequest")]);
+        let client = replay_s3_client(replay.clone());
+        let metadata = test_metadata();
+        let diagnostics = PutDiagnostics::default();
+        let stats = DeploymentStats::default();
+        let retry_coordinator = PutRetryCoordinator::new();
+        let retry = test_retry_options();
+
+        let result = upload_payload(
+            PutContext {
+                destination_s3: &client,
+                destination_bucket: "destination",
+                metadata: &metadata,
+                retry: &retry,
+                retry_coordinator: &retry_coordinator,
+                diagnostics: &diagnostics,
+                stats: &stats,
+            },
+            "file.txt",
+            UploadPayload::from_bytes(b"hello".to_vec()),
+            None,
+        )
+        .await;
+
+        assert!(result.is_err());
+        assert_eq!(
+            replay
+                .actual_requests()
+                .map(|request| request.method().to_string())
+                .collect::<Vec<_>>(),
+            vec!["PUT"]
+        );
+    }
+
+    #[tokio::test]
+    async fn each_application_put_attempt_uses_one_sdk_attempt() {
+        let replay = StaticReplayClient::new(vec![error_event(500, "InternalError")]);
+        let client = replay_s3_client(replay.clone());
+        let metadata = test_metadata();
+        let diagnostics = PutDiagnostics::default();
+        let stats = DeploymentStats::default();
+        let retry_coordinator = PutRetryCoordinator::new();
+        let mut retry = test_retry_options();
+        retry.max_attempts = 1;
+
+        let result = upload_payload(
+            PutContext {
+                destination_s3: &client,
+                destination_bucket: "destination",
+                metadata: &metadata,
+                retry: &retry,
+                retry_coordinator: &retry_coordinator,
+                diagnostics: &diagnostics,
+                stats: &stats,
+            },
+            "file.txt",
+            UploadPayload::from_bytes(b"hello".to_vec()),
+            None,
+        )
+        .await;
+
+        assert!(result.is_err());
+        assert_eq!(
+            replay
+                .actual_requests()
+                .map(|request| request.method().to_string())
+                .collect::<Vec<_>>(),
+            vec!["PUT"]
+        );
     }
 
     #[tokio::test]
@@ -1201,6 +1660,145 @@ mod tests {
             }),
             source_offset: 0,
             source_span_end: bytes.len() as u64,
+        }
+    }
+
+    async fn run_ambiguous_put(headers: Vec<(&str, &str)>) -> (Result<()>, Vec<String>) {
+        run_ambiguous_put_with_acl(headers, private_acl_xml()).await
+    }
+
+    async fn run_ambiguous_put_with_acl(
+        headers: Vec<(&str, &str)>,
+        acl_xml: &'static str,
+    ) -> (Result<()>, Vec<String>) {
+        let replay = StaticReplayClient::new(vec![
+            error_event(500, "InternalError"),
+            error_event(412, "PreconditionFailed"),
+            head_event(headers),
+            acl_event(acl_xml),
+        ]);
+        let client = replay_s3_client(replay.clone());
+        let metadata = test_metadata();
+        let diagnostics = PutDiagnostics::default();
+        let stats = DeploymentStats::default();
+        let retry_coordinator = PutRetryCoordinator::new();
+        let retry = test_retry_options();
+        let result = upload_payload(
+            PutContext {
+                destination_s3: &client,
+                destination_bucket: "destination",
+                metadata: &metadata,
+                retry: &retry,
+                retry_coordinator: &retry_coordinator,
+                diagnostics: &diagnostics,
+                stats: &stats,
+            },
+            "file.txt",
+            UploadPayload::from_bytes(b"hello".to_vec()),
+            Some(PutPrecondition::IfNoneMatch),
+        )
+        .await;
+        let requests = replay
+            .actual_requests()
+            .map(|request| request.method().to_string())
+            .collect();
+        (result, requests)
+    }
+
+    fn replay_s3_client(replay: StaticReplayClient) -> aws_sdk_s3::Client {
+        let config = aws_sdk_s3::Config::builder()
+            .behavior_version_latest()
+            .region(aws_sdk_s3::config::Region::new("us-east-1"))
+            .credentials_provider(aws_sdk_s3::config::Credentials::new(
+                "test-access-key",
+                "test-secret-key",
+                None,
+                None,
+                "shin-bucket-deployment-test",
+            ))
+            .endpoint_url("https://s3.test")
+            .force_path_style(true)
+            .retry_config(aws_sdk_s3::config::retry::RetryConfig::standard().with_max_attempts(3))
+            .http_client(replay)
+            .build();
+        aws_sdk_s3::Client::from_conf(config)
+    }
+
+    fn error_event(status: u16, code: &str) -> ReplayEvent {
+        let body = format!("<Error><Code>{code}</Code><Message>test error</Message></Error>");
+        ReplayEvent::new(
+            Request::builder()
+                .uri("https://s3.test/expected")
+                .body(SdkBody::empty())
+                .unwrap(),
+            Response::builder()
+                .status(status)
+                .header("content-type", "application/xml")
+                .body(SdkBody::from(body.into_bytes()))
+                .unwrap(),
+        )
+    }
+
+    fn head_event(headers: Vec<(&str, &str)>) -> ReplayEvent {
+        let mut response = Response::builder().status(200);
+        for (name, value) in headers {
+            response = response.header(name, value);
+        }
+        ReplayEvent::new(
+            Request::builder()
+                .uri("https://s3.test/expected")
+                .body(SdkBody::empty())
+                .unwrap(),
+            response.body(SdkBody::empty()).unwrap(),
+        )
+    }
+
+    fn acl_event(xml: &'static str) -> ReplayEvent {
+        ReplayEvent::new(
+            Request::builder()
+                .uri("https://s3.test/expected")
+                .body(SdkBody::empty())
+                .unwrap(),
+            Response::builder()
+                .status(200)
+                .header("content-type", "application/xml")
+                .body(SdkBody::from(xml.as_bytes()))
+                .unwrap(),
+        )
+    }
+
+    fn private_acl_xml() -> &'static str {
+        r#"<AccessControlPolicy xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Owner><ID>owner</ID></Owner><AccessControlList><Grant><Grantee xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="CanonicalUser"><ID>owner</ID></Grantee><Permission>FULL_CONTROL</Permission></Grant></AccessControlList></AccessControlPolicy>"#
+    }
+
+    fn public_read_acl_xml() -> &'static str {
+        r#"<AccessControlPolicy xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Owner><ID>owner</ID></Owner><AccessControlList><Grant><Grantee xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="CanonicalUser"><ID>owner</ID></Grantee><Permission>FULL_CONTROL</Permission></Grant><Grant><Grantee xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="Group"><URI>http://acs.amazonaws.com/groups/global/AllUsers</URI></Grantee><Permission>READ</Permission></Grant></AccessControlList></AccessControlPolicy>"#
+    }
+
+    fn test_metadata() -> ObjectMetadata {
+        ObjectMetadata {
+            user_metadata: HashMap::from([("release".to_string(), "stable".to_string())]),
+            cache_control: None,
+            content_disposition: None,
+            content_encoding: None,
+            content_language: None,
+            content_type: None,
+            server_side_encryption: None,
+            storage_class: None,
+            website_redirect_location: None,
+            sse_kms_key_id: None,
+            acl: None,
+        }
+    }
+
+    fn test_retry_options() -> PutObjectRetryOptions {
+        PutObjectRetryOptions {
+            max_attempts: 2,
+            retry_base_delay_ms: 0,
+            retry_max_delay_ms: 0,
+            slowdown_retry_base_delay_ms: 0,
+            slowdown_retry_max_delay_ms: 0,
+            jitter: PutObjectRetryJitter::None,
         }
     }
 }

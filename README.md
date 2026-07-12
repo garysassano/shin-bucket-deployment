@@ -66,7 +66,7 @@ The official `BucketDeployment` is a good default for many stacks, but its provi
 | Leaner runtime              | This custom resource provider runs on the [Lambda Rust runtime](https://github.com/aws/aws-lambda-rust-runtime) (`provided.al2023`) rather than the Python runtime used by the upstream provider. In practice, the lower runtime overhead can mean faster cold starts and lower memory footprint. See [lambda-perf](https://maxday.github.io/lambda-perf/). |
 | Direct AWS SDK operations   | Copy, upload, delete, and CloudFront invalidation are executed through SDK calls instead of shelling out to `aws s3 cp` / `aws s3 sync`.                                                                                                                                                                                                                    |
 | Archive-aware planning      | For extracted assets, the provider plans directly from the zip archive instead of extracting the whole archive to a working directory before syncing.                                                                                                                                                                                                       |
-| `ETag`-based skip decisions | The provider lists the destination prefix once and compares planned content MD5 values with destination `ETag` values to skip unchanged single-part static objects.                                                                                                                                                                                         |
+| Semantic update decisions   | The provider combines content identity with normalized old/new object settings, so metadata-only updates rewrite objects while unchanged settings retain the fast `ETag`-based path.                                                                                                                                                                         |
 | Marker-free streaming path  | Missing sources without deploy-time markers stream directly from archive entries; replacement buffers are only used for sources that declare markers.                                                                                                                                                                                                       |
 | Safer destination moves     | Opt-in cleanup deploys new content first, infers the old prefix, and preserves overlapping current namespaces. See [changing a destination safely](docs/architecture.md#changing-a-destination-safely).                                                                                                                                                     |
 
@@ -124,6 +124,10 @@ Before uploading or copying, the provider lists the destination prefix. Destinat
 
 For existing marker-free zip entries with authenticated catalog MD5s, the provider compares destination size and `ETag` before reading entry bytes. Catalogs in arbitrary ZIPs are untrusted and do not receive this shortcut. Without a trusted catalog match, it reads and decompresses the entry from ranged source blocks, validates size and CRC32, computes MD5, and compares it with the destination `ETag`. Missing marker-free objects stream directly to S3 without pre-hashing. Entries with deploy-time markers are materialized after decompression and replacement so the final bytes can be hashed and uploaded when changed.
 
+On Update, normalized user metadata and every supported system setting from CloudFormation `OldResourceProperties` participate in the decision. A change to metadata, cache headers, an explicit content type, ACL, storage class, encryption, or website redirect forces replacement even when object bytes are unchanged, for both extracted uploads and `extract=false` copies. Content type is compared after resolving the final key, and implicit `private` ACL / `STANDARD` storage defaults are normalized, so spelling out an already-effective default does not cause a useless rewrite. On Create there is no prior semantic identity to trust, so a matching pre-existing destination object is rewritten to converge its settings.
+
+Extracted uploads store a full-object SHA-256 checksum. If a retry receives an ambiguous conditional `409` or `412`, the provider reads the destination with checksum mode and accepts it only when size, SHA-256, all `HeadObject`-visible settings, user metadata, and the effective object ACL exactly match. Otherwise the deployment fails closed instead of assuming that a lost response committed the intended object.
+
 ### Memory Model
 
 Marker-free ZIP entry streaming uses the same small-buffer defaults as the local `s3-unspool` extraction path: 64 KiB entry read buffers, 256 KiB S3 body chunks, and a 1 MiB body pipe between entry production and the SDK upload body. With the default 32 parallel transfers, this keeps entry stream buffering around 44 MiB, leaving the 1024 MiB default provider Lambda memory for the Rust runtime, AWS SDK, source block window, and ZIP metadata.
@@ -140,9 +144,9 @@ The provider logs one sanitized `shin_deployment_summary` JSON line per custom-r
 
 ### `ETag`-based Skips
 
-The unchanged-object optimization depends on S3 `ETag` values behaving like MD5 content hashes. That is generally true for simple single-part static objects, but not for all S3 configurations.
+The byte-identity optimization depends on S3 `ETag` values behaving like MD5 content hashes. That is generally true for simple single-part static objects, but not for all S3 configurations.
 
-Uploads or copies may not be skipped correctly for metadata-only changes, multipart objects, SSE-KMS or SSE-C objects, or any case where MD5-like `ETag` metadata is unavailable.
+CloudFormation object-setting changes independently disable skips, so metadata-only property updates are not lost. Multipart objects, SSE-KMS or SSE-C objects, and objects written by other tools may still lack an MD5-like `ETag`; those cases can cause extra transfers. Out-of-band destination metadata drift is not discovered when the CloudFormation settings themselves are unchanged because normal planning intentionally avoids one metadata request per object.
 
 ### Cataloged `Source.asset` Assets
 
@@ -157,7 +161,9 @@ Zip entries with deploy-time marker replacements are fully materialized in memor
 
 ### Object Size and Scope
 
-Source archives are read with S3 ranges and do not need to fit in Lambda memory or ephemeral storage. Individual files inside the asset ZIP must be <= 5 GiB because extracted uploads currently use S3 `PutObject`, not multipart upload.
+Source archives are read with S3 ranges and do not need to fit in Lambda memory or ephemeral storage. Individual files inside the asset ZIP, including marker-expanded output, must be <= 5 GiB because extracted uploads currently use S3 `PutObject`, not multipart upload.
+
+Before destination mutation, the provider validates the complete final key against S3's [1024-byte UTF-8 key limit](https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html), checks archive and aggregate size arithmetic, rejects oversized single-request uploads and copies, and checks user/system metadata plus controlled request headers against S3's [2 KiB metadata and 8 KiB request-header limits](https://docs.aws.amazon.com/AmazonS3/latest/userguide/UsingMetadata.html). Marker-bearing entries undergo a complete validation/replacement pass so the actual expanded length is known before any write; until the streaming replacement work lands, transfer can read and materialize those entries a second time. Two KiB of the request-header budget is conservatively reserved for SDK signing, conditional, and checksum headers.
 
 This construct targets static asset deployment to S3. It is not a general-purpose sync engine and does not provide byte-range diffing, persistent manifests, or non-S3 backend behavior.
 
