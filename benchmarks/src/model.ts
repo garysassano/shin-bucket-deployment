@@ -45,6 +45,9 @@ export type ProviderSummary = {
 
 export type BenchmarkResultRecord = {
   readonly snapshotDate?: string | null;
+  readonly decisionRunId?: string | null;
+  readonly comparisonVariant?: string | null;
+  readonly repetition?: number | null;
   readonly providerImplementationCommit?: string | null;
   readonly providerImplementationSubject?: string | null;
   readonly resultDocumentationCommit?: string | null;
@@ -95,7 +98,15 @@ export function readBenchmarkResultRows(filePath: string): BenchmarkResultRow[] 
 export function benchmarkResultKey(
   record: Pick<
     BenchmarkResultRecord,
-    "profile" | "memoryMb" | "parallel" | "implementation" | "phase" | "state"
+    | "profile"
+    | "memoryMb"
+    | "parallel"
+    | "implementation"
+    | "phase"
+    | "state"
+    | "decisionRunId"
+    | "comparisonVariant"
+    | "repetition"
   >,
 ): string {
   return [
@@ -105,9 +116,16 @@ export function benchmarkResultKey(
     normalizeImplementation(record.implementation),
     record.phase,
     record.state,
+    record.decisionRunId,
+    record.comparisonVariant,
+    record.repetition,
   ]
     .map((part) => part ?? "")
     .join("\u0000");
+}
+
+export function isCanonicalBenchmarkRecord(record: BenchmarkResultRecord): boolean {
+  return record.decisionRunId === undefined || record.decisionRunId === null;
 }
 
 export function phaseRank(phase: string | null | undefined): number {

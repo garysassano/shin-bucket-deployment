@@ -4,6 +4,7 @@ import { parseCliOptions } from "../cli";
 import {
   type BenchmarkResultRecord,
   implementationLabel,
+  isCanonicalBenchmarkRecord,
   phaseRank,
   readBenchmarkResultRecords,
 } from "../model";
@@ -148,6 +149,7 @@ function main(): void {
 
 export function renderBenchmarkReport(options: RenderOptions): string {
   const records = readBenchmarkResultRecords(options.inputFile)
+    .filter(isCanonicalBenchmarkRecord)
     .filter((record) => (options.assetProfile ? record.profile === options.assetProfile : true))
     .filter((record) => (options.memoryMb ? record.memoryMb === options.memoryMb : true))
     .filter((record) => (options.parallel ? record.parallel === options.parallel : true));

@@ -8,6 +8,10 @@ Deployable benchmark CDK apps live in `benchmarks/apps/**`. Curated benchmark ma
 
 The runner adds a benchmark-only invocation token to the deployment custom resource for every phase. This guarantees that `unchanged-update` measures an actual provider invocation even when the deterministic asset and all functional deployment properties are unchanged; the token does not change the asset, destination, or provider algorithm.
 
+Repeated decision runs belong in `results.jsonl` too. Pass `--decision-run-id`, `--comparison-variant`, and `--repetition` so the upsert key preserves every sample instead of replacing an earlier repetition. Canonical snapshot and telemetry renderers exclude decision-run rows by default; the retained JSONL rows remain available for later aggregate analysis.
+
+Before expanding an AWS benchmark to multiple repetitions, run one smoke repetition per variant, report its elapsed time and preliminary signal, and obtain maintainer approval for the proposed repetition count and wall-clock budget. Every completed run writes its sanitized rows directly to `results.jsonl`; do not defer persistence until the whole matrix finishes.
+
 README benchmark snapshots use sanitized tiny-many records from `benchmarks/results.jsonl`. Snapshot filenames follow `<profile>-<memory>mib-<parallel>.svg`, for example `tiny-many-1024mib-32.svg`.
 
 Only README-linked snapshot SVGs are committed under `benchmarks/snapshots`. Temporary alternate layouts can be regenerated locally with `benchmarks/src/render/readme-snapshot.ts`, but should not be kept as committed design history. Generated report charts live beside the report output by default.

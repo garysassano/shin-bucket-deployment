@@ -4,6 +4,7 @@ import { parseCliOptions } from "../cli";
 import {
   type BenchmarkResultRecord,
   type ProviderSummary,
+  isCanonicalBenchmarkRecord,
   phaseRank,
   readBenchmarkResultRows,
 } from "../model";
@@ -314,6 +315,7 @@ function renderMarkdownTable<T>(rows: T[], columns: Array<Column<T>>): string {
 
 function readTelemetryRows(filePath: string): TelemetryRow[] {
   return readBenchmarkResultRows(filePath)
+    .filter(({ record }) => isCanonicalBenchmarkRecord(record))
     .filter(({ record }) => record.providerSummary !== undefined && record.providerSummary !== null)
     .map(({ line, record }) => ({
       line,

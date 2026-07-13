@@ -44,6 +44,9 @@ type RunnerConfig = {
   readonly concurrency: number;
   readonly destinationPrefix: string;
   readonly phases: PhaseConfig[];
+  readonly decisionRunId?: string;
+  readonly comparisonVariant?: string;
+  readonly repetition?: number;
 };
 
 type BenchmarkConfig = z.infer<typeof benchmarkConfigSchema>;
@@ -60,6 +63,9 @@ type RunOptions = {
   readonly concurrency: number;
   readonly destinationPrefix: string;
   readonly phases: PhaseConfig[];
+  readonly decisionRunId?: string;
+  readonly comparisonVariant?: string;
+  readonly repetition?: number;
 };
 
 type PhaseEvidence = {
@@ -112,6 +118,9 @@ const CLI_OPTIONS = [
   "scratch-root",
   "concurrency",
   "destination-prefix",
+  "decision-run-id",
+  "comparison-variant",
+  "repetition",
 ];
 
 const nonEmptyStringSchema = z.string().min(1);
@@ -144,6 +153,9 @@ const benchmarkConfigSchema = z
     lambdaConfigs: z.array(lambdaConfigSchema).nonempty().optional(),
     implementations: z.array(implementationSchema).nonempty().optional(),
     phases: z.array(phaseSchema).nonempty().optional(),
+    decisionRunId: nonEmptyStringSchema.optional(),
+    comparisonVariant: nonEmptyStringSchema.optional(),
+    repetition: positiveIntegerSchema.optional(),
   })
   .strict();
 
@@ -273,6 +285,9 @@ async function runBenchmarkStack(args: {
           parallel: run.parallel,
           state: phase.assetState,
           cleanup: "all benchmark stacks destroyed",
+          decisionRunId: options.decisionRunId,
+          comparisonVariant: options.comparisonVariant,
+          repetition: options.repetition,
         },
       });
     }
@@ -598,6 +613,13 @@ function parseArgs(args: string[]): RunOptions {
   );
   const destinationPrefix = values.get("destination-prefix") ?? config.destinationPrefix;
   const phases = config.phases;
+  const decisionRunId = values.get("decision-run-id") ?? config.decisionRunId;
+  const comparisonVariant = values.get("comparison-variant") ?? config.comparisonVariant;
+  const repetitionValue = values.get("repetition");
+  const repetition =
+    repetitionValue === undefined
+      ? config.repetition
+      : positiveInteger(repetitionValue, "repetition");
 
   return {
     assetProfiles,
@@ -611,6 +633,9 @@ function parseArgs(args: string[]): RunOptions {
     concurrency,
     destinationPrefix,
     phases,
+    decisionRunId,
+    comparisonVariant,
+    repetition,
   };
 }
 
@@ -637,6 +662,11 @@ function readConfigFile(configPath: string | undefined): RunnerConfig {
       : { destinationPrefix: parsed.destinationPrefix }),
     ...(parsed.concurrency === undefined ? {} : { concurrency: parsed.concurrency }),
     ...(parsed.phases === undefined ? {} : { phases: parsed.phases.map(configPhaseToRunPhase) }),
+    ...(parsed.decisionRunId === undefined ? {} : { decisionRunId: parsed.decisionRunId }),
+    ...(parsed.comparisonVariant === undefined
+      ? {}
+      : { comparisonVariant: parsed.comparisonVariant }),
+    ...(parsed.repetition === undefined ? {} : { repetition: parsed.repetition }),
   };
   return fileConfig;
 }
@@ -786,7 +816,7 @@ function sleep(milliseconds: number): Promise<void> {
 
 function usage(): never {
   console.error(
-    "Usage: node dist/benchmarks/src/run-assets-comparison.js --config benchmarks/configs/shin-aws-2048-64-4096-128.json [--asset-profiles tiny-many,large-few] [--lambda-configs 2048:64,4096:128] [--run-token <id>] [--snapshot-date <YYYY-MM-DD>] [--scratch-root <outside-repo>] [--concurrency 1]",
+    "Usage: node dist/benchmarks/src/run-assets-comparison.js --config benchmarks/configs/shin-aws-2048-64-4096-128.json [--asset-profiles tiny-many,large-few] [--lambda-configs 2048:64,4096:128] [--run-token <id>] [--snapshot-date <YYYY-MM-DD>] [--decision-run-id <id>] [--comparison-variant <name>] [--repetition <n>] [--scratch-root <outside-repo>] [--concurrency 1]",
   );
   process.exit(1);
 }

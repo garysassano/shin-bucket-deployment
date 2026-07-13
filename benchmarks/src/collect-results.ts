@@ -6,7 +6,9 @@ import { type BenchmarkResultRecord, benchmarkResultKey, normalizeImplementation
 export type CollectBenchmarkOptions = {
   readonly assetProfile?: string;
   readonly cleanup?: string;
+  readonly comparisonVariant?: string;
   readonly commit?: string;
+  readonly decisionRunId?: string;
   readonly fileCount?: number;
   readonly implementation?: string;
   readonly logFile: string;
@@ -16,6 +18,7 @@ export type CollectBenchmarkOptions = {
   readonly parallel?: number;
   readonly phase: string;
   readonly region?: string;
+  readonly repetition?: number;
   readonly reportFile?: string;
   readonly resultCommit?: string;
   readonly snapshotDate?: string;
@@ -29,7 +32,9 @@ const CLI_OPTIONS = [
   "asset-profile",
   "asset-state",
   "cleanup",
+  "comparison-variant",
   "commit",
+  "decision-run-id",
   "file-count",
   "implementation",
   "lambda-max-parallel-transfers",
@@ -39,6 +44,7 @@ const CLI_OPTIONS = [
   "output-file",
   "phase",
   "region",
+  "repetition",
   "report-file",
   "result-commit",
   "snapshot-date",
@@ -61,6 +67,9 @@ export function collectBenchmarkResult(options: CollectBenchmarkOptions): Benchm
   const providerSummary = options.summaryFile ? readSummaryFile(options.summaryFile) : undefined;
   const record: BenchmarkResultRecord = {
     snapshotDate: options.snapshotDate ?? today(),
+    decisionRunId: options.decisionRunId ?? null,
+    comparisonVariant: options.comparisonVariant ?? null,
+    repetition: options.repetition ?? null,
     providerImplementationCommit: options.commit ?? null,
     providerImplementationSubject: options.subject ?? null,
     resultDocumentationCommit: options.resultCommit ?? null,
@@ -122,7 +131,9 @@ function parseArgs(args: string[]): CollectBenchmarkOptions {
   return {
     assetProfile: values.get("asset-profile"),
     cleanup: values.get("cleanup"),
+    comparisonVariant: values.get("comparison-variant"),
     commit: values.get("commit"),
+    decisionRunId: values.get("decision-run-id"),
     fileCount: optionalNumber(values, "file-count"),
     implementation: values.get("implementation"),
     logFile,
@@ -132,6 +143,7 @@ function parseArgs(args: string[]): CollectBenchmarkOptions {
     parallel: optionalNumber(values, "lambda-max-parallel-transfers"),
     phase,
     region: values.get("region"),
+    repetition: optionalPositiveInteger(values, "repetition"),
     reportFile: values.get("report-file"),
     resultCommit: values.get("result-commit"),
     snapshotDate: values.get("snapshot-date"),
@@ -162,9 +174,17 @@ function optionalNumber(values: Map<string, string>, name: string): number | und
   return parsed;
 }
 
+function optionalPositiveInteger(values: Map<string, string>, name: string): number | undefined {
+  const value = optionalNumber(values, name);
+  if (value !== undefined && (!Number.isInteger(value) || value < 1)) {
+    usage();
+  }
+  return value;
+}
+
 function usage(): never {
   console.error(
-    "Usage: node dist/benchmarks/src/collect-results.js --log-file <path> --phase <name> [--snapshot-date <YYYY-MM-DD>] [--report-file <path>] [--summary-file <path>] [--output-file benchmarks/results.jsonl] [--asset-profile <name>] [--asset-state <name>] [--implementation <shin|aws>] [--lambda-max-parallel-transfers <n>] [--lambda-memory-mb <n>]",
+    "Usage: node dist/benchmarks/src/collect-results.js --log-file <path> --phase <name> [--snapshot-date <YYYY-MM-DD>] [--decision-run-id <id>] [--comparison-variant <name>] [--repetition <n>] [--report-file <path>] [--summary-file <path>] [--output-file benchmarks/results.jsonl] [--asset-profile <name>] [--asset-state <name>] [--implementation <shin|aws>] [--lambda-max-parallel-transfers <n>] [--lambda-memory-mb <n>]",
   );
   process.exit(1);
 }

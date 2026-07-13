@@ -48,6 +48,14 @@ All 12 current Shin phase records selected `kms-sha256` and reported zero PUT re
 
 These rows are decision evidence for the checksum redesign, not a replacement for the repository's canonical snapshot. The temporary before/current and encryption variants do not fit the current JSONL upsert identity without overwriting one another, and broader methodology-v2/CI regression work remains separate. Raw logs and individual rows remain outside git. Every benchmark stack was destroyed, and a final scoped check found none remaining.
 
+## Transfer scheduler decision run — paused
+
+The 2026-07-13 transfer-scheduler run was stopped before its final upstream repetition. The completed sanitized evidence is retained in `benchmarks/results.jsonl` under decision-run ID `transfer-scheduler-2026-07-13`: five complete `before` repetitions, five complete `current` repetitions, and four complete `upstream` repetitions. Each repetition contains `tiny-many` and `large-few` at 2048 MiB / 32 transfers across the four ordered phases, with stacks serialized at concurrency 1 in `eu-central-1`.
+
+The benchmark app uses a benchmark-only per-phase custom-resource token so `unchanged-update` always invokes the provider without changing the asset, destination, or provider algorithm. Decision rows include `decisionRunId`, `comparisonVariant`, and `repetition`; these fields are part of the upsert identity so repeated samples cannot replace one another. Canonical snapshot renderers exclude decision rows by default, while the JSONL remains available for later aggregate analysis.
+
+The interrupted fifth upstream repetition is not represented as complete evidence. No performance acceptance or release decision is claimed from this paused run. Raw AWS output remains outside git, every completed repetition performed its own cleanup, the interrupted stack was deleted separately, and the final scoped stack count was zero.
+
 ## Current Snapshot
 
 > [!CAUTION]

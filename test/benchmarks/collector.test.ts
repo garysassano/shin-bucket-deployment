@@ -75,6 +75,38 @@ describe("benchmark result collector", () => {
     });
   });
 
+  test("preserves decision-run variants and repetitions in the JSONL key", () => {
+    const dir = mkdtempSync(join(tmpdir(), "shin-bench-collector-"));
+    const logFile = join(dir, "deploy.log");
+    const outputFile = join(dir, "results.jsonl");
+    writeFileSync(
+      logFile,
+      [
+        "Stack.BenchmarkAssetProfile = tiny-many",
+        "Stack.BenchmarkImplementation = shin",
+        "Stack.BenchmarkMemoryLimitMb = 2048",
+        "Stack.BenchmarkMaxParallelTransfers = 32",
+        "Stack.BenchmarkState = baseline",
+        "",
+      ].join("\n"),
+    );
+
+    for (const repetition of [1, 2]) {
+      collectBenchmarkResult({
+        logFile,
+        outputFile,
+        phase: "cold-create",
+        decisionRunId: "transfer-scheduler-2026-07-13",
+        comparisonVariant: "current",
+        repetition,
+      });
+    }
+
+    const rows = readFileSync(outputFile, "utf8").trim().split("\n").map(JSON.parse);
+    expect(rows).toHaveLength(2);
+    expect(rows.map((row) => row.repetition)).toEqual([1, 2]);
+  });
+
   test("uses explicit metadata when command logs omit outputs", () => {
     const dir = mkdtempSync(join(tmpdir(), "shin-bench-collector-"));
     const logFile = join(dir, "destroy.log");
