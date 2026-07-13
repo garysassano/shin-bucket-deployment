@@ -102,7 +102,10 @@ describe("benchmark result collector", () => {
       });
     }
 
-    const rows = readFileSync(outputFile, "utf8").trim().split("\n").map(JSON.parse);
+    const rows = readFileSync(outputFile, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
     expect(rows).toHaveLength(2);
     expect(rows.map((row) => row.repetition)).toEqual([1, 2]);
   });
