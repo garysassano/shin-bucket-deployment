@@ -324,7 +324,7 @@ flowchart LR
   L -->|No| K
 ```
 
-The provider's skip identity is content only. It does not expose deployment-wide object metadata overrides and does not parse `OldResourceProperties` for object settings. Every PUT and COPY infers `Content-Type` from the file extension in the final destination object key with an `application/octet-stream` fallback; cache behavior belongs in CloudFront, while encryption, storage, and lifecycle defaults belong on the bucket.
+The provider's skip identity is content only. It does not expose deployment-wide object metadata overrides and does not parse `OldResourceProperties` for object settings. Every PUT and COPY infers `Content-Type` from the deployed object's file extension with an `application/octet-stream` fallback; cache behavior belongs in CloudFront, while encryption, storage, and lifecycle defaults belong on the bucket.
 
 `ListObjectsV2` exposes destination `ETag`, but not the actual checksum value needed to compare stored SHA-256. Performing one checksum-mode `HeadObject` per destination object would defeat the single-list deployment model. Shin therefore uses catalog/MD5 skips only for default/SSE-S3 destinations and reserves checksum-mode `HeadObject` for reconciling ambiguous KMS/DSSE writes.
 
@@ -515,7 +515,7 @@ Destination upload diagnostics field reference:
 | Deploy-time marker replacement | Marker entries are materialized after ranged extraction so final replaced bytes can be hashed and uploaded. |
 | Multiple sources with override order | The provider builds one manifest across sources before pruning and upload decisions. |
 | Include/exclude filters | Filters are applied while walking ZIP entries. |
-| Object metadata and content type | Deployment-wide object metadata overrides are intentionally omitted. Upload and copy infer `Content-Type` from the file extension in the final destination object key with a binary fallback. Bucket and CloudFront policy own cache, encryption, storage, and lifecycle behavior. |
+| Object metadata and content type | Deployment-wide object metadata overrides are intentionally omitted. Upload and copy infer `Content-Type` from the deployed object's file extension with a binary fallback. Bucket and CloudFront policy own cache, encryption, storage, and lifecycle behavior. |
 | `extract=false` | Copy mode stays separate from ZIP extraction. |
 | `destinationLifecycle` | Destination listing, stale-object deletion, destination-change cleanup, and Delete cleanup remain provider-owned. |
 | CloudFront invalidation | Runs after S3 deployment and is outside the extraction engine. |

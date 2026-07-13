@@ -95,7 +95,7 @@ The construct follows the upstream `BucketDeployment` API where the behavior map
 | Filtering       | `include`, `exclude`                                                                                                                                 |
 | Lifecycle       | `destinationLifecycle`                                                                                                                               |
 | Update behavior | `extract`, `outputObjectKeys`                                                                                                                        |
-| Object headers  | Automatic `Content-Type` inference from the file extension in the final destination object key, with `application/octet-stream` fallback             |
+| Object headers  | Automatic `Content-Type` inference from the deployed object's file extension, with `application/octet-stream` fallback                              |
 | CloudFront      | `distribution`, `distributionPaths`, `waitForDistributionInvalidation`                                                                               |
 | Provider Lambda | `architecture`, `bundling`, `logGroup`, `memoryLimit`, `role`, `securityGroups`, `vpc`, `vpcSubnets`                                                 |
 | Runtime tuning  | `maxParallelTransfers`, `advancedRuntimeTuning`                                                                                                      |
@@ -133,7 +133,7 @@ If a conditional PUT retry receives an ambiguous `409` or `412`, SSE-S3 reconcil
 
 Transfer scheduling retains only the configured in-flight task set rather than one handle per object. It drains completions while admitting work; the first observed error or panic stops admission, aborts and drains outstanding tasks, cancels source schedulers, wakes source-block waiters, and prevents stale deletion or CloudFront invalidation from running. Retryable ZIP bodies are lazy, so SDK clones that are never polled do not start decompression, acquire a source reader, or add replay claims.
 
-PUT and COPY always infer `Content-Type` from the file extension in the final destination object key, falling back to `application/octet-stream`. Other object metadata is left to bucket defaults, bucket policy, lifecycle configuration, and CloudFront cache policy rather than custom-resource properties.
+PUT and COPY always infer `Content-Type` from the deployed object's file extension, falling back to `application/octet-stream`. Other object metadata is left to bucket defaults, bucket policy, lifecycle configuration, and CloudFront cache policy rather than custom-resource properties.
 
 ### Memory Model
 
