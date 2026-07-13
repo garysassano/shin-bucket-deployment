@@ -12,7 +12,7 @@ The provider Lambda:
 - reads extracted ZIP sources with ranged S3 `GetObject` requests
 - does not download the full ZIP to memory
 - does not write the source ZIP or extracted entries to Lambda `/tmp`
-- lists the destination prefix once with `ListObjectsV2`
+- lists the destination prefix once for comparison metadata and, when stale deletion is enabled, again page by page after transfers
 - skips unchanged objects when destination content identity is sufficient
 - uploads changed extracted objects with `PutObject`
 - copies `extract=false` sources with `CopyObject`
@@ -23,22 +23,24 @@ Runtime tuning defaults:
 
 | Setting | Default | Purpose |
 | --- | ---: | --- |
-| `maxParallelTransfers` | 32 | Bounds the continuously drained set of copy, hash, upload, and related logical object tasks. |
-| `memoryLimit` | 1024 MiB | Sizes the Lambda and drives adaptive source-read defaults. |
+| `maxParallelTransfers` | 32 | Bounds the continuously drained set of copy, hash, upload, and related logical object tasks; valid range 1–256. |
+| `memoryLimit` | 1024 MiB | Sizes the Lambda. The provider reads the actual value from the Lambda runtime environment. |
 
 Most deployments should tune only `memoryLimit` and, when needed, `maxParallelTransfers`. Source block/window and `PutObject` retry settings remain available under `advancedRuntimeTuning` as support and benchmark escape hatches:
 
 | Advanced setting | Default | Purpose |
 | --- | ---: | --- |
-| `advancedRuntimeTuning.sourceBlockBytes` | 8 MiB | Source range block size for ZIP entry reads. Must be at least 30 bytes. |
-| `advancedRuntimeTuning.sourceBlockMergeGapBytes` | 256 KiB | Maximum gap for coalescing adjacent source spans. |
-| `advancedRuntimeTuning.sourceGetConcurrency` | derived from Lambda memory, 1 to 8 | Maximum concurrent source ranged `GetObject` block fetches per archive. |
-| `advancedRuntimeTuning.sourceWindowBytes` | derived from Lambda memory and ZIP file count | Maximum resident source block data per ZIP archive; a single larger block can still be admitted. |
-| `advancedRuntimeTuning.sourceWindowMemoryBudgetMb` | provider Lambda `memoryLimit` | Memory budget used for adaptive source window sizing. |
-| `advancedRuntimeTuning.putObjectRetry.maxAttempts` | 6 | Maximum application-level `PutObject` attempts. |
-| `advancedRuntimeTuning.putObjectRetry.baseDelayMs` / `maxDelayMs` | 250 / 5000 | Capped non-throttling `PutObject` retry delay. |
-| `advancedRuntimeTuning.putObjectRetry.slowdownBaseDelayMs` / `slowdownMaxDelayMs` | 1000 / 30000 | Capped throttling `PutObject` retry delay. |
+| `advancedRuntimeTuning.sourceBlockBytes` | 8 MiB | Source range block size for ZIP entry reads. Valid range 30 bytes through JavaScript's maximum safe integer; it must fit the global budget. |
+| `advancedRuntimeTuning.sourceBlockMergeGapBytes` | 256 KiB | Maximum gap for coalescing adjacent source spans. Valid range 0 through JavaScript's maximum safe integer. |
+| `advancedRuntimeTuning.sourceGetConcurrency` | derived from actual Lambda memory, 1 to 8 | Maximum concurrent source ranged `GetObject` block fetches per archive; explicit valid range 1–64. Block size times concurrency must fit the global budget. |
+| `advancedRuntimeTuning.sourceWindowBytes` | derived from the global budget and ZIP file count | Per-archive source block window. It must be at least one block and no greater than the invocation-global budget. |
+| `advancedRuntimeTuning.sourceWindowMemoryBudgetMb` | 50% of actual Lambda memory | Optional lower invocation-global source block budget. It cannot raise the 50% cap. |
+| `advancedRuntimeTuning.putObjectRetry.maxAttempts` | 6 | Maximum application-level `PutObject` attempts; valid range 1–10. |
+| `advancedRuntimeTuning.putObjectRetry.baseDelayMs` / `maxDelayMs` | 250 / 5000 | Non-throttling retry delays; each is 0–60000 ms and base cannot exceed max. |
+| `advancedRuntimeTuning.putObjectRetry.slowdownBaseDelayMs` / `slowdownMaxDelayMs` | 1000 / 30000 | Throttling retry delays; each is 0–60000 ms and base cannot exceed max. |
 | `advancedRuntimeTuning.putObjectRetry.jitter` | `full` | Jitter mode for computed `PutObject` retry delays; `none` is also supported. |
+
+Numeric tuning values must be safe integers. Synthesis validates resolved values and their cross-field memory relationships; unresolved CloudFormation tokens are validated by the Rust provider with checked conversions and arithmetic. Invalid zeroes, extremes, inverted delays, and budget overcommit fail explicitly rather than being clamped or replaced by defaults.
 
 Source ranged reads use a fixed three-total-attempt provider policy. Each attempt disables SDK retries. Transport failures, timeouts, throttling, retryable 5xx responses, body read failures, and incomplete bodies may consume the remaining attempts; permanent 4xx, construction failures, and local validation errors do not.
 
@@ -50,22 +52,27 @@ Fixed ZIP entry streaming defaults keep per-transfer memory bounded:
 | ZIP entry S3 body chunk | 256 KiB | Size of each `Bytes` frame offered to the destination `PutObject` body. |
 | ZIP entry body pipe capacity | 1 MiB | Backpressure between entry production and the SDK upload body consumer. |
 
-The default provider Lambda memory is 1024 MiB. That default is sized around the adaptive memory model used for source blocks and transfer work rather than around source ZIP size. It was selected from historical exploratory measurements whose single-sample methodology is now being revalidated; those rows are not a performance guarantee or a sufficient basis for changing production defaults.
+The default provider Lambda memory is 1024 MiB. The runtime reads `AWS_LAMBDA_FUNCTION_MEMORY_SIZE`; the custom-resource payload is not trusted as the memory source. Half of the actual memory becomes the default invocation-global source block cap, leaving the other half for runtime, SDK, transfer, marker, and planning allocations. The 1024 MiB default was selected from historical exploratory measurements whose single-sample methodology is now being revalidated; those rows are not a performance guarantee or a sufficient basis for changing production defaults.
 
 | Budget item at default settings | Approximate budget |
 | --- | ---: |
-| Runtime/base reserve | 64 MiB |
-| Transfer worker reserve, `32 * 12 MiB` | 384 MiB |
-| Source ranged `GetObject` in-flight reserve, `4 * 8 MiB` | 32 MiB |
-| ZIP entry metadata reserve | 2 KiB per file |
-| Remaining source block window | About 160 MiB minus the file reserve for large enough archives, clamped to the source ZIP size |
+| Invocation-global source block cap | 512 MiB |
+| Adaptive local-window runtime/base reserve | 64 MiB |
+| Adaptive local-window transfer reserve, `32 * 12 MiB` | 384 MiB |
+| Adaptive local-window in-flight GET reserve, `4 * 8 MiB` | 32 MiB |
+| Adaptive local-window ZIP metadata reserve | 2 KiB per file |
+| Derived per-archive source window for a large ZIP | About 32 MiB minus the file reserve, still governed by the 512 MiB global cap |
 
-The explicit streaming buffers are small enough to fit inside the transfer worker reserve: each active marker-free upload stream uses about 64 KiB read buffer, 64 KiB held-back validation buffer, 256 KiB body assembly buffer, and up to 1 MiB of queued body frames. Marker uploads add a bounded replacement pipe, one held-back output frame, and at most `longest marker token - 1` bytes of input carry; they do not retain the complete entry or replacement output. At 32 active marker-free transfers, entry stream buffering is roughly 44 MiB. For 2,500 ZIP entries, the file reserve is about 5 MiB and the adaptive source window can grow to about 155 MiB when the source ZIP is large enough. For small archives, the source window is clamped down to the actual source ZIP size, so observed RSS is much lower than the worst-case budget.
+The explicit streaming buffers are small enough to fit inside the transfer worker reserve: each active marker-free upload stream uses about 64 KiB read buffer, 64 KiB held-back validation buffer, 256 KiB body assembly buffer, and up to 1 MiB of queued body frames. Marker uploads add a bounded replacement pipe, one held-back output frame, and at most `longest marker token - 1` bytes of input carry; they do not retain the complete entry or replacement output. At 32 active marker-free transfers, entry stream buffering is roughly 44 MiB. Each archive derives a local window from the shared budget and its file count, but local windows do not reserve independent memory. Pending fetches acquire fair 4 KiB-granularity permits from one invocation-wide semaphore; fetching and ready blocks retain those permits until all claims release them. Failure and deadline cancellation drop permits and wake global and local waiters. For small archives, the source window is clamped down to the actual source ZIP size, so observed RSS is much lower than the worst-case budget.
 
 Adaptive source window formula:
 
 ```text
-sourceGetConcurrency = clamp(memoryLimitMiB / 256, 1, 8)
+actualMemoryMiB = AWS_LAMBDA_FUNCTION_MEMORY_SIZE
+globalSourceBudgetBytes = floor(actualMemoryBytes / 2)
+globalSourceBudgetBytes = min(globalSourceBudgetBytes, explicitLowerBudgetBytes)
+
+sourceGetConcurrency = clamp(actualMemoryMiB / 256, 1, 8)
 
 reservedBytes =
   64 MiB
@@ -73,16 +80,18 @@ reservedBytes =
   + (zipFileCount * 2 KiB)
   + (sourceGetConcurrency * sourceBlockBytes)
 
-capacityBytes = min(memoryBudgetBytes - reservedBytes, sourceZipBytes)
+capacityBytes = min(globalSourceBudgetBytes - reservedBytes, sourceZipBytes)
 
 if capacityBytes > 512 MiB:
   capacityBytes -= 384 MiB
 
 sourceWindowBytes = min(capacityBytes, 512 MiB)
 sourceWindowBytes = max(sourceWindowBytes, min(sourceBlockBytes, sourceZipBytes))
+
+sum(resident source block bytes across archives) <= globalSourceBudgetBytes
 ```
 
-`memoryBudgetBytes` defaults to `memoryLimit` but can be isolated with `advancedRuntimeTuning.sourceWindowMemoryBudgetMb`. The final `max` ensures at least one source block can be admitted, while the `min(sourceZipBytes)` clamp avoids reserving more resident source data than the archive can contain.
+`advancedRuntimeTuning.sourceWindowMemoryBudgetMb` can lower `globalSourceBudgetBytes`; it cannot raise the half-memory cap. The final local-window `max` ensures at least one validated source block can be admitted, while the `min(sourceZipBytes)` clamp avoids planning a larger local window than the archive can contain. The global semaphore, not the sum of local-window values, is the aggregate bound.
 
 ## Supported Scenarios
 
@@ -283,25 +292,27 @@ For `extract=true`:
 7. Before applying deployment filters, strictly validate an authenticated catalog and require a one-to-one path and size mapping with every non-directory, non-catalog ZIP entry.
 8. Build a manifest of planned ZIP entries with normalized destination keys, source archive index, entry offsets, compressed size, uncompressed size, CRC32, and optional trusted size/MD5 metadata.
 9. Preflight every final UTF-8 destination key, single-request object size, archive span, and aggregate output total before destination mutation.
-10. Coalesce planned source spans into shared source blocks, prefetch them with bounded source GET concurrency, and release blocks after all active readers consume their claims. Every provider-owned ranged-read attempt disables SDK retries; transient transport, timeout, throttling, retryable 5xx, and incomplete-body failures can use the remaining three-total-attempt budget, while permanent 4xx and validation failures stop immediately.
-11. List the destination prefix once.
+10. Coalesce planned source spans into shared source blocks, locate intersecting blocks with indexed interval boundaries, prefetch them with bounded source GET concurrency, and release blocks after all active readers consume their claims. All archives borrow fairly from the invocation-global source budget. Every provider-owned ranged-read attempt disables SDK retries; transient transport, timeout, throttling, retryable 5xx, and incomplete-body failures can use the remaining three-total-attempt budget, while permanent 4xx and validation failures stop immediately.
+11. List the destination prefix for comparison. Count all listed objects, but retain size and `ETag` metadata only for keys in the manifest.
 12. On SSE-S3 destinations, skip existing marker-free trusted entries when destination size and `ETag` match the authenticated catalog. Existing untrusted entries are read/decompressed once for CRC/size/MD5 comparison; missing entries avoid that precomparison pass.
 13. On KMS/DSSE destinations, do not use destination `ETag` as plaintext MD5 and do not perform a useless precomparison read. Trusted entries still validate their catalog MD5 while streaming; untrusted entries do not compute MD5.
 14. Stream every marker-bearing entry through a deterministic planning pass. Simultaneous replacements use leftmost-longest matching, lexicographic token order for equal-length ties, and never rescan replacement bytes. The pass validates source size/CRC/catalog MD5, enforces the expanded size limit, determines exact `Content-Length`, and calculates final MD5 only for SSE-S3 destinations.
 15. Skip an unchanged SSE-S3 marker object after that planning pass. Otherwise reopen the entry for a retryable streaming upload pass; each consumed retry body repeats only that bounded upload pass. Hold back the final output frame until source validation and the planning-pass length/digest checks succeed.
 16. Set inferred `Content-Type` on every PUT. SSE-S3 uploads retain streamed MD5 for ambiguous-write reconciliation without storing another checksum. KMS/DSSE uploads request stored full-object SHA-256 and calculate the independent expected digest while streaming.
 17. Admit at most `maxParallelTransfers` logical object tasks, continuously drain completed joins, and stop admission on the first observed error or panic. Abort and drain outstanding work before stale deletion or invalidation can run.
+18. When stale deletion is enabled, list the destination again after successful transfers and delete non-manifest keys from each page before requesting the next page.
 
 For `extract=false`:
 
 1. `HeadObject` each source object.
 2. Build copy plans using the source object `ETag` as the expected content identity.
 3. Preflight final keys and known source sizes.
-4. List the destination prefix once.
+4. List the destination prefix for comparison, retaining metadata only for manifest keys.
 5. On SSE-S3 destinations, skip copies whose destination `ETag` matches the source identity. On KMS/DSSE destinations, copy because encrypted destination `ETag`s do not provide that comparison.
 6. Run copies with `CopyObject`, `MetadataDirective=REPLACE`, and inferred `Content-Type`. No unused copy checksum is requested.
+7. When stale deletion is enabled, perform the same post-transfer page-streamed destination scan and deletion.
 
-Destination listing is also used for stale-object cleanup. With `destinationLifecycle.onDeploy.deleteStaleObjects` enabled, objects under the destination prefix that are not in the current deployment plan are removed with `DeleteObjects` in 1000-key chunks.
+The comparison scan retains at most one destination metadata record per manifest key. With `destinationLifecycle.onDeploy.deleteStaleObjects` enabled, a second scan after transfers holds at most one S3 page of keys and removes included objects absent from the deployment plan with `DeleteObjects` in 1000-key chunks. Destination planning memory is therefore O(manifest keys + one page + transfer concurrency), independent of unrelated destination object count.
 
 ## Skip Decisions
 
@@ -327,7 +338,7 @@ flowchart LR
 
 The provider's skip identity is content only. It does not expose deployment-wide object metadata overrides and does not parse `OldResourceProperties` for object settings. Every PUT and COPY infers `Content-Type` from the deployed object's file extension with an `application/octet-stream` fallback; cache behavior belongs in CloudFront, while encryption, storage, and lifecycle defaults belong on the bucket.
 
-`ListObjectsV2` exposes destination `ETag`, but not the actual checksum value needed to compare stored SHA-256. Performing one checksum-mode `HeadObject` per destination object would defeat the single-list deployment model. Shin therefore uses catalog/MD5 skips only for default/SSE-S3 destinations and reserves checksum-mode `HeadObject` for reconciling ambiguous KMS/DSSE writes.
+`ListObjectsV2` exposes destination `ETag`, but not the actual checksum value needed to compare stored SHA-256. Performing one checksum-mode `HeadObject` per destination object would defeat the bounded comparison model. Shin therefore uses catalog/MD5 skips only for default/SSE-S3 destinations and reserves checksum-mode `HeadObject` for reconciling ambiguous KMS/DSSE writes. The optional second list is a page-streamed stale-cleanup pass and retains no comparison metadata.
 
 Directory `Source.asset` inputs are packaged with an authenticated source MD5 catalog. On SSE-S3 destinations, marker-free entries with trusted MD5s and matching destination size can be skipped without reading ZIP entry bytes. Without a trusted catalog match, existing marker-free entries are read and decompressed to compute MD5; missing entries stream straight to upload. On KMS/DSSE destinations, entries stream without a destination-comparison pass because encrypted `ETag`s are not plaintext MD5. ZIP entry reads always validate declared uncompressed size and CRC32, and validate authenticated MD5 whenever present, before the final upload chunk is released.
 
@@ -428,17 +439,18 @@ The current implementation:
 - use authenticated embedded source MD5 catalogs for sparse unchanged skips
 - coalesce adjacent source spans into shared source blocks
 - prefetch source blocks with bounded source GET concurrency
-- bound resident source block data and release blocks by reader claims
+- bound aggregate resident source block data with one fair invocation-global budget and release permits by reader claims
+- locate source blocks for entry spans with indexed interval boundaries instead of scanning every block
 - use one SDK attempt per provider-owned ranged GET attempt and retry only typed transient, throttled, or incomplete-body failures
 - validate ZIP entry uncompressed size and CRC32 during hashing and upload
-- keep destination listing as the central comparison input
+- retain destination comparison metadata only for manifest keys and page stale cleanup after transfers
 - use source-object `If-Match` guards for ranged archive reads
 - use destination `If-None-Match`/`If-Match` guards for extracted `PutObject` writes when listing data supports them
 - retry failed `PutObject` attempts with capped backoff and throttle-aware delays
 - drain a bounded transfer task set continuously and abort outstanding work on the first observed error or panic
 - create retryable ZIP body work only when a body instance is actually polled
 - replace markers with deterministic simultaneous semantics using bounded planning and retryable streaming passes
-- derive source GET concurrency and source block window from Lambda memory unless explicitly configured
+- derive source GET concurrency, the half-memory global cap, and local source windows from actual Lambda memory unless valid lower tuning is configured
 - emit structured source scheduler and destination `PutObject` diagnostics as provider logs
 
 The remaining catalog caveat is packaging compatibility. Cataloged directory assets are produced by this construct's `Source.asset` wrapper. If callers need CDK asset bundling or symlink-following behavior that the wrapper does not currently implement, they can pass `embeddedCatalog: false` and use the upstream CDK asset path without trusted catalog sparse skips.
@@ -454,7 +466,7 @@ Cataloged asset packaging limitations:
 
 ## Diagnostics
 
-Each extracted deployment logs the effective source schedule and a final source diagnostics record per source archive. These records include planned entries and blocks, planned and fetched source bytes, source amplification, ranged `GetObject` wire attempts and typed failures, block hits/misses/releases/refetches, split wait counters for in-flight fetches versus source-window capacity, consumed body attempts/replays, resident source-window high-water, true active ZIP entry reader high-water, and active source GET high-water. The aggregate `shin_deployment_summary` is schema version 2. It separates logical transfer objects and cancellations from source and destination wire attempts; the upload path also logs destination `PutObject` retry settings, throttling, wait time, and failures grouped by error code. Its `markerReplacement` object names the strategy and semantics, declares the nominal two passes for an uploaded marker object, and reports actual planning and upload passes for the invocation.
+Each extracted deployment logs the effective source schedule and a final source diagnostics record per source archive. These records include planned entries and blocks, planned and fetched source bytes, source amplification, ranged `GetObject` wire attempts and typed failures, block hits/misses/releases/refetches, split wait counters for in-flight fetches versus source-window capacity, consumed body attempts/replays, per-archive resident source-window high-water, true active ZIP entry reader high-water, and active source GET high-water. The aggregate `shin_deployment_summary` is schema version 2. It adds the actual Lambda memory, invocation-global source budget/current/high-water values, and destination metadata/page high-water. It separates logical transfer objects and cancellations from source and destination wire attempts; the upload path also logs destination `PutObject` retry settings, throttling, wait time, and failures grouped by error code. Its `markerReplacement` object names the strategy and semantics, declares the nominal two passes for an uploaded marker object, and reports actual planning and upload passes for the invocation.
 
 Diagnostics are emitted to CloudWatch Logs through structured `tracing` fields. They are not returned in the CloudFormation custom-resource response because that response has a small practical size limit and is already used for `objectKeys` and `deployedBucket` outputs.
 
@@ -510,7 +522,19 @@ Source diagnostics field reference:
 | `bodyReplays` | Polled ZIP body instances after the first consumed body for the logical upload payload. | Measure decompression/source replay rather than clone creation. |
 | `activeGetsHighWater` | Peak concurrent ranged `GetObject` calls. | Check adaptive source GET concurrency behavior. |
 | `activeReadersHighWater` | Peak active ZIP entry readers, counted once per reader rather than once per claimed block. | Verify entry readers stayed within transfer concurrency. |
-| `residentBytesHighWater` | Peak resident source block bytes. | Compare actual source window use with configured capacity. |
+| `residentBytesHighWater` | Peak resident source block bytes for any one archive. | Compare actual per-archive use with its local window. |
+| `globalBudgetBytes` | Invocation-global source block budget derived from actual Lambda memory and optional lower tuning. | Verify every archive shares the intended cap. |
+| `globalResidentBytesCurrent` | Globally admitted source block bytes still held when the summary is emitted. | Detect leaked permits; successful requests should report zero. |
+| `globalResidentBytesHighWater` | Peak source block bytes admitted across all archives in the invocation. | Prove aggregate use stayed at or below `globalBudgetBytes`. |
+
+Runtime and destination planning diagnostics field reference:
+
+| Field | Meaning | Use when debugging |
+| --- | --- | --- |
+| `availableMemoryMb` | Actual Lambda memory read from `AWS_LAMBDA_FUNCTION_MEMORY_SIZE`. | Confirm adaptive defaults use runtime truth rather than a request property. |
+| `destinationObjects` | Objects observed by the initial destination comparison scan. | Understand destination namespace scale. |
+| `destinationMetadataRetained` | Initial destination records retained because their relative keys occur in the manifest. | Verify metadata memory scales with the manifest, not the destination. |
+| `destinationPageObjectsHighWater` | Largest `ListObjectsV2` page observed by comparison or stale cleanup. | Verify page-streamed cleanup retained at most one S3 page. |
 
 Destination upload diagnostics field reference:
 
@@ -546,8 +570,10 @@ Destination upload diagnostics field reference:
 - Source ZIP archives and marker-expanded entries do not need to fit in Lambda memory or ephemeral storage; both stream in bounded chunks.
 - Each extracted ZIP entry must fit S3's single-request `PutObject` limit.
 - Final destination keys must fit S3's 1024-byte UTF-8 limit.
-- `advancedRuntimeTuning.sourceBlockBytes` must be at least 30 bytes so ZIP local file headers can fit in one source block.
-- Very small Lambda memory settings reduce source GET concurrency and source window capacity unless explicitly overridden.
+- `maxParallelTransfers` is 1–256, explicit source GET concurrency is 1–64, and application PUT attempts are 1–10.
+- `advancedRuntimeTuning.sourceBlockBytes` must be at least 30 bytes so ZIP local file headers can fit in one source block. Block size, block size times source GET concurrency, and any explicit local window must fit the invocation-global source budget.
+- Retry delays are 0–60000 ms and each base delay must not exceed its corresponding maximum.
+- `advancedRuntimeTuning.sourceWindowMemoryBudgetMb` can only lower the default half-memory source cap. Very small Lambda memory settings can therefore make otherwise valid tuning combinations fail explicitly.
 - Cataloged asset packaging requires CDK staging and rejects bundled directory assets, symlinks, and non-regular files.
 - The provider is a static asset deployment engine, not a general-purpose sync engine with byte-range diffs or persistent manifests.
 
@@ -556,5 +582,4 @@ Destination upload diagnostics field reference:
 The highest-value architecture work is now:
 
 1. Promote the benchmark methodology to repeated canonical runs and add CI regression checks that can detect provider-time, memory, transfer, retry, and request-count regressions without committing raw AWS evidence.
-2. Add invocation-global source-window budgeting and page-bounded destination cleanup planning.
-3. Add cataloged packaging support for CDK asset bundling or keep the current explicit fallback if the compatibility surface is too large.
+2. Add cataloged packaging support for CDK asset bundling or keep the current explicit fallback if the compatibility surface is too large.

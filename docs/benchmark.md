@@ -99,6 +99,26 @@ The current provider used 42.4% to 46.5% less peak memory than before and was 5.
 
 Raw AWS output remains outside git. Every repetition captured provider telemetry before cleanup, destroyed its stack, and verified stack absence.
 
+## Invocation memory-planning performance decision
+
+The 2026-07-13 memory-planning decision run completed five `before`, five `current`, and five `upstream` repetitions. Its 45 sanitized phase rows are retained in `benchmarks/results.jsonl` under decision-run ID `memory-planning-2026-07-13`. Runs used the configured test profile in `eu-central-1`, serialized stacks at concurrency 1, 1024 MiB Lambda memory, 32 parallel transfers, and the same three ordered phases for every variant.
+
+The deterministic `multi-source-prune` profile deploys four independent source archives. Baseline state contains 1,284 files and 47,426,688 bytes; pruned state contains 129 files and 4,805,824 bytes, forcing removal of 1,155 stale destination objects across more than one S3 page. `before` is the unchanged provider at the harness-only commit `10253c9`; `current` is the bounded provider at `72e2fcf`; upstream is AWS CDK 2.260.0 `BucketDeployment`.
+
+Median CloudWatch provider duration and peak-memory results:
+
+| Phase | Provider seconds, before / current / upstream | Current vs before | Upstream / current | Peak MiB, before / current / upstream |
+| --- | ---: | ---: | ---: | ---: |
+| `cold-create` | 1.914 / 2.025 / 23.644 | +5.8% | 11.7x | 50 / 48 / 242 |
+| `unchanged-update` | 0.516 / 0.608 / 24.134 | +17.8% | 39.7x | 50 / 50 / 242 |
+| `pruned-update` | 2.358 / 2.629 / 20.169 | +11.5% | 7.7x | 50 / 52 / 242 |
+
+The bounded design adds 0.092–0.271 seconds to the median pre-change provider phases. That is the measured cost of the post-transfer destination cleanup scan; source fetched bytes and ranged-GET attempts were unchanged from `before`. Current still completed provider work 7.7x to 39.7x faster than upstream and used 78.5% to 80.2% less peak Lambda memory, so the memory-safety change remains performance-accepted for this target workload.
+
+Every current row read the actual 1024 MiB Lambda size and reported an exact 536,870,912-byte invocation-global source budget, zero globally resident bytes at summary time, and a global high-water below the cap. The four-source cold runs reached 459,139 bytes aggregate versus 229,613 bytes for the largest individual archive, proving that the aggregate counter spans archives. Destination page high-water was exactly 1,000; metadata retention was 1,284 entries for unchanged state and 129 for pruned state; every pruned phase deleted exactly 1,155 keys in two batches.
+
+All 15 current rows reported zero source GET retries/errors, destination PUT retries/throttles, transfer failures, cancellations, panics, and body replays. Raw AWS output remains outside git, every repetition destroyed its stack, and the final evidence set contains no partial run.
+
 ## Current Snapshot
 
 > [!CAUTION]
@@ -138,7 +158,7 @@ The `assets` benchmark scenario generates deterministic bundles under `.benchmar
 
 ## Telemetry Notes
 
-Shin rows may include sanitized `shin_deployment_summary` telemetry. Schema-v2 summaries separate logical transfer objects, source and destination wire attempts, consumed body replays, typed throttling/errors, and cancellations; historical schema-v1 rows do not contain those fields. Use `docs/architecture.md` for exact diagnostics meanings.
+Shin rows may include sanitized `shin_deployment_summary` telemetry. Schema-v2 summaries separate logical transfer objects, source and destination wire attempts, consumed body replays, typed throttling/errors, cancellations, invocation-global source memory, and destination metadata/page high-water; historical rows may not contain every field. Use `docs/architecture.md` for exact diagnostics meanings.
 
 Do not infer S3 throttling from source block waits alone. Source S3 pressure requires source `getRetries` or `getErrors`; destination S3 throttling requires `putObject.throttledAttempts` or retry evidence.
 
