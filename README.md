@@ -95,7 +95,6 @@ The construct follows the upstream `BucketDeployment` API where the behavior map
 | Filtering       | `include`, `exclude`                                                                                                                                 |
 | Lifecycle       | `destinationLifecycle`                                                                                                                               |
 | Update behavior | `extract`, `outputObjectKeys`                                                                                                                        |
-| Object headers  | Automatic `Content-Type` inference from the deployed object's file extension, with `application/octet-stream` fallback                              |
 | CloudFront      | `distribution`, `distributionPaths`, `waitForDistributionInvalidation`                                                                               |
 | Provider Lambda | `architecture`, `bundling`, `logGroup`, `memoryLimit`, `role`, `securityGroups`, `vpc`, `vpcSubnets`                                                 |
 | Runtime tuning  | `maxParallelTransfers`, `advancedRuntimeTuning`                                                                                                      |
@@ -104,7 +103,8 @@ Unsupported upstream props:
 
 | Prop | Reason |
 | --- | --- |
-| `accessControl`, `cacheControl`, `contentDisposition`, `contentEncoding`, `contentLanguage`, `contentType`, `expires`, `metadata`, `storageClass`, `websiteRedirectLocation` | Object metadata is intentionally outside the deployment contract. Configure cache behavior in CloudFront and storage/lifecycle behavior on the bucket. |
+| `accessControl`, `cacheControl`, `contentDisposition`, `contentEncoding`, `contentLanguage`, `expires`, `metadata`, `storageClass`, `websiteRedirectLocation` | Object metadata is intentionally outside the deployment contract. Configure cache behavior in CloudFront and storage/lifecycle behavior on the bucket. |
+| `contentType` | Shin automatically infers `Content-Type` from each deployed object's file extension, with `application/octet-stream` as the fallback. |
 | `serverSideEncryption`, `serverSideEncryptionAwsKmsKeyId`, `serverSideEncryptionCustomerAlgorithm` | Configure default encryption on `destinationBucket`; SSE-C is not supported. |
 | `ephemeralStorageSize` | The provider does not stage archives or extracted files in Lambda `/tmp`. |
 | `logRetention` | This legacy upstream prop is not exposed; provide `logGroup` with the desired retention policy. |
