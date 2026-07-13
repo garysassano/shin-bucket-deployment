@@ -1081,6 +1081,20 @@ mod tests {
         parse_request(&raw).expect("valid request")
     }
 
+    #[test]
+    fn deployment_summary_uses_diagnostics_schema_v2() {
+        let request = deployment_request_with_paths(vec!["/*".to_string()]);
+        let stats = crate::types::DeploymentStats::default();
+        let summary = serde_json::to_value(stats.snapshot("Create", "success", &request))
+            .expect("serializable summary");
+
+        assert_eq!(summary["schemaVersion"], 2);
+        assert_eq!(summary["transfer"]["scheduledObjects"], 0);
+        assert_eq!(summary["source"]["getAttempts"], 0);
+        assert_eq!(summary["source"]["bodyReplays"], 0);
+        assert_eq!(summary["putObject"]["wireAttempts"], 0);
+    }
+
     #[tokio::test]
     async fn callback_accepts_success_without_retry() {
         let server = MockCallbackServer::start(vec![MockCallback::Status(200)]);

@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 use std::io;
+use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -8,6 +9,9 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use aws_sdk_s3::Client;
+use aws_sdk_s3::config::retry::RetryConfig;
+use aws_sdk_s3::error::{ProvideErrorMetadata, SdkError};
+use aws_sdk_s3::operation::get_object::GetObjectError;
 use aws_sdk_s3::primitives::{ByteStream, SdkBody};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
@@ -21,7 +25,7 @@ use sha2::Sha256;
 use tokio::io::{AsyncBufRead, AsyncRead, AsyncReadExt, AsyncSeek, ReadBuf, SeekFrom};
 use tokio::sync::futures::OwnedNotified;
 use tokio::sync::{Notify, Semaphore, mpsc};
-use tokio::task::JoinHandle;
+use tokio::task::JoinSet;
 use tokio::time::{Instant, timeout_at};
 
 use crate::types::{AppState, DestinationChecksumStrategy};
@@ -100,6 +104,9 @@ pub(crate) struct SourceDiagnostics {
     source_get_request_errors: AtomicU64,
     source_get_body_errors: AtomicU64,
     source_get_short_body_errors: AtomicU64,
+    source_get_throttled_attempts: AtomicU64,
+    source_get_retryable_errors: AtomicU64,
+    source_get_permanent_errors: AtomicU64,
     source_get_errors: AtomicU64,
     fetched_source_bytes: AtomicU64,
     block_hits: AtomicU64,
@@ -112,6 +119,8 @@ pub(crate) struct SourceDiagnostics {
     replay_claims: AtomicU64,
     replay_claims_after_release: AtomicU64,
     replay_claims_after_failure: AtomicU64,
+    body_attempts: AtomicU64,
+    body_replays: AtomicU64,
     active_gets: AtomicU64,
     active_gets_high_water: AtomicU64,
     active_readers: AtomicU64,
@@ -135,6 +144,9 @@ pub(crate) struct SourceDiagnosticsSnapshot {
     pub(crate) source_get_request_errors: u64,
     pub(crate) source_get_body_errors: u64,
     pub(crate) source_get_short_body_errors: u64,
+    pub(crate) source_get_throttled_attempts: u64,
+    pub(crate) source_get_retryable_errors: u64,
+    pub(crate) source_get_permanent_errors: u64,
     pub(crate) source_get_errors: u64,
     pub(crate) fetched_source_bytes: u64,
     pub(crate) source_amplification: f64,
@@ -148,6 +160,8 @@ pub(crate) struct SourceDiagnosticsSnapshot {
     pub(crate) replay_claims: u64,
     pub(crate) replay_claims_after_release: u64,
     pub(crate) replay_claims_after_failure: u64,
+    pub(crate) body_attempts: u64,
+    pub(crate) body_replays: u64,
     pub(crate) active_gets_high_water: u64,
     pub(crate) active_readers_high_water: u64,
     pub(crate) resident_bytes_high_water: u64,
@@ -206,7 +220,7 @@ pub(crate) struct SourceBlockStore {
     source_get_concurrency: usize,
     window_bytes: u64,
     fetch_semaphore: Semaphore,
-    body_tasks: Mutex<Vec<JoinHandle<()>>>,
+    body_tasks: Mutex<JoinSet<()>>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -220,6 +234,7 @@ pub(crate) struct SourceBlockOptions {
 struct SourceBlockState {
     slots: Vec<SourceBlockSlot>,
     resident_bytes: u64,
+    failure: Option<String>,
 }
 
 struct SourceBlockSlot {
@@ -237,8 +252,23 @@ enum SourceBlockStatus {
 }
 
 struct ReceiverBody {
-    receiver: tokio::sync::Mutex<mpsc::Receiver<std::result::Result<Bytes, BodyError>>>,
+    init: Option<ReceiverBodyInit>,
+    receiver: Option<mpsc::Receiver<std::result::Result<Bytes, BodyError>>>,
     content_length: u64,
+}
+
+struct ReceiverBodyInit {
+    store: Arc<SourceBlockStore>,
+    plan: ZipEntryPlan,
+    body_state: Arc<UploadBodyState>,
+    checksum_strategy: DestinationChecksumStrategy,
+    attempts: Arc<AtomicUsize>,
+}
+
+struct RangeGetError {
+    source: io::Error,
+    retryable: bool,
+    throttled: bool,
 }
 
 pub(crate) async fn prepare_source_zip(
@@ -308,7 +338,6 @@ impl SourceClient {
             ));
         }
 
-        let mut last_error = None;
         for attempt in 1..=GET_OBJECT_MAX_ATTEMPTS {
             self.diagnostics
                 .source_get_attempts
@@ -320,23 +349,48 @@ impl SourceClient {
             }
             match self.fetch_range_once(start, end).await {
                 Ok(bytes) => return Ok(bytes),
-                Err(err) if attempt < GET_OBJECT_MAX_ATTEMPTS => {
-                    last_error = Some(err);
+                Err(error) if error.retryable && attempt < GET_OBJECT_MAX_ATTEMPTS => {
+                    self.diagnostics
+                        .source_get_retryable_errors
+                        .fetch_add(1, Ordering::Relaxed);
+                    if error.throttled {
+                        self.diagnostics
+                            .source_get_throttled_attempts
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
                     tokio::time::sleep(Duration::from_millis(100 * attempt as u64)).await;
                 }
-                Err(err) => {
+                Err(error) => {
+                    if error.retryable {
+                        self.diagnostics
+                            .source_get_retryable_errors
+                            .fetch_add(1, Ordering::Relaxed);
+                    } else {
+                        self.diagnostics
+                            .source_get_permanent_errors
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+                    if error.throttled {
+                        self.diagnostics
+                            .source_get_throttled_attempts
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
                     self.diagnostics
                         .source_get_errors
                         .fetch_add(1, Ordering::Relaxed);
-                    return Err(err);
+                    return Err(error.source);
                 }
             }
         }
 
-        Err(last_error.unwrap_or_else(|| io::Error::other("S3 ranged GetObject failed")))
+        Err(io::Error::other("S3 ranged GetObject failed"))
     }
 
-    async fn fetch_range_once(&self, start: u64, end: u64) -> io::Result<Bytes> {
+    async fn fetch_range_once(
+        &self,
+        start: u64,
+        end: u64,
+    ) -> std::result::Result<Bytes, RangeGetError> {
         let _active_get = self.diagnostics.track_active_get();
         let mut request = self
             .client
@@ -349,12 +403,19 @@ impl SourceClient {
             request = request.if_match(etag);
         }
 
-        let output = request.send().await.map_err(|err| {
-            self.diagnostics
-                .source_get_request_errors
-                .fetch_add(1, Ordering::Relaxed);
-            io::Error::other(format!("S3 ranged GetObject failed: {err}"))
-        })?;
+        let output = request
+            .customize()
+            .config_override(
+                aws_sdk_s3::config::Builder::new().retry_config(RetryConfig::disabled()),
+            )
+            .send()
+            .await
+            .map_err(|error| {
+                self.diagnostics
+                    .source_get_request_errors
+                    .fetch_add(1, Ordering::Relaxed);
+                range_get_request_error(error)
+            })?;
 
         output
             .body
@@ -365,11 +426,22 @@ impl SourceClient {
                 self.diagnostics
                     .source_get_body_errors
                     .fetch_add(1, Ordering::Relaxed);
-                io::Error::other(format!("S3 range body read failed: {err}"))
+                RangeGetError {
+                    source: io::Error::other(format!("S3 range body read failed: {err}")),
+                    retryable: true,
+                    throttled: false,
+                }
             })
             .and_then(|bytes| {
                 let expected_len = usize::try_from(end - start + 1).map_err(|_| {
-                    io::Error::new(io::ErrorKind::InvalidInput, "S3 range is too large")
+                    RangeGetError {
+                        source: io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            "S3 range is too large",
+                        ),
+                        retryable: false,
+                        throttled: false,
+                    }
                 })?;
                 if bytes.len() == expected_len {
                     Ok(bytes)
@@ -377,16 +449,64 @@ impl SourceClient {
                     self.diagnostics
                         .source_get_short_body_errors
                         .fetch_add(1, Ordering::Relaxed);
-                    Err(io::Error::new(
-                        io::ErrorKind::UnexpectedEof,
-                        format!(
-                            "S3 range bytes={start}-{end} returned {} bytes, expected {expected_len}",
-                            bytes.len()
+                    Err(RangeGetError {
+                        source: io::Error::new(
+                            io::ErrorKind::UnexpectedEof,
+                            format!(
+                                "S3 range bytes={start}-{end} returned {} bytes, expected {expected_len}",
+                                bytes.len()
+                            ),
                         ),
-                    ))
+                        retryable: true,
+                        throttled: false,
+                    })
                 }
             })
     }
+}
+
+fn range_get_request_error(error: SdkError<GetObjectError>) -> RangeGetError {
+    let (retryable, throttled) = match &error {
+        SdkError::ServiceError(service) => {
+            let status = service.raw().status().as_u16();
+            let throttled = service.err().code().is_some_and(is_s3_throttle_error_code);
+            (
+                status == 408 || status == 429 || status >= 500 || throttled,
+                throttled,
+            )
+        }
+        SdkError::TimeoutError(_) | SdkError::DispatchFailure(_) => (true, false),
+        SdkError::ResponseError(response) => {
+            let status = response.raw().status().as_u16();
+            (
+                status == 408 || status == 429 || status >= 500,
+                status == 429,
+            )
+        }
+        SdkError::ConstructionFailure(_) => (false, false),
+        _ => (false, false),
+    };
+
+    RangeGetError {
+        source: io::Error::other(format!("S3 ranged GetObject failed: {error}")),
+        retryable,
+        throttled,
+    }
+}
+
+fn is_s3_throttle_error_code(code: &str) -> bool {
+    matches!(
+        code,
+        "SlowDown"
+            | "Throttling"
+            | "ThrottlingException"
+            | "TooManyRequestsException"
+            | "RequestLimitExceeded"
+            | "RequestThrottled"
+            | "RequestThrottledException"
+            | "ProvisionedThroughputExceededException"
+            | "BandwidthLimitExceeded"
+    )
 }
 
 impl SourceDiagnostics {
@@ -406,6 +526,9 @@ impl SourceDiagnostics {
             source_get_request_errors: AtomicU64::new(0),
             source_get_body_errors: AtomicU64::new(0),
             source_get_short_body_errors: AtomicU64::new(0),
+            source_get_throttled_attempts: AtomicU64::new(0),
+            source_get_retryable_errors: AtomicU64::new(0),
+            source_get_permanent_errors: AtomicU64::new(0),
             source_get_errors: AtomicU64::new(0),
             fetched_source_bytes: AtomicU64::new(0),
             block_hits: AtomicU64::new(0),
@@ -418,6 +541,8 @@ impl SourceDiagnostics {
             replay_claims: AtomicU64::new(0),
             replay_claims_after_release: AtomicU64::new(0),
             replay_claims_after_failure: AtomicU64::new(0),
+            body_attempts: AtomicU64::new(0),
+            body_replays: AtomicU64::new(0),
             active_gets: AtomicU64::new(0),
             active_gets_high_water: AtomicU64::new(0),
             active_readers: AtomicU64::new(0),
@@ -485,6 +610,11 @@ impl SourceDiagnostics {
             source_get_request_errors: self.source_get_request_errors.load(Ordering::Relaxed),
             source_get_body_errors: self.source_get_body_errors.load(Ordering::Relaxed),
             source_get_short_body_errors: self.source_get_short_body_errors.load(Ordering::Relaxed),
+            source_get_throttled_attempts: self
+                .source_get_throttled_attempts
+                .load(Ordering::Relaxed),
+            source_get_retryable_errors: self.source_get_retryable_errors.load(Ordering::Relaxed),
+            source_get_permanent_errors: self.source_get_permanent_errors.load(Ordering::Relaxed),
             source_get_errors: self.source_get_errors.load(Ordering::Relaxed),
             fetched_source_bytes,
             source_amplification,
@@ -498,6 +628,8 @@ impl SourceDiagnostics {
             replay_claims: self.replay_claims.load(Ordering::Relaxed),
             replay_claims_after_release: self.replay_claims_after_release.load(Ordering::Relaxed),
             replay_claims_after_failure: self.replay_claims_after_failure.load(Ordering::Relaxed),
+            body_attempts: self.body_attempts.load(Ordering::Relaxed),
+            body_replays: self.body_replays.load(Ordering::Relaxed),
             active_gets_high_water: self.active_gets_high_water.load(Ordering::Relaxed),
             active_readers_high_water: self.active_readers_high_water.load(Ordering::Relaxed),
             resident_bytes_high_water: self.resident_bytes_high_water.load(Ordering::Relaxed),
@@ -508,11 +640,8 @@ impl SourceDiagnostics {
         update_high_water(&self.resident_bytes_high_water, resident_bytes);
     }
 
-    fn record_reader_started(&self, count: usize) {
-        let active = self
-            .active_readers
-            .fetch_add(u64::try_from(count).unwrap_or(u64::MAX), Ordering::Relaxed)
-            .saturating_add(u64::try_from(count).unwrap_or(u64::MAX));
+    fn record_reader_started(&self) {
+        let active = self.active_readers.fetch_add(1, Ordering::Relaxed) + 1;
         update_high_water(&self.active_readers_high_water, active);
     }
 
@@ -543,6 +672,13 @@ impl SourceDiagnostics {
     fn record_replay_claim_after_failure(&self) {
         self.replay_claims_after_failure
             .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_body_started(&self, replay: bool) {
+        self.body_attempts.fetch_add(1, Ordering::Relaxed);
+        if replay {
+            self.body_replays.fetch_add(1, Ordering::Relaxed);
+        }
     }
 }
 
@@ -667,6 +803,7 @@ impl SourceBlockStore {
                     })
                     .collect(),
                 resident_bytes: 0,
+                failure: None,
             }),
             blocks,
             notify: Arc::new(Notify::new()),
@@ -674,11 +811,25 @@ impl SourceBlockStore {
             source_get_concurrency: options.get_concurrency,
             window_bytes: options.window_bytes.max(options.block_bytes) as u64,
             fetch_semaphore: Semaphore::new(options.get_concurrency),
-            body_tasks: Mutex::new(Vec::new()),
+            body_tasks: Mutex::new(JoinSet::new()),
         })
     }
 
-    pub(crate) async fn run_scheduler(self: Arc<Self>) {
+    pub(crate) fn start_scheduler(self: &Arc<Self>) {
+        let store = Arc::clone(self);
+        self.spawn_body_task(async move {
+            let outcome = AssertUnwindSafe(Arc::clone(&store).run_scheduler())
+                .catch_unwind()
+                .await;
+            match outcome {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => store.cancel(format!("source block scheduler failed: {error}")),
+                Err(_) => store.cancel("source block scheduler panicked"),
+            }
+        });
+    }
+
+    async fn run_scheduler(self: Arc<Self>) -> io::Result<()> {
         let mut tasks = FuturesUnordered::new();
         let mut next_index = 0_usize;
 
@@ -686,7 +837,7 @@ impl SourceBlockStore {
             while tasks.len() < self.source_get_concurrency && next_index < self.blocks.len() {
                 let index = next_index;
                 next_index += 1;
-                let Some(block) = self.reserve_fetch(index).await else {
+                let Some(block) = self.reserve_fetch(index).await? else {
                     continue;
                 };
                 let store = Arc::clone(&self);
@@ -699,24 +850,38 @@ impl SourceBlockStore {
                 break;
             }
         }
+
+        Ok(())
+    }
+
+    pub(crate) fn cancel(&self, reason: impl Into<String>) {
+        let mut state = self
+            .state
+            .lock()
+            .expect("source block state mutex should not be poisoned");
+        if state.failure.is_none() {
+            state.failure = Some(reason.into());
+        }
+        drop(state);
+        self.fetch_semaphore.close();
+        self.notify.notify_waiters();
+        self.capacity_notify.notify_waiters();
     }
 
     pub(crate) async fn abort_and_drain_body_tasks(&self, deadline: Instant) -> Result<()> {
-        let tasks = {
+        let mut tasks = {
             let mut tasks = self
                 .body_tasks
                 .lock()
                 .expect("source body task mutex should not be poisoned");
-            std::mem::take(&mut *tasks)
+            std::mem::replace(&mut *tasks, JoinSet::new())
         };
 
-        for task in &tasks {
-            task.abort();
-        }
+        tasks.abort_all();
 
         timeout_at(deadline, async {
-            for task in tasks {
-                match task.await {
+            while let Some(result) = tasks.join_next().await {
+                match result {
                     Ok(()) => {}
                     Err(error) if error.is_cancelled() => {}
                     Err(error) => return Err(error).context("source body task panicked"),
@@ -728,30 +893,43 @@ impl SourceBlockStore {
         .context("source body tasks did not drain before the deployment drain deadline")?
     }
 
-    fn track_body_task(&self, task: JoinHandle<()>) {
-        self.body_tasks
+    fn spawn_body_task(&self, task: impl Future<Output = ()> + Send + 'static) {
+        let mut tasks = self
+            .body_tasks
             .lock()
-            .expect("source body task mutex should not be poisoned")
-            .push(task);
+            .expect("source body task mutex should not be poisoned");
+        while let Some(result) = tasks.try_join_next() {
+            if let Err(error) = result
+                && !error.is_cancelled()
+            {
+                tracing::error!(error = %error, "source body task panicked");
+            }
+        }
+        tasks.spawn(task);
     }
 
-    async fn reserve_fetch(&self, index: usize) -> Option<SourceBlockRange> {
-        self.blocks.get(index)?;
+    async fn reserve_fetch(&self, index: usize) -> io::Result<Option<SourceBlockRange>> {
+        if self.blocks.get(index).is_none() {
+            return Ok(None);
+        }
         loop {
             let wait = {
                 let mut state = self
                     .state
                     .lock()
                     .expect("source block state mutex should not be poisoned");
+                if let Some(error) = &state.failure {
+                    return Err(io::Error::other(error.clone()));
+                }
                 if state.slots[index].remaining_claims == 0 {
-                    return None;
+                    return Ok(None);
                 }
                 match state.slots[index].status {
                     SourceBlockStatus::Pending => {}
                     SourceBlockStatus::Fetching
                     | SourceBlockStatus::Ready(_)
                     | SourceBlockStatus::Released
-                    | SourceBlockStatus::Failed(_) => return None,
+                    | SourceBlockStatus::Failed(_) => return Ok(None),
                 }
 
                 let block = self.blocks[index];
@@ -763,7 +941,7 @@ impl SourceBlockStore {
                         .diagnostics
                         .record_resident_bytes(state.resident_bytes);
                     state.slots[index].status = SourceBlockStatus::Fetching;
-                    return Some(block);
+                    return Ok(Some(block));
                 }
 
                 enabled_notification(&self.capacity_notify)
@@ -830,6 +1008,9 @@ impl SourceBlockStore {
             .state
             .lock()
             .expect("source block state mutex should not be poisoned");
+        if let Some(error) = &state.failure {
+            return Err(io::Error::other(error.clone()));
+        }
         for &index in &indices {
             let Some(slot) = state.slots.get(index) else {
                 return Err(io::Error::new(
@@ -851,7 +1032,7 @@ impl SourceBlockStore {
         for &index in &indices {
             state.slots[index].live_claims = state.slots[index].live_claims.saturating_add(1);
         }
-        self.source.diagnostics.record_reader_started(indices.len());
+        self.source.diagnostics.record_reader_started();
         Ok(indices.into())
     }
 
@@ -865,6 +1046,9 @@ impl SourceBlockStore {
             .state
             .lock()
             .expect("source block state mutex should not be poisoned");
+        if state.failure.is_some() {
+            return;
+        }
         for index in indices {
             self.source.diagnostics.record_replay_claim();
             let Some(slot) = state.slots.get_mut(index) else {
@@ -902,6 +1086,9 @@ impl SourceBlockStore {
                     .state
                     .lock()
                     .expect("source block state mutex should not be poisoned");
+                if let Some(error) = &state.failure {
+                    return Err(io::Error::other(error.clone()));
+                }
                 match &state.slots[index].status {
                     SourceBlockStatus::Ready(bytes) => {
                         self.source
@@ -1017,7 +1204,6 @@ impl SourceBlockStore {
                 return;
             }
             slot.live_claims -= 1;
-            self.source.diagnostics.record_reader_finished();
             slot.remaining_claims = slot.remaining_claims.saturating_sub(1);
             if slot.live_claims == 0
                 && slot.remaining_claims == 0
@@ -1460,6 +1646,7 @@ impl Drop for EntryDataReader {
         while let Some(index) = self.remaining_blocks.pop_front() {
             self.store.release_block_reader(index);
         }
+        self.store.source.diagnostics.record_reader_finished();
     }
 }
 
@@ -1495,18 +1682,16 @@ pub(crate) fn zip_entry_body(
     content_length: u64,
     body_state: Arc<UploadBodyState>,
     checksum_strategy: DestinationChecksumStrategy,
+    attempts: Arc<AtomicUsize>,
 ) -> ByteStream {
-    let attempts = Arc::new(AtomicUsize::new(0));
     ByteStream::new(SdkBody::retryable(move || {
-        if attempts.fetch_add(1, Ordering::AcqRel) > 0 {
-            store.retain_zip_entry_for_replay(&plan);
-        }
         zip_entry_sdk_body(
             store.clone(),
             plan.clone(),
             content_length,
             Arc::clone(&body_state),
             checksum_strategy,
+            Arc::clone(&attempts),
         )
     }))
 }
@@ -1517,32 +1702,17 @@ fn zip_entry_sdk_body(
     content_length: u64,
     body_state: Arc<UploadBodyState>,
     checksum_strategy: DestinationChecksumStrategy,
+    attempts: Arc<AtomicUsize>,
 ) -> SdkBody {
-    let (sender, receiver) = mpsc::channel(ZIP_ENTRY_BODY_PIPE_CHUNKS);
-    let body_store = Arc::clone(&store);
-    let task = tokio::spawn(async move {
-        if let Err(error) = send_zip_entry_chunks(
-            body_store,
-            plan,
-            sender.clone(),
-            Arc::clone(&body_state),
-            checksum_strategy,
-        )
-        .await
-        {
-            if error
-                .downcast_ref::<io::Error>()
-                .is_some_and(|error| error.kind() == io::ErrorKind::InvalidData)
-            {
-                body_state.record_validation_error(&error.to_string());
-            }
-            let _ = sender.send(Err(error)).await;
-        }
-    });
-    store.track_body_task(task);
-
     SdkBody::from_body_1_x(ReceiverBody {
-        receiver: tokio::sync::Mutex::new(receiver),
+        init: Some(ReceiverBodyInit {
+            store,
+            plan,
+            body_state,
+            checksum_strategy,
+            attempts,
+        }),
+        receiver: None,
         content_length,
     })
 }
@@ -1686,7 +1856,47 @@ impl Body for ReceiverBody {
         mut self: Pin<&mut Self>,
         cx: &mut TaskContext<'_>,
     ) -> Poll<Option<std::result::Result<Frame<Self::Data>, Self::Error>>> {
-        let receiver = self.receiver.get_mut();
+        if let Some(init) = self.init.take() {
+            let replay = init.attempts.fetch_add(1, Ordering::AcqRel) > 0;
+            init.store.source.diagnostics.record_body_started(replay);
+            if replay {
+                init.store.retain_zip_entry_for_replay(&init.plan);
+            }
+
+            let (sender, receiver) = mpsc::channel(ZIP_ENTRY_BODY_PIPE_CHUNKS);
+            let body_store = Arc::clone(&init.store);
+            init.store.spawn_body_task(async move {
+                let outcome = AssertUnwindSafe(send_zip_entry_chunks(
+                    body_store,
+                    init.plan,
+                    sender.clone(),
+                    Arc::clone(&init.body_state),
+                    init.checksum_strategy,
+                ))
+                .catch_unwind()
+                .await;
+                let error = match outcome {
+                    Ok(Ok(())) => return,
+                    Ok(Err(error)) => error,
+                    Err(_) => boxed_body_error(io::Error::other("source body task panicked")),
+                };
+                {
+                    if error
+                        .downcast_ref::<io::Error>()
+                        .is_some_and(|error| error.kind() == io::ErrorKind::InvalidData)
+                    {
+                        init.body_state.record_validation_error(&error.to_string());
+                    }
+                    let _ = sender.send(Err(error)).await;
+                }
+            });
+            self.receiver = Some(receiver);
+        }
+
+        let receiver = self
+            .receiver
+            .as_mut()
+            .expect("source body receiver starts on first poll");
         match receiver.poll_recv(cx) {
             Poll::Ready(Some(Ok(bytes))) => Poll::Ready(Some(Ok(Frame::data(bytes)))),
             Poll::Ready(Some(Err(error))) => Poll::Ready(Some(Err(error))),
@@ -1772,17 +1982,21 @@ mod tests {
     use std::future::pending;
     use std::io::Write;
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::time::Duration;
 
+    use aws_sdk_s3::primitives::SdkBody;
+    use aws_smithy_http_client::test_util::{ReplayEvent, StaticReplayClient};
+    use http::{Request, Response};
     use tokio::io::AsyncReadExt;
     use tokio::sync::Semaphore;
     use tokio::time::Instant;
     use zip::write::{SimpleFileOptions, ZipWriter};
 
     use super::{
-        LOCAL_FILE_HEADER_LEN, SourceDiagnostics, UploadBodyState, plan_source_blocks,
-        send_zip_entry_chunks, zip_entry_reader,
+        LOCAL_FILE_HEADER_LEN, SourceClient, SourceDiagnostics, UploadBodyState,
+        plan_source_blocks, range_get_request_error, send_zip_entry_chunks, zip_entry_body,
+        zip_entry_reader,
     };
     use crate::s3::archive::{
         SourceBlockOptions, SourceBlockRange, SourceBlockSlot, SourceBlockState, SourceBlockStatus,
@@ -1923,6 +2137,125 @@ mod tests {
         assert!(kms_state.checksum_sha256().is_some());
     }
 
+    #[tokio::test]
+    async fn unpolled_retryable_body_clones_create_no_source_work() {
+        let zip = zip_from_entry("lazy.txt", b"lazy body");
+        let plan = zip_plan_from_archive(&zip, "lazy.txt");
+        let store = ready_store_for_plan(&zip, &plan);
+        let body_state = Arc::new(UploadBodyState::default());
+        let body_attempts = Arc::new(AtomicUsize::new(0));
+        let body = zip_entry_body(
+            Arc::clone(&store),
+            plan,
+            9,
+            body_state,
+            DestinationChecksumStrategy::SseS3Etag,
+            body_attempts,
+        );
+        let sdk_body = body.into_inner();
+        let unpolled_clone = sdk_body.try_clone().expect("retryable body clone");
+
+        let before = store.source.diagnostics.snapshot();
+        assert_eq!(before.body_attempts, 0);
+        assert_eq!(before.body_replays, 0);
+        assert_eq!(before.replay_claims, 0);
+        assert_eq!(before.active_readers_high_water, 0);
+        drop(unpolled_clone);
+
+        let bytes = aws_sdk_s3::primitives::ByteStream::new(sdk_body)
+            .collect()
+            .await
+            .expect("polled body")
+            .into_bytes();
+        assert_eq!(bytes.as_ref(), b"lazy body");
+        let after = store.source.diagnostics.snapshot();
+        assert_eq!(after.body_attempts, 1);
+        assert_eq!(after.body_replays, 0);
+        assert_eq!(after.replay_claims, 0);
+        assert_eq!(after.active_readers_high_water, 1);
+    }
+
+    #[tokio::test]
+    async fn ranged_get_retries_transient_failures_with_one_sdk_attempt_each() {
+        let replay = StaticReplayClient::new(vec![
+            get_error_event(500, "InternalError"),
+            get_error_event(503, "SlowDown"),
+            get_success_event(b"hello"),
+        ]);
+        let source = replay_source_client(replay.clone(), 5);
+
+        let bytes = source
+            .get_range(0, 4)
+            .await
+            .expect("third attempt succeeds");
+        assert_eq!(bytes.as_ref(), b"hello");
+        assert_eq!(replay.actual_requests().count(), 3);
+        let diagnostics = source.diagnostics.snapshot();
+        assert_eq!(diagnostics.source_get_attempts, 3);
+        assert_eq!(diagnostics.source_get_retries, 2);
+        assert_eq!(diagnostics.source_get_retryable_errors, 2);
+        assert_eq!(diagnostics.source_get_throttled_attempts, 1);
+        assert_eq!(diagnostics.source_get_errors, 0);
+    }
+
+    #[tokio::test]
+    async fn ranged_get_does_not_retry_permanent_4xx() {
+        let replay = StaticReplayClient::new(vec![get_error_event(400, "InvalidRequest")]);
+        let source = replay_source_client(replay.clone(), 5);
+
+        let error = source
+            .get_range(0, 4)
+            .await
+            .expect_err("permanent request should fail");
+        assert!(error.to_string().contains("GetObject"));
+        assert_eq!(replay.actual_requests().count(), 1);
+        let diagnostics = source.diagnostics.snapshot();
+        assert_eq!(diagnostics.source_get_attempts, 1);
+        assert_eq!(diagnostics.source_get_retries, 0);
+        assert_eq!(diagnostics.source_get_permanent_errors, 1);
+        assert_eq!(diagnostics.source_get_errors, 1);
+    }
+
+    #[tokio::test]
+    async fn ranged_get_retries_incomplete_bodies() {
+        let replay =
+            StaticReplayClient::new(vec![get_success_event(b"hey"), get_success_event(b"hello")]);
+        let source = replay_source_client(replay.clone(), 5);
+
+        let bytes = source
+            .get_range(0, 4)
+            .await
+            .expect("short body should be retried");
+        assert_eq!(bytes.as_ref(), b"hello");
+        assert_eq!(replay.actual_requests().count(), 2);
+        let diagnostics = source.diagnostics.snapshot();
+        assert_eq!(diagnostics.source_get_short_body_errors, 1);
+        assert_eq!(diagnostics.source_get_retryable_errors, 1);
+        assert_eq!(diagnostics.source_get_retries, 1);
+    }
+
+    #[test]
+    fn ranged_get_classifies_timeout_and_construction_failures() {
+        let timeout = range_get_request_error(aws_sdk_s3::error::SdkError::<
+            aws_sdk_s3::operation::get_object::GetObjectError,
+        >::timeout_error(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "injected timeout",
+        )));
+        assert!(timeout.retryable);
+        assert!(!timeout.throttled);
+
+        let construction =
+            range_get_request_error(aws_sdk_s3::error::SdkError::<
+                aws_sdk_s3::operation::get_object::GetObjectError,
+            >::construction_failure(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "injected construction failure",
+            )));
+        assert!(!construction.retryable);
+        assert!(!construction.throttled);
+    }
+
     #[tokio::test(start_paused = true)]
     async fn spawned_source_bodies_are_aborted_and_drained() {
         let zip = zip_from_entry("body.txt", b"body task");
@@ -1930,10 +2263,10 @@ mod tests {
         let store = ready_store_for_plan(&zip, &plan);
         let dropped = Arc::new(AtomicBool::new(false));
         let task_dropped = Arc::clone(&dropped);
-        store.track_body_task(tokio::spawn(async move {
+        store.spawn_body_task(async move {
             let _signal = DropSignal(task_dropped);
             pending::<()>().await;
-        }));
+        });
         tokio::task::yield_now().await;
 
         store
@@ -1942,6 +2275,30 @@ mod tests {
             .expect("body task drain");
 
         assert!(dropped.load(Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn scheduler_cancellation_wakes_capacity_waiters() {
+        let zip = zip_from_entry("waiter.txt", b"waiter");
+        let plan = zip_plan_from_archive(&zip, "waiter.txt");
+        let store = ready_store_for_plan(&zip, &plan);
+        {
+            let mut state = store.state.lock().expect("source block state");
+            state.slots[0].status = SourceBlockStatus::Pending;
+            state.resident_bytes = store.window_bytes;
+        }
+        let waiter_store = Arc::clone(&store);
+        let waiter = tokio::spawn(async move { waiter_store.reserve_fetch(0).await });
+        tokio::task::yield_now().await;
+
+        store.cancel("injected scheduler failure");
+        let error = tokio::time::timeout(Duration::from_secs(1), waiter)
+            .await
+            .expect("waiter should wake")
+            .expect("waiter task")
+            .expect_err("cancelled scheduler should fail the waiter");
+
+        assert!(error.to_string().contains("injected scheduler failure"));
     }
 
     #[tokio::test]
@@ -1973,13 +2330,14 @@ mod tests {
                     ])),
                 }],
                 resident_bytes: block.len(),
+                failure: None,
             }),
             notify: Arc::new(tokio::sync::Notify::new()),
             capacity_notify: Arc::new(tokio::sync::Notify::new()),
             source_get_concurrency: 1,
             window_bytes: block.len(),
             fetch_semaphore: Semaphore::new(1),
-            body_tasks: std::sync::Mutex::new(Vec::new()),
+            body_tasks: std::sync::Mutex::new(tokio::task::JoinSet::new()),
         });
         let plan = ZipEntryPlan {
             source_index: 0,
@@ -2022,7 +2380,7 @@ mod tests {
         diagnostics.record_replay_claim_after_failure();
         diagnostics.record_resident_bytes(64);
         diagnostics.record_resident_bytes(32);
-        diagnostics.record_reader_started(2);
+        diagnostics.record_reader_started();
         diagnostics.record_reader_finished();
 
         let snapshot = diagnostics.snapshot();
@@ -2035,7 +2393,7 @@ mod tests {
         assert_eq!(snapshot.replay_claims_after_release, 1);
         assert_eq!(snapshot.replay_claims_after_failure, 1);
         assert_eq!(snapshot.resident_bytes_high_water, 64);
-        assert_eq!(snapshot.active_readers_high_water, 2);
+        assert_eq!(snapshot.active_readers_high_water, 1);
     }
 
     fn ready_store_for_plan(zip: &[u8], plan: &ZipEntryPlan) -> Arc<super::SourceBlockStore> {
@@ -2062,13 +2420,14 @@ mod tests {
                     )),
                 }],
                 resident_bytes: block.len(),
+                failure: None,
             }),
             notify: Arc::new(tokio::sync::Notify::new()),
             capacity_notify: Arc::new(tokio::sync::Notify::new()),
             source_get_concurrency: 1,
             window_bytes: block.len(),
             fetch_semaphore: Semaphore::new(1),
-            body_tasks: std::sync::Mutex::new(Vec::new()),
+            body_tasks: std::sync::Mutex::new(tokio::task::JoinSet::new()),
         })
     }
 
@@ -2132,5 +2491,61 @@ mod tests {
             ))
             .build();
         aws_sdk_s3::Client::from_conf(config)
+    }
+
+    fn replay_source_client(replay: StaticReplayClient, len: u64) -> Arc<SourceClient> {
+        let config = aws_sdk_s3::Config::builder()
+            .behavior_version_latest()
+            .region(aws_sdk_s3::config::Region::new("us-east-1"))
+            .credentials_provider(aws_sdk_s3::config::Credentials::new(
+                "test-access-key",
+                "test-secret-key",
+                None,
+                None,
+                "shin-bucket-deployment-test",
+            ))
+            .endpoint_url("https://s3.test")
+            .force_path_style(true)
+            .retry_config(aws_sdk_s3::config::retry::RetryConfig::standard().with_max_attempts(3))
+            .http_client(replay)
+            .build();
+        Arc::new(SourceClient {
+            client: aws_sdk_s3::Client::from_conf(config),
+            bucket: "bucket".to_string(),
+            key: "archive.zip".to_string(),
+            len,
+            etag: None,
+            diagnostics: Arc::new(SourceDiagnostics::new(len)),
+        })
+    }
+
+    fn get_error_event(status: u16, code: &str) -> ReplayEvent {
+        let body = format!("<Error><Code>{code}</Code><Message>test error</Message></Error>");
+        ReplayEvent::new(
+            Request::builder()
+                .uri("https://s3.test/expected")
+                .body(SdkBody::empty())
+                .unwrap(),
+            Response::builder()
+                .status(status)
+                .header("content-type", "application/xml")
+                .body(SdkBody::from(body.into_bytes()))
+                .unwrap(),
+        )
+    }
+
+    fn get_success_event(bytes: &'static [u8]) -> ReplayEvent {
+        ReplayEvent::new(
+            Request::builder()
+                .uri("https://s3.test/expected")
+                .body(SdkBody::empty())
+                .unwrap(),
+            Response::builder()
+                .status(206)
+                .header("content-length", bytes.len())
+                .header("content-range", format!("bytes 0-{}/5", bytes.len() - 1))
+                .body(SdkBody::from(bytes))
+                .unwrap(),
+        )
     }
 }

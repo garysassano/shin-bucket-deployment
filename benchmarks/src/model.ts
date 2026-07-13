@@ -24,6 +24,7 @@ const PHASE_RANKS: ReadonlyMap<string, number> = new Map(
 
 export type ProviderSummary = {
   readonly event?: string | null;
+  readonly schemaVersion?: number | null;
   readonly requestType?: string | null;
   readonly status?: string | null;
   readonly extract?: boolean | null;
@@ -37,6 +38,7 @@ export type ProviderSummary = {
   readonly phaseMs?: Record<string, number | null> | null;
   readonly counts?: Record<string, number | null> | null;
   readonly bytes?: Record<string, number | null> | null;
+  readonly transfer?: Record<string, number | null> | null;
   readonly source?: Record<string, number | null> | null;
   readonly putObject?: Record<string, number | null> | null;
 };

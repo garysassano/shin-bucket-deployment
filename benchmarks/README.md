@@ -4,6 +4,8 @@ This folder contains committed benchmark support assets, sanitized current resul
 
 Deployable benchmark CDK apps live in `benchmarks/apps/**`. Curated benchmark matrices live in `benchmarks/configs/**`, shared JSON Schemas live in `benchmarks/schemas/**`, and benchmark configs are run through `pnpm benchmark:run-assets -- --config <path>`.
 
+`configs/transfer-scheduler-2048-32.json` is the serialized 2048 MiB / 32-transfer decision matrix for the bounded scheduler: `tiny-many` and `large-few`, Shin and upstream, and the four ordered lifecycle phases. Repeat it with unique scratch roots and output files when collecting a multi-sample decision run; raw per-repetition evidence remains outside git.
+
 README benchmark snapshots use sanitized tiny-many records from `benchmarks/results.jsonl`. Snapshot filenames follow `<profile>-<memory>mib-<parallel>.svg`, for example `tiny-many-1024mib-32.svg`.
 
 Only README-linked snapshot SVGs are committed under `benchmarks/snapshots`. Temporary alternate layouts can be regenerated locally with `benchmarks/src/render/readme-snapshot.ts`, but should not be kept as committed design history. Generated report charts live beside the report output by default.
@@ -13,7 +15,7 @@ Only README-linked snapshot SVGs are committed under `benchmarks/snapshots`. Tem
 - In-depth Shin provider telemetry: [`telemetry.md`](telemetry.md)
 - Structured JSONL source: [`results.jsonl`](results.jsonl)
 
-Regenerate the telemetry tables with `pnpm benchmark:telemetry-table`.
+Regenerate the telemetry tables with `pnpm benchmark:telemetry-table`. Provider diagnostics schema v2 adds transfer-scheduler logical/completion/cancellation counters, exact source and destination wire attempts, consumed body replays, typed source throttling/errors, and true active-reader high-water. Historical schema-v1 rows render unavailable v2 fields as `null`.
 
 ## 1024 MiB / 16 Snapshot
 

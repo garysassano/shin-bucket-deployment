@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, HashMap};
+use std::future::Future;
+use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -18,10 +20,10 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use bytes::Bytes;
 use crc32fast::Hasher as Crc32Hasher;
 use fastrand::Rng;
+use futures_util::FutureExt;
 use md5::{Digest as Md5Digest, Md5};
 use sha2::Sha256;
 use tokio::io::{AsyncRead, AsyncReadExt};
-use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use tokio::time::timeout_at;
 
@@ -29,7 +31,7 @@ use crate::deadline::InvocationDeadlines;
 use crate::replace::replace_markers_bounded;
 use crate::types::{
     AppState, DeploymentRequest, DeploymentStats, DestinationChecksumStrategy, MarkerConfig,
-    PutObjectRetryJitter, PutObjectRetryOptions, SourceArchive,
+    PutObjectRetryJitter, PutObjectRetryOptions, PutObjectStats, SourceArchive,
 };
 
 use super::archive::{
@@ -51,12 +53,27 @@ enum UploadPayload {
         plan: ZipEntryPlan,
         content_length: u64,
         body_state: Arc<UploadBodyState>,
+        body_attempts: Arc<AtomicUsize>,
     },
 }
 
 pub(super) struct TransferExecution {
     pub(super) stats: Arc<DeploymentStats>,
     pub(super) deadlines: InvocationDeadlines,
+}
+
+struct TransferScheduler {
+    tasks: JoinSet<TransferTaskCompletion>,
+    max_in_flight: usize,
+    in_flight: usize,
+    failed: Arc<AtomicBool>,
+    stats: Arc<DeploymentStats>,
+    deadlines: InvocationDeadlines,
+}
+
+struct TransferTaskCompletion {
+    result: Result<()>,
+    panicked: bool,
 }
 
 impl UploadPayload {
@@ -78,6 +95,7 @@ impl UploadPayload {
             plan,
             content_length,
             body_state: Arc::new(UploadBodyState::default()),
+            body_attempts: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -112,6 +130,7 @@ struct PreparedUploadPayload {
 
 #[derive(Default)]
 struct PutDiagnostics {
+    wire_attempts: AtomicU64,
     failed_attempts: AtomicU64,
     retry_attempts: AtomicU64,
     throttled_attempts: AtomicU64,
@@ -123,6 +142,7 @@ struct PutDiagnostics {
 
 #[derive(Debug)]
 struct PutDiagnosticsSnapshot {
+    wire_attempts: u64,
     failed_attempts: u64,
     retry_attempts: u64,
     throttled_attempts: u64,
@@ -161,39 +181,33 @@ pub(super) async fn execute_copy_plans(
     execution: TransferExecution,
 ) -> Result<()> {
     let TransferExecution { stats, deadlines } = execution;
-    let semaphore = Arc::new(Semaphore::new(max_parallel_transfers.max(1)));
-    let mut tasks = JoinSet::new();
+    let mut scheduler =
+        TransferScheduler::new(max_parallel_transfers, Arc::clone(&stats), deadlines);
 
     for plan in copy_plans {
-        let permit = match timeout_at(deadlines.work(), semaphore.clone().acquire_owned()).await {
-            Ok(permit) => permit.context("failed to acquire copy semaphore")?,
-            Err(_) => {
-                abort_and_drain_transfer_tasks(&mut tasks, deadlines).await?;
-                return Err(transfer_deadline_error());
-            }
-        };
         let state = state.clone();
         let destination_bucket = destination_bucket.to_string();
         let copied_bytes = plan.size.unwrap_or(0);
         let stats = Arc::clone(&stats);
 
-        tasks.spawn(async move {
-            let _permit = permit;
-            copy_source_object(
-                &state,
-                &destination_bucket,
-                &plan.source_bucket,
-                &plan.source_key,
-                plan.expected_etag.as_deref(),
-                &plan.destination_key,
-            )
+        scheduler
+            .spawn(async move {
+                copy_source_object(
+                    &state,
+                    &destination_bucket,
+                    &plan.source_bucket,
+                    &plan.source_key,
+                    plan.expected_etag.as_deref(),
+                    &plan.destination_key,
+                )
+                .await?;
+                stats.add_copied_object(copied_bytes);
+                Ok(())
+            })
             .await?;
-            stats.add_copied_object(copied_bytes);
-            Ok(())
-        });
     }
 
-    join_transfer_tasks(tasks, deadlines).await
+    scheduler.finish().await
 }
 
 pub(super) async fn upload_zip_entries(
@@ -205,128 +219,131 @@ pub(super) async fn upload_zip_entries(
     execution: TransferExecution,
 ) -> Result<()> {
     let TransferExecution { stats, deadlines } = execution;
-    let semaphore = Arc::new(Semaphore::new(
-        request.runtime.max_parallel_transfers.max(1),
-    ));
     let put_diagnostics = Arc::new(PutDiagnostics::default());
     let put_retry_coordinator = Arc::new(PutRetryCoordinator::new());
     let mut archive_diagnostics_sources = Vec::new();
     let mut block_stores = Vec::new();
-    let mut tasks = JoinSet::new();
+    let mut scheduler = TransferScheduler::new(
+        request.runtime.max_parallel_transfers,
+        Arc::clone(&stats),
+        deadlines,
+    );
 
-    for (archive_index, plans) in zip_plans {
-        let source = archives[archive_index].source.clone();
-        archive_diagnostics_sources.push((archive_index, source.clone()));
-        let plans = plans
-            .into_iter()
-            .filter(|plan| {
-                !catalog_skips_zip_entry(
-                    plan,
-                    &request.source_markers[plan.source_index],
-                    destination_objects.get(&plan.relative_key),
-                    request.destination_checksum_strategy,
-                    &stats,
-                )
-            })
-            .collect::<Vec<_>>();
-        if plans.is_empty() {
-            continue;
+    let transfer_result = async {
+        for (archive_index, plans) in zip_plans {
+            let source = archives[archive_index].source.clone();
+            archive_diagnostics_sources.push((archive_index, source.clone()));
+            let plans = plans
+                .into_iter()
+                .filter(|plan| {
+                    !catalog_skips_zip_entry(
+                        plan,
+                        &request.source_markers[plan.source_index],
+                        destination_objects.get(&plan.relative_key),
+                        request.destination_checksum_strategy,
+                        &stats,
+                    )
+                })
+                .collect::<Vec<_>>();
+            if plans.is_empty() {
+                continue;
+            }
+            let source_window_bytes =
+                source_window_bytes_for_archive(&request.runtime, source.len(), plans.len());
+            let store = SourceBlockStore::new(
+                source.clone(),
+                &plans,
+                SourceBlockOptions {
+                    block_bytes: request.runtime.source_block_bytes,
+                    merge_gap_bytes: request.runtime.source_block_merge_gap_bytes,
+                    get_concurrency: request.runtime.source_get_concurrency,
+                    window_bytes: source_window_bytes,
+                },
+            );
+            block_stores.push(Arc::clone(&store));
+            tracing::info!(
+                archive_index,
+                source_zip_bytes = source.len(),
+                planned_entries = plans.len(),
+                source_block_bytes = request.runtime.source_block_bytes,
+                source_block_merge_gap_bytes = request.runtime.source_block_merge_gap_bytes,
+                source_get_concurrency = request.runtime.source_get_concurrency,
+                source_window_bytes,
+                max_parallel_transfers = request.runtime.max_parallel_transfers,
+                "planned source block schedule"
+            );
+            store.start_scheduler();
+            for plan in plans {
+                let store = store.clone();
+                let state = state.clone();
+                let destination_bucket = request.dest_bucket_name.clone();
+                let source_markers = request.source_markers[plan.source_index].clone();
+                let source_marker_config = request.source_markers_config[plan.source_index].clone();
+                let destination_object = destination_objects.get(&plan.relative_key).cloned();
+                let put_diagnostics = put_diagnostics.clone();
+                let put_retry_coordinator = put_retry_coordinator.clone();
+                let put_retry = request.runtime.put_object_retry.clone();
+                let checksum_strategy = request.destination_checksum_strategy;
+                let stats = Arc::clone(&stats);
+
+                scheduler
+                    .spawn(async move {
+                        let Some(payload) = prepare_zip_entry_upload(
+                            &store,
+                            &plan,
+                            &source_markers,
+                            &source_marker_config,
+                            destination_object.as_ref(),
+                            checksum_strategy,
+                            &stats,
+                        )
+                        .await?
+                        else {
+                            return Ok(());
+                        };
+
+                        let precondition =
+                            put_precondition_for_destination(destination_object.as_ref());
+                        upload_payload(
+                            PutContext {
+                                destination_s3: &state.destination_s3,
+                                destination_bucket: &destination_bucket,
+                                checksum_strategy,
+                                retry: &put_retry,
+                                retry_coordinator: &put_retry_coordinator,
+                                diagnostics: &put_diagnostics,
+                                stats: &stats,
+                            },
+                            &plan.destination_key,
+                            payload,
+                            precondition,
+                        )
+                        .await
+                    })
+                    .await?;
+            }
         }
-        let source_window_bytes =
-            source_window_bytes_for_archive(&request.runtime, source.len(), plans.len());
-        let store = SourceBlockStore::new(
-            source.clone(),
-            &plans,
-            SourceBlockOptions {
-                block_bytes: request.runtime.source_block_bytes,
-                merge_gap_bytes: request.runtime.source_block_merge_gap_bytes,
-                get_concurrency: request.runtime.source_get_concurrency,
-                window_bytes: source_window_bytes,
-            },
-        );
-        block_stores.push(Arc::clone(&store));
-        tracing::info!(
-            archive_index,
-            source_zip_bytes = source.len(),
-            planned_entries = plans.len(),
-            source_block_bytes = request.runtime.source_block_bytes,
-            source_block_merge_gap_bytes = request.runtime.source_block_merge_gap_bytes,
-            source_get_concurrency = request.runtime.source_get_concurrency,
-            source_window_bytes,
-            max_parallel_transfers = request.runtime.max_parallel_transfers,
-            "planned source block schedule"
-        );
-        let scheduler_store = store.clone();
-        for plan in plans {
-            let permit = match timeout_at(deadlines.work(), semaphore.clone().acquire_owned()).await
-            {
-                Ok(permit) => permit.context("failed to acquire upload semaphore")?,
-                Err(_) => {
-                    abort_and_drain_transfer_tasks(&mut tasks, deadlines).await?;
-                    abort_and_drain_body_tasks(&block_stores, deadlines).await?;
-                    return Err(transfer_deadline_error());
-                }
-            };
-            let store = store.clone();
-            let state = state.clone();
-            let destination_bucket = request.dest_bucket_name.clone();
-            let source_markers = request.source_markers[plan.source_index].clone();
-            let source_marker_config = request.source_markers_config[plan.source_index].clone();
-            let destination_object = destination_objects.get(&plan.relative_key).cloned();
-            let put_diagnostics = put_diagnostics.clone();
-            let put_retry_coordinator = put_retry_coordinator.clone();
-            let put_retry = request.runtime.put_object_retry.clone();
-            let checksum_strategy = request.destination_checksum_strategy;
-            let stats = Arc::clone(&stats);
 
-            tasks.spawn(async move {
-                let _permit = permit;
-                let Some(payload) = prepare_zip_entry_upload(
-                    &store,
-                    &plan,
-                    &source_markers,
-                    &source_marker_config,
-                    destination_object.as_ref(),
-                    checksum_strategy,
-                    &stats,
-                )
-                .await?
-                else {
-                    return Ok(());
-                };
-
-                let precondition = put_precondition_for_destination(destination_object.as_ref());
-                upload_payload(
-                    PutContext {
-                        destination_s3: &state.destination_s3,
-                        destination_bucket: &destination_bucket,
-                        checksum_strategy,
-                        retry: &put_retry,
-                        retry_coordinator: &put_retry_coordinator,
-                        diagnostics: &put_diagnostics,
-                        stats: &stats,
-                    },
-                    &plan.destination_key,
-                    payload,
-                    precondition,
-                )
-                .await
-            });
-        }
-        tasks.spawn(async move {
-            scheduler_store.run_scheduler().await;
-            Ok(())
-        });
+        scheduler.finish().await
     }
-
-    let transfer_result = join_transfer_tasks(tasks, deadlines).await;
+    .await;
+    if let Err(error) = &transfer_result {
+        for store in &block_stores {
+            store.cancel(format!("transfer scheduling cancelled: {error}"));
+        }
+    }
     let body_drain_result = abort_and_drain_body_tasks(&block_stores, deadlines).await;
     for (archive_index, source) in archive_diagnostics_sources {
         log_source_diagnostics(archive_index, &source, &stats);
     }
     log_put_diagnostics(&request.runtime.put_object_retry, &put_diagnostics, &stats);
-    transfer_result?;
-    body_drain_result
+    match (transfer_result, body_drain_result) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+        (Err(error), Err(drain_error)) => {
+            Err(error).context(format!("source task cleanup also failed: {drain_error}"))
+        }
+    }
 }
 
 fn catalog_skips_zip_entry(
@@ -503,9 +520,6 @@ async fn upload_payload(
 
     let max_attempts = context.retry.max_attempts.max(1);
     for attempt in 1..=max_attempts {
-        if attempt > 1 {
-            retain_payload_for_replay(&payload);
-        }
         context
             .retry_coordinator
             .wait_for_throttle_cooldown(context.diagnostics)
@@ -527,6 +541,10 @@ async fn upload_payload(
             context.checksum_strategy,
             payload.body_state().checksum_sha256().is_some(),
         );
+        context
+            .diagnostics
+            .wire_attempts
+            .fetch_add(1, Ordering::Relaxed);
 
         match apply_put_content_type(request, destination_key)
             .body(body)
@@ -673,19 +691,15 @@ fn payload_body(
             plan,
             content_length,
             body_state,
+            body_attempts,
         } => zip_entry_body(
             store.clone(),
             plan.clone(),
             *content_length,
             Arc::clone(body_state),
             checksum_strategy,
+            Arc::clone(body_attempts),
         ),
-    }
-}
-
-fn retain_payload_for_replay(payload: &UploadPayload) {
-    if let UploadPayload::ZipEntry { store, plan, .. } = payload {
-        store.retain_zip_entry_for_replay(plan);
     }
 }
 
@@ -863,59 +877,175 @@ fn finalize_md5(hasher: Md5) -> String {
     output
 }
 
-async fn join_transfer_tasks(
-    mut tasks: JoinSet<Result<()>>,
-    deadlines: InvocationDeadlines,
-) -> Result<()> {
-    loop {
-        let next = match timeout_at(deadlines.work(), tasks.join_next()).await {
-            Ok(next) => next,
+impl TransferScheduler {
+    fn new(
+        max_in_flight: usize,
+        stats: Arc<DeploymentStats>,
+        deadlines: InvocationDeadlines,
+    ) -> Self {
+        Self {
+            tasks: JoinSet::new(),
+            max_in_flight: max_in_flight.max(1),
+            in_flight: 0,
+            failed: Arc::new(AtomicBool::new(false)),
+            stats,
+            deadlines,
+        }
+    }
+
+    async fn spawn(
+        &mut self,
+        task: impl Future<Output = Result<()>> + Send + 'static,
+    ) -> Result<()> {
+        self.drain_ready().await?;
+        while self.in_flight >= self.max_in_flight {
+            self.join_one().await?;
+            self.drain_ready().await?;
+        }
+        if self.failed.load(Ordering::Acquire) {
+            self.join_one().await?;
+        }
+
+        let failed = Arc::clone(&self.failed);
+        self.in_flight += 1;
+        self.stats.add_transfer_scheduled_object(self.in_flight);
+        self.tasks.spawn(async move {
+            match AssertUnwindSafe(task).catch_unwind().await {
+                Ok(result) => {
+                    if result.is_err() {
+                        failed.store(true, Ordering::Release);
+                    }
+                    TransferTaskCompletion {
+                        result,
+                        panicked: false,
+                    }
+                }
+                Err(_) => {
+                    failed.store(true, Ordering::Release);
+                    TransferTaskCompletion {
+                        result: Err(anyhow!("transfer task panicked")),
+                        panicked: true,
+                    }
+                }
+            }
+        });
+        Ok(())
+    }
+
+    async fn finish(mut self) -> Result<()> {
+        while self.in_flight > 0 {
+            self.join_one().await?;
+        }
+        Ok(())
+    }
+
+    async fn drain_ready(&mut self) -> Result<()> {
+        while let Some(result) = self.tasks.try_join_next() {
+            self.handle_join_or_abort(result).await?;
+        }
+        Ok(())
+    }
+
+    async fn join_one(&mut self) -> Result<()> {
+        let joined = match timeout_at(self.deadlines.work(), self.tasks.join_next()).await {
+            Ok(Some(joined)) => joined,
+            Ok(None) => {
+                self.in_flight = 0;
+                return Ok(());
+            }
             Err(_) => {
-                abort_and_drain_transfer_tasks(&mut tasks, deadlines).await?;
+                self.abort_and_drain().await?;
                 return Err(transfer_deadline_error());
             }
         };
-        let Some(result) = next else {
-            return Ok(());
-        };
+        self.handle_join_or_abort(joined).await
+    }
 
-        match result {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => {
-                abort_and_drain_transfer_tasks(&mut tasks, deadlines).await?;
-                return Err(error);
+    async fn handle_join_or_abort(
+        &mut self,
+        joined: std::result::Result<TransferTaskCompletion, tokio::task::JoinError>,
+    ) -> Result<()> {
+        let result = self.record_join(joined);
+        if let Err(error) = result {
+            if let Err(drain_error) = self.abort_and_drain().await {
+                return Err(error)
+                    .context(format!("transfer task cleanup also failed: {drain_error}"));
+            }
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    fn record_join(
+        &mut self,
+        joined: std::result::Result<TransferTaskCompletion, tokio::task::JoinError>,
+    ) -> Result<()> {
+        self.in_flight = self.in_flight.saturating_sub(1);
+        match joined {
+            Ok(TransferTaskCompletion { result: Ok(()), .. }) => {
+                self.stats.add_transfer_completed_object();
+                Ok(())
+            }
+            Ok(TransferTaskCompletion {
+                result: Err(error),
+                panicked,
+            }) => {
+                self.stats.add_transfer_failed_object(panicked);
+                Err(error)
+            }
+            Err(error) if error.is_cancelled() => {
+                self.stats.add_transfer_cancelled_object();
+                Err(error).context("transfer task was cancelled unexpectedly")
             }
             Err(error) => {
-                abort_and_drain_transfer_tasks(&mut tasks, deadlines).await?;
-                return Err(error).context("transfer task panicked or was cancelled");
+                self.stats.add_transfer_failed_object(true);
+                Err(error).context("transfer task panicked")
             }
         }
     }
-}
 
-async fn abort_and_drain_transfer_tasks(
-    tasks: &mut JoinSet<Result<()>>,
-    deadlines: InvocationDeadlines,
-) -> Result<()> {
-    tasks.abort_all();
-    timeout_at(deadlines.bounded_drain(), async {
-        while tasks.join_next().await.is_some() {}
-    })
-    .await
-    .context("transfer tasks did not drain before the deployment drain deadline")?;
-    Ok(())
+    async fn abort_and_drain(&mut self) -> Result<()> {
+        self.failed.store(true, Ordering::Release);
+        self.tasks.abort_all();
+        timeout_at(self.deadlines.bounded_drain(), async {
+            while let Some(joined) = self.tasks.join_next().await {
+                self.in_flight = self.in_flight.saturating_sub(1);
+                match joined {
+                    Ok(TransferTaskCompletion { result: Ok(()), .. }) => {
+                        self.stats.add_transfer_completed_object()
+                    }
+                    Ok(TransferTaskCompletion {
+                        result: Err(_),
+                        panicked,
+                    }) => self.stats.add_transfer_failed_object(panicked),
+                    Err(error) if error.is_cancelled() => {
+                        self.stats.add_transfer_cancelled_object();
+                    }
+                    Err(_) => self.stats.add_transfer_failed_object(true),
+                }
+            }
+        })
+        .await
+        .context("transfer tasks did not drain before the deployment drain deadline")?;
+        Ok(())
+    }
 }
 
 async fn abort_and_drain_body_tasks(
     stores: &[Arc<SourceBlockStore>],
     deadlines: InvocationDeadlines,
 ) -> Result<()> {
+    let mut first_error = None;
     for store in stores {
-        store
+        if let Err(error) = store
             .abort_and_drain_body_tasks(deadlines.bounded_drain())
-            .await?;
+            .await
+            && first_error.is_none()
+        {
+            first_error = Some(error);
+        }
     }
-    Ok(())
+    first_error.map_or(Ok(()), Err)
 }
 
 fn transfer_deadline_error() -> anyhow::Error {
@@ -986,6 +1116,7 @@ impl PutDiagnostics {
 
     fn snapshot(&self) -> PutDiagnosticsSnapshot {
         PutDiagnosticsSnapshot {
+            wire_attempts: self.wire_attempts.load(Ordering::Relaxed),
             failed_attempts: self.failed_attempts.load(Ordering::Relaxed),
             retry_attempts: self.retry_attempts.load(Ordering::Relaxed),
             throttled_attempts: self.throttled_attempts.load(Ordering::Relaxed),
@@ -1110,6 +1241,9 @@ fn log_source_diagnostics(
         source_get_request_errors = diagnostics.source_get_request_errors,
         source_get_body_errors = diagnostics.source_get_body_errors,
         source_get_short_body_errors = diagnostics.source_get_short_body_errors,
+        source_get_throttled_attempts = diagnostics.source_get_throttled_attempts,
+        source_get_retryable_errors = diagnostics.source_get_retryable_errors,
+        source_get_permanent_errors = diagnostics.source_get_permanent_errors,
         source_get_errors = diagnostics.source_get_errors,
         block_hits = diagnostics.block_hits,
         block_waits = diagnostics.block_waits,
@@ -1121,6 +1255,8 @@ fn log_source_diagnostics(
         replay_claims = diagnostics.replay_claims,
         replay_claims_after_release = diagnostics.replay_claims_after_release,
         replay_claims_after_failure = diagnostics.replay_claims_after_failure,
+        body_attempts = diagnostics.body_attempts,
+        body_replays = diagnostics.body_replays,
         active_gets_high_water = diagnostics.active_gets_high_water,
         active_readers_high_water = diagnostics.active_readers_high_water,
         resident_bytes_high_water = diagnostics.resident_bytes_high_water,
@@ -1134,14 +1270,15 @@ fn log_put_diagnostics(
     stats: &DeploymentStats,
 ) {
     let diagnostics = diagnostics.snapshot();
-    stats.add_put_stats(
-        diagnostics.failed_attempts,
-        diagnostics.retry_attempts,
-        diagnostics.throttled_attempts,
-        diagnostics.retry_wait_millis,
-        diagnostics.throttle_cooldown_waits,
-        diagnostics.throttle_cooldown_wait_millis,
-    );
+    stats.add_put_stats(&PutObjectStats {
+        wire_attempts: diagnostics.wire_attempts,
+        failed_attempts: diagnostics.failed_attempts,
+        retry_attempts: diagnostics.retry_attempts,
+        throttled_attempts: diagnostics.throttled_attempts,
+        retry_wait_ms: diagnostics.retry_wait_millis,
+        throttle_cooldown_waits: diagnostics.throttle_cooldown_waits,
+        throttle_cooldown_wait_ms: diagnostics.throttle_cooldown_wait_millis,
+    });
     tracing::info!(
         max_attempts = retry.max_attempts,
         retry_base_delay_ms = retry.retry_base_delay_ms,
@@ -1149,6 +1286,7 @@ fn log_put_diagnostics(
         slowdown_retry_base_delay_ms = retry.slowdown_retry_base_delay_ms,
         slowdown_retry_max_delay_ms = retry.slowdown_retry_max_delay_ms,
         retry_jitter = ?retry.jitter,
+        wire_attempts = diagnostics.wire_attempts,
         failed_attempts = diagnostics.failed_attempts,
         retry_attempts = diagnostics.retry_attempts,
         throttled_attempts = diagnostics.throttled_attempts,
@@ -1202,14 +1340,13 @@ mod tests {
     use std::future::pending;
     use std::io::Cursor;
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::time::Duration;
 
-    use anyhow::Result;
+    use anyhow::{Result, anyhow};
     use aws_sdk_s3::primitives::SdkBody;
     use aws_smithy_http_client::test_util::{ReplayEvent, StaticReplayClient};
     use http::{Request, Response};
-    use tokio::task::JoinSet;
     use tokio::time::Instant as TokioInstant;
 
     use super::super::destination::DestinationObject;
@@ -1221,9 +1358,9 @@ mod tests {
     };
 
     use super::{
-        PutContext, PutDiagnostics, PutPrecondition, PutRetryCoordinator, UploadPayload,
-        catalog_skips_zip_entry, copy_source_object, digest_async_reader, duration_millis_u64,
-        join_transfer_tasks, md5_hex, put_precondition_for_destination, put_retry_cap_millis,
+        PutContext, PutDiagnostics, PutPrecondition, PutRetryCoordinator, TransferScheduler,
+        UploadPayload, catalog_skips_zip_entry, copy_source_object, digest_async_reader,
+        duration_millis_u64, md5_hex, put_precondition_for_destination, put_retry_cap_millis,
         quoted_etag, read_async_reader_to_vec, request_checksum_calculation, sha256_base64,
         should_compare_marker_free_entry, upload_payload,
     };
@@ -1669,25 +1806,152 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn deadline_aborts_and_drains_spawned_transfer_tasks() {
         let dropped = Arc::new(AtomicBool::new(false));
-        let mut tasks = JoinSet::<Result<()>>::new();
+        let stats = Arc::new(DeploymentStats::default());
+        let deadlines = InvocationDeadlines::from_remaining_at(
+            TokioInstant::now(),
+            Duration::from_secs(50) + Duration::from_millis(10),
+        );
+        let mut scheduler = TransferScheduler::new(1, Arc::clone(&stats), deadlines);
         let task_dropped = Arc::clone(&dropped);
-        tasks.spawn(async move {
-            let _signal = DropSignal(task_dropped);
-            pending::<()>().await;
-            Ok(())
-        });
+        scheduler
+            .spawn(async move {
+                let _signal = DropSignal(task_dropped);
+                pending::<()>().await;
+                Ok(())
+            })
+            .await
+            .expect("task should be scheduled");
 
-        let result = join_transfer_tasks(
-            tasks,
-            InvocationDeadlines::from_remaining_at(
-                TokioInstant::now(),
-                Duration::from_secs(50) + Duration::from_millis(10),
-            ),
-        )
-        .await;
+        let result = scheduler.finish().await;
 
         assert!(result.is_err());
         assert!(dropped.load(Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn first_fatal_result_prevents_later_transfer_admission() {
+        let later_writes = Arc::new(AtomicU64::new(0));
+        let stats = Arc::new(DeploymentStats::default());
+        let mut scheduler = TransferScheduler::new(
+            1,
+            stats,
+            InvocationDeadlines::from_remaining_at(TokioInstant::now(), Duration::from_secs(120)),
+        );
+        scheduler
+            .spawn(async { Err(anyhow!("injected early failure")) })
+            .await
+            .expect("first task should be scheduled");
+
+        let later_writes_for_task = Arc::clone(&later_writes);
+        let result = scheduler
+            .spawn(async move {
+                later_writes_for_task.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            })
+            .await;
+
+        assert!(result.is_err());
+        assert_eq!(later_writes.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn fatal_result_aborts_outstanding_work_before_a_later_write() {
+        let second_started = Arc::new(tokio::sync::Notify::new());
+        let later_writes = Arc::new(AtomicU64::new(0));
+        let outstanding_dropped = Arc::new(AtomicBool::new(false));
+        let stats = Arc::new(DeploymentStats::default());
+        let mut scheduler = TransferScheduler::new(
+            2,
+            stats,
+            InvocationDeadlines::from_remaining_at(TokioInstant::now(), Duration::from_secs(120)),
+        );
+        let failure_wait = Arc::clone(&second_started);
+        scheduler
+            .spawn(async move {
+                failure_wait.notified().await;
+                Err(anyhow!("injected early failure"))
+            })
+            .await
+            .expect("failure task should be scheduled");
+        let second_started_for_task = Arc::clone(&second_started);
+        let later_writes_for_task = Arc::clone(&later_writes);
+        let outstanding_dropped_for_task = Arc::clone(&outstanding_dropped);
+        scheduler
+            .spawn(async move {
+                let _drop = DropSignal(outstanding_dropped_for_task);
+                second_started_for_task.notify_one();
+                pending::<()>().await;
+                later_writes_for_task.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            })
+            .await
+            .expect("outstanding task should be scheduled");
+
+        let result = scheduler.finish().await;
+
+        assert!(result.is_err());
+        assert!(outstanding_dropped.load(Ordering::Acquire));
+        assert_eq!(later_writes.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn panicking_transfer_aborts_and_drains_outstanding_work() {
+        let outstanding_dropped = Arc::new(AtomicBool::new(false));
+        let stats = Arc::new(DeploymentStats::default());
+        let mut scheduler = TransferScheduler::new(
+            2,
+            stats,
+            InvocationDeadlines::from_remaining_at(TokioInstant::now(), Duration::from_secs(120)),
+        );
+        scheduler
+            .spawn(async move { panic!("injected transfer panic") })
+            .await
+            .expect("panic task should be scheduled");
+        let outstanding_dropped_for_task = Arc::clone(&outstanding_dropped);
+        scheduler
+            .spawn(async move {
+                let _drop = DropSignal(outstanding_dropped_for_task);
+                pending::<()>().await;
+                Ok(())
+            })
+            .await
+            .expect("outstanding task should be scheduled");
+
+        let result = scheduler.finish().await;
+
+        assert!(result.is_err());
+        assert!(outstanding_dropped.load(Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn scheduler_keeps_active_work_bounded_by_transfer_concurrency() {
+        let active = Arc::new(AtomicU64::new(0));
+        let high_water = Arc::new(AtomicU64::new(0));
+        let stats = Arc::new(DeploymentStats::default());
+        let mut scheduler = TransferScheduler::new(
+            3,
+            stats,
+            InvocationDeadlines::from_remaining_at(TokioInstant::now(), Duration::from_secs(120)),
+        );
+
+        for _ in 0..100 {
+            let active = Arc::clone(&active);
+            let high_water = Arc::clone(&high_water);
+            scheduler
+                .spawn(async move {
+                    let current = active.fetch_add(1, Ordering::AcqRel) + 1;
+                    high_water.fetch_max(current, Ordering::AcqRel);
+                    tokio::task::yield_now().await;
+                    active.fetch_sub(1, Ordering::AcqRel);
+                    Ok(())
+                })
+                .await
+                .expect("bounded task should be scheduled");
+            assert!(scheduler.tasks.len() <= 3);
+        }
+        scheduler.finish().await.expect("all tasks should complete");
+
+        assert!(high_water.load(Ordering::Acquire) <= 3);
     }
 
     fn integrity_plan(bytes: &[u8], md5: Option<String>) -> ZipEntryPlan {

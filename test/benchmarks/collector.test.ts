@@ -299,14 +299,31 @@ describe("benchmark result collector", () => {
           cleanup: "all benchmark stacks destroyed",
           notes: null,
           providerSummary: {
+            schemaVersion: 2,
             requestType: "Create",
             status: "success",
             destinationChecksumStrategy: "sse-s3-etag",
             durationMs: 3207,
             phaseMs: { plan: 328, destinationList: 34, transfer: 2843, delete: 0 },
             counts: { uploadedObjects: 2585, skippedObjects: 0, catalogSkips: 0 },
-            source: { fetchedBytes: 856774, getRetries: 0 },
-            putObject: { retryAttempts: 0, throttledAttempts: 0 },
+            transfer: {
+              scheduledObjects: 2585,
+              completedObjects: 2585,
+              failedObjects: 0,
+              cancelledObjects: 0,
+              panickedObjects: 0,
+              inFlightHighWater: 32,
+            },
+            source: {
+              fetchedBytes: 856774,
+              getRetries: 0,
+              getThrottledAttempts: 0,
+              getRetryableErrors: 0,
+              getPermanentErrors: 0,
+              bodyAttempts: 2585,
+              bodyReplays: 0,
+            },
+            putObject: { wireAttempts: 2585, retryAttempts: 0, throttledAttempts: 0 },
           },
         },
       ]
@@ -326,6 +343,9 @@ describe("benchmark result collector", () => {
     expect(table).toContain("### Provider Phase Timing");
     expect(table).toContain("| cold-create | 328 | 34 | 2843 | 0 | null | null |");
     expect(table).toContain("### Source Range Reads");
+    expect(table).toContain("### Transfer Scheduler");
+    expect(table).toContain("| cold-create | 2585 | 2585 | 0 | 0 | 0 | 32 |");
+    expect(table).toContain("### PutObject Pressure");
     expect(table).toContain("| Shin telemetry rows | 1 |");
   });
 });

@@ -65,7 +65,7 @@ These rows are decision evidence for the checksum redesign, not a replacement fo
 
 ## Reading Results
 
-Use `benchmarks/README.md` first for visual snapshots. Use `benchmarks/telemetry.md` when you need detailed Shin provider telemetry, including runtime timings, provider phase timing, object work, source range-read diagnostics, bytes/memory windows, and `PutObject` pressure.
+Use `benchmarks/README.md` first for visual snapshots. Use `benchmarks/telemetry.md` when you need detailed Shin provider telemetry, including runtime timings, provider phase timing, object work, transfer-scheduler completion/cancellation, source range-read diagnostics, bytes/memory windows, consumed body replays, and `PutObject` pressure.
 
 Regenerate the Shin telemetry Markdown tables from the JSONL source with:
 
@@ -87,7 +87,7 @@ The `assets` benchmark scenario generates deterministic bundles under `.benchmar
 
 ## Telemetry Notes
 
-Shin rows may include sanitized `shin_deployment_summary` telemetry. Use `docs/architecture.md` for diagnostics field meanings.
+Shin rows may include sanitized `shin_deployment_summary` telemetry. Schema-v2 summaries separate logical transfer objects, source and destination wire attempts, consumed body replays, typed throttling/errors, and cancellations; historical schema-v1 rows do not contain those fields. Use `docs/architecture.md` for exact diagnostics meanings.
 
 Do not infer S3 throttling from source block waits alone. Source S3 pressure requires source `getRetries` or `getErrors`; destination S3 throttling requires `putObject.throttledAttempts` or retry evidence.
 
