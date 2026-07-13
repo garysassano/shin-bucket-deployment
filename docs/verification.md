@@ -50,7 +50,7 @@ This page is the current human-readable correctness snapshot for `ShinBucketDepl
 
 ## Known Limitations
 
-- Correctness is accepted for the feature branch, but performance acceptance is still pending: the five-repetition transfer-scheduler decision run was stopped after five before, five current, and four upstream repetitions. The sanitized completed rows are retained in `benchmarks/results.jsonl`; no release decision is claimed from the incomplete matrix.
+- The transfer-scheduler decision run contains five before, five current, and four upstream repetitions; the maintainer stopped the final upstream repetition to cap time and accepted the completed performance evidence for PR review. The 112 sanitized phase rows are retained in `benchmarks/results.jsonl`.
 - The deployed AWS run exercised arm64. The x86_64 provider was rebuilt from the same source and passed package validation, but was not separately deployed.
 - Lost-response convergence is covered with deterministic S3 wire replay rather than an injected AWS network failure. The real KMS/DSSE run confirms that the stored checksum needed by that reconciliation path exists and matches.
 - KMS/DSSE destination ETags are not treated as plaintext MD5. Existing encrypted objects can transfer again instead of using the SSE-S3 catalog/ETag shortcut; avoiding a checksum-mode `HeadObject` per destination object keeps the normal deployment request count bounded.

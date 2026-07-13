@@ -48,13 +48,28 @@ All 12 current Shin phase records selected `kms-sha256` and reported zero PUT re
 
 These rows are decision evidence for the checksum redesign, not a replacement for the repository's canonical snapshot. The temporary before/current and encryption variants do not fit the current JSONL upsert identity without overwriting one another, and broader methodology-v2/CI regression work remains separate. Raw logs and individual rows remain outside git. Every benchmark stack was destroyed, and a final scoped check found none remaining.
 
-## Transfer scheduler decision run — paused
+## Transfer scheduler performance decision
 
-The 2026-07-13 transfer-scheduler run was stopped before its final upstream repetition. The completed sanitized evidence is retained in `benchmarks/results.jsonl` under decision-run ID `transfer-scheduler-2026-07-13`: five complete `before` repetitions, five complete `current` repetitions, and four complete `upstream` repetitions. Each repetition contains `tiny-many` and `large-few` at 2048 MiB / 32 transfers across the four ordered phases, with stacks serialized at concurrency 1 in `eu-central-1`.
+The 2026-07-13 transfer-scheduler decision run completed five `before` repetitions, five `current` repetitions, and four `upstream` repetitions before the maintainer stopped the final upstream repetition to cap time and cost. The maintainer accepted the completed evidence as sufficient to proceed to PR review. The 112 sanitized phase rows are retained in `benchmarks/results.jsonl` under decision-run ID `transfer-scheduler-2026-07-13`. Each repetition contains `tiny-many` and `large-few` at 2048 MiB / 32 transfers across the four ordered phases, with stacks serialized at concurrency 1 in `eu-central-1`.
 
 The benchmark app uses a benchmark-only per-phase custom-resource token so `unchanged-update` always invokes the provider without changing the asset, destination, or provider algorithm. Decision rows include `decisionRunId`, `comparisonVariant`, and `repetition`; these fields are part of the upsert identity so repeated samples cannot replace one another. Canonical snapshot renderers exclude decision rows by default, while the JSONL remains available for later aggregate analysis.
 
-The interrupted fifth upstream repetition is not represented as complete evidence. No performance acceptance or release decision is claimed from this paused run. Raw AWS output remains outside git, every completed repetition performed its own cleanup, the interrupted stack was deleted separately, and the final scoped stack count was zero.
+Median CloudWatch provider duration and peak-memory results:
+
+| Profile | Phase | Provider seconds, before / current / upstream | Current vs before | Upstream / current | Peak MiB, before / current / upstream |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `tiny-many` | `cold-create` | 2.570 / 2.376 / 14.409 | -7.5% | 6.1x | 90 / 48 / 221 |
+| `tiny-many` | `unchanged-update` | 0.404 / 0.382 / 14.283 | -5.4% | 37.4x | 90 / 48 / 221 |
+| `tiny-many` | `changed-update` | 0.541 / 0.521 / 14.581 | -3.7% | 28.0x | 90 / 56 / 221 |
+| `tiny-many` | `pruned-update` | 3.699 / 3.664 / 14.024 | -0.9% | 3.8x | 111 / 60 / 221 |
+| `large-few` | `cold-create` | 1.146 / 0.971 / 4.335 | -15.3% | 4.5x | 145 / 97 / 351 |
+| `large-few` | `unchanged-update` | 0.206 / 0.196 / 3.894 | -4.9% | 19.9x | 145 / 97 / 351 |
+| `large-few` | `changed-update` | 0.403 / 0.372 / 3.931 | -7.7% | 10.6x | 145 / 97 / 352 |
+| `large-few` | `pruned-update` | 1.009 / 0.931 / 3.837 | -7.7% | 4.1x | 146 / 97 / 352 |
+
+Current improved on before in every median phase, by 0.9% to 15.3%, while using materially less peak memory. Upstream required 3.8x to 37.4x the current provider duration. Across all 40 current rows, source GET and destination PUT retries, throttled attempts, transfer failures, cancellations, panics, and consumed body replays were zero. Transfer in-flight high-water reached the configured bound of 32 and active readers peaked at 27.
+
+The interrupted fifth upstream repetition is not represented as complete evidence. Raw AWS output remains outside git, every completed repetition performed its own cleanup, the interrupted stack was deleted separately, and the final scoped stack count was zero.
 
 ## Current Snapshot
 
