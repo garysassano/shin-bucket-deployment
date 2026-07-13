@@ -91,10 +91,11 @@ The construct follows the upstream `BucketDeployment` API where the behavior map
 | Area            | Supported                                                                                                                                            |
 | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Sources         | `sources`, `Source.data`, `Source.jsonData`, `Source.yamlData`, `embeddedCatalog`                                                                    |
-| Destination     | `destinationBucket`, `destinationKeyPrefix`, `deployedBucket`, `objectKeys`                                                                           |
+| Destination     | `destinationBucket`, `destinationKeyPrefix`                                                                                                           |
 | Filtering       | `include`, `exclude`                                                                                                                                 |
 | Lifecycle       | `destinationLifecycle`                                                                                                                               |
-| Update behavior | `extract`, `outputObjectKeys`                                                                                                                        |
+| Deployment mode | `extract`                                                                                                                                            |
+| Outputs         | `deployedBucket`, `objectKeys`, `outputObjectKeys`                                                                                                   |
 | CloudFront      | `distribution`, `distributionPaths`, `waitForDistributionInvalidation`                                                                               |
 | Provider Lambda | `architecture`, `bundling`, `logGroup`, `memoryLimit`, `role`, `securityGroups`, `vpc`, `vpcSubnets`                                                 |
 | Runtime tuning  | `maxParallelTransfers`, `advancedRuntimeTuning`                                                                                                      |
