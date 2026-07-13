@@ -71,6 +71,32 @@ Current improved on before in every median phase, by 0.9% to 15.3%, while using 
 
 The interrupted fifth upstream repetition is not represented as complete evidence. Raw AWS output remains outside git, every completed repetition performed its own cleanup, the interrupted stack was deleted separately, and the final scoped stack count was zero.
 
+## Marker replacement performance decision
+
+The 2026-07-13 marker-replacement decision run completed five `before`, five `current`, and five `upstream` repetitions. Its 45 sanitized rows are retained in `benchmarks/results.jsonl` under decision-run ID `marker-replacement-2026-07-13`. Every repetition used the `marker-heavy` profile, a 16 MiB marker-bearing object plus four small ordinary files, 2048 MiB Lambda memory, 32 parallel transfers, serialized stacks, and the same create/unchanged/changed phase order in `eu-central-1`.
+
+The `before` provider is benchmark-harness commit `b11e26c`, whose provider source still matches `main` before streaming marker replacement. The current provider is `d8b40a5`. Upstream is AWS CDK 2.260.0 `BucketDeployment`. Values are medians of five CloudWatch `REPORT` records per cell.
+
+| Phase | Provider seconds, before / current / upstream | Billed seconds, before / current / upstream | Current vs before | Upstream / current | Peak MiB, before / current / upstream |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `cold-create` | 3.539 / 0.620 / 5.292 | 3.668 / 0.772 / 5.811 | -82.5% | 8.5x | 82 / 37 / 197 |
+| `unchanged-update` | 3.386 / 0.303 / 5.021 | 3.386 / 0.304 / 5.022 | -91.1% | 16.6x | 84 / 37 / 198 |
+| `changed-update` | 3.514 / 0.561 / 5.029 | 3.515 / 0.561 / 5.030 | -84.0% | 9.0x | 84 / 38 / 199 |
+
+End-to-end timings remained comparable while provider work improved materially:
+
+| Phase | CDK deploy seconds, before / current / upstream | Local wall seconds, before / current / upstream |
+| --- | ---: | ---: |
+| `cold-create` | 57.05 / 51.96 / 57.06 | 66.298 / 61.373 / 66.330 |
+| `unchanged-update` | 11.21 / 11.15 / 11.14 | 20.830 / 20.699 / 20.586 |
+| `changed-update` | 11.27 / 11.13 / 11.10 | 25.952 / 25.749 / 25.777 |
+
+Current telemetry makes the pass tradeoff explicit. Every marker entry used one bounded planning pass to determine exact `Content-Length`, validate source size/CRC/catalog integrity, and calculate the SSE-S3 comparison digest. Cold create and changed update then used one retryable streaming upload pass; unchanged update matched the destination after planning and used no upload pass. Median source fetches were therefore 150,391 bytes for create, 74,324 bytes for unchanged, and 149,072 bytes for changed. The two-pass phases each recorded one deliberate replay-after-release refetch. This is local source-block replay, not S3 pressure: all 15 current rows reported zero source GET retries/errors and zero destination PUT retries/throttles.
+
+The current provider used 54.8% to 56.0% less peak memory than before and was 5.7x to 11.2x faster in provider time. It remained 8.5x to 16.6x faster than upstream while using about one fifth of upstream peak memory. The measured extra read on upload phases is therefore accepted: it removes whole-entry output buffering, preserves exact/retryable `PutObject` bodies, and still improves both time and memory materially.
+
+Raw AWS output remains outside git. Every repetition captured provider telemetry before cleanup, destroyed its stack, and verified stack absence.
+
 ## Current Snapshot
 
 > [!CAUTION]

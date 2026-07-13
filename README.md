@@ -68,7 +68,7 @@ The official `BucketDeployment` is a good default for many stacks, but its provi
 | Archive-aware planning      | For extracted assets, the provider plans directly from the zip archive instead of extracting the whole archive to a working directory before syncing.                                                                                                                                                                                                       |
 | Bounded fail-fast transfers | Completed tasks are drained continuously, concurrency is capped by `maxParallelTransfers`, and the first observed transfer failure or panic cancels and drains outstanding work before cleanup or invalidation can continue.                                                                                                                              |
 | Encryption-aware writes     | SSE-S3 destinations use the cheap single-part MD5/`ETag` path; KMS and DSSE destinations store full-object SHA-256 only where encrypted `ETag`s cannot prove content identity.                                                                                                                                                                                  |
-| Marker-free streaming path  | Missing sources without deploy-time markers stream directly from archive entries; replacement buffers are only used for sources that declare markers.                                                                                                                                                                                                       |
+| Bounded marker replacement  | Marker-free entries stream directly. Marker entries use deterministic simultaneous replacement with one exact-length planning pass and a second retryable streaming pass only when upload is required; neither pass retains the complete entry or output.                                                                                                  |
 | Safer destination moves     | Opt-in cleanup deploys new content first, infers the old prefix, and preserves overlapping current namespaces. See [changing a destination safely](docs/architecture.md#changing-a-destination-safely).                                                                                                                                                     |
 
 ## Benchmark Snapshots
@@ -76,7 +76,7 @@ The official `BucketDeployment` is a good default for many stacks, but its provi
 > [!CAUTION]
 > These are historical exploratory snapshots with single-sample methodology. They are being revalidated and should not be treated as performance guarantees or used to choose production defaults.
 
-The separate [PR #12 controlled decision run](docs/benchmark.md#pr-12-performance-decision-run) used three repetitions per phase. Its current SSE-S3 provider medians were 3.8x to 43.0x faster than upstream and improved on the original PR #12 candidate in every measured phase; the correctness-required KMS path remained 2.6x to 2.7x faster than upstream. The charts below still represent the older canonical snapshot and are intentionally not relabeled with those temporary run variants.
+Controlled decision runs are documented separately from these historical charts. The [marker replacement run](docs/benchmark.md#marker-replacement-performance-decision) used five repetitions per variant: the bounded streaming path was 5.7x to 11.2x faster and used about 55% less peak memory than its whole-entry baseline while remaining 8.5x to 16.6x faster than upstream. The [PR #12 run](docs/benchmark.md#pr-12-performance-decision-run) measured the encryption-aware SSE-S3 and KMS paths. The charts below remain the older canonical snapshot and are intentionally not relabeled with decision-run variants.
 
 <img src="https://raw.githubusercontent.com/garysassano/shin-bucket-deployment/main/benchmarks/snapshots/tiny-many-1024mib-32.svg" alt="ShinBucketDeployment tiny-many 1024 MiB parallel 32 benchmark" width="100%">
 
@@ -129,6 +129,8 @@ At synthesis, Shin inspects `destinationBucket`'s default encryption rule. Defau
 
 Before uploading or copying, the provider lists the destination prefix. Destination keys are used to delete stale objects when `destinationLifecycle.onDeploy.deleteStaleObjects` is enabled. For SSE-S3 destinations, existing marker-free ZIP entries with authenticated catalog MD5s can be skipped from destination size and `ETag` without reading entry bytes. Untrusted existing entries are read once for MD5 comparison, while missing entries stream directly to S3 without a pre-hash pass. The upload stream calculates MD5 alongside required ZIP validation, so ambiguous writes can reconcile against a single-part destination `ETag` without requesting an additional stored checksum.
 
+Marker replacement is simultaneous and non-recursive: the leftmost match wins, the longest token wins at the same position, equal-length ties use lexicographic token order, and replacement values are never searched again. Tokens may cross decompression chunks. A bounded planning pass validates source bytes, calculates exact final length, and determines an SSE-S3 comparison MD5. If upload is needed, a second bounded pass supplies the retryable body; unchanged SSE-S3 marker objects stop after planning.
+
 KMS and DSSE destination `ETag`s are not treated as plaintext MD5. Those destinations bypass catalog/destination MD5 shortcuts and avoid a useless comparison read before upload; authenticated source MD5 is still validated when present. Extracted PUTs request a stored full-object SHA-256 checksum, while `extract=false` objects use direct `CopyObject` without requesting an unused checksum. Content identity is the only skip input; there is no separate old/new object-property identity.
 
 If a conditional PUT retry receives an ambiguous `409` or `412`, SSE-S3 reconciliation requires exact length plus the streamed MD5 as the single-part `ETag`, using an ordinary `HeadObject`. KMS/DSSE reconciliation uses checksum-mode `HeadObject` and requires exact length plus the stored `FULL_OBJECT` SHA-256. Neither path performs ACL reads. Missing evidence or any content mismatch fails closed instead of assuming that a lost response committed the intended object.
@@ -139,7 +141,7 @@ PUT and COPY always infer `Content-Type` from the deployed object's file extensi
 
 ### Memory Model
 
-Marker-free ZIP entry streaming uses small-buffer defaults: 64 KiB entry read buffers, 256 KiB S3 body chunks, and a 1 MiB body pipe between entry production and the SDK upload body. With the default 32 parallel transfers, this keeps entry stream buffering around 44 MiB, leaving the 1024 MiB default provider Lambda memory for the Rust runtime, AWS SDK, source block window, and ZIP metadata.
+ZIP entry streaming uses small-buffer defaults: 64 KiB entry read buffers, 256 KiB S3 body chunks, and a 1 MiB body pipe between entry production and the SDK upload body. Marker replacement adds only bounded token carry, a replacement pipe, and one held-back final frame; it does not retain the complete entry or expanded output. With the default 32 parallel marker-free transfers, entry stream buffering is around 44 MiB, leaving the 1024 MiB default provider Lambda memory for the Rust runtime, AWS SDK, source block window, and ZIP metadata.
 
 At the default 1024 MiB memory limit, adaptive source scheduling reserves about 64 MiB for runtime/base overhead, 384 MiB for 32 transfer workers, 32 MiB for four in-flight source range requests, and 2 KiB per ZIP entry for metadata. The remaining source block window is clamped to the actual source ZIP size and capped by the adaptive model; for large enough archives it is about 160 MiB minus the file reserve after large-archive RSS slack. The 1024 MiB default was selected from historical exploratory measurements whose methodology is now being revalidated; it is not a performance guarantee.
 
@@ -147,7 +149,7 @@ At the default 1024 MiB memory limit, adaptive source scheduling reserves about 
 
 CloudFront invalidation is created after S3 changes when `distribution` is provided. If `distributionPaths` is omitted, the default path is the destination prefix plus `*`, for example `/site/*`.
 
-The provider logs one sanitized `shin_deployment_summary` JSON line per custom-resource request plus structured source scheduler and destination `PutObject` diagnostics to CloudWatch Logs. Diagnostics schema v2 separates logical scheduled objects, wire attempts, consumed body replays, throttled attempts, cancellations, panics, and true active-reader high-water. The summary excludes bucket names, object keys, account IDs, distribution IDs, URLs, and ETags.
+The provider logs one sanitized `shin_deployment_summary` JSON line per custom-resource request plus structured source scheduler and destination `PutObject` diagnostics to CloudWatch Logs. Diagnostics schema v2 separates logical scheduled objects, wire attempts, consumed body replays, throttled attempts, cancellations, panics, and true active-reader high-water. `markerReplacement` reports the strategy, semantics, nominal passes per uploaded object, and actual planning/upload passes. The summary excludes bucket names, object keys, account IDs, distribution IDs, URLs, and ETags.
 
 ## Limits
 
@@ -157,23 +159,23 @@ The fast destination skip path depends on S3 `ETag` values behaving like MD5 con
 
 ### Cataloged `Source.asset` Assets
 
-Zip entries with deploy-time marker replacements are fully materialized in memory after replacement so the final bytes can be hashed and uploaded. Plain zip entries are read and uploaded in chunks. Cataloged directory assets currently do not support CDK asset `bundling` or symlink-following options; pass `embeddedCatalog: false` to `Source.asset` to use the upstream CDK asset path for those cases.
+ZIP entries, including marker-expanded output, stream in bounded chunks. Marker uploads require an exact-length planning pass and a second source pass when upload is needed. Cataloged directory assets currently do not support CDK asset `bundling` or symlink-following options; pass `embeddedCatalog: false` to `Source.asset` to use the upstream CDK asset path for those cases.
 
 - It applies to local directory assets only. Local `.zip` files, `Source.bucket` archives, data sources, and third-party sources remain deployable but cannot declare their catalogs trusted.
 - It does not run CDK asset `bundling`. Use your own pre-bundled directory, or pass `embeddedCatalog: false` to delegate packaging to CDK.
 - It rejects symlinks and non-regular files instead of following, materializing, or silently dropping them.
 - It requires CDK asset staging and delegates ZIP/ZIP64 creation to CDK from a temporary materialized directory.
 - It changes the staged ZIP bytes compared with upstream CDK packaging because the catalog entry is added.
-- Authenticated catalog MD5s are only used for marker-free destination skips. Every trusted entry that is read is checked against its catalog MD5 before upload or replacement.
+- Authenticated catalog MD5s are only used for marker-free destination skips. Every trusted entry is checked against its catalog MD5 in each comparison, upload, or marker pass that reads it.
 
 ### Object Size and Scope
 
 Source archives are read with S3 ranges and do not need to fit in Lambda memory or ephemeral storage. Individual files inside the asset ZIP, including marker-expanded output, must be <= 5 GiB because extracted uploads currently use S3 `PutObject`, not multipart upload.
 
-Before destination mutation, the provider validates the complete final key against S3's [1024-byte UTF-8 key limit](https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html), checks archive and aggregate size arithmetic, and rejects oversized single-request uploads and copies. A marker-bearing entry is decompressed, validated, replaced, and size-checked once immediately before its own PUT; earlier independent writes may already have completed. Marker output remains whole-entry materialized until the streaming replacement work lands.
+Before destination mutation, the provider validates the complete final key against S3's [1024-byte UTF-8 key limit](https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html), checks archive and aggregate size arithmetic, and rejects oversized single-request uploads and copies. Marker output size is enforced incrementally during planning, and the upload body withholds its final frame until the second pass validates source CRC/size/catalog integrity and matches the planned length and digest. Earlier independent object writes may already have completed before a later object fails; deployments are not transactional.
 
 This construct targets static asset deployment to S3. It is not a general-purpose sync engine and does not provide byte-range diffing, persistent manifests, or non-S3 backend behavior.
 
 ## Development
 
-To rebuild the Rust provider binaries or use a local checkout in your CDK app, see [Building from source](docs/building-from-source.md).
+To rebuild the Rust provider binaries or use a local checkout in your CDK app, see [Building from source](docs/building-from-source.md). Deeper implementation, evidence, and correctness details live in [Architecture](docs/architecture.md), [Benchmark](docs/benchmark.md), and [Verification](docs/verification.md).

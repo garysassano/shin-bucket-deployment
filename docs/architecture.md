@@ -60,7 +60,7 @@ The default provider Lambda memory is 1024 MiB. That default is sized around the
 | ZIP entry metadata reserve | 2 KiB per file |
 | Remaining source block window | About 160 MiB minus the file reserve for large enough archives, clamped to the source ZIP size |
 
-The explicit streaming buffers are small enough to fit inside the transfer worker reserve: each active marker-free upload stream uses about 64 KiB read buffer, 64 KiB held-back validation buffer, 256 KiB body assembly buffer, and up to 1 MiB of queued body frames. At 32 active transfers that is roughly 44 MiB of entry stream buffering. For 2,500 ZIP entries, the file reserve is about 5 MiB and the adaptive source window can grow to about 155 MiB when the source ZIP is large enough. For small archives, the source window is clamped down to the actual source ZIP size, so observed RSS is much lower than the worst-case budget.
+The explicit streaming buffers are small enough to fit inside the transfer worker reserve: each active marker-free upload stream uses about 64 KiB read buffer, 64 KiB held-back validation buffer, 256 KiB body assembly buffer, and up to 1 MiB of queued body frames. Marker uploads add a bounded replacement pipe, one held-back output frame, and at most `longest marker token - 1` bytes of input carry; they do not retain the complete entry or replacement output. At 32 active marker-free transfers, entry stream buffering is roughly 44 MiB. For 2,500 ZIP entries, the file reserve is about 5 MiB and the adaptive source window can grow to about 155 MiB when the source ZIP is large enough. For small archives, the source window is clamped down to the actual source ZIP size, so observed RSS is much lower than the worst-case budget.
 
 Adaptive source window formula:
 
@@ -287,9 +287,10 @@ For `extract=true`:
 11. List the destination prefix once.
 12. On SSE-S3 destinations, skip existing marker-free trusted entries when destination size and `ETag` match the authenticated catalog. Existing untrusted entries are read/decompressed once for CRC/size/MD5 comparison; missing entries avoid that precomparison pass.
 13. On KMS/DSSE destinations, do not use destination `ETag` as plaintext MD5 and do not perform a useless precomparison read. Trusted entries still validate their catalog MD5 while streaming; untrusted entries do not compute MD5.
-14. Materialize each marker-bearing entry once immediately before its own PUT, validate and replace it, enforce the expanded size limit, and compare final MD5 only on SSE-S3 destinations.
-15. Set inferred `Content-Type` on every PUT. SSE-S3 uploads retain streamed MD5 for ambiguous-write reconciliation without storing another checksum. KMS/DSSE uploads request stored full-object SHA-256 and calculate the independent expected digest while streaming.
-16. Admit at most `maxParallelTransfers` logical object tasks, continuously drain completed joins, and stop admission on the first observed error or panic. Abort and drain outstanding work before stale deletion or invalidation can run.
+14. Stream every marker-bearing entry through a deterministic planning pass. Simultaneous replacements use leftmost-longest matching, lexicographic token order for equal-length ties, and never rescan replacement bytes. The pass validates source size/CRC/catalog MD5, enforces the expanded size limit, determines exact `Content-Length`, and calculates final MD5 only for SSE-S3 destinations.
+15. Skip an unchanged SSE-S3 marker object after that planning pass. Otherwise reopen the entry for a retryable streaming upload pass; each consumed retry body repeats only that bounded upload pass. Hold back the final output frame until source validation and the planning-pass length/digest checks succeed.
+16. Set inferred `Content-Type` on every PUT. SSE-S3 uploads retain streamed MD5 for ambiguous-write reconciliation without storing another checksum. KMS/DSSE uploads request stored full-object SHA-256 and calculate the independent expected digest while streaming.
+17. Admit at most `maxParallelTransfers` logical object tasks, continuously drain completed joins, and stop admission on the first observed error or panic. Abort and drain outstanding work before stale deletion or invalidation can run.
 
 For `extract=false`:
 
@@ -315,7 +316,7 @@ flowchart LR
   F -->|"extract=false"| G["Expected ETag from source HeadObject"]
   F -->|"Trusted catalog entry without markers"| H["Compare authenticated catalog MD5 and size"]
   F -->|"Untrusted ZIP entry without markers"| I["Read/decompress entry and compute MD5"]
-  F -->|"ZIP entry with markers"| J["Materialize replacements and compute final MD5"]
+  F -->|"ZIP entry with markers"| J["Stream planning pass and compute final MD5"]
   G --> L{"Expected MD5/ETag equals destination ETag?"}
   H --> L
   I --> L
@@ -328,7 +329,11 @@ The provider's skip identity is content only. It does not expose deployment-wide
 
 `ListObjectsV2` exposes destination `ETag`, but not the actual checksum value needed to compare stored SHA-256. Performing one checksum-mode `HeadObject` per destination object would defeat the single-list deployment model. Shin therefore uses catalog/MD5 skips only for default/SSE-S3 destinations and reserves checksum-mode `HeadObject` for reconciling ambiguous KMS/DSSE writes.
 
-Directory `Source.asset` inputs are packaged with an authenticated source MD5 catalog. On SSE-S3 destinations, marker-free entries with trusted MD5s and matching destination size can be skipped without reading ZIP entry bytes. Without a trusted catalog match, existing marker-free entries are read and decompressed to compute MD5; missing entries stream straight to upload. On KMS/DSSE destinations, entries stream without a destination-comparison pass because encrypted `ETag`s are not plaintext MD5. ZIP entry reads always validate declared uncompressed size and CRC32, and validate authenticated MD5 whenever present, before the final upload chunk is released. Marker entries are materialized once immediately before their own PUT; the deployment no longer performs a global marker preflight that doubles source reads.
+Directory `Source.asset` inputs are packaged with an authenticated source MD5 catalog. On SSE-S3 destinations, marker-free entries with trusted MD5s and matching destination size can be skipped without reading ZIP entry bytes. Without a trusted catalog match, existing marker-free entries are read and decompressed to compute MD5; missing entries stream straight to upload. On KMS/DSSE destinations, entries stream without a destination-comparison pass because encrypted `ETag`s are not plaintext MD5. ZIP entry reads always validate declared uncompressed size and CRC32, and validate authenticated MD5 whenever present, before the final upload chunk is released.
+
+Marker entries use a compiled multi-pattern automaton with simultaneous, non-recursive semantics. The earliest input match wins; at that position the longest token wins; equal-length tokens are ordered lexicographically. Replacement values, including JSON-escaped values, are written directly and are never searched again. Input carry is bounded by the longest token, so matches may cross any decompression chunk without whole-entry buffering.
+
+S3 requires exact `Content-Length` before `PutObject` starts. Marker entries therefore use one bounded planning pass. If an existing SSE-S3 object has the resulting MD5, deployment stops there. An object that needs upload uses a second bounded pass whose body can be reopened for application or SDK replay. KMS/DSSE marker entries necessarily use both passes because destination `ETag` is not a plaintext identity. The measured marker decision run in [benchmark](./benchmark.md#marker-replacement-performance-decision) accepted this conditional extra read: current provider time improved 82.5% to 91.1% and peak memory fell about 55% versus whole-entry materialization while remaining 8.5x to 16.6x faster than upstream.
 
 `extract=false` copies use source and destination `ETag` comparison only on SSE-S3 destinations. Source object `ETag` comes from a source `HeadObject`; destination `ETag` comes from the single destination list. KMS/DSSE destinations copy without treating their destination `ETag` as plaintext identity.
 
@@ -356,7 +361,7 @@ For an untrusted source, the provider never fetches or parses embedded catalog c
 
 For a trusted source, planning requires exactly one v1 catalog and rejects any reserved v2 entry. Both compressed and uncompressed catalog sizes are limited to 64 MiB. The provider validates the catalog entry size and CRC32, hashes its exact decompressed bytes with SHA-256, compares that digest with the template, and parses with unknown fields denied. Catalog paths must be unique and already canonical; sizes and lowercase MD5s must be well formed; and catalog entries must map one-to-one to every non-directory, non-catalog ZIP entry. These checks finish before destination listing or mutation.
 
-Authenticating the catalog fixes every per-file size and MD5 in the template's trust boundary. When a trusted entry is read for comparison, direct upload, changed upload, retry/replay, or marker materialization, the provider computes MD5 alongside its existing size and CRC32 checks and compares it with the authenticated entry. The direct streaming body retains its last pending chunk until all checks succeed. A mismatch therefore makes the request body fail before S3 can commit that object.
+Authenticating the catalog fixes every per-file size and MD5 in the template's trust boundary. When a trusted entry is read for comparison, direct upload, changed upload, retry/replay, or either marker pass, the provider computes MD5 alongside its existing size and CRC32 checks and compares it with the authenticated entry. The direct streaming body retains its last pending chunk until all checks succeed. A mismatch therefore makes the request body fail before S3 can commit that object.
 
 This design deliberately relies on MD5 second-preimage resistance for source entry authentication after the SHA-256 catalog binding. It does not add a per-file SHA-256 field. Destination sparse skips still compare authenticated size/MD5 with the `ETag` exposed by `ListObjectsV2`; the design does not make destination ETags collision-resistant or change the limitations of multipart and encrypted-object ETags.
 
@@ -410,7 +415,7 @@ The provider role uses source grants from each bound CDK source and destination 
 
 The older extract path downloaded each source ZIP from S3, wrote the full archive to Lambda `/tmp`, opened it with `ZipArchive`, and reread the temporary file for planning, fallback hashing, and upload streaming.
 
-The current path reads the ZIP central directory and entry bodies through S3 ranges. Directory assets use a compact v1 size/MD5 catalog with an additional template-bound SHA-256 trust layer. Entry source spans are planned into coalesced blocks, prefetched with bounded source GET concurrency, shared by concurrent readers, retained while claimed, and reopened for retryable upload bodies. This removes the full-archive ephemeral-storage dependency and makes source ZIP size independent of Lambda `/tmp`. Replacement-expanded entries still must fit in memory because their final bytes are only known after marker substitution.
+The current path reads the ZIP central directory and entry bodies through S3 ranges. Directory assets use a compact v1 size/MD5 catalog with an additional template-bound SHA-256 trust layer. Entry source spans are planned into coalesced blocks, prefetched with bounded source GET concurrency, shared by concurrent readers, retained while claimed, and reopened for retryable upload bodies. This removes the full-archive ephemeral-storage dependency and makes source ZIP and marker-expanded entry size independent of Lambda `/tmp` and whole-entry memory.
 
 The current implementation:
 
@@ -432,6 +437,7 @@ The current implementation:
 - retry failed `PutObject` attempts with capped backoff and throttle-aware delays
 - drain a bounded transfer task set continuously and abort outstanding work on the first observed error or panic
 - create retryable ZIP body work only when a body instance is actually polled
+- replace markers with deterministic simultaneous semantics using bounded planning and retryable streaming passes
 - derive source GET concurrency and source block window from Lambda memory unless explicitly configured
 - emit structured source scheduler and destination `PutObject` diagnostics as provider logs
 
@@ -448,7 +454,7 @@ Cataloged asset packaging limitations:
 
 ## Diagnostics
 
-Each extracted deployment logs the effective source schedule and a final source diagnostics record per source archive. These records include planned entries and blocks, planned and fetched source bytes, source amplification, ranged `GetObject` wire attempts and typed failures, block hits/misses/releases/refetches, split wait counters for in-flight fetches versus source-window capacity, consumed body attempts/replays, resident source-window high-water, true active ZIP entry reader high-water, and active source GET high-water. The aggregate `shin_deployment_summary` is schema version 2. It separates logical transfer objects and cancellations from source and destination wire attempts; the upload path also logs destination `PutObject` retry settings, throttling, wait time, and failures grouped by error code.
+Each extracted deployment logs the effective source schedule and a final source diagnostics record per source archive. These records include planned entries and blocks, planned and fetched source bytes, source amplification, ranged `GetObject` wire attempts and typed failures, block hits/misses/releases/refetches, split wait counters for in-flight fetches versus source-window capacity, consumed body attempts/replays, resident source-window high-water, true active ZIP entry reader high-water, and active source GET high-water. The aggregate `shin_deployment_summary` is schema version 2. It separates logical transfer objects and cancellations from source and destination wire attempts; the upload path also logs destination `PutObject` retry settings, throttling, wait time, and failures grouped by error code. Its `markerReplacement` object names the strategy and semantics, declares the nominal two passes for an uploaded marker object, and reports actual planning and upload passes for the invocation.
 
 Diagnostics are emitted to CloudWatch Logs through structured `tracing` fields. They are not returned in the CloudFormation custom-resource response because that response has a small practical size limit and is already used for `objectKeys` and `deployedBucket` outputs.
 
@@ -462,6 +468,16 @@ Transfer scheduler diagnostics field reference:
 | `cancelledObjects` | Outstanding logical object tasks aborted during fail-fast or deadline cleanup. | Confirm outstanding writes were cancelled and drained. |
 | `panickedObjects` | Failed logical object tasks whose future panicked. | Distinguish runtime panics from ordinary transfer errors. |
 | `inFlightHighWater` | Peak admitted object tasks retained by the scheduler. | Verify the task set stayed within `maxParallelTransfers`. |
+
+Marker replacement diagnostics field reference:
+
+| Field | Meaning | Use when debugging |
+| --- | --- | --- |
+| `strategy` | `planning-plus-retryable-stream`. | Identify the exact-length planning and conditional upload design. |
+| `semantics` | `leftmost-longest-non-recursive`. | Confirm deterministic simultaneous replacement behavior. |
+| `plannedPassesPerUpload` | Nominal pass count for an object that requires upload; currently 2. | Make the accepted source-read tradeoff explicit. |
+| `planningPasses` | Marker entries read for output length, validation, and optional SSE-S3 comparison. | Compare marker work with marker entry count. |
+| `uploadPasses` | Marker upload body instances actually polled, including consumed retries. | Distinguish skipped entries from uploads and replay work. |
 
 Source diagnostics field reference:
 
@@ -512,7 +528,7 @@ Destination upload diagnostics field reference:
 
 | CDK behavior | Engine impact |
 | --- | --- |
-| Deploy-time marker replacement | Marker entries are materialized after ranged extraction so final replaced bytes can be hashed and uploaded. |
+| Deploy-time marker replacement | Marker entries use simultaneous leftmost-longest replacement, one bounded exact-length planning pass, and a second retryable streaming pass only when upload is required. |
 | Multiple sources with override order | The provider builds one manifest across sources before pruning and upload decisions. |
 | Include/exclude filters | Filters are applied while walking ZIP entries. |
 | Object metadata and content type | Deployment-wide object metadata overrides are intentionally omitted. Upload and copy infer `Content-Type` from the deployed object's file extension with a binary fallback. Bucket and CloudFront policy own cache, encryption, storage, and lifecycle behavior. |
@@ -527,8 +543,7 @@ Destination upload diagnostics field reference:
 - Without an authenticated source MD5 catalog match, unchanged existing SSE-S3 ZIP entries must be read and hashed during deployment.
 - KMS/DSSE destinations do not use destination `ETag` as plaintext identity and can perform extra transfers; SSE-C is unsupported.
 - Imported buckets and tokenized, unknown, or multi-rule synthesized encryption configurations are rejected.
-- Source ZIP archives do not need to fit in Lambda memory or ephemeral storage; marker-free ZIP entries stream in chunks.
-- Marker-replaced entries must fit in Lambda memory after replacement.
+- Source ZIP archives and marker-expanded entries do not need to fit in Lambda memory or ephemeral storage; both stream in bounded chunks.
 - Each extracted ZIP entry must fit S3's single-request `PutObject` limit.
 - Final destination keys must fit S3's 1024-byte UTF-8 limit.
 - `advancedRuntimeTuning.sourceBlockBytes` must be at least 30 bytes so ZIP local file headers can fit in one source block.
@@ -541,6 +556,5 @@ Destination upload diagnostics field reference:
 The highest-value architecture work is now:
 
 1. Promote the benchmark methodology to repeated canonical runs and add CI regression checks that can detect provider-time, memory, transfer, retry, and request-count regressions without committing raw AWS evidence.
-2. Replace whole-entry marker materialization with a deterministic bounded streaming design only when measurements justify its pass count and retry strategy.
-3. Add invocation-global source-window budgeting and page-bounded destination cleanup planning.
-4. Add cataloged packaging support for CDK asset bundling or keep the current explicit fallback if the compatibility surface is too large.
+2. Add invocation-global source-window budgeting and page-bounded destination cleanup planning.
+3. Add cataloged packaging support for CDK asset bundling or keep the current explicit fallback if the compatibility surface is too large.
