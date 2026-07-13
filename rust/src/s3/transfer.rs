@@ -15,27 +15,32 @@ use aws_sdk_s3::error::SdkError;
 use aws_sdk_s3::operation::put_object::PutObjectError;
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::{ChecksumAlgorithm, ChecksumMode, ChecksumType, MetadataDirective};
+#[cfg(test)]
 use base64::Engine as _;
+#[cfg(test)]
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+#[cfg(test)]
 use bytes::Bytes;
 use crc32fast::Hasher as Crc32Hasher;
 use fastrand::Rng;
 use futures_util::FutureExt;
 use md5::{Digest as Md5Digest, Md5};
+#[cfg(test)]
 use sha2::Sha256;
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::task::JoinSet;
 use tokio::time::timeout_at;
 
 use crate::deadline::InvocationDeadlines;
-use crate::replace::replace_markers_bounded;
+use crate::replace::MarkerReplacements;
 use crate::types::{
     AppState, DeploymentRequest, DeploymentStats, DestinationChecksumStrategy, MarkerConfig,
     PutObjectRetryJitter, PutObjectRetryOptions, PutObjectStats, SourceArchive,
 };
 
 use super::archive::{
-    SourceBlockOptions, SourceBlockStore, UploadBodyState, validate_zip_entry_output,
+    MarkerBodyContext, SourceBlockOptions, SourceBlockStore, UploadBodyState,
+    marker_zip_entry_body, plan_marker_zip_entry, validate_zip_entry_output,
     validate_zip_entry_size_not_exceeded, zip_entry_body, zip_entry_reader,
 };
 use super::content_type::{apply_copy_content_type, apply_put_content_type};
@@ -44,6 +49,7 @@ use super::planner::{CopyPlan, ZipEntryPlan};
 use super::{S3_SINGLE_PUT_LIMIT, ZIP_ENTRY_READ_CHUNK_BYTES, source_window_bytes_for_archive};
 
 enum UploadPayload {
+    #[cfg(test)]
     Bytes {
         bytes: Bytes,
         body_state: Arc<UploadBodyState>,
@@ -54,6 +60,8 @@ enum UploadPayload {
         content_length: u64,
         body_state: Arc<UploadBodyState>,
         body_attempts: Arc<AtomicUsize>,
+        marker_replacements: Option<Arc<MarkerReplacements>>,
+        deployment_stats: Option<Arc<DeploymentStats>>,
     },
 }
 
@@ -77,6 +85,7 @@ struct TransferTaskCompletion {
 }
 
 impl UploadPayload {
+    #[cfg(test)]
     fn from_bytes(bytes: Vec<u8>) -> Self {
         let body_state = Arc::new(UploadBodyState::default());
         Self::Bytes {
@@ -96,11 +105,32 @@ impl UploadPayload {
             content_length,
             body_state: Arc::new(UploadBodyState::default()),
             body_attempts: Arc::new(AtomicUsize::new(0)),
+            marker_replacements: None,
+            deployment_stats: None,
+        }
+    }
+
+    fn from_marker_zip_entry(
+        store: Arc<SourceBlockStore>,
+        plan: ZipEntryPlan,
+        content_length: u64,
+        marker_replacements: Arc<MarkerReplacements>,
+        deployment_stats: Arc<DeploymentStats>,
+    ) -> Self {
+        Self::ZipEntry {
+            store,
+            plan,
+            content_length,
+            body_state: Arc::new(UploadBodyState::default()),
+            body_attempts: Arc::new(AtomicUsize::new(0)),
+            marker_replacements: Some(marker_replacements),
+            deployment_stats: Some(deployment_stats),
         }
     }
 
     fn content_length(&self) -> u64 {
         match self {
+            #[cfg(test)]
             UploadPayload::Bytes { bytes, .. } => u64::try_from(bytes.len()).unwrap_or(u64::MAX),
             UploadPayload::ZipEntry { content_length, .. } => *content_length,
         }
@@ -108,13 +138,17 @@ impl UploadPayload {
 
     fn body_state(&self) -> &UploadBodyState {
         match self {
+            #[cfg(test)]
             UploadPayload::Bytes { body_state, .. }
             | UploadPayload::ZipEntry { body_state, .. } => body_state,
+            #[cfg(not(test))]
+            UploadPayload::ZipEntry { body_state, .. } => body_state,
         }
     }
 
-    fn prepare_checksum(&self, checksum_strategy: DestinationChecksumStrategy) {
-        if checksum_strategy == DestinationChecksumStrategy::KmsSha256
+    fn prepare_checksum(&self, _checksum_strategy: DestinationChecksumStrategy) {
+        #[cfg(test)]
+        if _checksum_strategy == DestinationChecksumStrategy::KmsSha256
             && self.body_state().checksum_sha256().is_none()
             && let UploadPayload::Bytes { bytes, body_state } = self
         {
@@ -375,7 +409,7 @@ async fn prepare_zip_entry_upload(
     source_marker_config: &MarkerConfig,
     destination_object: Option<&DestinationObject>,
     checksum_strategy: DestinationChecksumStrategy,
-    stats: &DeploymentStats,
+    stats: &Arc<DeploymentStats>,
 ) -> Result<Option<UploadPayload>> {
     if source_markers.is_empty()
         && !should_compare_marker_free_entry(plan, destination_object, checksum_strategy)
@@ -398,6 +432,7 @@ async fn prepare_zip_entry_upload(
         source_markers,
         source_marker_config,
         checksum_strategy,
+        stats,
     )
     .await?;
 
@@ -411,9 +446,7 @@ async fn prepare_zip_entry_upload(
         return Ok(None);
     }
 
-    if source_markers.is_empty() {
-        store.retain_zip_entry_for_replay(plan);
-    }
+    store.retain_zip_entry_for_replay(plan);
 
     if let Some(etag) = prepared.etag {
         prepared.payload.body_state().record_etag_md5(etag);
@@ -484,6 +517,7 @@ async fn prepare_zip_entry_for_comparison(
     source_markers: &HashMap<String, String>,
     source_marker_config: &MarkerConfig,
     checksum_strategy: DestinationChecksumStrategy,
+    stats: &Arc<DeploymentStats>,
 ) -> Result<PreparedUploadPayload> {
     if source_markers.is_empty() {
         let etag = hash_zip_entry_reader(store.clone(), plan.clone()).await?;
@@ -492,18 +526,31 @@ async fn prepare_zip_entry_for_comparison(
             etag: Some(etag),
         })
     } else {
-        let bytes = read_zip_entry_to_vec(store, plan.clone()).await?;
-        let replaced = replace_markers_bounded(
-            bytes,
+        let replacements = Arc::new(MarkerReplacements::new(
             source_markers,
             source_marker_config,
-            usize::try_from(S3_SINGLE_PUT_LIMIT).unwrap_or(usize::MAX),
-        )?;
-        let etag = (checksum_strategy == DestinationChecksumStrategy::SseS3Etag)
-            .then(|| md5_hex(&replaced));
-        validate_put_object_size(plan, replaced.len())?;
+        )?);
+        // PutObject requires an exact length before its retryable body starts. This
+        // pass validates and counts without retaining replacement output; only an
+        // object that still needs uploading incurs the second streaming pass.
+        stats.add_marker_planning_pass();
+        let planned = plan_marker_zip_entry(
+            store.clone(),
+            plan.clone(),
+            &replacements,
+            checksum_strategy,
+        )
+        .await?;
+        let etag = planned.md5;
+        validate_put_object_size(plan, planned.output_bytes)?;
         Ok(PreparedUploadPayload {
-            payload: UploadPayload::from_bytes(replaced),
+            payload: UploadPayload::from_marker_zip_entry(
+                store,
+                plan.clone(),
+                planned.output_bytes,
+                replacements,
+                Arc::clone(stats),
+            ),
             etag,
         })
     }
@@ -685,6 +732,7 @@ fn payload_body(
     checksum_strategy: DestinationChecksumStrategy,
 ) -> ByteStream {
     match payload {
+        #[cfg(test)]
         UploadPayload::Bytes { bytes, .. } => ByteStream::from(bytes.clone()),
         UploadPayload::ZipEntry {
             store,
@@ -692,14 +740,30 @@ fn payload_body(
             content_length,
             body_state,
             body_attempts,
-        } => zip_entry_body(
-            store.clone(),
-            plan.clone(),
-            *content_length,
-            Arc::clone(body_state),
-            checksum_strategy,
-            Arc::clone(body_attempts),
-        ),
+            marker_replacements,
+            deployment_stats,
+        } => match (marker_replacements, deployment_stats) {
+            (Some(marker_replacements), Some(deployment_stats)) => marker_zip_entry_body(
+                store.clone(),
+                plan.clone(),
+                *content_length,
+                Arc::clone(body_state),
+                checksum_strategy,
+                Arc::clone(body_attempts),
+                MarkerBodyContext {
+                    replacements: Arc::clone(marker_replacements),
+                    stats: Arc::clone(deployment_stats),
+                },
+            ),
+            _ => zip_entry_body(
+                store.clone(),
+                plan.clone(),
+                *content_length,
+                Arc::clone(body_state),
+                checksum_strategy,
+                Arc::clone(body_attempts),
+            ),
+        },
     }
 }
 
@@ -766,9 +830,7 @@ fn destination_object_etag_matches(
     destination_object.and_then(|object| object.etag.as_deref()) == Some(expected_etag)
 }
 
-fn validate_put_object_size(plan: &ZipEntryPlan, output_len: usize) -> Result<()> {
-    let output_len = u64::try_from(output_len)
-        .map_err(|_| anyhow!("marker-expanded output size cannot be represented safely"))?;
+fn validate_put_object_size(plan: &ZipEntryPlan, output_len: u64) -> Result<()> {
     if output_len > S3_SINGLE_PUT_LIMIT {
         return Err(anyhow!(
             "marker-expanded entry `{}` is {output_len} bytes, larger than the S3 single PutObject limit",
@@ -778,6 +840,7 @@ fn validate_put_object_size(plan: &ZipEntryPlan, output_len: usize) -> Result<()
     Ok(())
 }
 
+#[cfg(test)]
 fn sha256_base64(bytes: &[u8]) -> String {
     BASE64_STANDARD.encode(Sha256::digest(bytes))
 }
@@ -786,15 +849,6 @@ async fn hash_zip_entry_reader(store: Arc<SourceBlockStore>, plan: ZipEntryPlan)
     let reader = zip_entry_reader(store, plan.clone())?;
     let (etag, _, _) = digest_async_reader(reader, &plan).await?;
     Ok(etag)
-}
-
-async fn read_zip_entry_to_vec(
-    store: Arc<SourceBlockStore>,
-    plan: ZipEntryPlan,
-) -> Result<Vec<u8>> {
-    let reader = zip_entry_reader(store, plan.clone())?;
-    let (bytes, _, _) = read_async_reader_to_vec(reader, &plan).await?;
-    Ok(bytes)
 }
 
 async fn digest_async_reader(
@@ -825,6 +879,7 @@ async fn digest_async_reader(
     Ok((md5, bytes, crc32))
 }
 
+#[cfg(test)]
 async fn read_async_reader_to_vec(
     mut reader: Pin<Box<dyn AsyncRead + Send>>,
     plan: &ZipEntryPlan,
@@ -858,6 +913,7 @@ async fn read_async_reader_to_vec(
     Ok((bytes, total_bytes, crc32))
 }
 
+#[cfg(test)]
 fn md5_hex(bytes: &[u8]) -> String {
     let mut hasher = Md5::new();
     hasher.update(bytes);

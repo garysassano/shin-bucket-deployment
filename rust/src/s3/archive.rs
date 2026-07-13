@@ -22,16 +22,20 @@ use futures_util::stream::{FuturesUnordered, StreamExt};
 use http_body::{Body, Frame, SizeHint};
 use md5::{Digest as Md5Digest, Md5};
 use sha2::Sha256;
-use tokio::io::{AsyncBufRead, AsyncRead, AsyncReadExt, AsyncSeek, ReadBuf, SeekFrom};
+use tokio::io::{AsyncBufRead, AsyncRead, AsyncReadExt, AsyncSeek, AsyncWrite, ReadBuf, SeekFrom};
 use tokio::sync::futures::OwnedNotified;
 use tokio::sync::{Notify, Semaphore, mpsc};
 use tokio::task::JoinSet;
 use tokio::time::{Instant, timeout_at};
 
-use crate::types::{AppState, DestinationChecksumStrategy};
+use crate::replace::{MarkerReplacements, ReplacementOptions, ReplacementResult};
+use crate::types::{AppState, DeploymentStats, DestinationChecksumStrategy};
 
 use super::planner::ZipEntryPlan;
-use super::{ZIP_ENTRY_BODY_CHUNK_BYTES, ZIP_ENTRY_BODY_PIPE_CHUNKS, ZIP_ENTRY_READ_CHUNK_BYTES};
+use super::{
+    S3_SINGLE_PUT_LIMIT, ZIP_ENTRY_BODY_CHUNK_BYTES, ZIP_ENTRY_BODY_PIPE_CHUNKS,
+    ZIP_ENTRY_READ_CHUNK_BYTES,
+};
 
 const GET_OBJECT_MAX_ATTEMPTS: usize = 3;
 const LOCAL_FILE_HEADER_SIGNATURE: u32 = 0x0403_4b50;
@@ -263,6 +267,20 @@ struct ReceiverBodyInit {
     body_state: Arc<UploadBodyState>,
     checksum_strategy: DestinationChecksumStrategy,
     attempts: Arc<AtomicUsize>,
+    marker: Option<MarkerBodyContext>,
+}
+
+#[derive(Clone)]
+pub(crate) struct MarkerBodyContext {
+    pub(crate) replacements: Arc<MarkerReplacements>,
+    pub(crate) stats: Arc<DeploymentStats>,
+}
+
+struct ZipEntryInputValidator<'a> {
+    plan: &'a ZipEntryPlan,
+    bytes: u64,
+    crc32: Crc32Hasher,
+    md5: Option<Md5>,
 }
 
 struct RangeGetError {
@@ -1684,37 +1702,111 @@ pub(crate) fn zip_entry_body(
     checksum_strategy: DestinationChecksumStrategy,
     attempts: Arc<AtomicUsize>,
 ) -> ByteStream {
-    ByteStream::new(SdkBody::retryable(move || {
-        zip_entry_sdk_body(
-            store.clone(),
-            plan.clone(),
-            content_length,
-            Arc::clone(&body_state),
-            checksum_strategy,
-            Arc::clone(&attempts),
-        )
-    }))
+    zip_entry_body_inner(
+        store,
+        plan,
+        content_length,
+        body_state,
+        checksum_strategy,
+        attempts,
+        None,
+    )
 }
 
-fn zip_entry_sdk_body(
+pub(crate) fn marker_zip_entry_body(
     store: Arc<SourceBlockStore>,
     plan: ZipEntryPlan,
     content_length: u64,
     body_state: Arc<UploadBodyState>,
     checksum_strategy: DestinationChecksumStrategy,
     attempts: Arc<AtomicUsize>,
-) -> SdkBody {
+    marker: MarkerBodyContext,
+) -> ByteStream {
+    zip_entry_body_inner(
+        store,
+        plan,
+        content_length,
+        body_state,
+        checksum_strategy,
+        attempts,
+        Some(marker),
+    )
+}
+
+fn zip_entry_body_inner(
+    store: Arc<SourceBlockStore>,
+    plan: ZipEntryPlan,
+    content_length: u64,
+    body_state: Arc<UploadBodyState>,
+    checksum_strategy: DestinationChecksumStrategy,
+    attempts: Arc<AtomicUsize>,
+    marker: Option<MarkerBodyContext>,
+) -> ByteStream {
+    ByteStream::new(SdkBody::retryable(move || {
+        zip_entry_sdk_body(
+            ReceiverBodyInit {
+                store: store.clone(),
+                plan: plan.clone(),
+                body_state: Arc::clone(&body_state),
+                checksum_strategy,
+                attempts: Arc::clone(&attempts),
+                marker: marker.clone(),
+            },
+            content_length,
+        )
+    }))
+}
+
+fn zip_entry_sdk_body(init: ReceiverBodyInit, content_length: u64) -> SdkBody {
     SdkBody::from_body_1_x(ReceiverBody {
-        init: Some(ReceiverBodyInit {
-            store,
-            plan,
-            body_state,
-            checksum_strategy,
-            attempts,
-        }),
+        init: Some(init),
         receiver: None,
         content_length,
     })
+}
+
+pub(crate) async fn plan_marker_zip_entry(
+    store: Arc<SourceBlockStore>,
+    plan: ZipEntryPlan,
+    marker_replacements: &MarkerReplacements,
+    checksum_strategy: DestinationChecksumStrategy,
+) -> io::Result<ReplacementResult> {
+    let mut output = tokio::io::sink();
+    replace_marker_zip_entry(
+        store,
+        plan,
+        marker_replacements,
+        &mut output,
+        checksum_strategy == DestinationChecksumStrategy::SseS3Etag,
+        false,
+    )
+    .await
+}
+
+async fn replace_marker_zip_entry<W: AsyncWrite + Unpin>(
+    store: Arc<SourceBlockStore>,
+    plan: ZipEntryPlan,
+    marker_replacements: &MarkerReplacements,
+    output: &mut W,
+    hash_md5: bool,
+    hash_sha256: bool,
+) -> io::Result<ReplacementResult> {
+    let mut reader = zip_entry_reader(store, plan.clone())?;
+    let mut validator = ZipEntryInputValidator::new(&plan);
+    let result = marker_replacements
+        .replace_stream(
+            &mut reader,
+            output,
+            ReplacementOptions {
+                max_output_bytes: S3_SINGLE_PUT_LIMIT,
+                hash_md5,
+                hash_sha256,
+            },
+            |bytes| validator.observe(bytes),
+        )
+        .await?;
+    validator.finish()?;
+    Ok(result)
 }
 
 pub(crate) fn zip_entry_reader(
@@ -1808,6 +1900,149 @@ async fn send_zip_entry_chunks(
     Ok(())
 }
 
+async fn send_marker_zip_entry_chunks(
+    store: Arc<SourceBlockStore>,
+    plan: ZipEntryPlan,
+    content_length: u64,
+    marker_replacements: Arc<MarkerReplacements>,
+    sender: mpsc::Sender<std::result::Result<Bytes, BodyError>>,
+    body_state: Arc<UploadBodyState>,
+    checksum_strategy: DestinationChecksumStrategy,
+) -> std::result::Result<(), BodyError> {
+    let pipe_capacity = ZIP_ENTRY_BODY_CHUNK_BYTES
+        .checked_mul(2)
+        .unwrap_or(ZIP_ENTRY_BODY_CHUNK_BYTES);
+    let (mut output_reader, mut output_writer) = tokio::io::duplex(pipe_capacity);
+    let producer = async move {
+        let result = replace_marker_zip_entry(
+            store,
+            plan.clone(),
+            &marker_replacements,
+            &mut output_writer,
+            checksum_strategy == DestinationChecksumStrategy::SseS3Etag,
+            checksum_strategy == DestinationChecksumStrategy::KmsSha256,
+        )
+        .await
+        .map_err(boxed_body_error)?;
+        if result.output_bytes != content_length {
+            return Err(boxed_body_error(invalid_entry(
+                &plan,
+                format!(
+                    "marker output changed between planning and upload passes: expected {content_length} bytes, produced {} bytes",
+                    result.output_bytes
+                ),
+            )));
+        }
+        drop(output_writer);
+        Ok(result)
+    };
+    let consumer = forward_replaced_body_chunks(&mut output_reader, &sender);
+    let (result, final_chunk) = tokio::try_join!(producer, consumer)?;
+
+    if let Some(md5) = result.md5 {
+        if let Some(expected) = body_state.etag_md5()
+            && expected != md5
+        {
+            return Err(boxed_body_error(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "marker output digest changed between planning and upload passes",
+            )));
+        }
+        body_state.record_etag_md5(md5);
+    }
+    if let Some(sha256) = result.sha256 {
+        body_state.record_checksum_sha256(sha256);
+    }
+    if let Some(final_chunk) = final_chunk
+        && sender.send(Ok(final_chunk)).await.is_err()
+    {
+        return Ok(());
+    }
+    Ok(())
+}
+
+async fn forward_replaced_body_chunks(
+    reader: &mut tokio::io::DuplexStream,
+    sender: &mpsc::Sender<std::result::Result<Bytes, BodyError>>,
+) -> std::result::Result<Option<Bytes>, BodyError> {
+    // Keep one complete frame back so source CRC/size/catalog validation and
+    // planning-pass identity checks can fail before S3 receives a complete body.
+    let mut read_buffer = vec![0_u8; ZIP_ENTRY_READ_CHUNK_BYTES];
+    let mut frame = Vec::with_capacity(ZIP_ENTRY_BODY_CHUNK_BYTES);
+    let mut held_frame = None;
+
+    loop {
+        let read = reader
+            .read(&mut read_buffer)
+            .await
+            .map_err(boxed_body_error)?;
+        if read == 0 {
+            break;
+        }
+        let mut remaining = &read_buffer[..read];
+        while !remaining.is_empty() {
+            let available = ZIP_ENTRY_BODY_CHUNK_BYTES - frame.len();
+            let take = available.min(remaining.len());
+            frame.extend_from_slice(&remaining[..take]);
+            remaining = &remaining[take..];
+            if frame.len() == ZIP_ENTRY_BODY_CHUNK_BYTES {
+                let next = Bytes::copy_from_slice(&frame);
+                frame.clear();
+                if let Some(previous) = held_frame.replace(next)
+                    && sender.send(Ok(previous)).await.is_err()
+                {
+                    return Ok(None);
+                }
+            }
+        }
+    }
+
+    if !frame.is_empty() {
+        let next = Bytes::copy_from_slice(&frame);
+        if let Some(previous) = held_frame.replace(next)
+            && sender.send(Ok(previous)).await.is_err()
+        {
+            return Ok(None);
+        }
+    }
+    Ok(held_frame)
+}
+
+impl ZipEntryInputValidator<'_> {
+    fn new(plan: &ZipEntryPlan) -> ZipEntryInputValidator<'_> {
+        ZipEntryInputValidator {
+            plan,
+            bytes: 0,
+            crc32: Crc32Hasher::new(),
+            md5: plan.trusted_integrity.is_some().then(Md5::new),
+        }
+    }
+
+    fn observe(&mut self, bytes: &[u8]) -> io::Result<()> {
+        let added = u64::try_from(bytes.len())
+            .map_err(|_| invalid_entry(self.plan, "entry size cannot be represented safely"))?;
+        let next = self
+            .bytes
+            .checked_add(added)
+            .ok_or_else(|| invalid_entry(self.plan, "entry size arithmetic overflowed"))?;
+        validate_zip_entry_size_not_exceeded(self.plan, next)?;
+        self.crc32.update(bytes);
+        if let Some(md5) = self.md5.as_mut() {
+            md5.update(bytes);
+        }
+        self.bytes = next;
+        Ok(())
+    }
+
+    fn finish(self) -> io::Result<()> {
+        validate_zip_entry_output(self.plan, self.bytes, self.crc32.finalize())?;
+        if let Some(md5) = self.md5 {
+            self.plan.validate_trusted_md5(&finalize_md5(md5))?;
+        }
+        Ok(())
+    }
+}
+
 fn finalize_md5(hasher: Md5) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
 
@@ -1862,19 +2097,37 @@ impl Body for ReceiverBody {
             if replay {
                 init.store.retain_zip_entry_for_replay(&init.plan);
             }
+            if let Some(marker) = &init.marker {
+                marker.stats.add_marker_upload_pass();
+            }
 
             let (sender, receiver) = mpsc::channel(ZIP_ENTRY_BODY_PIPE_CHUNKS);
             let body_store = Arc::clone(&init.store);
+            let content_length = self.content_length;
             init.store.spawn_body_task(async move {
-                let outcome = AssertUnwindSafe(send_zip_entry_chunks(
-                    body_store,
-                    init.plan,
-                    sender.clone(),
-                    Arc::clone(&init.body_state),
-                    init.checksum_strategy,
-                ))
-                .catch_unwind()
-                .await;
+                let outcome = if let Some(marker) = init.marker {
+                    AssertUnwindSafe(send_marker_zip_entry_chunks(
+                        body_store,
+                        init.plan,
+                        content_length,
+                        marker.replacements,
+                        sender.clone(),
+                        Arc::clone(&init.body_state),
+                        init.checksum_strategy,
+                    ))
+                    .catch_unwind()
+                    .await
+                } else {
+                    AssertUnwindSafe(send_zip_entry_chunks(
+                        body_store,
+                        init.plan,
+                        sender.clone(),
+                        Arc::clone(&init.body_state),
+                        init.checksum_strategy,
+                    ))
+                    .catch_unwind()
+                    .await
+                };
                 let error = match outcome {
                     Ok(Ok(())) => return,
                     Ok(Err(error)) => error,
@@ -1979,6 +2232,7 @@ fn boxed_body_error(error: impl std::error::Error + Send + Sync + 'static) -> Bo
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::future::pending;
     use std::io::Write;
     use std::sync::Arc;
@@ -1995,15 +2249,18 @@ mod tests {
 
     use super::{
         LOCAL_FILE_HEADER_LEN, SourceClient, SourceDiagnostics, UploadBodyState,
-        plan_source_blocks, range_get_request_error, send_zip_entry_chunks, zip_entry_body,
-        zip_entry_reader,
+        marker_zip_entry_body, plan_marker_zip_entry, plan_source_blocks, range_get_request_error,
+        send_marker_zip_entry_chunks, send_zip_entry_chunks, zip_entry_body, zip_entry_reader,
     };
+    use crate::replace::MarkerReplacements;
     use crate::s3::archive::{
         SourceBlockOptions, SourceBlockRange, SourceBlockSlot, SourceBlockState, SourceBlockStatus,
     };
     use crate::s3::planner::ZipEntryPlan;
     use crate::s3::{DEFAULT_SOURCE_BLOCK_BYTES, DEFAULT_SOURCE_BLOCK_MERGE_GAP_BYTES};
-    use crate::types::{DestinationChecksumStrategy, TrustedEntryIntegrity};
+    use crate::types::{
+        DeploymentStats, DestinationChecksumStrategy, MarkerConfig, TrustedEntryIntegrity,
+    };
 
     struct DropSignal(Arc<AtomicBool>);
 
@@ -2135,6 +2392,127 @@ mod tests {
         .expect("KMS stream");
         assert!(kms_state.etag_md5().is_none());
         assert!(kms_state.checksum_sha256().is_some());
+    }
+
+    #[tokio::test]
+    async fn marker_planning_streams_exact_length_and_rejects_crc_failure() {
+        let zip = zip_from_entry("marker.txt", b"before TOKEN after");
+        let plan = zip_plan_from_archive(&zip, "marker.txt");
+        let replacements = MarkerReplacements::new(
+            &HashMap::from([("TOKEN".to_string(), "expanded-value".to_string())]),
+            &MarkerConfig::default(),
+        )
+        .expect("marker automaton");
+        let store = ready_store_for_plan(&zip, &plan);
+
+        let result = plan_marker_zip_entry(
+            store,
+            plan.clone(),
+            &replacements,
+            DestinationChecksumStrategy::SseS3Etag,
+        )
+        .await
+        .expect("marker planning pass");
+
+        assert_eq!(
+            result.output_bytes,
+            b"before expanded-value after".len() as u64
+        );
+        assert!(result.md5.is_some());
+        assert!(result.sha256.is_none());
+
+        let mut invalid = plan;
+        invalid.crc32 ^= 1;
+        let invalid_store = ready_store_for_plan(&zip, &invalid);
+        let error = plan_marker_zip_entry(
+            invalid_store,
+            invalid,
+            &replacements,
+            DestinationChecksumStrategy::SseS3Etag,
+        )
+        .await
+        .expect_err("marker planning must preserve CRC validation");
+        assert!(error.to_string().contains("CRC32"));
+    }
+
+    #[tokio::test]
+    async fn marker_upload_stream_is_retryable_and_withholds_the_final_chunk_until_validation() {
+        let zip = zip_from_entry("marker.txt", b"TOKEN and TOKEN");
+        let plan = zip_plan_from_archive(&zip, "marker.txt");
+        let replacements = Arc::new(
+            MarkerReplacements::new(
+                &HashMap::from([("TOKEN".to_string(), "replacement".to_string())]),
+                &MarkerConfig::default(),
+            )
+            .expect("marker automaton"),
+        );
+        let output = b"replacement and replacement";
+        let store = ready_store_for_plan_with_claims(&zip, &plan, 4);
+        let body_state = Arc::new(UploadBodyState::default());
+        let body_attempts = Arc::new(AtomicUsize::new(0));
+        let body = marker_zip_entry_body(
+            Arc::clone(&store),
+            plan,
+            output.len() as u64,
+            Arc::clone(&body_state),
+            DestinationChecksumStrategy::SseS3Etag,
+            body_attempts,
+            super::MarkerBodyContext {
+                replacements,
+                stats: Arc::new(DeploymentStats::default()),
+            },
+        );
+        let sdk_body = body.into_inner();
+        let replay = sdk_body.try_clone().expect("retryable marker body");
+
+        let first = aws_sdk_s3::primitives::ByteStream::new(sdk_body)
+            .collect()
+            .await
+            .expect("first marker body")
+            .into_bytes();
+        let second = aws_sdk_s3::primitives::ByteStream::new(replay)
+            .collect()
+            .await
+            .expect("replayed marker body")
+            .into_bytes();
+
+        assert_eq!(first.as_ref(), output);
+        assert_eq!(second.as_ref(), output);
+        assert!(body_state.etag_md5().is_some());
+        let diagnostics = store.source.diagnostics.snapshot();
+        assert_eq!(diagnostics.body_attempts, 2);
+        assert_eq!(diagnostics.body_replays, 1);
+    }
+
+    #[tokio::test]
+    async fn marker_upload_crc_failure_releases_no_final_body_frame() {
+        let zip = zip_from_entry("marker.txt", b"TOKEN");
+        let mut plan = zip_plan_from_archive(&zip, "marker.txt");
+        plan.crc32 ^= 1;
+        let store = ready_store_for_plan(&zip, &plan);
+        let replacements = Arc::new(
+            MarkerReplacements::new(
+                &HashMap::from([("TOKEN".to_string(), "replacement".to_string())]),
+                &MarkerConfig::default(),
+            )
+            .expect("marker automaton"),
+        );
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(2);
+
+        let error = send_marker_zip_entry_chunks(
+            store,
+            plan,
+            b"replacement".len() as u64,
+            replacements,
+            sender,
+            Arc::new(UploadBodyState::default()),
+            DestinationChecksumStrategy::SseS3Etag,
+        )
+        .await
+        .expect_err("CRC failure must fail the marker body");
+
+        assert!(error.to_string().contains("CRC32"));
+        assert!(receiver.try_recv().is_err());
     }
 
     #[tokio::test]
@@ -2397,6 +2775,14 @@ mod tests {
     }
 
     fn ready_store_for_plan(zip: &[u8], plan: &ZipEntryPlan) -> Arc<super::SourceBlockStore> {
+        ready_store_for_plan_with_claims(zip, plan, 1)
+    }
+
+    fn ready_store_for_plan_with_claims(
+        zip: &[u8],
+        plan: &ZipEntryPlan,
+        claims: usize,
+    ) -> Arc<super::SourceBlockStore> {
         let block = SourceBlockRange {
             start: plan.source_offset,
             end: plan.source_span_end - 1,
@@ -2413,7 +2799,7 @@ mod tests {
             blocks: vec![block],
             state: std::sync::Mutex::new(SourceBlockState {
                 slots: vec![SourceBlockSlot {
-                    remaining_claims: 1,
+                    remaining_claims: claims,
                     live_claims: 0,
                     status: SourceBlockStatus::Ready(bytes::Bytes::copy_from_slice(
                         &zip[block.start as usize..block.end as usize + 1],
