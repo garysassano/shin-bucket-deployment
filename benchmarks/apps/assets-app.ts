@@ -1,7 +1,7 @@
 import {
   App,
-  Aws,
   CfnOutput,
+  CfnParameter,
   CfnResource,
   RemovalPolicy,
   Stack,
@@ -15,6 +15,12 @@ import {
 import type { Construct } from "constructs";
 import { ShinBucketDeployment, Source as ShinSource } from "../../src";
 import { ensureBenchmarkAssets } from "../src/assets";
+import {
+  MARKER_BENCHMARK_BYTES,
+  MARKER_BENCHMARK_VALUE_A,
+  MARKER_BENCHMARK_VALUE_B,
+  markerBenchmarkPayload,
+} from "../src/marker-payload";
 import { type BenchmarkImplementation, isBenchmarkImplementation } from "../src/model";
 
 class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
@@ -32,8 +38,20 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
       "SHIN_BENCH_DELETE_CURRENT_OBJECTS_ON_DELETE",
     );
     const deleteStaleObjects = process.env.SHIN_BENCH_DELETE_STALE_OBJECTS !== "false";
-    const markerPayload =
-      bundle.profile === "marker-heavy" ? markerBenchmarkPayload(bundle.state) : undefined;
+    let markerPayload: string | undefined;
+    if (bundle.profile === "marker-heavy") {
+      const markerA = new CfnParameter(this, "MarkerA", {
+        default: MARKER_BENCHMARK_VALUE_A,
+      });
+      const markerB = new CfnParameter(this, "MarkerB", {
+        default: MARKER_BENCHMARK_VALUE_B,
+      });
+      markerPayload = markerBenchmarkPayload(
+        bundle.state,
+        markerA.valueAsString,
+        markerB.valueAsString,
+      );
+    }
 
     const websiteBucket = new Bucket(this, "WebsiteBucket", {
       autoDeleteObjects: true,
@@ -109,7 +127,7 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
     });
 
     new CfnOutput(this, "BenchmarkTotalBytes", {
-      value: String(bundle.totalBytes + (markerPayload === undefined ? 0 : markerPayload.length)),
+      value: String(bundle.totalBytes + (markerPayload === undefined ? 0 : MARKER_BENCHMARK_BYTES)),
     });
 
     new CfnOutput(this, "BenchmarkMemoryLimitMb", {
@@ -124,20 +142,6 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
       value: implementation,
     });
   }
-}
-
-const MARKER_BENCHMARK_BYTES = 16 * 1024 * 1024;
-
-function markerBenchmarkPayload(state: string): string {
-  const markers = [
-    `region=${Aws.REGION}`,
-    `stack=${Aws.STACK_NAME}`,
-    `revision=${state === "changed" ? "changed" : "stable"}`,
-    "\n",
-  ].join(";");
-  const segmentBytes = 1024 * 1024;
-  const segment = markers.padStart(segmentBytes, "x");
-  return segment.repeat(MARKER_BENCHMARK_BYTES / segmentBytes);
 }
 
 function forceBenchmarkInvocation(deployment: Construct, token: string | undefined): void {

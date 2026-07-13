@@ -1991,7 +1991,12 @@ async fn forward_replaced_body_chunks(
                 if let Some(previous) = held_frame.replace(next)
                     && sender.send(Ok(previous)).await.is_err()
                 {
-                    return Ok(None);
+                    // Fail this side of try_join so a producer blocked on the
+                    // replacement pipe is cancelled when its body is dropped.
+                    return Err(boxed_body_error(io::Error::new(
+                        io::ErrorKind::BrokenPipe,
+                        "marker body receiver closed",
+                    )));
                 }
             }
         }
@@ -2002,7 +2007,10 @@ async fn forward_replaced_body_chunks(
         if let Some(previous) = held_frame.replace(next)
             && sender.send(Ok(previous)).await.is_err()
         {
-            return Ok(None);
+            return Err(boxed_body_error(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "marker body receiver closed",
+            )));
         }
     }
     Ok(held_frame)
@@ -2513,6 +2521,42 @@ mod tests {
 
         assert!(error.to_string().contains("CRC32"));
         assert!(receiver.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn marker_upload_stops_when_body_receiver_is_dropped() {
+        let zip = zip_from_entry("marker.txt", b"TOKEN");
+        let plan = zip_plan_from_archive(&zip, "marker.txt");
+        let output = "x".repeat(super::ZIP_ENTRY_BODY_CHUNK_BYTES * 8);
+        let store = ready_store_for_plan(&zip, &plan);
+        let replacements = Arc::new(
+            MarkerReplacements::new(
+                &HashMap::from([("TOKEN".to_string(), output.clone())]),
+                &MarkerConfig::default(),
+            )
+            .expect("marker automaton"),
+        );
+        let (sender, receiver) = tokio::sync::mpsc::channel(1);
+        drop(receiver);
+
+        let completed = tokio::time::timeout(
+            Duration::from_secs(1),
+            send_marker_zip_entry_chunks(
+                store,
+                plan,
+                output.len() as u64,
+                replacements,
+                sender,
+                Arc::new(UploadBodyState::default()),
+                DestinationChecksumStrategy::SseS3Etag,
+            ),
+        )
+        .await;
+
+        assert!(
+            completed.is_ok(),
+            "marker producer hung after its body receiver was dropped"
+        );
     }
 
     #[tokio::test]
