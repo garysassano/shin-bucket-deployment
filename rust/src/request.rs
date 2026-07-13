@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, ensure};
 use globset::{Glob, GlobMatcher};
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -10,7 +10,6 @@ use crate::s3::{
     DEFAULT_SOURCE_BLOCK_MERGE_GAP_BYTES, PUT_OBJECT_MAX_ATTEMPTS, PUT_OBJECT_RETRY_BASE_DELAY_MS,
     PUT_OBJECT_RETRY_MAX_DELAY_MS, PUT_OBJECT_SLOWDOWN_RETRY_BASE_DELAY_MS,
     PUT_OBJECT_SLOWDOWN_RETRY_MAX_DELAY_MS, adaptive_source_get_concurrency,
-    default_source_window_memory_budget_mb,
 };
 use crate::types::{
     DeletePreviousObjectsOnChange, DeploymentRequest, DestinationChecksumStrategy, Filters,
@@ -20,6 +19,13 @@ use crate::types::{
 
 const DEFAULT_AVAILABLE_MEMORY_MB: u64 = 1024;
 const MIN_SOURCE_BLOCK_BYTES: usize = 30;
+const MAX_PARALLEL_TRANSFERS: usize = 256;
+const MAX_SOURCE_GET_CONCURRENCY: usize = 64;
+const MAX_PUT_OBJECT_ATTEMPTS: usize = 10;
+const MAX_RETRY_DELAY_MS: u64 = 60_000;
+const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
+const MIB: u64 = 1024 * 1024;
+const LAMBDA_MEMORY_ENV: &str = "AWS_LAMBDA_FUNCTION_MEMORY_SIZE";
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -189,7 +195,7 @@ pub(crate) fn parse_request(raw: &RawDeploymentRequest) -> Result<DeploymentRequ
         invalidate_previous_distribution_on_change: raw
             .invalidate_previous_distribution_on_change
             .clone(),
-        runtime: runtime_options(raw),
+        runtime: runtime_options(raw)?,
     })
 }
 
@@ -241,54 +247,199 @@ fn parse_sha256(value: &str) -> Option<[u8; 32]> {
     Some(digest)
 }
 
-fn runtime_options(raw: &RawDeploymentRequest) -> RuntimeOptions {
-    let available_memory_mb = raw
-        .available_memory_mb
-        .unwrap_or(DEFAULT_AVAILABLE_MEMORY_MB);
-    RuntimeOptions {
+fn runtime_options(raw: &RawDeploymentRequest) -> Result<RuntimeOptions> {
+    let lambda_memory = std::env::var(LAMBDA_MEMORY_ENV).ok();
+    runtime_options_with_memory(raw, lambda_memory.as_deref())
+}
+
+fn runtime_options_with_memory(
+    raw: &RawDeploymentRequest,
+    lambda_memory: Option<&str>,
+) -> Result<RuntimeOptions> {
+    let available_memory_mb = match lambda_memory {
+        Some(value) => value.parse::<u64>().with_context(|| {
+            format!("{LAMBDA_MEMORY_ENV} must contain a positive integer MiB value")
+        })?,
+        None => raw
+            .available_memory_mb
+            .unwrap_or(DEFAULT_AVAILABLE_MEMORY_MB),
+    };
+    validate_u64_range(
+        if lambda_memory.is_some() {
+            LAMBDA_MEMORY_ENV
+        } else {
+            "AvailableMemoryMb"
+        },
         available_memory_mb,
-        max_parallel_transfers: non_zero_usize(
-            raw.max_parallel_transfers,
-            DEFAULT_MAX_PARALLEL_TRANSFERS,
+        1,
+        MAX_SAFE_INTEGER,
+    )?;
+
+    let lambda_memory_bytes = available_memory_mb
+        .checked_mul(MIB)
+        .ok_or_else(|| anyhow!("Lambda memory size overflowed while converting MiB to bytes"))?;
+    let memory_cap_bytes = lambda_memory_bytes / 2;
+    let source_memory_budget_bytes = match raw.source_window_memory_budget_mb {
+        Some(memory_mb) => {
+            validate_u64_range("SourceWindowMemoryBudgetMb", memory_mb, 1, MAX_SAFE_INTEGER)?;
+            memory_mb.checked_mul(MIB).ok_or_else(|| {
+                anyhow!("SourceWindowMemoryBudgetMb overflowed while converting MiB to bytes")
+            })?
+        }
+        None => memory_cap_bytes,
+    };
+    ensure!(
+        source_memory_budget_bytes <= memory_cap_bytes,
+        "SourceWindowMemoryBudgetMb must not exceed 50% of the actual Lambda memory"
+    );
+    let source_memory_budget_bytes = usize::try_from(source_memory_budget_bytes)
+        .context("source memory budget cannot be represented on this provider architecture")?;
+
+    let max_parallel_transfers = raw
+        .max_parallel_transfers
+        .unwrap_or(DEFAULT_MAX_PARALLEL_TRANSFERS);
+    validate_usize_range(
+        "MaxParallelTransfers",
+        max_parallel_transfers,
+        1,
+        MAX_PARALLEL_TRANSFERS,
+    )?;
+
+    let source_block_bytes = raw.source_block_bytes.unwrap_or(DEFAULT_SOURCE_BLOCK_BYTES);
+    validate_usize_range(
+        "SourceBlockBytes",
+        source_block_bytes,
+        MIN_SOURCE_BLOCK_BYTES,
+        usize::try_from(MAX_SAFE_INTEGER).unwrap_or(usize::MAX),
+    )?;
+    ensure!(
+        source_block_bytes <= source_memory_budget_bytes,
+        "SourceBlockBytes must fit within the invocation-global source memory budget"
+    );
+
+    let source_block_merge_gap_bytes = raw
+        .source_block_merge_gap_bytes
+        .unwrap_or(DEFAULT_SOURCE_BLOCK_MERGE_GAP_BYTES);
+    validate_usize_range(
+        "SourceBlockMergeGapBytes",
+        source_block_merge_gap_bytes,
+        0,
+        usize::try_from(MAX_SAFE_INTEGER).unwrap_or(usize::MAX),
+    )?;
+
+    let source_get_concurrency = raw
+        .source_get_concurrency
+        .unwrap_or_else(|| adaptive_source_get_concurrency(available_memory_mb));
+    validate_usize_range(
+        "SourceGetConcurrency",
+        source_get_concurrency,
+        1,
+        MAX_SOURCE_GET_CONCURRENCY,
+    )?;
+    let concurrent_source_block_bytes = source_block_bytes
+        .checked_mul(source_get_concurrency)
+        .ok_or_else(|| anyhow!("SourceBlockBytes * SourceGetConcurrency overflowed"))?;
+    ensure!(
+        concurrent_source_block_bytes <= source_memory_budget_bytes,
+        "SourceBlockBytes * SourceGetConcurrency must fit within the invocation-global source memory budget"
+    );
+
+    if let Some(source_window_bytes) = raw.source_window_bytes {
+        validate_usize_range(
+            "SourceWindowBytes",
+            source_window_bytes,
+            1,
+            usize::try_from(MAX_SAFE_INTEGER).unwrap_or(usize::MAX),
+        )?;
+        ensure!(
+            source_window_bytes >= source_block_bytes,
+            "SourceWindowBytes must be greater than or equal to SourceBlockBytes"
+        );
+        ensure!(
+            source_window_bytes <= source_memory_budget_bytes,
+            "SourceWindowBytes must fit within the invocation-global source memory budget"
+        );
+    }
+
+    let put_object_max_attempts = raw
+        .put_object_max_attempts
+        .unwrap_or(PUT_OBJECT_MAX_ATTEMPTS);
+    validate_usize_range(
+        "PutObjectMaxAttempts",
+        put_object_max_attempts,
+        1,
+        MAX_PUT_OBJECT_ATTEMPTS,
+    )?;
+    let retry_base_delay_ms = raw
+        .put_object_retry_base_delay_ms
+        .unwrap_or(PUT_OBJECT_RETRY_BASE_DELAY_MS);
+    let retry_max_delay_ms = raw
+        .put_object_retry_max_delay_ms
+        .unwrap_or(PUT_OBJECT_RETRY_MAX_DELAY_MS);
+    let slowdown_retry_base_delay_ms = raw
+        .put_object_slowdown_retry_base_delay_ms
+        .unwrap_or(PUT_OBJECT_SLOWDOWN_RETRY_BASE_DELAY_MS);
+    let slowdown_retry_max_delay_ms = raw
+        .put_object_slowdown_retry_max_delay_ms
+        .unwrap_or(PUT_OBJECT_SLOWDOWN_RETRY_MAX_DELAY_MS);
+    for (name, value) in [
+        ("PutObjectRetryBaseDelayMs", retry_base_delay_ms),
+        ("PutObjectRetryMaxDelayMs", retry_max_delay_ms),
+        (
+            "PutObjectSlowdownRetryBaseDelayMs",
+            slowdown_retry_base_delay_ms,
         ),
-        source_block_bytes: non_zero_usize(raw.source_block_bytes, DEFAULT_SOURCE_BLOCK_BYTES)
-            .max(MIN_SOURCE_BLOCK_BYTES),
-        source_block_merge_gap_bytes: raw
-            .source_block_merge_gap_bytes
-            .unwrap_or(DEFAULT_SOURCE_BLOCK_MERGE_GAP_BYTES),
-        source_get_concurrency: non_zero_usize(
-            raw.source_get_concurrency,
-            adaptive_source_get_concurrency(available_memory_mb),
+        (
+            "PutObjectSlowdownRetryMaxDelayMs",
+            slowdown_retry_max_delay_ms,
         ),
-        source_window_bytes: raw.source_window_bytes.filter(|bytes| *bytes > 0),
-        source_window_memory_budget_mb: raw
-            .source_window_memory_budget_mb
-            .unwrap_or_else(|| default_source_window_memory_budget_mb(available_memory_mb)),
+    ] {
+        validate_u64_range(name, value, 0, MAX_RETRY_DELAY_MS)?;
+    }
+    ensure!(
+        retry_base_delay_ms <= retry_max_delay_ms,
+        "PutObjectRetryBaseDelayMs must be less than or equal to PutObjectRetryMaxDelayMs"
+    );
+    ensure!(
+        slowdown_retry_base_delay_ms <= slowdown_retry_max_delay_ms,
+        "PutObjectSlowdownRetryBaseDelayMs must be less than or equal to PutObjectSlowdownRetryMaxDelayMs"
+    );
+
+    Ok(RuntimeOptions {
+        available_memory_mb,
+        max_parallel_transfers,
+        source_block_bytes,
+        source_block_merge_gap_bytes,
+        source_get_concurrency,
+        source_window_bytes: raw.source_window_bytes,
+        source_memory_budget_bytes,
         put_object_retry: PutObjectRetryOptions {
-            max_attempts: non_zero_usize(raw.put_object_max_attempts, PUT_OBJECT_MAX_ATTEMPTS),
-            retry_base_delay_ms: raw
-                .put_object_retry_base_delay_ms
-                .unwrap_or(PUT_OBJECT_RETRY_BASE_DELAY_MS),
-            retry_max_delay_ms: raw
-                .put_object_retry_max_delay_ms
-                .unwrap_or(PUT_OBJECT_RETRY_MAX_DELAY_MS),
-            slowdown_retry_base_delay_ms: raw
-                .put_object_slowdown_retry_base_delay_ms
-                .unwrap_or(PUT_OBJECT_SLOWDOWN_RETRY_BASE_DELAY_MS),
-            slowdown_retry_max_delay_ms: raw
-                .put_object_slowdown_retry_max_delay_ms
-                .unwrap_or(PUT_OBJECT_SLOWDOWN_RETRY_MAX_DELAY_MS),
+            max_attempts: put_object_max_attempts,
+            retry_base_delay_ms,
+            retry_max_delay_ms,
+            slowdown_retry_base_delay_ms,
+            slowdown_retry_max_delay_ms,
             jitter: raw
                 .put_object_retry_jitter
                 .unwrap_or(PutObjectRetryJitter::Full),
         },
-    }
+    })
 }
 
-fn non_zero_usize(value: Option<usize>, default_value: usize) -> usize {
-    value
-        .filter(|value| *value > 0)
-        .unwrap_or(default_value.max(1))
+fn validate_usize_range(name: &str, value: usize, minimum: usize, maximum: usize) -> Result<()> {
+    ensure!(
+        (minimum..=maximum).contains(&value),
+        "{name} must be in the inclusive range {minimum}..={maximum}"
+    );
+    Ok(())
+}
+
+fn validate_u64_range(name: &str, value: u64, minimum: u64, maximum: u64) -> Result<()> {
+    ensure!(
+        (minimum..=maximum).contains(&value),
+        "{name} must be in the inclusive range {minimum}..={maximum}"
+    );
+    Ok(())
 }
 
 pub(crate) fn parse_old_destination(raw: &RawDeploymentRequest) -> PreviousDestination {
@@ -598,7 +749,10 @@ mod tests {
         assert_eq!(request.source_catalogs, vec![None]);
         assert_eq!(request.distribution_paths, vec!["/*"]);
         assert_eq!(request.runtime.available_memory_mb, 1024);
-        assert_eq!(request.runtime.source_window_memory_budget_mb, 1024);
+        assert_eq!(
+            request.runtime.source_memory_budget_bytes,
+            512 * 1024 * 1024
+        );
         assert_eq!(request.runtime.source_get_concurrency, 4);
         assert_eq!(request.runtime.max_parallel_transfers, 32);
         assert_eq!(
@@ -608,6 +762,90 @@ mod tests {
         assert_eq!(
             request.runtime.put_object_retry.jitter,
             PutObjectRetryJitter::Full
+        );
+    }
+
+    #[test]
+    fn lambda_memory_environment_is_authoritative_for_the_global_budget() {
+        let mut props = minimal_request();
+        props["AvailableMemoryMb"] = json!(2048);
+        let raw: RawDeploymentRequest = serde_json::from_value(props).unwrap();
+
+        let runtime = runtime_options_with_memory(&raw, Some("512")).expect("runtime options");
+
+        assert_eq!(runtime.available_memory_mb, 512);
+        assert_eq!(runtime.source_memory_budget_bytes, 256 * 1024 * 1024);
+        assert_eq!(runtime.source_get_concurrency, 2);
+    }
+
+    #[test]
+    fn runtime_tuning_rejects_zero_extremes_and_budget_overcommit() {
+        for (property, value, expected) in [
+            ("MaxParallelTransfers", json!(0), "MaxParallelTransfers"),
+            ("MaxParallelTransfers", json!(257), "MaxParallelTransfers"),
+            ("SourceGetConcurrency", json!(0), "SourceGetConcurrency"),
+            ("SourceGetConcurrency", json!(65), "SourceGetConcurrency"),
+            ("PutObjectMaxAttempts", json!(0), "PutObjectMaxAttempts"),
+            ("PutObjectMaxAttempts", json!(11), "PutObjectMaxAttempts"),
+            (
+                "PutObjectRetryMaxDelayMs",
+                json!(60_001),
+                "PutObjectRetryMaxDelayMs",
+            ),
+            (
+                "SourceWindowMemoryBudgetMb",
+                json!(513),
+                "50% of the actual Lambda memory",
+            ),
+            (
+                "SourceWindowBytes",
+                json!(4 * 1024 * 1024),
+                "SourceWindowBytes must be greater",
+            ),
+            (
+                "SourceBlockMergeGapBytes",
+                json!("9007199254740992"),
+                "SourceBlockMergeGapBytes",
+            ),
+        ] {
+            let mut props = minimal_request();
+            props[property] = value;
+            let raw: RawDeploymentRequest = serde_json::from_value(props).unwrap();
+            let error = runtime_options_with_memory(&raw, Some("1024"))
+                .expect_err("invalid runtime tuning must fail");
+            assert!(
+                error.to_string().contains(expected),
+                "unexpected error for {property}: {error}"
+            );
+        }
+
+        let mut props = minimal_request();
+        props["SourceBlockBytes"] = json!(128 * 1024 * 1024);
+        props["SourceGetConcurrency"] = json!(5);
+        let raw: RawDeploymentRequest = serde_json::from_value(props).unwrap();
+        assert!(
+            runtime_options_with_memory(&raw, Some("1024"))
+                .unwrap_err()
+                .to_string()
+                .contains("SourceBlockBytes * SourceGetConcurrency")
+        );
+    }
+
+    #[test]
+    fn runtime_tuning_rejects_malformed_memory_and_inverted_delays() {
+        let raw: RawDeploymentRequest = serde_json::from_value(minimal_request()).unwrap();
+        assert!(runtime_options_with_memory(&raw, Some("not-a-number")).is_err());
+        assert!(runtime_options_with_memory(&raw, Some("0")).is_err());
+
+        let mut props = minimal_request();
+        props["PutObjectRetryBaseDelayMs"] = json!(20);
+        props["PutObjectRetryMaxDelayMs"] = json!(10);
+        let raw: RawDeploymentRequest = serde_json::from_value(props).unwrap();
+        assert!(
+            runtime_options_with_memory(&raw, Some("1024"))
+                .unwrap_err()
+                .to_string()
+                .contains("PutObjectRetryBaseDelayMs")
         );
     }
 
@@ -810,7 +1048,10 @@ mod tests {
         assert_eq!(request.runtime.source_block_merge_gap_bytes, 128);
         assert_eq!(request.runtime.source_get_concurrency, 6);
         assert_eq!(request.runtime.source_window_bytes, Some(65_536));
-        assert_eq!(request.runtime.source_window_memory_budget_mb, 512);
+        assert_eq!(
+            request.runtime.source_memory_budget_bytes,
+            512 * 1024 * 1024
+        );
         assert_eq!(request.runtime.put_object_retry.max_attempts, 3);
         assert_eq!(request.runtime.put_object_retry.retry_base_delay_ms, 10);
         assert_eq!(request.runtime.put_object_retry.retry_max_delay_ms, 20);
@@ -870,13 +1111,13 @@ mod tests {
     }
 
     #[test]
-    fn clamps_source_block_bytes_to_zip_local_header_length() {
+    fn rejects_source_blocks_below_zip_local_header_length() {
         let mut props = minimal_request();
         props["SourceBlockBytes"] = json!("1");
 
         let raw: RawDeploymentRequest = serde_json::from_value(props).unwrap();
-        let request = parse_request(&raw).expect("valid request");
+        let error = parse_request(&raw).expect_err("undersized source block must fail");
 
-        assert_eq!(request.runtime.source_block_bytes, 30);
+        assert!(error.to_string().contains("SourceBlockBytes"));
     }
 }

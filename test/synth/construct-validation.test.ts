@@ -1,11 +1,11 @@
 import { join } from "node:path";
-import { App, Aws, Stack } from "aws-cdk-lib";
+import { App, Aws, CfnParameter, Stack } from "aws-cdk-lib";
 import { Match, Template } from "aws-cdk-lib/assertions";
 import { AllowedMethods, Distribution, ViewerProtocolPolicy } from "aws-cdk-lib/aws-cloudfront";
 import { S3BucketOrigin } from "aws-cdk-lib/aws-cloudfront-origins";
 import { Bucket } from "aws-cdk-lib/aws-s3";
 import { describe, expect, test } from "vitest";
-import { ShinBucketDeployment, Source } from "../../src";
+import { ShinBucketDeployment, type ShinBucketDeploymentProps, Source } from "../../src";
 import { testBundling } from "../support/bundling";
 
 function customResourceProperties(stack: Stack) {
@@ -397,7 +397,7 @@ describe("ShinBucketDeployment validation and option coverage", () => {
         sourceBlockMergeGapBytes: 64 * 1024,
         sourceGetConcurrency: 3,
         sourceWindowBytes: 32 * 1024 * 1024,
-        sourceWindowMemoryBudgetMb: 768,
+        sourceWindowMemoryBudgetMb: 512,
         putObjectRetry: {
           maxAttempts: 4,
           baseDelayMs: 100,
@@ -411,13 +411,12 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     });
 
     expect(customResourceProperties(stack)).toMatchObject({
-      AvailableMemoryMb: 1024,
       MaxParallelTransfers: 7,
       SourceBlockBytes: 4 * 1024 * 1024,
       SourceBlockMergeGapBytes: 64 * 1024,
       SourceGetConcurrency: 3,
       SourceWindowBytes: 32 * 1024 * 1024,
-      SourceWindowMemoryBudgetMb: 768,
+      SourceWindowMemoryBudgetMb: 512,
       PutObjectMaxAttempts: 4,
       PutObjectRetryBaseDelayMs: 100,
       PutObjectRetryMaxDelayMs: 1_000,
@@ -425,6 +424,25 @@ describe("ShinBucketDeployment validation and option coverage", () => {
       PutObjectSlowdownRetryMaxDelayMs: 20_000,
       PutObjectRetryJitter: "none",
     });
+  });
+
+  test("defers unresolved numeric tuning to provider validation", () => {
+    const stack = new Stack();
+    const destinationBucket = new Bucket(stack, "Dest");
+    const memory = new CfnParameter(stack, "Memory", { type: "Number" });
+    const block = new CfnParameter(stack, "Block", { type: "Number" });
+
+    new ShinBucketDeployment(stack, "Deploy", {
+      sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
+      destinationBucket,
+      memoryLimit: memory.valueAsNumber,
+      advancedRuntimeTuning: {
+        sourceBlockBytes: block.valueAsNumber,
+      },
+      bundling: testBundling(),
+    });
+
+    expect(customResourceProperties(stack).SourceBlockBytes).toEqual({ Ref: "Block" });
   });
 
   test("rejects invalid runtime tuning values", () => {
@@ -487,7 +505,74 @@ describe("ShinBucketDeployment validation and option coverage", () => {
           sourceBlockBytes: 29,
         },
       });
-    }).toThrow(/sourceBlockBytes must be an integer greater than or equal to 30/);
+    }).toThrow(/sourceBlockBytes must be a safe integer.*30/);
+
+    const invalidCases: Array<{
+      readonly id: string;
+      readonly props: Partial<ShinBucketDeploymentProps>;
+      readonly message: RegExp;
+    }> = [
+      {
+        id: "TooManyTransfers",
+        props: { maxParallelTransfers: 257 },
+        message: /maxParallelTransfers.*256/,
+      },
+      {
+        id: "TooManySourceGets",
+        props: { advancedRuntimeTuning: { sourceGetConcurrency: 65 } },
+        message: /sourceGetConcurrency.*64/,
+      },
+      {
+        id: "TooManyPutAttempts",
+        props: { advancedRuntimeTuning: { putObjectRetry: { maxAttempts: 11 } } },
+        message: /maxAttempts.*10/,
+      },
+      {
+        id: "LongRetryDelay",
+        props: { advancedRuntimeTuning: { putObjectRetry: { maxDelayMs: 60_001 } } },
+        message: /maxDelayMs.*60000/,
+      },
+      {
+        id: "BudgetAboveHalf",
+        props: {
+          memoryLimit: 1024,
+          advancedRuntimeTuning: { sourceWindowMemoryBudgetMb: 513 },
+        },
+        message: /must not exceed 50%/,
+      },
+      {
+        id: "WindowBelowBlock",
+        props: { advancedRuntimeTuning: { sourceWindowBytes: 4 * 1024 * 1024 } },
+        message: /sourceWindowBytes must be greater than or equal to sourceBlockBytes/,
+      },
+      {
+        id: "ConcurrentBlocksAboveBudget",
+        props: {
+          advancedRuntimeTuning: {
+            sourceBlockBytes: 128 * 1024 * 1024,
+            sourceGetConcurrency: 5,
+          },
+        },
+        message: /sourceBlockBytes \* sourceGetConcurrency/,
+      },
+      {
+        id: "UnsafeInteger",
+        props: {
+          advancedRuntimeTuning: { sourceBlockMergeGapBytes: Number.MAX_SAFE_INTEGER + 1 },
+        },
+        message: /sourceBlockMergeGapBytes must be a safe integer/,
+      },
+    ];
+
+    for (const invalid of invalidCases) {
+      expect(() => {
+        new ShinBucketDeployment(stack, invalid.id, {
+          sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
+          destinationBucket,
+          ...invalid.props,
+        });
+      }).toThrow(invalid.message);
+    }
   });
 
   test("requests DestinationBucketArn when deployedBucket is accessed", () => {

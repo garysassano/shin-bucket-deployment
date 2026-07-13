@@ -36,6 +36,12 @@ const SHARED_HANDLER_ID_PREFIX = "ShinBucketDeploymentHandler";
 const DEFAULT_MEMORY_LIMIT_MB = 1024;
 const PROVIDER_TIMEOUT = Duration.minutes(15);
 const MIN_SOURCE_BLOCK_BYTES = 30;
+const DEFAULT_SOURCE_BLOCK_BYTES = 8 * 1024 * 1024;
+const MAX_PARALLEL_TRANSFERS = 256;
+const MAX_SOURCE_GET_CONCURRENCY = 64;
+const MAX_PUT_OBJECT_ATTEMPTS = 10;
+const MAX_RETRY_DELAY_MS = 60_000;
+const MIB = 1024 * 1024;
 const DEFAULT_PUT_OBJECT_RETRY_BASE_DELAY_MS = 250;
 const DEFAULT_PUT_OBJECT_RETRY_MAX_DELAY_MS = 5_000;
 const DEFAULT_PUT_OBJECT_SLOWDOWN_RETRY_BASE_DELAY_MS = 1_000;
@@ -186,30 +192,36 @@ export interface ShinBucketDeploymentBundlingOptions {
 export interface ShinBucketDeploymentPutObjectRetryTuning {
   /**
    * Maximum application-level PutObject attempts per object.
+   * Must be in the inclusive range 1..10.
    * @default 6
    */
   readonly maxAttempts?: number;
 
   /**
    * Base retry delay for non-throttling PutObject failures, in milliseconds.
+   * Must be in the inclusive range 0..60000 and no greater than `maxDelayMs`.
    * @default 250
    */
   readonly baseDelayMs?: number;
 
   /**
    * Maximum retry delay for non-throttling PutObject failures, in milliseconds.
+   * Must be in the inclusive range 0..60000.
    * @default 5000
    */
   readonly maxDelayMs?: number;
 
   /**
    * Base retry delay for throttling PutObject failures, in milliseconds.
+   * Must be in the inclusive range 0..60000 and no greater than
+   * `slowdownMaxDelayMs`.
    * @default 1000
    */
   readonly slowdownBaseDelayMs?: number;
 
   /**
    * Maximum retry delay for throttling PutObject failures, in milliseconds.
+   * Must be in the inclusive range 0..60000.
    * @default 30000
    */
   readonly slowdownMaxDelayMs?: number;
@@ -226,7 +238,8 @@ export interface ShinBucketDeploymentAdvancedRuntimeTuning {
    * Source ranged-read block size in bytes.
    *
    * Must be at least 30 bytes so ZIP local file headers can fit in one source
-   * block.
+   * block, and must fit the invocation-global source memory budget both alone
+   * and when multiplied by `sourceGetConcurrency`.
    *
    * @default 8 MiB
    */
@@ -240,19 +253,23 @@ export interface ShinBucketDeploymentAdvancedRuntimeTuning {
 
   /**
    * Maximum concurrent ranged GetObject requests per source archive.
+   * Must be in the inclusive range 1..64.
    * @default - derived from the provider Lambda memory size
    */
   readonly sourceGetConcurrency?: number;
 
   /**
    * Resident source block window size in bytes per source archive.
+   * This local window must fit the invocation-global source memory budget.
    * @default - derived from the provider Lambda memory size and source archive shape
    */
   readonly sourceWindowBytes?: number;
 
   /**
-   * Memory budget in MiB used to derive the resident source block window.
-   * @default - provider Lambda memory size
+   * Optional lower invocation-global budget, in MiB, shared fairly by source
+   * archive windows. It cannot exceed 50% of the provider's actual Lambda
+   * memory.
+   * @default - 50% of the provider Lambda memory size
    */
   readonly sourceWindowMemoryBudgetMb?: number;
 
@@ -392,6 +409,7 @@ export interface ShinBucketDeploymentProps
 
   /**
    * Maximum concurrent object transfers run by the provider.
+   * Must be in the inclusive range 1..256.
    * @default 32
    */
   readonly maxParallelTransfers?: number;
@@ -599,13 +617,23 @@ export class ShinBucketDeployment extends Construct {
       { maxParallelTransfers: props.maxParallelTransfers },
       ["maxParallelTransfers"],
       1,
+      "",
+      MAX_PARALLEL_TRANSFERS,
     );
     validateIntegerProps(
       this,
       advancedRuntimeTuning,
-      ["sourceGetConcurrency", "sourceWindowBytes", "sourceWindowMemoryBudgetMb"],
+      ["sourceWindowBytes", "sourceWindowMemoryBudgetMb"],
       1,
       "advancedRuntimeTuning.",
+    );
+    validateIntegerProps(
+      this,
+      advancedRuntimeTuning,
+      ["sourceGetConcurrency"],
+      1,
+      "advancedRuntimeTuning.",
+      MAX_SOURCE_GET_CONCURRENCY,
     );
     validateIntegerProps(
       this,
@@ -620,6 +648,7 @@ export class ShinBucketDeployment extends Construct {
       ["maxAttempts"],
       1,
       "advancedRuntimeTuning.putObjectRetry.",
+      MAX_PUT_OBJECT_ATTEMPTS,
     );
     validateIntegerProps(
       this,
@@ -634,8 +663,10 @@ export class ShinBucketDeployment extends Construct {
       ["baseDelayMs", "maxDelayMs", "slowdownBaseDelayMs", "slowdownMaxDelayMs"],
       0,
       "advancedRuntimeTuning.putObjectRetry.",
+      MAX_RETRY_DELAY_MS,
     );
     validatePutObjectRetryProps(this, putObjectRetryTuning);
+    validateSourceMemoryProps(this, props.memoryLimit, advancedRuntimeTuning);
 
     this.destinationBucket = props.destinationBucket;
     const destinationBucketResource = inspectableDestinationBucketResource(
@@ -854,7 +885,6 @@ export class ShinBucketDeployment extends Construct {
           produce: () =>
             this.requestDestinationArn ? this.destinationBucket.bucketArn : undefined,
         }),
-        AvailableMemoryMb: props.memoryLimit ?? DEFAULT_MEMORY_LIMIT_MB,
         MaxParallelTransfers: props.maxParallelTransfers,
         SourceBlockBytes: advancedRuntimeTuning.sourceBlockBytes,
         SourceBlockMergeGapBytes: advancedRuntimeTuning.sourceBlockMergeGapBytes,
@@ -1235,18 +1265,24 @@ function validateIntegerProps(
   propNames: readonly string[],
   minimum: number,
   propPathPrefix = "",
+  maximum = Number.MAX_SAFE_INTEGER,
 ): void {
   const values = props as Record<string, unknown>;
   for (const propName of propNames) {
     const value = values[propName];
-    if (value === undefined) {
+    if (value === undefined || Token.isUnresolved(value)) {
       continue;
     }
-    if (typeof value !== "number" || !Number.isInteger(value) || value < minimum) {
+    if (
+      typeof value !== "number" ||
+      !Number.isSafeInteger(value) ||
+      value < minimum ||
+      value > maximum
+    ) {
       const propPath = `${propPathPrefix}${propName}`;
       throw new ValidationError(
         literalString(`ShinBucketDeploymentInvalid${propPath}`),
-        `${propPath} must be an integer greater than or equal to ${minimum}.`,
+        `${propPath} must be a safe integer in the inclusive range ${minimum}..${maximum}.`,
         scope,
       );
     }
@@ -1259,7 +1295,11 @@ function validatePutObjectRetryProps(
 ): void {
   const retryBaseDelayMs = props.baseDelayMs ?? DEFAULT_PUT_OBJECT_RETRY_BASE_DELAY_MS;
   const retryMaxDelayMs = props.maxDelayMs ?? DEFAULT_PUT_OBJECT_RETRY_MAX_DELAY_MS;
-  if (retryMaxDelayMs < retryBaseDelayMs) {
+  if (
+    !Token.isUnresolved(retryMaxDelayMs) &&
+    !Token.isUnresolved(retryBaseDelayMs) &&
+    retryMaxDelayMs < retryBaseDelayMs
+  ) {
     throw new ValidationError(
       literalString("ShinBucketDeploymentInvalidPutObjectRetryMaxDelayMs"),
       "advancedRuntimeTuning.putObjectRetry.maxDelayMs must be greater than or equal to advancedRuntimeTuning.putObjectRetry.baseDelayMs.",
@@ -1271,7 +1311,11 @@ function validatePutObjectRetryProps(
     props.slowdownBaseDelayMs ?? DEFAULT_PUT_OBJECT_SLOWDOWN_RETRY_BASE_DELAY_MS;
   const slowdownRetryMaxDelayMs =
     props.slowdownMaxDelayMs ?? DEFAULT_PUT_OBJECT_SLOWDOWN_RETRY_MAX_DELAY_MS;
-  if (slowdownRetryMaxDelayMs < slowdownRetryBaseDelayMs) {
+  if (
+    !Token.isUnresolved(slowdownRetryMaxDelayMs) &&
+    !Token.isUnresolved(slowdownRetryBaseDelayMs) &&
+    slowdownRetryMaxDelayMs < slowdownRetryBaseDelayMs
+  ) {
     throw new ValidationError(
       literalString("ShinBucketDeploymentInvalidPutObjectSlowdownRetryMaxDelayMs"),
       "advancedRuntimeTuning.putObjectRetry.slowdownMaxDelayMs must be greater than or equal to advancedRuntimeTuning.putObjectRetry.slowdownBaseDelayMs.",
@@ -1286,6 +1330,99 @@ function validatePutObjectRetryProps(
       scope,
     );
   }
+}
+
+function validateSourceMemoryProps(
+  scope: Construct,
+  memoryLimit: number | undefined,
+  tuning: ShinBucketDeploymentAdvancedRuntimeTuning,
+): void {
+  const lambdaMemoryMb = resolvedNumber(memoryLimit ?? DEFAULT_MEMORY_LIMIT_MB);
+  const configuredBudgetMb = resolvedNumber(tuning.sourceWindowMemoryBudgetMb);
+  const memoryCapBytes = lambdaMemoryMb === undefined ? undefined : (lambdaMemoryMb * MIB) / 2;
+  const configuredBudgetBytes =
+    configuredBudgetMb === undefined ? undefined : configuredBudgetMb * MIB;
+
+  if (
+    memoryCapBytes !== undefined &&
+    (!Number.isSafeInteger(memoryCapBytes) || memoryCapBytes <= 0)
+  ) {
+    throw new ValidationError(
+      literalString("ShinBucketDeploymentInvalidMemoryLimitForSourceBudget"),
+      "memoryLimit must produce a positive safe-integer byte budget.",
+      scope,
+    );
+  }
+  if (configuredBudgetBytes !== undefined && !Number.isSafeInteger(configuredBudgetBytes)) {
+    throw new ValidationError(
+      literalString("ShinBucketDeploymentInvalidSourceWindowMemoryBudgetMb"),
+      "advancedRuntimeTuning.sourceWindowMemoryBudgetMb must produce a safe-integer byte budget.",
+      scope,
+    );
+  }
+  if (
+    configuredBudgetBytes !== undefined &&
+    memoryCapBytes !== undefined &&
+    configuredBudgetBytes > memoryCapBytes
+  ) {
+    throw new ValidationError(
+      literalString("ShinBucketDeploymentSourceMemoryBudgetExceedsCap"),
+      "advancedRuntimeTuning.sourceWindowMemoryBudgetMb must not exceed 50% of memoryLimit.",
+      scope,
+    );
+  }
+
+  const budgetBytes = configuredBudgetBytes ?? memoryCapBytes;
+  if (budgetBytes === undefined) {
+    return;
+  }
+  const blockBytes =
+    tuning.sourceBlockBytes === undefined
+      ? DEFAULT_SOURCE_BLOCK_BYTES
+      : resolvedNumber(tuning.sourceBlockBytes);
+  const sourceGetConcurrency =
+    tuning.sourceGetConcurrency === undefined
+      ? lambdaMemoryMb === undefined
+        ? undefined
+        : Math.min(8, Math.max(1, Math.floor(lambdaMemoryMb / 256)))
+      : resolvedNumber(tuning.sourceGetConcurrency);
+  const windowBytes = resolvedNumber(tuning.sourceWindowBytes);
+
+  if (blockBytes !== undefined && blockBytes > budgetBytes) {
+    throw new ValidationError(
+      literalString("ShinBucketDeploymentSourceBlockExceedsMemoryBudget"),
+      "advancedRuntimeTuning.sourceBlockBytes must fit within the invocation-global source memory budget.",
+      scope,
+    );
+  }
+  if (windowBytes !== undefined && blockBytes !== undefined && windowBytes < blockBytes) {
+    throw new ValidationError(
+      literalString("ShinBucketDeploymentSourceWindowBelowBlock"),
+      "advancedRuntimeTuning.sourceWindowBytes must be greater than or equal to sourceBlockBytes.",
+      scope,
+    );
+  }
+  if (windowBytes !== undefined && windowBytes > budgetBytes) {
+    throw new ValidationError(
+      literalString("ShinBucketDeploymentSourceWindowExceedsMemoryBudget"),
+      "advancedRuntimeTuning.sourceWindowBytes must fit within the invocation-global source memory budget.",
+      scope,
+    );
+  }
+  if (sourceGetConcurrency !== undefined && blockBytes !== undefined) {
+    const concurrentBlockBytes = blockBytes * sourceGetConcurrency;
+    if (!Number.isSafeInteger(concurrentBlockBytes) || concurrentBlockBytes > budgetBytes) {
+      throw new ValidationError(
+        literalString("ShinBucketDeploymentSourceConcurrencyExceedsMemoryBudget"),
+        "advancedRuntimeTuning.sourceBlockBytes * sourceGetConcurrency must fit within the invocation-global source memory budget.",
+        scope,
+      );
+    }
+  }
+}
+
+function resolvedNumber(value: number | undefined): number | undefined {
+  return value === undefined || Token.isUnresolved(value) ? undefined : value;
 }
 
 function sourceConfigEqual(stack: Stack, a: SourceConfig, b: SourceConfig) {

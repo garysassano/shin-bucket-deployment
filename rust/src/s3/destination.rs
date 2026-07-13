@@ -12,7 +12,6 @@ const OWNER_TAG_BASE: &str = "aws-cdk:cr-owned";
 
 pub(super) struct DestinationPlan {
     pub(super) objects: HashMap<String, DestinationObject>,
-    pub(super) keys_to_delete: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -23,9 +22,7 @@ pub(super) struct DestinationObject {
 
 struct DestinationRecordContext<'a> {
     strip_prefix: &'a str,
-    filters: &'a Filters,
     manifest: &'a DeploymentManifest,
-    delete_stale_objects_on_deployment: bool,
 }
 
 pub(crate) async fn delete_prefix(
@@ -142,7 +139,6 @@ pub(crate) async fn bucket_has_competing_owner(
 pub(super) async fn plan_destination(
     state: &AppState,
     request: &DeploymentRequest,
-    filters: &Filters,
     manifest: &DeploymentManifest,
     stats: &DeploymentStats,
 ) -> Result<DestinationPlan> {
@@ -150,7 +146,7 @@ pub(super) async fn plan_destination(
     let strip_prefix = list_prefix.as_deref().unwrap_or("");
     let mut start_after = None;
     let mut objects = HashMap::new();
-    let mut keys_to_delete = Vec::new();
+    let mut listed_objects = 0_u64;
 
     loop {
         let response = state
@@ -161,6 +157,8 @@ pub(super) async fn plan_destination(
             .set_start_after(start_after.clone())
             .send()
             .await?;
+        stats.record_destination_page_objects(response.contents().len() as u64);
+        listed_objects = listed_objects.saturating_add(response.contents().len() as u64);
 
         for object in response.contents() {
             let Some(key) = object.key() else { continue };
@@ -170,12 +168,9 @@ pub(super) async fn plan_destination(
                 object.size().and_then(|size| u64::try_from(size).ok()),
                 DestinationRecordContext {
                     strip_prefix,
-                    filters,
                     manifest,
-                    delete_stale_objects_on_deployment: request.delete_stale_objects_on_deployment,
                 },
                 &mut objects,
-                &mut keys_to_delete,
             );
         }
 
@@ -192,23 +187,63 @@ pub(super) async fn plan_destination(
         start_after = last_key;
     }
 
-    stats.add_destination_objects(objects.len() as u64);
+    stats.add_destination_objects(listed_objects);
+    stats.set_destination_metadata_retained(objects.len() as u64);
 
-    Ok(DestinationPlan {
-        objects,
-        keys_to_delete,
-    })
+    Ok(DestinationPlan { objects })
 }
 
-pub(super) async fn delete_keys(
+pub(super) async fn delete_stale_objects(
     state: &AppState,
-    bucket: &str,
-    keys: &[String],
+    request: &DeploymentRequest,
+    filters: &Filters,
+    manifest: &DeploymentManifest,
     stats: &DeploymentStats,
 ) -> Result<()> {
-    delete_keys_optional_stats(state, bucket, keys, Some(stats))
-        .await
-        .map(|_| ())
+    let list_prefix = namespace_list_prefix(&request.dest_bucket_prefix);
+    let strip_prefix = list_prefix.as_deref().unwrap_or("");
+    let mut start_after = None;
+
+    loop {
+        let response = state
+            .destination_s3
+            .list_objects_v2()
+            .bucket(&request.dest_bucket_name)
+            .set_prefix(list_prefix.clone())
+            .set_start_after(start_after.clone())
+            .send()
+            .await?;
+        stats.record_destination_page_objects(response.contents().len() as u64);
+
+        let keys_to_delete = response
+            .contents()
+            .iter()
+            .filter_map(|object| object.key())
+            .filter(|key| stale_destination_key(key, strip_prefix, filters, manifest))
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>();
+        let last_key = response
+            .contents()
+            .iter()
+            .filter_map(|object| object.key())
+            .next_back()
+            .map(ToOwned::to_owned);
+
+        delete_keys_optional_stats(
+            state,
+            &request.dest_bucket_name,
+            &keys_to_delete,
+            Some(stats),
+        )
+        .await?;
+
+        if !response.is_truncated().unwrap_or(false) || last_key.is_none() {
+            break;
+        }
+        start_after = last_key;
+    }
+
+    Ok(())
 }
 
 async fn delete_keys_optional_stats(
@@ -388,10 +423,9 @@ fn record_destination_object(
     size: Option<u64>,
     context: DestinationRecordContext<'_>,
     objects: &mut HashMap<String, DestinationObject>,
-    keys_to_delete: &mut Vec<String>,
 ) {
     let relative_key = strip_destination_prefix(context.strip_prefix, key);
-    if relative_key.is_empty() {
+    if relative_key.is_empty() || !context.manifest.contains_key(&relative_key) {
         return;
     }
 
@@ -402,12 +436,18 @@ fn record_destination_object(
             size,
         },
     );
-    if !context.filters.should_include(&relative_key) {
-        return;
-    }
-    if context.delete_stale_objects_on_deployment && !context.manifest.contains_key(&relative_key) {
-        keys_to_delete.push(key.to_string());
-    }
+}
+
+fn stale_destination_key(
+    key: &str,
+    strip_prefix: &str,
+    filters: &Filters,
+    manifest: &DeploymentManifest,
+) -> bool {
+    let relative_key = strip_destination_prefix(strip_prefix, key);
+    !relative_key.is_empty()
+        && filters.should_include(&relative_key)
+        && !manifest.contains_key(&relative_key)
 }
 
 #[cfg(test)]
@@ -417,6 +457,7 @@ mod tests {
     use super::{
         DestinationObject, DestinationRecordContext, key_is_excluded, namespace_list_prefix,
         normalize_etag, owner_tag_overlaps_cleanup, parse_owner_tag, record_destination_object,
+        stale_destination_key,
     };
     use crate::request::compile_filters;
     use crate::types::{DeploymentManifest, PlannedAction, PlannedObject};
@@ -442,11 +483,10 @@ mod tests {
     }
 
     #[test]
-    fn destination_entry_records_etag_and_queues_stale_manifest_key_for_deletion() {
+    fn destination_entry_omits_non_manifest_metadata_and_identifies_stale_key() {
         let filters = compile_filters(&[], &[]).unwrap();
         let manifest = DeploymentManifest::new();
         let mut objects = HashMap::<String, DestinationObject>::new();
-        let mut keys_to_delete = Vec::new();
 
         record_destination_object(
             "site/old.txt",
@@ -454,21 +494,22 @@ mod tests {
             Some(10),
             DestinationRecordContext {
                 strip_prefix: "site/",
-                filters: &filters,
                 manifest: &manifest,
-                delete_stale_objects_on_deployment: true,
             },
             &mut objects,
-            &mut keys_to_delete,
         );
 
-        assert_eq!(objects["old.txt"].etag.as_deref(), Some("abc123"));
-        assert_eq!(objects["old.txt"].size, Some(10));
-        assert_eq!(keys_to_delete, vec!["site/old.txt".to_string()]);
+        assert!(objects.is_empty());
+        assert!(stale_destination_key(
+            "site/old.txt",
+            "site/",
+            &filters,
+            &manifest
+        ));
     }
 
     #[test]
-    fn destination_entry_keeps_manifest_key_and_excluded_key_out_of_delete_list() {
+    fn destination_entry_retains_only_manifest_metadata_and_excludes_filtered_stale_key() {
         let filters = compile_filters(&["*.map".to_string()], &[]).unwrap();
         let mut manifest = DeploymentManifest::new();
         manifest.insert(
@@ -483,7 +524,6 @@ mod tests {
             },
         );
         let mut objects = HashMap::<String, DestinationObject>::new();
-        let mut keys_to_delete = Vec::new();
 
         record_destination_object(
             "site/keep.txt",
@@ -491,12 +531,9 @@ mod tests {
             Some(1),
             DestinationRecordContext {
                 strip_prefix: "site/",
-                filters: &filters,
                 manifest: &manifest,
-                delete_stale_objects_on_deployment: true,
             },
             &mut objects,
-            &mut keys_to_delete,
         );
         record_destination_object(
             "site/debug.map",
@@ -504,25 +541,31 @@ mod tests {
             Some(1),
             DestinationRecordContext {
                 strip_prefix: "site/",
-                filters: &filters,
                 manifest: &manifest,
-                delete_stale_objects_on_deployment: true,
             },
             &mut objects,
-            &mut keys_to_delete,
         );
 
         assert!(objects.contains_key("keep.txt"));
-        assert!(objects.contains_key("debug.map"));
-        assert!(keys_to_delete.is_empty());
+        assert!(!objects.contains_key("debug.map"));
+        assert!(!stale_destination_key(
+            "site/keep.txt",
+            "site/",
+            &filters,
+            &manifest
+        ));
+        assert!(!stale_destination_key(
+            "site/debug.map",
+            "site/",
+            &filters,
+            &manifest
+        ));
     }
 
     #[test]
     fn destination_entry_ignores_empty_relative_key() {
-        let filters = compile_filters(&[], &[]).unwrap();
         let manifest = DeploymentManifest::new();
         let mut objects = HashMap::<String, DestinationObject>::new();
-        let mut keys_to_delete = Vec::new();
 
         record_destination_object(
             "site/",
@@ -530,16 +573,12 @@ mod tests {
             None,
             DestinationRecordContext {
                 strip_prefix: "site/",
-                filters: &filters,
                 manifest: &manifest,
-                delete_stale_objects_on_deployment: true,
             },
             &mut objects,
-            &mut keys_to_delete,
         );
 
         assert!(objects.is_empty());
-        assert!(keys_to_delete.is_empty());
     }
 
     #[test]

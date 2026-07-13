@@ -15,7 +15,7 @@ use crate::types::{
 };
 
 use super::archive::{
-    S3RangeReader, SourceBlockOptions, SourceBlockStore, prepare_source_zip,
+    S3RangeReader, SourceBlockOptions, SourceBlockStore, SourceByteBudget, prepare_source_zip,
     validate_zip_entry_output, validate_zip_entry_size_not_exceeded, zip_entry_reader,
 };
 use super::destination::{DestinationObject, destination_etag_matches, normalize_etag};
@@ -48,6 +48,13 @@ pub(crate) struct ZipEntryPlan {
     pub(super) trusted_integrity: Option<TrustedEntryIntegrity>,
     pub(super) source_offset: u64,
     pub(super) source_span_end: u64,
+}
+
+struct ArchivePlanningContext<'a> {
+    request: &'a DeploymentRequest,
+    filters: &'a Filters,
+    stats: &'a DeploymentStats,
+    source_budget: std::sync::Arc<SourceByteBudget>,
 }
 
 impl ZipEntryPlan {
@@ -120,6 +127,7 @@ pub(super) async fn plan_deployment(
     request: &DeploymentRequest,
     filters: &Filters,
     stats: &DeploymentStats,
+    source_budget: std::sync::Arc<SourceByteBudget>,
 ) -> Result<(Vec<SourceArchive>, DeploymentManifest)> {
     let mut archives = Vec::new();
     let mut manifest = DeploymentManifest::new();
@@ -142,9 +150,12 @@ pub(super) async fn plan_deployment(
                 archive_index,
                 source_index,
                 source,
-                request,
-                filters,
-                stats,
+                ArchivePlanningContext {
+                    request,
+                    filters,
+                    stats,
+                    source_budget: std::sync::Arc::clone(&source_budget),
+                },
                 &mut manifest,
             )
             .await?;
@@ -279,11 +290,15 @@ async fn add_archive_entries_to_manifest(
     archive_index: usize,
     source_index: usize,
     source: std::sync::Arc<super::archive::SourceClient>,
-    request: &DeploymentRequest,
-    filters: &Filters,
-    stats: &DeploymentStats,
+    context: ArchivePlanningContext<'_>,
     manifest: &mut DeploymentManifest,
 ) -> Result<()> {
+    let ArchivePlanningContext {
+        request,
+        filters,
+        stats,
+        source_budget,
+    } = context;
     let reader = S3RangeReader::new(source.clone(), request.runtime.source_block_bytes);
     let reader = ZipFileReader::with_tokio(reader)
         .await
@@ -292,7 +307,15 @@ async fn add_archive_entries_to_manifest(
     let entries = zip_file.entries();
     validate_archive_directory(entries, source.len())?;
     let catalog = if let Some(expected) = &request.source_catalogs[source_index] {
-        match load_authenticated_catalog(source.clone(), request, entries, &expected.sha256).await {
+        match load_authenticated_catalog(
+            source.clone(),
+            request,
+            entries,
+            &expected.sha256,
+            source_budget,
+        )
+        .await
+        {
             Ok(catalog) => {
                 tracing::info!(
                     source_index,
@@ -403,6 +426,7 @@ async fn load_authenticated_catalog(
     request: &DeploymentRequest,
     entries: &[StoredZipEntry],
     expected_sha256: &[u8; 32],
+    source_budget: std::sync::Arc<SourceByteBudget>,
 ) -> Result<HashMap<String, TrustedEntryIntegrity>> {
     let stored = authenticated_catalog_entry(entries)?;
 
@@ -428,6 +452,7 @@ async fn load_authenticated_catalog(
             get_concurrency: request.runtime.source_get_concurrency,
             window_bytes: source_window_bytes_for_archive(&request.runtime, source.len(), 1),
         },
+        source_budget,
     );
     let mut reader = zip_entry_reader(store, plan.clone())?;
     let mut bytes = Vec::new();
@@ -1174,7 +1199,7 @@ mod tests {
                 source_block_merge_gap_bytes: 256 * 1024,
                 source_get_concurrency: 1,
                 source_window_bytes: None,
-                source_window_memory_budget_mb: 256,
+                source_memory_budget_bytes: 256 * 1024 * 1024,
                 put_object_retry: PutObjectRetryOptions {
                     max_attempts: 1,
                     retry_base_delay_ms: 1,

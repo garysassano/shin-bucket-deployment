@@ -182,7 +182,7 @@ mod tests {
                 source_block_merge_gap_bytes: 0,
                 source_get_concurrency: 1,
                 source_window_bytes: None,
-                source_window_memory_budget_mb: 256,
+                source_memory_budget_bytes: 256 * 1024 * 1024,
                 put_object_retry: PutObjectRetryOptions {
                     max_attempts: 1,
                     retry_base_delay_ms: 0,

@@ -24,7 +24,7 @@ use md5::{Digest as Md5Digest, Md5};
 use sha2::Sha256;
 use tokio::io::{AsyncBufRead, AsyncRead, AsyncReadExt, AsyncSeek, AsyncWrite, ReadBuf, SeekFrom};
 use tokio::sync::futures::OwnedNotified;
-use tokio::sync::{Notify, Semaphore, mpsc};
+use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore, mpsc};
 use tokio::task::JoinSet;
 use tokio::time::{Instant, timeout_at};
 
@@ -46,6 +46,7 @@ const LOCAL_FILE_NAME_LEN_OFFSET: usize = 26;
 const LOCAL_EXTRA_FIELD_LEN_OFFSET: usize = 28;
 const GENERAL_PURPOSE_ENCRYPTED: u16 = 1 << 0;
 const GENERAL_PURPOSE_STRONG_ENCRYPTION: u16 = 1 << 6;
+const SOURCE_BUDGET_PERMIT_UNIT_BYTES: u64 = 4 * 1024;
 
 type BodyError = Box<dyn std::error::Error + Send + Sync>;
 
@@ -221,6 +222,8 @@ pub(crate) struct SourceBlockStore {
     state: Mutex<SourceBlockState>,
     notify: Arc<Notify>,
     capacity_notify: Arc<Notify>,
+    cancel_notify: Arc<Notify>,
+    budget: Arc<SourceByteBudget>,
     source_get_concurrency: usize,
     window_bytes: u64,
     fetch_semaphore: Semaphore,
@@ -237,6 +240,7 @@ pub(crate) struct SourceBlockOptions {
 
 struct SourceBlockState {
     slots: Vec<SourceBlockSlot>,
+    window_committed_bytes: u64,
     resident_bytes: u64,
     failure: Option<String>,
 }
@@ -244,15 +248,30 @@ struct SourceBlockState {
 struct SourceBlockSlot {
     remaining_claims: usize,
     live_claims: usize,
+    budget_permit: Option<SourceBudgetPermit>,
     status: SourceBlockStatus,
 }
 
 enum SourceBlockStatus {
     Pending,
+    Reserving,
     Fetching,
     Ready(Bytes),
     Released,
     Failed(String),
+}
+
+pub(crate) struct SourceByteBudget {
+    limit_bytes: u64,
+    permit_unit_bytes: u64,
+    semaphore: Arc<Semaphore>,
+    stats: Arc<DeploymentStats>,
+}
+
+struct SourceBudgetPermit {
+    bytes: u64,
+    _permit: OwnedSemaphorePermit,
+    stats: Arc<DeploymentStats>,
 }
 
 struct ReceiverBody {
@@ -717,6 +736,67 @@ impl Drop for ActiveSourceGetGuard {
     }
 }
 
+impl SourceByteBudget {
+    pub(crate) fn new(limit_bytes: usize, stats: Arc<DeploymentStats>) -> Arc<Self> {
+        assert!(limit_bytes > 0, "source byte budget must be positive");
+        let limit_bytes = u64::try_from(limit_bytes).expect("usize source budget fits u64");
+        let permit_unit_bytes = SOURCE_BUDGET_PERMIT_UNIT_BYTES.min(limit_bytes);
+        let permit_count = usize::try_from(limit_bytes / permit_unit_bytes)
+            .expect("source budget permit count fits usize");
+        stats.configure_source_global_budget(limit_bytes);
+        Arc::new(Self {
+            limit_bytes,
+            permit_unit_bytes,
+            semaphore: Arc::new(Semaphore::new(permit_count)),
+            stats,
+        })
+    }
+
+    pub(crate) fn limit_bytes(&self) -> u64 {
+        self.limit_bytes
+    }
+
+    async fn acquire(
+        self: &Arc<Self>,
+        bytes: u64,
+        cancel_wait: EnabledNotification,
+    ) -> io::Result<SourceBudgetPermit> {
+        if bytes == 0 || bytes > self.limit_bytes {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "source block of {bytes} bytes does not fit the {}-byte invocation-global budget",
+                    self.limit_bytes
+                ),
+            ));
+        }
+        let permits = bytes.div_ceil(self.permit_unit_bytes);
+        let permits = u32::try_from(permits).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "source block budget permit count exceeds the semaphore limit",
+            )
+        })?;
+        let acquisition = Arc::clone(&self.semaphore).acquire_many_owned(permits);
+        let permit = tokio::select! {
+            permit = acquisition => permit.map_err(|_| io::Error::other("source byte budget is closed"))?,
+            () = cancel_wait => return Err(io::Error::other("source block reservation was cancelled")),
+        };
+        self.stats.acquire_source_global_bytes(bytes);
+        Ok(SourceBudgetPermit {
+            bytes,
+            _permit: permit,
+            stats: Arc::clone(&self.stats),
+        })
+    }
+}
+
+impl Drop for SourceBudgetPermit {
+    fn drop(&mut self) {
+        self.stats.release_source_global_bytes(self.bytes);
+    }
+}
+
 impl S3RangeReader {
     pub(crate) fn new(source: Arc<SourceClient>, chunk_size: usize) -> Self {
         Self {
@@ -792,6 +872,7 @@ impl SourceBlockStore {
         source: Arc<SourceClient>,
         plans: &[ZipEntryPlan],
         options: SourceBlockOptions,
+        budget: Arc<SourceByteBudget>,
     ) -> Arc<Self> {
         let block_bytes = options.block_bytes.max(1);
         let get_concurrency = options.get_concurrency.max(1);
@@ -817,15 +898,19 @@ impl SourceBlockStore {
                     .map(|remaining_claims| SourceBlockSlot {
                         remaining_claims,
                         live_claims: 0,
+                        budget_permit: None,
                         status: SourceBlockStatus::Pending,
                     })
                     .collect(),
+                window_committed_bytes: 0,
                 resident_bytes: 0,
                 failure: None,
             }),
             blocks,
             notify: Arc::new(Notify::new()),
             capacity_notify: Arc::new(Notify::new()),
+            cancel_notify: Arc::new(Notify::new()),
+            budget,
             source_get_concurrency: options.get_concurrency,
             window_bytes: options.window_bytes.max(options.block_bytes) as u64,
             fetch_semaphore: Semaphore::new(options.get_concurrency),
@@ -873,17 +958,27 @@ impl SourceBlockStore {
     }
 
     pub(crate) fn cancel(&self, reason: impl Into<String>) {
+        let reason = reason.into();
         let mut state = self
             .state
             .lock()
             .expect("source block state mutex should not be poisoned");
         if state.failure.is_none() {
-            state.failure = Some(reason.into());
+            state.failure = Some(reason.clone());
+        }
+        state.window_committed_bytes = 0;
+        state.resident_bytes = 0;
+        for slot in &mut state.slots {
+            slot.budget_permit.take();
+            if !matches!(slot.status, SourceBlockStatus::Released) {
+                slot.status = SourceBlockStatus::Failed(reason.clone());
+            }
         }
         drop(state);
         self.fetch_semaphore.close();
         self.notify.notify_waiters();
         self.capacity_notify.notify_waiters();
+        self.cancel_notify.notify_waiters();
     }
 
     pub(crate) async fn abort_and_drain_body_tasks(&self, deadline: Instant) -> Result<()> {
@@ -930,7 +1025,7 @@ impl SourceBlockStore {
         if self.blocks.get(index).is_none() {
             return Ok(None);
         }
-        loop {
+        let (block, cancel_wait) = loop {
             let wait = {
                 let mut state = self
                     .state
@@ -944,7 +1039,8 @@ impl SourceBlockStore {
                 }
                 match state.slots[index].status {
                     SourceBlockStatus::Pending => {}
-                    SourceBlockStatus::Fetching
+                    SourceBlockStatus::Reserving
+                    | SourceBlockStatus::Fetching
                     | SourceBlockStatus::Ready(_)
                     | SourceBlockStatus::Released
                     | SourceBlockStatus::Failed(_) => return Ok(None),
@@ -953,19 +1049,68 @@ impl SourceBlockStore {
                 let block = self.blocks[index];
                 let block_len = block.len();
                 let target_window = self.window_bytes.max(block_len);
-                if state.resident_bytes.saturating_add(block_len) <= target_window {
-                    state.resident_bytes = state.resident_bytes.saturating_add(block_len);
-                    self.source
-                        .diagnostics
-                        .record_resident_bytes(state.resident_bytes);
-                    state.slots[index].status = SourceBlockStatus::Fetching;
-                    return Ok(Some(block));
+                if state.window_committed_bytes.saturating_add(block_len) <= target_window {
+                    state.window_committed_bytes =
+                        state.window_committed_bytes.saturating_add(block_len);
+                    state.slots[index].status = SourceBlockStatus::Reserving;
+                    break (block, enabled_notification(&self.cancel_notify));
                 }
 
                 enabled_notification(&self.capacity_notify)
             };
             wait.await;
+        };
+
+        let permit = match Arc::clone(&self.budget)
+            .acquire(block.len(), cancel_wait)
+            .await
+        {
+            Ok(permit) => permit,
+            Err(error) => {
+                let mut state = self
+                    .state
+                    .lock()
+                    .expect("source block state mutex should not be poisoned");
+                if matches!(state.slots[index].status, SourceBlockStatus::Reserving) {
+                    state.window_committed_bytes =
+                        state.window_committed_bytes.saturating_sub(block.len());
+                    state.slots[index].status = SourceBlockStatus::Failed(error.to_string());
+                }
+                drop(state);
+                self.notify.notify_waiters();
+                self.capacity_notify.notify_waiters();
+                return Err(error);
+            }
+        };
+
+        let mut state = self
+            .state
+            .lock()
+            .expect("source block state mutex should not be poisoned");
+        if let Some(error) = &state.failure {
+            return Err(io::Error::other(error.clone()));
         }
+        if state.slots[index].remaining_claims == 0
+            || !matches!(state.slots[index].status, SourceBlockStatus::Reserving)
+        {
+            if matches!(state.slots[index].status, SourceBlockStatus::Reserving) {
+                state.window_committed_bytes =
+                    state.window_committed_bytes.saturating_sub(block.len());
+                state.slots[index].status = SourceBlockStatus::Released;
+            }
+            drop(state);
+            self.capacity_notify.notify_waiters();
+            return Ok(None);
+        }
+        state.resident_bytes = state.resident_bytes.saturating_add(block.len());
+        self.source
+            .diagnostics
+            .record_resident_bytes(state.resident_bytes);
+        state.slots[index].budget_permit = Some(permit);
+        state.slots[index].status = SourceBlockStatus::Fetching;
+        drop(state);
+        self.notify.notify_waiters();
+        Ok(Some(block))
     }
 
     async fn fetch_reserved_block(&self, index: usize, block: SourceBlockRange) {
@@ -983,6 +1128,11 @@ impl SourceBlockStore {
                 .state
                 .lock()
                 .expect("source block state mutex should not be poisoned");
+            if state.failure.is_some()
+                || !matches!(state.slots[index].status, SourceBlockStatus::Fetching)
+            {
+                return;
+            }
             match result {
                 Ok(bytes) => {
                     self.source
@@ -997,6 +1147,9 @@ impl SourceBlockStore {
                         && state.slots[index].live_claims == 0
                     {
                         state.resident_bytes = state.resident_bytes.saturating_sub(block.len());
+                        state.window_committed_bytes =
+                            state.window_committed_bytes.saturating_sub(block.len());
+                        state.slots[index].budget_permit.take();
                         state.slots[index].status = SourceBlockStatus::Released;
                         self.source
                             .diagnostics
@@ -1009,6 +1162,9 @@ impl SourceBlockStore {
                 }
                 Err(error) => {
                     state.resident_bytes = state.resident_bytes.saturating_sub(block.len());
+                    state.window_committed_bytes =
+                        state.window_committed_bytes.saturating_sub(block.len());
+                    state.slots[index].budget_permit.take();
                     state.slots[index].status = SourceBlockStatus::Failed(error.to_string());
                     release_capacity = true;
                 }
@@ -1100,7 +1256,7 @@ impl SourceBlockStore {
 
         loop {
             let action = {
-                let mut state = self
+                let state = self
                     .state
                     .lock()
                     .expect("source block state mutex should not be poisoned");
@@ -1146,43 +1302,32 @@ impl SourceBlockStore {
                         self.source.diagnostics.record_wait_fetching();
                         SourceBlockAction::Wait(enabled_notification(&self.notify))
                     }
+                    SourceBlockStatus::Reserving => {
+                        self.source.diagnostics.record_wait_capacity();
+                        SourceBlockAction::Wait(enabled_notification(&self.notify))
+                    }
                     SourceBlockStatus::Pending => {
                         if state.slots[index].remaining_claims == 0 {
                             return Err(io::Error::other(
                                 "source block has no remaining planned claims",
                             ));
                         }
-                        let block_len = block.len();
-                        let target_window = self.window_bytes.max(block_len);
-                        if state.resident_bytes.saturating_add(block_len) <= target_window {
-                            self.source
-                                .diagnostics
-                                .block_misses
-                                .fetch_add(1, Ordering::Relaxed);
-                            state.resident_bytes = state.resident_bytes.saturating_add(block_len);
-                            self.source
-                                .diagnostics
-                                .record_resident_bytes(state.resident_bytes);
-                            state.slots[index].status = SourceBlockStatus::Fetching;
-                            SourceBlockAction::Fetch(block)
-                        } else {
-                            self.source.diagnostics.record_wait_capacity();
-                            SourceBlockAction::WaitCapacity(enabled_notification(
-                                &self.capacity_notify,
-                            ))
-                        }
+                        self.source
+                            .diagnostics
+                            .block_misses
+                            .fetch_add(1, Ordering::Relaxed);
+                        SourceBlockAction::Reserve
                     }
                 }
             };
 
             match action {
-                SourceBlockAction::Fetch(block) => {
-                    self.fetch_reserved_block(index, block).await;
+                SourceBlockAction::Reserve => {
+                    if let Some(block) = self.reserve_fetch(index).await? {
+                        self.fetch_reserved_block(index, block).await;
+                    }
                 }
                 SourceBlockAction::Wait(wait) => {
-                    wait.await;
-                }
-                SourceBlockAction::WaitCapacity(wait) => {
                     wait.await;
                 }
             }
@@ -1227,6 +1372,7 @@ impl SourceBlockStore {
                 && slot.remaining_claims == 0
                 && matches!(slot.status, SourceBlockStatus::Ready(_))
             {
+                slot.budget_permit.take();
                 slot.status = SourceBlockStatus::Released;
                 self.source
                     .diagnostics
@@ -1234,6 +1380,9 @@ impl SourceBlockStore {
                     .fetch_add(1, Ordering::Relaxed);
                 state.resident_bytes = state
                     .resident_bytes
+                    .saturating_sub(self.blocks[index].len());
+                state.window_committed_bytes = state
+                    .window_committed_bytes
                     .saturating_sub(self.blocks[index].len());
                 notify_capacity = true;
             }
@@ -1245,9 +1394,8 @@ impl SourceBlockStore {
 }
 
 enum SourceBlockAction {
-    Fetch(SourceBlockRange),
+    Reserve,
     Wait(EnabledNotification),
-    WaitCapacity(EnabledNotification),
 }
 
 type EnabledNotification = Pin<Box<OwnedNotified>>;
@@ -1343,13 +1491,9 @@ fn block_indices_for_span(
     if start >= end_exclusive {
         return Vec::new();
     }
-    blocks
-        .iter()
-        .enumerate()
-        .filter_map(|(index, block)| {
-            (block.start < end_exclusive && start < block.end_exclusive()).then_some(index)
-        })
-        .collect()
+    let first = blocks.partition_point(|block| block.end < start);
+    let past_last = blocks.partition_point(|block| block.start < end_exclusive);
+    (first..past_last.max(first)).collect()
 }
 
 impl AsyncRead for S3RangeReader {
@@ -2250,6 +2394,7 @@ mod tests {
     use aws_sdk_s3::primitives::SdkBody;
     use aws_smithy_http_client::test_util::{ReplayEvent, StaticReplayClient};
     use http::{Request, Response};
+    use proptest::prelude::*;
     use tokio::io::AsyncReadExt;
     use tokio::sync::Semaphore;
     use tokio::time::Instant;
@@ -2257,8 +2402,9 @@ mod tests {
 
     use super::{
         LOCAL_FILE_HEADER_LEN, SourceClient, SourceDiagnostics, UploadBodyState,
-        marker_zip_entry_body, plan_marker_zip_entry, plan_source_blocks, range_get_request_error,
-        send_marker_zip_entry_chunks, send_zip_entry_chunks, zip_entry_body, zip_entry_reader,
+        block_indices_for_span, marker_zip_entry_body, plan_marker_zip_entry, plan_source_blocks,
+        range_get_request_error, send_marker_zip_entry_chunks, send_zip_entry_chunks,
+        zip_entry_body, zip_entry_reader,
     };
     use crate::replace::MarkerReplacements;
     use crate::s3::archive::{
@@ -2299,6 +2445,77 @@ mod tests {
         assert_eq!(blocks[1].end, 17 * 1024 * 1024 - 1);
         assert_eq!(blocks[2].start, 17 * 1024 * 1024);
         assert_eq!(blocks[2].end, 18 * 1024 * 1024 - 1);
+    }
+
+    proptest! {
+        #[test]
+        fn indexed_block_spans_match_the_linear_reference(
+            shapes in prop::collection::vec((0_u16..128, 1_u16..256), 0..64),
+            query_start in 0_u64..20_000,
+            query_len in 0_u64..5_000,
+        ) {
+            let mut cursor = 0_u64;
+            let blocks = shapes
+                .into_iter()
+                .map(|(gap, len)| {
+                    cursor = cursor.saturating_add(u64::from(gap));
+                    let block = SourceBlockRange {
+                        start: cursor,
+                        end: cursor.saturating_add(u64::from(len) - 1),
+                    };
+                    cursor = block.end.saturating_add(1);
+                    block
+                })
+                .collect::<Vec<_>>();
+            let query_end = query_start.saturating_add(query_len);
+            let expected = if query_start >= query_end {
+                Vec::new()
+            } else {
+                blocks
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, block)| {
+                        (block.start < query_end && query_start < block.end_exclusive())
+                            .then_some(index)
+                    })
+                    .collect::<Vec<_>>()
+            };
+
+            prop_assert_eq!(
+                block_indices_for_span(&blocks, query_start, query_end),
+                expected
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn invocation_budget_bounds_multiple_sources_and_cancel_releases_permits() {
+        let stats = Arc::new(crate::types::DeploymentStats::default());
+        let budget = super::SourceByteBudget::new(64, Arc::clone(&stats));
+        let first = pending_store_for_span(48, Arc::clone(&budget));
+        let second = pending_store_for_span(48, budget);
+
+        assert!(first.reserve_fetch(0).await.unwrap().is_some());
+        assert_eq!(stats.source_global_memory_for_test(), (64, 48, 48));
+
+        let waiting_store = Arc::clone(&second);
+        let waiting = tokio::spawn(async move { waiting_store.reserve_fetch(0).await });
+        tokio::task::yield_now().await;
+        assert!(!waiting.is_finished());
+
+        first.cancel("injected first-source cancellation");
+        assert!(
+            tokio::time::timeout(Duration::from_secs(1), waiting)
+                .await
+                .expect("second source reservation should be unblocked")
+                .expect("second source reservation task")
+                .expect("second source reservation")
+                .is_some()
+        );
+        assert_eq!(stats.source_global_memory_for_test(), (64, 48, 48));
+
+        second.cancel("test complete");
+        assert_eq!(stats.source_global_memory_for_test(), (64, 0, 48));
     }
 
     #[tokio::test]
@@ -2707,7 +2924,7 @@ mod tests {
         {
             let mut state = store.state.lock().expect("source block state");
             state.slots[0].status = SourceBlockStatus::Pending;
-            state.resident_bytes = store.window_bytes;
+            state.window_committed_bytes = store.window_bytes;
         }
         let waiter_store = Arc::clone(&store);
         let waiter = tokio::spawn(async move { waiter_store.reserve_fetch(0).await });
@@ -2746,16 +2963,23 @@ mod tests {
                 slots: vec![SourceBlockSlot {
                     remaining_claims: 1,
                     live_claims: 0,
+                    budget_permit: None,
                     status: SourceBlockStatus::Ready(bytes::Bytes::from(vec![
                         0u8;
                         short_len as usize
                     ])),
                 }],
+                window_committed_bytes: block.len(),
                 resident_bytes: block.len(),
                 failure: None,
             }),
             notify: Arc::new(tokio::sync::Notify::new()),
             capacity_notify: Arc::new(tokio::sync::Notify::new()),
+            cancel_notify: Arc::new(tokio::sync::Notify::new()),
+            budget: super::SourceByteBudget::new(
+                usize::try_from(block.len()).unwrap(),
+                Arc::new(crate::types::DeploymentStats::default()),
+            ),
             source_get_concurrency: 1,
             window_bytes: block.len(),
             fetch_semaphore: Semaphore::new(1),
@@ -2818,6 +3042,32 @@ mod tests {
         assert_eq!(snapshot.active_readers_high_water, 1);
     }
 
+    fn pending_store_for_span(
+        span_bytes: usize,
+        budget: Arc<super::SourceByteBudget>,
+    ) -> Arc<super::SourceBlockStore> {
+        let plan = plan_with_span("entry.txt", 0, span_bytes as u64);
+        let source = Arc::new(super::SourceClient {
+            client: dummy_s3_client(),
+            bucket: "bucket".to_string(),
+            key: "archive.zip".to_string(),
+            len: span_bytes as u64,
+            etag: None,
+            diagnostics: Arc::new(SourceDiagnostics::new(span_bytes as u64)),
+        });
+        super::SourceBlockStore::new(
+            source,
+            std::slice::from_ref(&plan),
+            SourceBlockOptions {
+                block_bytes: span_bytes,
+                merge_gap_bytes: 0,
+                get_concurrency: 1,
+                window_bytes: span_bytes,
+            },
+            budget,
+        )
+    }
+
     fn ready_store_for_plan(zip: &[u8], plan: &ZipEntryPlan) -> Arc<super::SourceBlockStore> {
         ready_store_for_plan_with_claims(zip, plan, 1)
     }
@@ -2845,15 +3095,22 @@ mod tests {
                 slots: vec![SourceBlockSlot {
                     remaining_claims: claims,
                     live_claims: 0,
+                    budget_permit: None,
                     status: SourceBlockStatus::Ready(bytes::Bytes::copy_from_slice(
                         &zip[block.start as usize..block.end as usize + 1],
                     )),
                 }],
+                window_committed_bytes: block.len(),
                 resident_bytes: block.len(),
                 failure: None,
             }),
             notify: Arc::new(tokio::sync::Notify::new()),
             capacity_notify: Arc::new(tokio::sync::Notify::new()),
+            cancel_notify: Arc::new(tokio::sync::Notify::new()),
+            budget: super::SourceByteBudget::new(
+                usize::try_from(block.len()).unwrap(),
+                Arc::new(crate::types::DeploymentStats::default()),
+            ),
             source_get_concurrency: 1,
             window_bytes: block.len(),
             fetch_semaphore: Semaphore::new(1),
