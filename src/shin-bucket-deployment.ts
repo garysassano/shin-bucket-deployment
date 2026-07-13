@@ -352,7 +352,7 @@ export interface ShinBucketDeploymentProps
     | "securityGroups"
   > {
   /**
-   * CDK-created destination bucket.
+   * Bucket that receives the deployed objects.
    *
    * Shin inspects the synthesized bucket encryption configuration to select
    * the cheapest sound conditional-write reconciliation strategy. Imported or

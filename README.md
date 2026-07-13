@@ -91,7 +91,7 @@ The construct follows the upstream `BucketDeployment` API where the behavior map
 | Area            | Supported                                                                                                                                            |
 | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Sources         | `sources`, `Source.data`, `Source.jsonData`, `Source.yamlData`, `embeddedCatalog`                                                                    |
-| Destination     | CDK-created `destinationBucket`, `destinationKeyPrefix`, `deployedBucket`, `objectKeys`                                                              |
+| Destination     | `destinationBucket`, `destinationKeyPrefix`, `deployedBucket`, `objectKeys`                                                                           |
 | Filtering       | `include`, `exclude`                                                                                                                                 |
 | Lifecycle       | `destinationLifecycle`                                                                                                                               |
 | Update behavior | `extract`, `outputObjectKeys`                                                                                                                        |
@@ -123,7 +123,7 @@ For `extract=false`, each source object is copied directly with S3 `CopyObject`.
 
 ### Change Detection
 
-At synthesis, Shin inspects the concrete CDK-created destination bucket's default encryption rule. Default or `AES256` encryption selects the `sse-s3-etag` strategy. KMS and DSSE select `kms-sha256`. Imported buckets and tokenized, unknown, or multi-rule encryption configurations are rejected because the provider cannot choose a sound strategy from them. An explicit KMS key ID must match the bucket's grantable L2 `encryptionKey`. Customer keys use CDK key grants; AWS-managed S3 key permissions are constrained by account/Region, `alias/aws/s3`, and regional S3 service conditions. No runtime `GetBucketEncryption` request is needed.
+At synthesis, Shin inspects `destinationBucket`'s default encryption rule. Default or `AES256` encryption selects the `sse-s3-etag` strategy. KMS and DSSE select `kms-sha256`. Imported buckets and tokenized, unknown, or multi-rule encryption configurations are rejected because the provider cannot choose a sound strategy from them. An explicit KMS key ID must match the bucket's grantable L2 `encryptionKey`. Customer keys use CDK key grants; AWS-managed S3 key permissions are constrained by account/Region, `alias/aws/s3`, and regional S3 service conditions. No runtime `GetBucketEncryption` request is needed.
 
 Before uploading or copying, the provider lists the destination prefix. Destination keys are used to delete stale objects when `destinationLifecycle.onDeploy.deleteStaleObjects` is enabled. For SSE-S3 destinations, existing marker-free ZIP entries with authenticated catalog MD5s can be skipped from destination size and `ETag` without reading entry bytes. Untrusted existing entries are read once for MD5 comparison, while missing entries stream directly to S3 without a pre-hash pass. The upload stream calculates MD5 alongside required ZIP validation, so ambiguous writes can reconcile against a single-part destination `ETag` without requesting an additional stored checksum.
 
