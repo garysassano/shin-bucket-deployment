@@ -344,6 +344,7 @@ function benchmarkEnv(args: {
     AWS_REGION: options.region,
     SHIN_BENCH_DESTINATION_PREFIX: options.destinationPrefix,
     SHIN_BENCH_IMPLEMENTATION: run.implementation,
+    SHIN_BENCH_INVOCATION_TOKEN: `${options.runToken}:${phase.name}`,
     SHIN_BENCH_LAMBDA_MAX_PARALLEL_TRANSFERS: String(run.parallel),
     SHIN_BENCH_LAMBDA_MEMORY_MB: String(run.memoryMb),
     SHIN_BENCH_ASSET_STATE: phase.assetState,
