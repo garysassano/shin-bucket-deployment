@@ -3,19 +3,19 @@
 This page is the current human-readable correctness snapshot for `ShinBucketDeployment`. Performance evidence and AWS CDK `BucketDeployment` comparisons remain separate in [benchmark](./benchmark.md). Verification is replaced rather than appended; runbooks and sanitization rules live in `.agents/skills/shin-verification/SKILL.md`.
 
 > [!IMPORTANT]
-> The streaming marker-replacement feature branch has complete local and AWS correctness evidence. The AWS run used the rebuilt arm64 provider from `d8b40a5`; both packaged architectures were rebuilt from the same provider source. Raw AWS output and identifiers remain outside git.
+> The current streaming marker-replacement branch is locally verified at `3967fec`. The latest full AWS correctness run used the rebuilt arm64 provider from `d8b40a5`; benchmark evidence for the follow-up commit remains separate and is not counted as correctness verification. Raw AWS output and identifiers remain outside git.
 
 ## Current Snapshot
 
 | Field | Value |
 | --- | --- |
-| Latest verification date | 2026-07-13 |
-| Current verification baseline | `d8b40a5` (`feat: stream deterministic marker replacement`) on `feat/streaming-marker-replacement` |
-| Current verification category | Deterministic local gates plus deployed AWS end-to-end verification |
-| Latest current run | `2026-07-13-aws-marker-replacement` |
-| AWS status for current code | Pass: 21 ordered phases across 16 stacks, followed by independent state assertions |
-| Provider architecture exercised in AWS | arm64 |
-| Packaged provider architectures | arm64 and x86_64 rebuilt from the same provider source |
+| Latest verification date | 2026-07-14 |
+| Current verification baseline | `3967fec` (`fix: stabilize marker streaming follow-up`) on `feat/streaming-marker-replacement` |
+| Current verification category | Deterministic local gates at current code plus the prior deployed AWS end-to-end snapshot |
+| Latest current run | `2026-07-14-local-marker-follow-up` |
+| AWS status for current code | Full correctness snapshot remains at `d8b40a5`; the current follow-up is locally verified |
+| Provider architecture exercised in the latest full AWS correctness run | arm64 |
+| Packaged provider architectures | arm64 and x86_64 rebuilt from `3967fec` |
 | Cleanup | All verification and benchmark stacks destroyed; the intentionally retained lifecycle-test bucket was emptied and deleted; final scoped stack count was zero |
 | Raw evidence | Raw CDK logs, CloudWatch output, responses, and identifiers were kept in scratch only and are not committed |
 | Scenario runner | `pnpm verify list`, `pnpm verify synth`, `pnpm verify deploy`, or `pnpm verify destroy`; ordered update chains remain serial within concurrent groups |
@@ -24,8 +24,8 @@ This page is the current human-readable correctness snapshot for `ShinBucketDepl
 
 | Priority | Area | Current Evidence | Status |
 | --- | --- | --- | --- |
-| P0 | Rust provider tests | 128 tests discovered: 127 passed and one credential-gated generated-S3 integration test was ignored. Coverage includes bounded scheduling and retry ownership plus the streaming marker engine's reference property tests, overlap/non-recursion, UTF-8 and chunk boundaries, empty/large replacement values, JSON escaping, exact size limits, CRC failure, retry-body replay, and final-frame withholding. | Local pass |
-| P0 | TypeScript and release-script tests | 87 Vitest tests cover construct synthesis, encryption strategy derivation, KMS IAM, removed-prop rejection, assets, lifecycle, validation, and the marker benchmark profile; five Node release tests passed. | Local pass |
+| P0 | Rust provider tests | 129 tests discovered: 128 passed and one credential-gated generated-S3 integration test was ignored. Coverage includes bounded scheduling and retry ownership plus the streaming marker engine's reference property tests, overlap/non-recursion, UTF-8 and chunk boundaries, empty/large replacement values, JSON escaping, exact size limits, CRC failure, retry-body replay, final-frame withholding, and cancellation when a marker upload body is abandoned. | Local pass |
+| P0 | TypeScript and release-script tests | 89 Vitest tests cover construct synthesis, encryption strategy derivation, KMS IAM, removed-prop rejection, assets, lifecycle, validation, and synthesis-stable marker benchmark bytes; five Node release tests passed. | Local pass |
 | P0 | Build and static checks | TypeScript build, published-package build, no-emit typecheck, Biome, Rust fmt/check, all-feature Clippy with warnings denied, package smoke verification, full-lock dependency audit, scoped dependency-policy checks, workflow checks, and clean diff validation passed. | Local pass |
 | P0 | Scenario synthesis | All 21 default verification phases list and synthesize, including customer-managed KMS, AWS-managed KMS, and managed DSSE destination scenarios. The removed metadata-update chain is no longer part of the product contract. | Local pass |
 | P0 | Marker replacement | Simultaneous leftmost-longest replacement is non-recursive and bounded across decompression chunks. AWS assertions checked plain, raw/escaped JSON, data, and YAML sources; telemetry recorded six planning and six upload passes using the declared two-pass strategy, with zero source GET errors/retries and zero destination PUT retries/throttles. | Local and AWS pass |
@@ -43,6 +43,7 @@ This page is the current human-readable correctness snapshot for `ShinBucketDepl
 
 | Run | Category | Scope | Status | Evidence |
 | --- | --- | --- | --- | --- |
+| `2026-07-14-local-marker-follow-up` | local | Abandoned marker-body cancellation, stable benchmark fixture, package, and scenario candidate at `3967fec` | Pass | 128 Rust tests passed with one AWS-only test ignored; 89 Vitest and five Node tests passed; build/package/typecheck/lint/fmt/clippy/audit/deny/workflow/TOML gates passed; all scenarios synthesized; both Lambda architectures rebuilt and package-verified. |
 | `2026-07-13-aws-marker-replacement` | aws | 21 phases across 16 stacks using the rebuilt arm64 streaming-marker provider | Pass and cleaned | Every ordered phase completed. Independent assertions covered content/types, all marker source shapes and telemetry, filters, source order, ranged reads, lifecycle state, exact KMS/DSSE checksum shape, and primed sync/async CloudFront invalidation. All stacks and the retained bucket were removed. |
 | `2026-07-13-local-marker-replacement` | local | Streaming marker provider, decision-run harness, package, and scenario candidate | Pass | 127 Rust tests passed with one AWS-only test ignored; 87 Vitest and five Node tests passed; build/package/typecheck/lint/fmt/clippy/audit/deny/workflow/TOML gates passed; all scenarios synthesized; both Lambda architectures rebuilt and package-verified. |
 | `2026-07-13-aws-transfer-scheduler` | aws | 21 phases across 16 stacks using the rebuilt arm64 transfer-scheduler provider | Pass and cleaned | Every ordered phase completed successfully. The runner destroyed all stacks and a separate scoped check found zero remaining. Raw logs and identifiers remain outside git. |

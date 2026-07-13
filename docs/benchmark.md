@@ -73,27 +73,29 @@ The interrupted fifth upstream repetition is not represented as complete evidenc
 
 ## Marker replacement performance decision
 
-The 2026-07-13 marker-replacement decision run completed five `before`, five `current`, and five `upstream` repetitions. Its 45 sanitized rows are retained in `benchmarks/results.jsonl` under decision-run ID `marker-replacement-2026-07-13`. Every repetition used the `marker-heavy` profile, a 16 MiB marker-bearing object plus four small ordinary files, 2048 MiB Lambda memory, 32 parallel transfers, serialized stacks, and the same create/unchanged/changed phase order in `eu-central-1`.
+The 2026-07-14 corrected marker-replacement decision run completed one `before`, one `current`, and one `upstream` repetition, as requested for this confirmation. Its nine sanitized rows are retained in `benchmarks/results.jsonl` under decision-run ID `marker-replacement-stable-2026-07-14`. Every variant used the `marker-heavy` profile, a stable 16 MiB marker-bearing object plus four small ordinary files, 2048 MiB Lambda memory, 32 parallel transfers, serialized stacks, and the same create/unchanged/changed phase order in `eu-central-1`.
 
-The `before` provider is benchmark-harness commit `b11e26c`, whose provider source still matches `main` before streaming marker replacement. The current provider is `d8b40a5`. Upstream is AWS CDK 2.260.0 `BucketDeployment`. Values are medians of five CloudWatch `REPORT` records per cell.
+The earlier five-repetition fixture padded around unresolved CDK token text. Placeholder lengths could change between syntheses, shifting the resolved marker body by 16 to 32 bytes and causing spurious unchanged uploads: its `before` rows alternated between zero and one marker upload, while its `current` rows alternated in the opposite pattern. The corrected fixture pads against fixed resolved parameter defaults. Both corrected Shin unchanged phases uploaded zero objects and skipped all six. The flawed 45 rows were removed from current-result data.
+
+The `before` provider is benchmark-harness commit `b11e26c`, whose provider source still matches `main` before streaming marker replacement; only the stable fixture was applied in a detached benchmark checkout. The current provider is `3967fec`. Upstream is AWS CDK 2.260.0 `BucketDeployment`. Values are single CloudWatch `REPORT` records per cell, not multi-sample medians.
 
 | Phase | Provider seconds, before / current / upstream | Billed seconds, before / current / upstream | Current vs before | Upstream / current | Peak MiB, before / current / upstream |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| `cold-create` | 3.539 / 0.620 / 5.292 | 3.668 / 0.772 / 5.811 | -82.5% | 8.5x | 82 / 37 / 197 |
-| `unchanged-update` | 3.386 / 0.303 / 5.021 | 3.386 / 0.304 / 5.022 | -91.1% | 16.6x | 84 / 37 / 198 |
-| `changed-update` | 3.514 / 0.561 / 5.029 | 3.515 / 0.561 / 5.030 | -84.0% | 9.0x | 84 / 38 / 199 |
+| `cold-create` | 3.483 / 0.630 / 5.273 | 3.603 / 0.779 / 5.798 | -81.9% | 8.4x | 66 / 38 / 196 |
+| `unchanged-update` | 3.182 / 0.289 / 4.895 | 3.182 / 0.290 / 4.895 | -90.9% | 16.9x | 71 / 38 / 198 |
+| `changed-update` | 3.522 / 0.551 / 5.002 | 3.523 / 0.551 / 5.003 | -84.4% | 9.1x | 71 / 38 / 199 |
 
 End-to-end timings remained comparable while provider work improved materially:
 
 | Phase | CDK deploy seconds, before / current / upstream | Local wall seconds, before / current / upstream |
 | --- | ---: | ---: |
-| `cold-create` | 57.05 / 51.96 / 57.06 | 66.298 / 61.373 / 66.330 |
-| `unchanged-update` | 11.21 / 11.15 / 11.14 | 20.830 / 20.699 / 20.586 |
-| `changed-update` | 11.27 / 11.13 / 11.10 | 25.952 / 25.749 / 25.777 |
+| `cold-create` | 55.03 / 54.68 / 54.66 | 68.433 / 66.412 / 72.865 |
+| `unchanged-update` | 11.28 / 11.26 / 11.30 | 21.221 / 19.824 / 19.789 |
+| `changed-update` | 11.23 / 11.18 / 11.26 | 26.239 / 24.899 / 24.477 |
 
-Current telemetry makes the pass tradeoff explicit. Every marker entry used one bounded planning pass to determine exact `Content-Length`, validate source size/CRC/catalog integrity, and calculate the SSE-S3 comparison digest. Cold create and changed update then used one retryable streaming upload pass; unchanged update matched the destination after planning and used no upload pass. Median source fetches were therefore 150,391 bytes for create, 74,324 bytes for unchanged, and 149,072 bytes for changed. The two-pass phases each recorded one deliberate replay-after-release refetch. This is local source-block replay, not S3 pressure: all 15 current rows reported zero source GET retries/errors and zero destination PUT retries/throttles.
+Current telemetry makes the pass tradeoff explicit. Every marker entry used one bounded planning pass to determine exact `Content-Length`, validate source size/CRC/catalog integrity, and calculate the SSE-S3 comparison digest. Cold create and changed update then used one retryable streaming upload pass; unchanged update matched the destination after planning and used no upload pass. Current source fetches were therefore 150,359 bytes for create, 74,308 bytes for unchanged, and 149,046 bytes for changed. The two-pass phases each recorded one deliberate replay-after-release refetch. This is local source-block replay, not S3 pressure: all six Shin rows reported zero source GET retries/errors and zero destination PUT retries/throttles.
 
-The current provider used 54.8% to 56.0% less peak memory than before and was 5.7x to 11.2x faster in provider time. It remained 8.5x to 16.6x faster than upstream while using about one fifth of upstream peak memory. The measured extra read on upload phases is therefore accepted: it removes whole-entry output buffering, preserves exact/retryable `PutObject` bodies, and still improves both time and memory materially.
+The current provider used 42.4% to 46.5% less peak memory than before and was 5.5x to 11.0x faster in provider time. It remained 8.4x to 16.9x faster than upstream while using about one fifth of upstream peak memory. As a historical cross-check, all nine corrected provider-time cells were within 6.1% of the superseded five-run medians. The measured extra read on upload phases is therefore accepted: it removes whole-entry output buffering, preserves exact/retryable `PutObject` bodies, and still improves both time and memory materially.
 
 Raw AWS output remains outside git. Every repetition captured provider telemetry before cleanup, destroyed its stack, and verified stack absence.
 
