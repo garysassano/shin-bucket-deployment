@@ -15,6 +15,7 @@ type FileSpec = {
 
 type GeneratedBundle = {
   readonly root: string;
+  readonly sourceRoots: readonly string[];
   readonly profile: BenchmarkAssetProfile;
   readonly state: BenchmarkAssetState;
   readonly fileCount: number;
@@ -39,7 +40,14 @@ export function ensureBenchmarkAssets(options?: {
   const totalBytes = specs.reduce((sum, spec) => sum + spec.size, 0);
 
   if (existsSync(markerPath)) {
-    return { root, profile, state, fileCount: specs.length, totalBytes };
+    return {
+      root,
+      sourceRoots: sourceRoots(profile, root),
+      profile,
+      state,
+      fileCount: specs.length,
+      totalBytes,
+    };
   }
 
   rmSync(root, { force: true, recursive: true });
@@ -56,10 +64,39 @@ export function ensureBenchmarkAssets(options?: {
     `${JSON.stringify({ profile, state, fileCount: specs.length, totalBytes }, null, 2)}\n`,
   );
 
-  return { root, profile, state, fileCount: specs.length, totalBytes };
+  return {
+    root,
+    sourceRoots: sourceRoots(profile, root),
+    profile,
+    state,
+    fileCount: specs.length,
+    totalBytes,
+  };
 }
 
 function buildSpecs(profile: BenchmarkAssetProfile, state: BenchmarkAssetState): FileSpec[] {
+  if (profile === "multi-source-prune") {
+    const specs: FileSpec[] = [];
+    for (let sourceIndex = 0; sourceIndex < 4; sourceIndex++) {
+      const source = `source-${String(sourceIndex).padStart(2, "0")}`;
+      specs.push({
+        path: `${source}/${source}/index.html`,
+        size: 8 * 1024,
+        kind: "text",
+      });
+      addSeries(
+        specs,
+        `${source}/${source}/assets/blob`,
+        ".bin",
+        320,
+        8 * 1024,
+        64 * 1024,
+        "binary",
+      );
+    }
+    return state === "pruned" ? specs.filter((_, index) => index % 10 === 0) : specs;
+  }
+
   const specs: FileSpec[] = [
     { path: "index.html", size: 24 * 1024, kind: "text" },
     { path: "asset-manifest.json", size: 18 * 1024, kind: "json" },
@@ -202,11 +239,21 @@ function changedSalt(path: string): string {
     path.includes("route-0007") ||
     path.includes("vendor-0001") ||
     path.includes("image-0003") ||
-    path.includes("page-0011")
+    path.includes("page-0011") ||
+    path.includes("blob-0007")
   ) {
     return "changed";
   }
   return "stable";
+}
+
+function sourceRoots(profile: BenchmarkAssetProfile, root: string): readonly string[] {
+  if (profile !== "multi-source-prune") {
+    return [root];
+  }
+  return Array.from({ length: 4 }, (_, index) =>
+    join(root, `source-${String(index).padStart(2, "0")}`),
+  );
 }
 
 function hashName(prefix: string, index: number): string {

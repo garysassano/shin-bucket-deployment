@@ -83,7 +83,7 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
         },
         ...(maxParallelTransfers === undefined ? {} : { maxParallelTransfers }),
         sources: [
-          ShinSource.asset(bundle.root),
+          ...bundle.sourceRoots.map((root) => ShinSource.asset(root)),
           ...(markerPayload === undefined
             ? []
             : [ShinSource.data("runtime/marker-heavy.txt", markerPayload)]),
@@ -97,7 +97,7 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
           ? {}
           : { retainOnDelete: !deleteCurrentObjectsOnDelete }),
         sources: [
-          AwsSource.asset(bundle.root),
+          ...bundle.sourceRoots.map((root) => AwsSource.asset(root)),
           ...(markerPayload === undefined
             ? []
             : [AwsSource.data("runtime/marker-heavy.txt", markerPayload)]),
@@ -124,6 +124,10 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
 
     new CfnOutput(this, "BenchmarkFileCount", {
       value: String(bundle.fileCount + (markerPayload === undefined ? 0 : 1)),
+    });
+
+    new CfnOutput(this, "BenchmarkSourceCount", {
+      value: String(bundle.sourceRoots.length),
     });
 
     new CfnOutput(this, "BenchmarkTotalBytes", {

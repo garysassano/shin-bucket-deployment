@@ -51,7 +51,7 @@
       "type": "array",
       "minItems": 1,
       "items": {
-        "enum": ["tiny-many", "mixed", "large-few", "marker-heavy"]
+        "enum": ["tiny-many", "mixed", "large-few", "marker-heavy", "multi-source-prune"]
       }
     },
     "implementations": {
