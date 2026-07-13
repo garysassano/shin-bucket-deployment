@@ -127,7 +127,7 @@ jobs:
         run: cargo audit --file rust/Cargo.lock
 
       - name: cargo deny
-        run: cargo deny --manifest-path rust/Cargo.toml check
+        run: pnpm rust:deny
 
   workflow-quality:
     name: Workflow and TOML quality
