@@ -6,7 +6,12 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { parseCliOptions } from "../cli";
-import { type BenchmarkResultRecord, phaseRank, readBenchmarkResultRecords } from "../model";
+import {
+  type BenchmarkResultRecord,
+  isCanonicalBenchmarkRecord,
+  phaseRank,
+  readBenchmarkResultRecords,
+} from "../model";
 
 type ChartVariant = "default" | "aws";
 type HeaderLayout = "two-line" | "three-line";
@@ -572,9 +577,9 @@ ${renderHeader(benchmarkData)}
 }
 
 // ═══ OUTPUT ═══
-const benchmarkDataItems = findSelections(readBenchmarkResultRecords(inputFile)).map(
-  buildBenchmarkData,
-);
+const benchmarkDataItems = findSelections(
+  readBenchmarkResultRecords(inputFile).filter(isCanonicalBenchmarkRecord),
+).map(buildBenchmarkData);
 if (benchmarkDataItems.length === 0) {
   throw new Error("No complete Shin/AWS benchmark pairs matched the selected filters");
 }

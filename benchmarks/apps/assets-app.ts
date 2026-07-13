@@ -1,9 +1,10 @@
-import { App, CfnOutput, RemovalPolicy, Stack, type StackProps } from "aws-cdk-lib";
+import { App, CfnOutput, CfnResource, RemovalPolicy, Stack, type StackProps } from "aws-cdk-lib";
 import { Bucket } from "aws-cdk-lib/aws-s3";
 import {
   BucketDeployment as AwsBucketDeployment,
   Source as AwsSource,
 } from "aws-cdk-lib/aws-s3-deployment";
+import type { Construct } from "constructs";
 import { ShinBucketDeployment, Source as ShinSource } from "../../src";
 import { ensureBenchmarkAssets } from "../src/assets";
 import { type BenchmarkImplementation, isBenchmarkImplementation } from "../src/model";
@@ -36,8 +37,9 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
       waitForDistributionInvalidation: process.env.SHIN_BENCH_WAIT_FOR_CLOUDFRONT === "true",
     };
 
+    let deployment: Construct;
     if (implementation === "shin") {
-      new ShinBucketDeployment(this, "DeployBenchmarkAssets", {
+      deployment = new ShinBucketDeployment(this, "DeployBenchmarkAssets", {
         ...deploymentProps,
         destinationLifecycle: {
           onDeploy: {
@@ -55,7 +57,7 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
         sources: [ShinSource.asset(bundle.root)],
       });
     } else {
-      new AwsBucketDeployment(this, "DeployBenchmarkAssets", {
+      deployment = new AwsBucketDeployment(this, "DeployBenchmarkAssets", {
         ...deploymentProps,
         prune: deleteStaleObjects,
         ...(deleteCurrentObjectsOnDelete === undefined
@@ -64,6 +66,7 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
         sources: [AwsSource.asset(bundle.root)],
       });
     }
+    forceBenchmarkInvocation(deployment, process.env.SHIN_BENCH_INVOCATION_TOKEN);
 
     new CfnOutput(this, "BucketName", {
       value: websiteBucket.bucketName,
@@ -101,6 +104,25 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
       value: implementation,
     });
   }
+}
+
+function forceBenchmarkInvocation(deployment: Construct, token: string | undefined): void {
+  if (!token) {
+    return;
+  }
+  const customResources = deployment.node
+    .findAll()
+    .filter(
+      (child): child is CfnResource =>
+        CfnResource.isCfnResource(child) && child.cfnResourceType.startsWith("Custom::"),
+    );
+  const [customResource] = customResources;
+  if (customResource === undefined || customResources.length !== 1) {
+    throw new Error(
+      `Expected exactly one deployment custom resource, found ${customResources.length}.`,
+    );
+  }
+  customResource.addPropertyOverride("BenchmarkInvocationToken", token);
 }
 
 function parseImplementation(value: string | undefined): BenchmarkImplementation {

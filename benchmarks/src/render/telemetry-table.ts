@@ -4,6 +4,7 @@ import { parseCliOptions } from "../cli";
 import {
   type BenchmarkResultRecord,
   type ProviderSummary,
+  isCanonicalBenchmarkRecord,
   phaseRank,
   readBenchmarkResultRows,
 } from "../model";
@@ -102,6 +103,24 @@ const SOURCE_COLUMNS: Array<Column<TelemetryRow>> = [
   { header: "Fetched blocks", value: (row) => nested(row, "source", "fetchedBlocks") },
   { header: "Get attempts", value: (row) => nested(row, "source", "getAttempts") },
   { header: "Get retries", value: (row) => nested(row, "source", "getRetries") },
+  {
+    header: "Get throttled",
+    value: (row) => nested(row, "source", "getThrottledAttempts"),
+  },
+  {
+    header: "Get retryable errors",
+    value: (row) => nested(row, "source", "getRetryableErrors"),
+  },
+  {
+    header: "Get permanent errors",
+    value: (row) => nested(row, "source", "getPermanentErrors"),
+  },
+  { header: "Get request errors", value: (row) => nested(row, "source", "getRequestErrors") },
+  { header: "Get body errors", value: (row) => nested(row, "source", "getBodyErrors") },
+  {
+    header: "Get short bodies",
+    value: (row) => nested(row, "source", "getShortBodyErrors"),
+  },
   { header: "Get errors", value: (row) => nested(row, "source", "getErrors") },
   { header: "Block hits", value: (row) => nested(row, "source", "blockHits") },
   { header: "Block misses", value: (row) => nested(row, "source", "blockMisses") },
@@ -118,14 +137,34 @@ const SOURCE_COLUMNS: Array<Column<TelemetryRow>> = [
     header: "Replay after failure",
     value: (row) => nested(row, "source", "replayClaimsAfterFailure"),
   },
+  { header: "Body attempts", value: (row) => nested(row, "source", "bodyAttempts") },
+  { header: "Body replays", value: (row) => nested(row, "source", "bodyReplays") },
+  {
+    header: "Active GETs high",
+    value: (row) => nested(row, "source", "activeGetsHighWater"),
+  },
   {
     header: "Active readers high",
     value: (row) => nested(row, "source", "activeReadersHighWater"),
   },
 ];
 
+const TRANSFER_COLUMNS: Array<Column<TelemetryRow>> = [
+  { header: "Phase", value: phase },
+  { header: "Scheduled", value: (row) => nested(row, "transfer", "scheduledObjects") },
+  { header: "Completed", value: (row) => nested(row, "transfer", "completedObjects") },
+  { header: "Failed", value: (row) => nested(row, "transfer", "failedObjects") },
+  { header: "Cancelled", value: (row) => nested(row, "transfer", "cancelledObjects") },
+  { header: "Panicked", value: (row) => nested(row, "transfer", "panickedObjects") },
+  {
+    header: "In flight high",
+    value: (row) => nested(row, "transfer", "inFlightHighWater"),
+  },
+];
+
 const PUT_COLUMNS: Array<Column<TelemetryRow>> = [
   { header: "Phase", value: phase },
+  { header: "Wire attempts", value: (row) => nested(row, "putObject", "wireAttempts") },
   { header: "Failed attempts", value: (row) => nested(row, "putObject", "failedAttempts") },
   { header: "Retry attempts", value: (row) => nested(row, "putObject", "retryAttempts") },
   { header: "Throttled attempts", value: (row) => nested(row, "putObject", "throttledAttempts") },
@@ -210,6 +249,10 @@ function renderGroup(group: TelemetryGroup): string[] {
     "",
     renderMarkdownTable(group.rows, SOURCE_COLUMNS),
     "",
+    "### Transfer Scheduler",
+    "",
+    renderMarkdownTable(group.rows, TRANSFER_COLUMNS),
+    "",
     "### PutObject Pressure",
     "",
     renderMarkdownTable(group.rows, PUT_COLUMNS),
@@ -254,7 +297,7 @@ function phase(row: TelemetryRow): string {
 
 function nested(
   row: TelemetryRow,
-  section: "phaseMs" | "counts" | "bytes" | "source" | "putObject",
+  section: "phaseMs" | "counts" | "bytes" | "transfer" | "source" | "putObject",
   key: string,
 ): unknown {
   return row.summary[section]?.[key];
@@ -272,6 +315,7 @@ function renderMarkdownTable<T>(rows: T[], columns: Array<Column<T>>): string {
 
 function readTelemetryRows(filePath: string): TelemetryRow[] {
   return readBenchmarkResultRows(filePath)
+    .filter(({ record }) => isCanonicalBenchmarkRecord(record))
     .filter(({ record }) => record.providerSummary !== undefined && record.providerSummary !== null)
     .map(({ line, record }) => ({
       line,

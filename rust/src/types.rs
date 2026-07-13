@@ -211,6 +211,12 @@ pub(crate) struct DeploymentStats {
     source_fetched_bytes: AtomicU64,
     source_get_attempts: AtomicU64,
     source_get_retries: AtomicU64,
+    source_get_throttled_attempts: AtomicU64,
+    source_get_retryable_errors: AtomicU64,
+    source_get_permanent_errors: AtomicU64,
+    source_get_request_errors: AtomicU64,
+    source_get_body_errors: AtomicU64,
+    source_get_short_body_errors: AtomicU64,
     source_get_errors: AtomicU64,
     source_block_hits: AtomicU64,
     source_block_misses: AtomicU64,
@@ -221,8 +227,18 @@ pub(crate) struct DeploymentStats {
     source_replay_claims: AtomicU64,
     source_replay_claims_after_release: AtomicU64,
     source_replay_claims_after_failure: AtomicU64,
+    source_body_attempts: AtomicU64,
+    source_body_replays: AtomicU64,
+    source_active_gets_high_water: AtomicU64,
     source_active_readers_high_water: AtomicU64,
     source_resident_bytes_high_water: AtomicU64,
+    transfer_scheduled_objects: AtomicU64,
+    transfer_completed_objects: AtomicU64,
+    transfer_failed_objects: AtomicU64,
+    transfer_cancelled_objects: AtomicU64,
+    transfer_panicked_objects: AtomicU64,
+    transfer_in_flight_high_water: AtomicU64,
+    put_wire_attempts: AtomicU64,
     put_failed_attempts: AtomicU64,
     put_retry_attempts: AtomicU64,
     put_throttled_attempts: AtomicU64,
@@ -237,6 +253,7 @@ struct OnceInstant(Instant);
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DeploymentStatsSnapshot<'a> {
     pub(crate) event: &'static str,
+    pub(crate) schema_version: u8,
     pub(crate) request_type: &'a str,
     pub(crate) status: &'a str,
     pub(crate) extract: bool,
@@ -248,6 +265,7 @@ pub(crate) struct DeploymentStatsSnapshot<'a> {
     pub(crate) phase_ms: PhaseMillis,
     pub(crate) counts: DeploymentCounts,
     pub(crate) bytes: DeploymentBytes,
+    pub(crate) transfer: TransferStats,
     pub(crate) source: SourceStats,
     pub(crate) put_object: PutObjectStats,
 }
@@ -299,6 +317,12 @@ pub(crate) struct SourceStats {
     pub(crate) fetched_bytes: u64,
     pub(crate) get_attempts: u64,
     pub(crate) get_retries: u64,
+    pub(crate) get_throttled_attempts: u64,
+    pub(crate) get_retryable_errors: u64,
+    pub(crate) get_permanent_errors: u64,
+    pub(crate) get_request_errors: u64,
+    pub(crate) get_body_errors: u64,
+    pub(crate) get_short_body_errors: u64,
     pub(crate) get_errors: u64,
     pub(crate) block_hits: u64,
     pub(crate) block_misses: u64,
@@ -309,13 +333,28 @@ pub(crate) struct SourceStats {
     pub(crate) replay_claims: u64,
     pub(crate) replay_claims_after_release: u64,
     pub(crate) replay_claims_after_failure: u64,
+    pub(crate) body_attempts: u64,
+    pub(crate) body_replays: u64,
+    pub(crate) active_gets_high_water: u64,
     pub(crate) active_readers_high_water: u64,
     pub(crate) resident_bytes_high_water: u64,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+pub(crate) struct TransferStats {
+    pub(crate) scheduled_objects: u64,
+    pub(crate) completed_objects: u64,
+    pub(crate) failed_objects: u64,
+    pub(crate) cancelled_objects: u64,
+    pub(crate) panicked_objects: u64,
+    pub(crate) in_flight_high_water: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct PutObjectStats {
+    pub(crate) wire_attempts: u64,
     pub(crate) failed_attempts: u64,
     pub(crate) retry_attempts: u64,
     pub(crate) throttled_attempts: u64,
@@ -430,6 +469,18 @@ impl DeploymentStats {
             .fetch_add(stats.source_get_attempts, Ordering::Relaxed);
         self.source_get_retries
             .fetch_add(stats.source_get_retries, Ordering::Relaxed);
+        self.source_get_throttled_attempts
+            .fetch_add(stats.source_get_throttled_attempts, Ordering::Relaxed);
+        self.source_get_retryable_errors
+            .fetch_add(stats.source_get_retryable_errors, Ordering::Relaxed);
+        self.source_get_permanent_errors
+            .fetch_add(stats.source_get_permanent_errors, Ordering::Relaxed);
+        self.source_get_request_errors
+            .fetch_add(stats.source_get_request_errors, Ordering::Relaxed);
+        self.source_get_body_errors
+            .fetch_add(stats.source_get_body_errors, Ordering::Relaxed);
+        self.source_get_short_body_errors
+            .fetch_add(stats.source_get_short_body_errors, Ordering::Relaxed);
         self.source_get_errors
             .fetch_add(stats.source_get_errors, Ordering::Relaxed);
         self.source_block_hits
@@ -450,33 +501,60 @@ impl DeploymentStats {
             .fetch_add(stats.replay_claims_after_release, Ordering::Relaxed);
         self.source_replay_claims_after_failure
             .fetch_add(stats.replay_claims_after_failure, Ordering::Relaxed);
+        self.source_body_attempts
+            .fetch_add(stats.body_attempts, Ordering::Relaxed);
+        self.source_body_replays
+            .fetch_add(stats.body_replays, Ordering::Relaxed);
+        self.source_active_gets_high_water
+            .fetch_max(stats.active_gets_high_water, Ordering::Relaxed);
         self.source_active_readers_high_water
             .fetch_max(stats.active_readers_high_water, Ordering::Relaxed);
         self.source_resident_bytes_high_water
             .fetch_max(stats.resident_bytes_high_water, Ordering::Relaxed);
     }
 
-    pub(crate) fn add_put_stats(
-        &self,
-        failed_attempts: u64,
-        retry_attempts: u64,
-        throttled_attempts: u64,
-        retry_wait_millis: u64,
-        throttle_cooldown_waits: u64,
-        throttle_cooldown_wait_millis: u64,
-    ) {
+    pub(crate) fn add_transfer_scheduled_object(&self, in_flight: usize) {
+        self.transfer_scheduled_objects
+            .fetch_add(1, Ordering::Relaxed);
+        self.transfer_in_flight_high_water.fetch_max(
+            u64::try_from(in_flight).unwrap_or(u64::MAX),
+            Ordering::Relaxed,
+        );
+    }
+
+    pub(crate) fn add_transfer_completed_object(&self) {
+        self.transfer_completed_objects
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn add_transfer_failed_object(&self, panicked: bool) {
+        self.transfer_failed_objects.fetch_add(1, Ordering::Relaxed);
+        if panicked {
+            self.transfer_panicked_objects
+                .fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    pub(crate) fn add_transfer_cancelled_object(&self) {
+        self.transfer_cancelled_objects
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn add_put_stats(&self, stats: &PutObjectStats) {
+        self.put_wire_attempts
+            .fetch_add(stats.wire_attempts, Ordering::Relaxed);
         self.put_failed_attempts
-            .fetch_add(failed_attempts, Ordering::Relaxed);
+            .fetch_add(stats.failed_attempts, Ordering::Relaxed);
         self.put_retry_attempts
-            .fetch_add(retry_attempts, Ordering::Relaxed);
+            .fetch_add(stats.retry_attempts, Ordering::Relaxed);
         self.put_throttled_attempts
-            .fetch_add(throttled_attempts, Ordering::Relaxed);
+            .fetch_add(stats.throttled_attempts, Ordering::Relaxed);
         self.put_retry_wait_millis
-            .fetch_add(retry_wait_millis, Ordering::Relaxed);
+            .fetch_add(stats.retry_wait_ms, Ordering::Relaxed);
         self.put_throttle_cooldown_waits
-            .fetch_add(throttle_cooldown_waits, Ordering::Relaxed);
+            .fetch_add(stats.throttle_cooldown_waits, Ordering::Relaxed);
         self.put_throttle_cooldown_wait_millis
-            .fetch_add(throttle_cooldown_wait_millis, Ordering::Relaxed);
+            .fetch_add(stats.throttle_cooldown_wait_ms, Ordering::Relaxed);
     }
 
     pub(crate) fn snapshot<'a>(
@@ -487,6 +565,7 @@ impl DeploymentStats {
     ) -> DeploymentStatsSnapshot<'a> {
         DeploymentStatsSnapshot {
             event: "shin_deployment_summary",
+            schema_version: 2,
             request_type,
             status,
             extract: request.extract,
@@ -524,6 +603,14 @@ impl DeploymentStats {
                 uploaded: self.uploaded_bytes.load(Ordering::Relaxed),
                 copied: self.copied_bytes.load(Ordering::Relaxed),
             },
+            transfer: TransferStats {
+                scheduled_objects: self.transfer_scheduled_objects.load(Ordering::Relaxed),
+                completed_objects: self.transfer_completed_objects.load(Ordering::Relaxed),
+                failed_objects: self.transfer_failed_objects.load(Ordering::Relaxed),
+                cancelled_objects: self.transfer_cancelled_objects.load(Ordering::Relaxed),
+                panicked_objects: self.transfer_panicked_objects.load(Ordering::Relaxed),
+                in_flight_high_water: self.transfer_in_flight_high_water.load(Ordering::Relaxed),
+            },
             source: SourceStats {
                 planned_blocks: self.source_planned_blocks.load(Ordering::Relaxed),
                 planned_bytes: self.source_planned_bytes.load(Ordering::Relaxed),
@@ -531,6 +618,12 @@ impl DeploymentStats {
                 fetched_bytes: self.source_fetched_bytes.load(Ordering::Relaxed),
                 get_attempts: self.source_get_attempts.load(Ordering::Relaxed),
                 get_retries: self.source_get_retries.load(Ordering::Relaxed),
+                get_throttled_attempts: self.source_get_throttled_attempts.load(Ordering::Relaxed),
+                get_retryable_errors: self.source_get_retryable_errors.load(Ordering::Relaxed),
+                get_permanent_errors: self.source_get_permanent_errors.load(Ordering::Relaxed),
+                get_request_errors: self.source_get_request_errors.load(Ordering::Relaxed),
+                get_body_errors: self.source_get_body_errors.load(Ordering::Relaxed),
+                get_short_body_errors: self.source_get_short_body_errors.load(Ordering::Relaxed),
                 get_errors: self.source_get_errors.load(Ordering::Relaxed),
                 block_hits: self.source_block_hits.load(Ordering::Relaxed),
                 block_misses: self.source_block_misses.load(Ordering::Relaxed),
@@ -545,6 +638,9 @@ impl DeploymentStats {
                 replay_claims_after_failure: self
                     .source_replay_claims_after_failure
                     .load(Ordering::Relaxed),
+                body_attempts: self.source_body_attempts.load(Ordering::Relaxed),
+                body_replays: self.source_body_replays.load(Ordering::Relaxed),
+                active_gets_high_water: self.source_active_gets_high_water.load(Ordering::Relaxed),
                 active_readers_high_water: self
                     .source_active_readers_high_water
                     .load(Ordering::Relaxed),
@@ -553,6 +649,7 @@ impl DeploymentStats {
                     .load(Ordering::Relaxed),
             },
             put_object: PutObjectStats {
+                wire_attempts: self.put_wire_attempts.load(Ordering::Relaxed),
                 failed_attempts: self.put_failed_attempts.load(Ordering::Relaxed),
                 retry_attempts: self.put_retry_attempts.load(Ordering::Relaxed),
                 throttled_attempts: self.put_throttled_attempts.load(Ordering::Relaxed),

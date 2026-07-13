@@ -23,7 +23,7 @@ Runtime tuning defaults:
 
 | Setting | Default | Purpose |
 | --- | ---: | --- |
-| `maxParallelTransfers` | 32 | Bounds copy, hash, upload, and related transfer work. |
+| `maxParallelTransfers` | 32 | Bounds the continuously drained set of copy, hash, upload, and related logical object tasks. |
 | `memoryLimit` | 1024 MiB | Sizes the Lambda and drives adaptive source-read defaults. |
 
 Most deployments should tune only `memoryLimit` and, when needed, `maxParallelTransfers`. Source block/window and `PutObject` retry settings remain available under `advancedRuntimeTuning` as support and benchmark escape hatches:
@@ -39,6 +39,8 @@ Most deployments should tune only `memoryLimit` and, when needed, `maxParallelTr
 | `advancedRuntimeTuning.putObjectRetry.baseDelayMs` / `maxDelayMs` | 250 / 5000 | Capped non-throttling `PutObject` retry delay. |
 | `advancedRuntimeTuning.putObjectRetry.slowdownBaseDelayMs` / `slowdownMaxDelayMs` | 1000 / 30000 | Capped throttling `PutObject` retry delay. |
 | `advancedRuntimeTuning.putObjectRetry.jitter` | `full` | Jitter mode for computed `PutObject` retry delays; `none` is also supported. |
+
+Source ranged reads use a fixed three-total-attempt provider policy. Each attempt disables SDK retries. Transport failures, timeouts, throttling, retryable 5xx responses, body read failures, and incomplete bodies may consume the remaining attempts; permanent 4xx, construction failures, and local validation errors do not.
 
 Fixed ZIP entry streaming defaults keep per-transfer memory bounded:
 
@@ -281,12 +283,13 @@ For `extract=true`:
 7. Before applying deployment filters, strictly validate an authenticated catalog and require a one-to-one path and size mapping with every non-directory, non-catalog ZIP entry.
 8. Build a manifest of planned ZIP entries with normalized destination keys, source archive index, entry offsets, compressed size, uncompressed size, CRC32, and optional trusted size/MD5 metadata.
 9. Preflight every final UTF-8 destination key, single-request object size, archive span, and aggregate output total before destination mutation.
-10. Coalesce planned source spans into shared source blocks, prefetch them with bounded source GET concurrency, and release blocks after all active readers consume their claims.
+10. Coalesce planned source spans into shared source blocks, prefetch them with bounded source GET concurrency, and release blocks after all active readers consume their claims. Every provider-owned ranged-read attempt disables SDK retries; transient transport, timeout, throttling, retryable 5xx, and incomplete-body failures can use the remaining three-total-attempt budget, while permanent 4xx and validation failures stop immediately.
 11. List the destination prefix once.
 12. On SSE-S3 destinations, skip existing marker-free trusted entries when destination size and `ETag` match the authenticated catalog. Existing untrusted entries are read/decompressed once for CRC/size/MD5 comparison; missing entries avoid that precomparison pass.
 13. On KMS/DSSE destinations, do not use destination `ETag` as plaintext MD5 and do not perform a useless precomparison read. Trusted entries still validate their catalog MD5 while streaming; untrusted entries do not compute MD5.
 14. Materialize each marker-bearing entry once immediately before its own PUT, validate and replace it, enforce the expanded size limit, and compare final MD5 only on SSE-S3 destinations.
 15. Set inferred `Content-Type` on every PUT. SSE-S3 uploads retain streamed MD5 for ambiguous-write reconciliation without storing another checksum. KMS/DSSE uploads request stored full-object SHA-256 and calculate the independent expected digest while streaming.
+16. Admit at most `maxParallelTransfers` logical object tasks, continuously drain completed joins, and stop admission on the first observed error or panic. Abort and drain outstanding work before stale deletion or invalidation can run.
 
 For `extract=false`:
 
@@ -381,7 +384,9 @@ For SSE-S3, the upload stream computes MD5 alongside required source validation 
 
 The normal SSE-S3 path performs no Shin SHA-256 pass and disables optional SDK checksum calculation. The KMS/DSSE path necessarily performs both the provider digest used independently after a lost response and the SDK's stored-checksum calculation. The controlled PR #12 run in [benchmark](./benchmark.md#pr-12-performance-decision-run) measured that KMS-only cost within -2.2% to +3.4% of the earlier provider duration while retaining a 2.6x to 2.7x provider-time advantage over upstream.
 
-The source ZIP ranged-read path still uses source `If-Match` when the source object has an `ETag`; that protects a single deployment from reading a source archive that changes while it is being streamed.
+The source ZIP ranged-read path still uses source `If-Match` when the source object has an `ETag`; that protects a single deployment from reading a source archive that changes while it is being streamed. Shin owns the complete three-total-attempt ranged-read policy. Every attempt disables AWS SDK retries, retries only typed transient/throttling failures or incomplete bodies, and never replays permanent 4xx responses, request construction failures, or local range validation errors.
+
+Transfer scheduling is bounded by `maxParallelTransfers`, including comparison/hash work as well as upload or copy work. Completed joins are removed while new objects are admitted, so task-handle memory is O(configured concurrency), not O(object count). The first observed transfer error or panic closes admission, aborts and drains outstanding transfer tasks, cancels source schedulers, wakes source-block and capacity waiters, and leaves later stale deletion and CloudFront invalidation unreachable. Retryable ZIP bodies share an attempt counter across application and SDK clones but do not start a decompressor, activate a source reader, or add replay claims until the body is first polled.
 
 `extract=false` remains on the `CopyObject` path. SSE-S3 skip decisions use `ETag`; KMS/DSSE copies do not use encrypted destination `ETag`s as plaintext identity. Copy requests do not ask S3 to calculate a checksum that Shin never consumes.
 
@@ -389,7 +394,7 @@ CloudFront invalidations use a bounded caller reference hash derived from the Cl
 
 ## CloudFormation Deadline And Response Protocol
 
-The provider derives absolute monotonic deadlines from each Lambda invocation. S3 and CloudFront work stops five seconds before a callback-only reserve begins; spawned transfer, source-scheduler, and body tasks are then cancelled and drained within that five-second window. The final 45 seconds are reserved only for failure/success response serialization and delivery. CloudFront creation, polling, and poll delays all use the work deadline rather than a separate fixed poll count.
+The provider derives absolute monotonic deadlines from each Lambda invocation. S3 and CloudFront work stops five seconds before a callback-only reserve begins; spawned transfer, source-scheduler, and body tasks are then cancelled, woken, and drained within that five-second window. Fatal transfer failures and panics use the same abort-and-drain path immediately rather than waiting for the invocation deadline. The final 45 seconds are reserved only for failure/success response serialization and delivery. CloudFront creation, polling, and poll delays all use the work deadline rather than a separate fixed poll count.
 
 Before any S3 mutation, the provider validates the custom resource `ResourceType`, CloudFront invalidation path/count serialization bounds, and the complete serialized success response. CloudFormation limits the entire custom-resource response body to 4096 bytes, so an oversized response fails before deployment with guidance to set `outputObjectKeys:false`. Failure responses dynamically reduce the serialized `Reason` when JSON escaping would otherwise exceed the same limit; the full error remains in CloudWatch Logs.
 
@@ -419,11 +424,14 @@ The current implementation:
 - coalesce adjacent source spans into shared source blocks
 - prefetch source blocks with bounded source GET concurrency
 - bound resident source block data and release blocks by reader claims
+- use one SDK attempt per provider-owned ranged GET attempt and retry only typed transient, throttled, or incomplete-body failures
 - validate ZIP entry uncompressed size and CRC32 during hashing and upload
 - keep destination listing as the central comparison input
 - use source-object `If-Match` guards for ranged archive reads
 - use destination `If-None-Match`/`If-Match` guards for extracted `PutObject` writes when listing data supports them
 - retry failed `PutObject` attempts with capped backoff and throttle-aware delays
+- drain a bounded transfer task set continuously and abort outstanding work on the first observed error or panic
+- create retryable ZIP body work only when a body instance is actually polled
 - derive source GET concurrency and source block window from Lambda memory unless explicitly configured
 - emit structured source scheduler and destination `PutObject` diagnostics as provider logs
 
@@ -440,9 +448,20 @@ Cataloged asset packaging limitations:
 
 ## Diagnostics
 
-Each extracted deployment logs the effective source schedule and a final source diagnostics record per source archive. These records include planned entries and blocks, planned and fetched source bytes, source amplification, ranged `GetObject` attempts/retries/errors, block hits/misses/releases/refetches, split wait counters for in-flight fetches versus source-window capacity, replay-claim counters, resident source-window high-water, active ZIP entry reader high-water, and active source GET high-water. The aggregate deployment summary records `destinationChecksumStrategy`, and the upload path also logs destination `PutObject` retry settings plus failed attempts, retry attempts, throttled attempts, retry wait milliseconds, and failures grouped by error code.
+Each extracted deployment logs the effective source schedule and a final source diagnostics record per source archive. These records include planned entries and blocks, planned and fetched source bytes, source amplification, ranged `GetObject` wire attempts and typed failures, block hits/misses/releases/refetches, split wait counters for in-flight fetches versus source-window capacity, consumed body attempts/replays, resident source-window high-water, true active ZIP entry reader high-water, and active source GET high-water. The aggregate `shin_deployment_summary` is schema version 2. It separates logical transfer objects and cancellations from source and destination wire attempts; the upload path also logs destination `PutObject` retry settings, throttling, wait time, and failures grouped by error code.
 
 Diagnostics are emitted to CloudWatch Logs through structured `tracing` fields. They are not returned in the CloudFormation custom-resource response because that response has a small practical size limit and is already used for `objectKeys` and `deployedBucket` outputs.
+
+Transfer scheduler diagnostics field reference:
+
+| Field | Meaning | Use when debugging |
+| --- | --- | --- |
+| `scheduledObjects` | Logical object tasks admitted to the bounded scheduler, including tasks that later discover a content skip. | Compare logical work with completed, failed, and cancelled work. |
+| `completedObjects` | Admitted logical object tasks that returned successfully. | Confirm all admitted work reached a terminal success or skip. |
+| `failedObjects` | Logical object tasks that returned an error or panicked. | Identify the failure that stopped further admission. |
+| `cancelledObjects` | Outstanding logical object tasks aborted during fail-fast or deadline cleanup. | Confirm outstanding writes were cancelled and drained. |
+| `panickedObjects` | Failed logical object tasks whose future panicked. | Distinguish runtime panics from ordinary transfer errors. |
+| `inFlightHighWater` | Peak admitted object tasks retained by the scheduler. | Verify the task set stayed within `maxParallelTransfers`. |
 
 Source diagnostics field reference:
 
@@ -452,8 +471,14 @@ Source diagnostics field reference:
 | `plannedBytes` | Total bytes covered by planned source blocks. | Compare required source reads with actual reads. |
 | `fetchedBlocks` | Number of ranged source blocks fetched from S3. | Detect duplicate source fetches. |
 | `fetchedBytes` | Total ranged source bytes fetched. | Calculate source read amplification. |
-| `getAttempts` | Ranged `GetObject` attempts. | Separate S3 activity from local block reuse. |
-| `getRetries` | Ranged `GetObject` retry attempts. | Identify source S3 retry pressure. |
+| `getAttempts` | Ranged `GetObject` wire attempts; each is exactly one SDK attempt. | Separate S3 activity from local block reuse and prove retry ownership. |
+| `getRetries` | Provider-owned attempts after the first attempt for a range. | Identify source S3 retry pressure. |
+| `getThrottledAttempts` | Failed wire attempts classified as source throttling. | Distinguish source S3 throttling from local block waits. |
+| `getRetryableErrors` | Transient request, response, body, or incomplete-body failures classified as retryable, including the terminal failure when attempts are exhausted. | Explain why the provider consumed or exhausted the total-attempt budget. |
+| `getPermanentErrors` | Permanent request or validation failures rejected without replay. | Confirm permanent 4xx and construction failures stopped immediately. |
+| `getRequestErrors` | Failed ranged `GetObject` request/response attempts before a body was accepted. | Separate wire/request failures from stream consumption failures. |
+| `getBodyErrors` | Accepted response bodies that failed while streaming. | Diagnose interrupted response bodies. |
+| `getShortBodyErrors` | Collected response bodies shorter or longer than the requested range. | Identify incomplete or malformed range responses that were retried. |
 | `getErrors` | Ranged `GetObject` terminal errors. | Identify source S3 failures. |
 | `blockHits` | Reader accesses satisfied from a resident ready source block. | Confirm source block reuse. |
 | `blockMisses` | Reader accesses that had to fetch or attempted to use a released block. | Understand non-resident block access. |
@@ -465,14 +490,17 @@ Source diagnostics field reference:
 | `replayClaims` | Source block replay claims added for payload replay. | Measure replay demand. |
 | `replayClaimsAfterRelease` | Replay claims added after a block was released. | Explain `blockRefetches` without blaming S3 throttling. |
 | `replayClaimsAfterFailure` | Replay claims added after a block failed. | Correlate replay with failed source reads. |
+| `bodyAttempts` | Retryable ZIP body instances that were actually polled. | Separate consumed bodies from SDK clones that created no work. |
+| `bodyReplays` | Polled ZIP body instances after the first consumed body for the logical upload payload. | Measure decompression/source replay rather than clone creation. |
 | `activeGetsHighWater` | Peak concurrent ranged `GetObject` calls. | Check adaptive source GET concurrency behavior. |
-| `activeReadersHighWater` | Peak active ZIP entry source block readers. | Understand pressure from transfer concurrency. |
+| `activeReadersHighWater` | Peak active ZIP entry readers, counted once per reader rather than once per claimed block. | Verify entry readers stayed within transfer concurrency. |
 | `residentBytesHighWater` | Peak resident source block bytes. | Compare actual source window use with configured capacity. |
 
 Destination upload diagnostics field reference:
 
 | Field | Meaning | Use when debugging |
 | --- | --- | --- |
+| `wireAttempts` | `PutObject` requests sent to the SDK; each application attempt disables SDK retries. | Compare destination wire work with logical scheduler objects and provider retries. |
 | `failedAttempts` | Failed `PutObject` attempts. | Identify destination upload instability. |
 | `retryAttempts` | `PutObject` attempts retried by the provider. | Measure retry pressure. |
 | `throttledAttempts` | Failed attempts classified as destination throttling, such as S3 `SlowDown`. | Distinguish S3 throttling from local scheduling effects. |
@@ -513,5 +541,6 @@ Destination upload diagnostics field reference:
 The highest-value architecture work is now:
 
 1. Promote the benchmark methodology to repeated canonical runs and add CI regression checks that can detect provider-time, memory, transfer, retry, and request-count regressions without committing raw AWS evidence.
-2. Expand structured provider telemetry where needed for stable performance gates, especially request counts and encryption-strategy-specific work.
-3. Add cataloged packaging support for CDK asset bundling or keep the current explicit fallback if the compatibility surface is too large.
+2. Replace whole-entry marker materialization with a deterministic bounded streaming design only when measurements justify its pass count and retry strategy.
+3. Add invocation-global source-window budgeting and page-bounded destination cleanup planning.
+4. Add cataloged packaging support for CDK asset bundling or keep the current explicit fallback if the compatibility surface is too large.
