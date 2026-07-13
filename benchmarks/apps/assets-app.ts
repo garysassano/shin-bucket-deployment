@@ -1,4 +1,12 @@
-import { App, CfnOutput, CfnResource, RemovalPolicy, Stack, type StackProps } from "aws-cdk-lib";
+import {
+  App,
+  CfnOutput,
+  CfnParameter,
+  CfnResource,
+  RemovalPolicy,
+  Stack,
+  type StackProps,
+} from "aws-cdk-lib";
 import { Bucket } from "aws-cdk-lib/aws-s3";
 import {
   BucketDeployment as AwsBucketDeployment,
@@ -7,6 +15,12 @@ import {
 import type { Construct } from "constructs";
 import { ShinBucketDeployment, Source as ShinSource } from "../../src";
 import { ensureBenchmarkAssets } from "../src/assets";
+import {
+  MARKER_BENCHMARK_BYTES,
+  MARKER_BENCHMARK_VALUE_A,
+  MARKER_BENCHMARK_VALUE_B,
+  markerBenchmarkPayload,
+} from "../src/marker-payload";
 import { type BenchmarkImplementation, isBenchmarkImplementation } from "../src/model";
 
 class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
@@ -24,6 +38,20 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
       "SHIN_BENCH_DELETE_CURRENT_OBJECTS_ON_DELETE",
     );
     const deleteStaleObjects = process.env.SHIN_BENCH_DELETE_STALE_OBJECTS !== "false";
+    let markerPayload: string | undefined;
+    if (bundle.profile === "marker-heavy") {
+      const markerA = new CfnParameter(this, "MarkerA", {
+        default: MARKER_BENCHMARK_VALUE_A,
+      });
+      const markerB = new CfnParameter(this, "MarkerB", {
+        default: MARKER_BENCHMARK_VALUE_B,
+      });
+      markerPayload = markerBenchmarkPayload(
+        bundle.state,
+        markerA.valueAsString,
+        markerB.valueAsString,
+      );
+    }
 
     const websiteBucket = new Bucket(this, "WebsiteBucket", {
       autoDeleteObjects: true,
@@ -54,7 +82,12 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
               }),
         },
         ...(maxParallelTransfers === undefined ? {} : { maxParallelTransfers }),
-        sources: [ShinSource.asset(bundle.root)],
+        sources: [
+          ShinSource.asset(bundle.root),
+          ...(markerPayload === undefined
+            ? []
+            : [ShinSource.data("runtime/marker-heavy.txt", markerPayload)]),
+        ],
       });
     } else {
       deployment = new AwsBucketDeployment(this, "DeployBenchmarkAssets", {
@@ -63,7 +96,12 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
         ...(deleteCurrentObjectsOnDelete === undefined
           ? {}
           : { retainOnDelete: !deleteCurrentObjectsOnDelete }),
-        sources: [AwsSource.asset(bundle.root)],
+        sources: [
+          AwsSource.asset(bundle.root),
+          ...(markerPayload === undefined
+            ? []
+            : [AwsSource.data("runtime/marker-heavy.txt", markerPayload)]),
+        ],
       });
     }
     forceBenchmarkInvocation(deployment, process.env.SHIN_BENCH_INVOCATION_TOKEN);
@@ -85,11 +123,11 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
     });
 
     new CfnOutput(this, "BenchmarkFileCount", {
-      value: String(bundle.fileCount),
+      value: String(bundle.fileCount + (markerPayload === undefined ? 0 : 1)),
     });
 
     new CfnOutput(this, "BenchmarkTotalBytes", {
-      value: String(bundle.totalBytes),
+      value: String(bundle.totalBytes + (markerPayload === undefined ? 0 : MARKER_BENCHMARK_BYTES)),
     });
 
     new CfnOutput(this, "BenchmarkMemoryLimitMb", {

@@ -1,0 +1,33 @@
+{
+  "$schema": "../schemas/asset-benchmark-config.schema.json",
+  "region": "eu-central-1",
+  "concurrency": 1,
+  "assetProfiles": [
+    "marker-heavy"
+  ],
+  "implementations": [
+    "shin",
+    "aws"
+  ],
+  "lambdaConfigs": [
+    {
+      "memoryMb": 2048,
+      "parallel": 32
+    }
+  ],
+  "phases": [
+    {
+      "name": "cold-create",
+      "assetState": "baseline"
+    },
+    {
+      "name": "unchanged-update",
+      "assetState": "baseline",
+      "deleteCurrentObjectsOnDelete": false
+    },
+    {
+      "name": "changed-update",
+      "assetState": "changed"
+    }
+  ]
+}

@@ -18,6 +18,12 @@ unmaintained = "workspace"
 # Add documented suppressions only when a fix is genuinely unavailable.
 ignore = []
 
+# `pnpm rust:deny` excludes only `spin@0.10.0`: current released
+# aws-smithy-checksums requires crc-fast 1.9+, whose x86_64/aarch64 targets
+# require that newly yanked exact version. `pnpm rust:audit` still scans the
+# complete lockfile. Remove the exact CLI exclusion when crc-fast publishes a
+# compatible non-yanked dependency.
+
 [bans]
 # AWS SDK transitive dependencies carry a few duplicate majors. Warn for
 # visibility without failing CI on upstream churn.

@@ -6,6 +6,8 @@ Deployable benchmark CDK apps live in `benchmarks/apps/**`. Curated benchmark ma
 
 `configs/transfer-scheduler-2048-32.json` is the serialized 2048 MiB / 32-transfer decision matrix for the bounded scheduler: `tiny-many` and `large-few`, Shin and upstream, and the four ordered lifecycle phases. Repeat it with unique scratch roots and output files when collecting a multi-sample decision run; raw per-repetition evidence remains outside git.
 
+`configs/marker-replacement-2048-32.json` is the comparable marker-path matrix. Its `marker-heavy` profile deploys one 16 MiB marker-bearing object plus four small ordinary files through Shin and upstream across create, unchanged, and changed phases. The fixture pads against fixed resolved parameter defaults so synthesized token placeholder lengths cannot change the deployed payload. Marker decision results and interpretation live in [`docs/benchmark.md`](../docs/benchmark.md#marker-replacement-performance-decision).
+
 The runner adds a benchmark-only invocation token to the deployment custom resource for every phase. This guarantees that `unchanged-update` measures an actual provider invocation even when the deterministic asset and all functional deployment properties are unchanged; the token does not change the asset, destination, or provider algorithm.
 
 Repeated decision runs belong in `results.jsonl` too. Pass `--decision-run-id`, `--comparison-variant`, and `--repetition` so the upsert key preserves every sample instead of replacing an earlier repetition. Canonical snapshot and telemetry renderers exclude decision-run rows by default; the retained JSONL rows remain available for later aggregate analysis.
@@ -21,7 +23,7 @@ Only README-linked snapshot SVGs are committed under `benchmarks/snapshots`. Tem
 - In-depth Shin provider telemetry: [`telemetry.md`](telemetry.md)
 - Structured JSONL source: [`results.jsonl`](results.jsonl)
 
-Regenerate the telemetry tables with `pnpm benchmark:telemetry-table`. Provider diagnostics schema v2 adds transfer-scheduler logical/completion/cancellation counters, exact source and destination wire attempts, consumed body replays, typed source throttling/errors, and true active-reader high-water. Historical schema-v1 rows render unavailable v2 fields as `null`.
+Regenerate the telemetry tables with `pnpm benchmark:telemetry-table`. Provider diagnostics schema v2 adds transfer-scheduler logical/completion/cancellation counters, exact source and destination wire attempts, consumed body replays, typed source throttling/errors, and true active-reader high-water. Current marker rows also include `markerReplacement` strategy, semantics, planning-pass, and upload-pass fields. Historical rows render unavailable fields as `null`.
 
 ## 1024 MiB / 16 Snapshot
 

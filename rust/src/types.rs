@@ -205,6 +205,8 @@ pub(crate) struct DeploymentStats {
     md5_hash_attempts: AtomicU64,
     md5_skips: AtomicU64,
     catalog_skips: AtomicU64,
+    marker_planning_passes: AtomicU64,
+    marker_upload_passes: AtomicU64,
     source_planned_blocks: AtomicU64,
     source_planned_bytes: AtomicU64,
     source_fetched_blocks: AtomicU64,
@@ -266,6 +268,7 @@ pub(crate) struct DeploymentStatsSnapshot<'a> {
     pub(crate) counts: DeploymentCounts,
     pub(crate) bytes: DeploymentBytes,
     pub(crate) transfer: TransferStats,
+    pub(crate) marker_replacement: MarkerReplacementStats,
     pub(crate) source: SourceStats,
     pub(crate) put_object: PutObjectStats,
 }
@@ -349,6 +352,16 @@ pub(crate) struct TransferStats {
     pub(crate) cancelled_objects: u64,
     pub(crate) panicked_objects: u64,
     pub(crate) in_flight_high_water: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct MarkerReplacementStats {
+    pub(crate) strategy: &'static str,
+    pub(crate) semantics: &'static str,
+    pub(crate) planned_passes_per_upload: u8,
+    pub(crate) planning_passes: u64,
+    pub(crate) upload_passes: u64,
 }
 
 #[derive(Serialize)]
@@ -454,6 +467,14 @@ impl DeploymentStats {
     pub(crate) fn add_catalog_skip(&self) {
         self.catalog_skips.fetch_add(1, Ordering::Relaxed);
         self.add_skipped_object();
+    }
+
+    pub(crate) fn add_marker_planning_pass(&self) {
+        self.marker_planning_passes.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn add_marker_upload_pass(&self) {
+        self.marker_upload_passes.fetch_add(1, Ordering::Relaxed);
     }
 
     pub(crate) fn add_source_stats(&self, stats: &crate::s3::archive::SourceDiagnosticsSnapshot) {
@@ -610,6 +631,13 @@ impl DeploymentStats {
                 cancelled_objects: self.transfer_cancelled_objects.load(Ordering::Relaxed),
                 panicked_objects: self.transfer_panicked_objects.load(Ordering::Relaxed),
                 in_flight_high_water: self.transfer_in_flight_high_water.load(Ordering::Relaxed),
+            },
+            marker_replacement: MarkerReplacementStats {
+                strategy: "planning-plus-retryable-stream",
+                semantics: "leftmost-longest-non-recursive",
+                planned_passes_per_upload: 2,
+                planning_passes: self.marker_planning_passes.load(Ordering::Relaxed),
+                upload_passes: self.marker_upload_passes.load(Ordering::Relaxed),
             },
             source: SourceStats {
                 planned_blocks: self.source_planned_blocks.load(Ordering::Relaxed),

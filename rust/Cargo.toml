@@ -10,6 +10,7 @@ name = "shin-bucket-deployment-handler"
 path = "src/main.rs"
 
 [dependencies]
+aho-corasick = "1.1.4"
 anyhow = "1"
 async-compression = { version = "0.4", default-features = false, features = [
   "tokio",
@@ -69,6 +70,7 @@ uuid = { version = "1", features = ["v4"] }
 [dev-dependencies]
 aws-smithy-http-client = { version = "1", features = ["test-util"] }
 http = "1"
+proptest = "1.11.0"
 tokio = { version = "1", features = ["test-util"] }
 zip = { version = "8", default-features = false, features = [
   "deflate",

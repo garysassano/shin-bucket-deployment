@@ -1085,11 +1085,20 @@ mod tests {
     fn deployment_summary_uses_diagnostics_schema_v2() {
         let request = deployment_request_with_paths(vec!["/*".to_string()]);
         let stats = crate::types::DeploymentStats::default();
+        stats.add_marker_planning_pass();
+        stats.add_marker_upload_pass();
         let summary = serde_json::to_value(stats.snapshot("Create", "success", &request))
             .expect("serializable summary");
 
         assert_eq!(summary["schemaVersion"], 2);
         assert_eq!(summary["transfer"]["scheduledObjects"], 0);
+        assert_eq!(
+            summary["markerReplacement"]["strategy"],
+            "planning-plus-retryable-stream"
+        );
+        assert_eq!(summary["markerReplacement"]["plannedPassesPerUpload"], 2);
+        assert_eq!(summary["markerReplacement"]["planningPasses"], 1);
+        assert_eq!(summary["markerReplacement"]["uploadPasses"], 1);
         assert_eq!(summary["source"]["getAttempts"], 0);
         assert_eq!(summary["source"]["bodyReplays"], 0);
         assert_eq!(summary["putObject"]["wireAttempts"], 0);

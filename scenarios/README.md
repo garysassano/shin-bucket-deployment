@@ -15,6 +15,8 @@ Deploy runs ordered update chains serially within each chain and runs independen
 
 The `kms-destination`, `kms-managed-destination`, and `dsse-managed-destination` scenarios exercise the strong stored-checksum path with a customer-managed key, the AWS-managed S3 KMS key, and managed DSSE respectively.
 
+The `marker-replacement` scenario exercises plain, JSON-escaped, JSON, YAML, and repeated-token replacement. The Rust property and stream tests additionally cover simultaneous leftmost-longest overlap semantics, replacement non-recursion, decompression-chunk boundaries, UTF-8, empty and large values, CRC failures, retry bodies, and exact output limits.
+
 `pnpm benchmark` runs only the named benchmark scenario and expands the requested config matrix:
 
 ```bash
