@@ -88,17 +88,18 @@ The separate [PR #12 controlled decision run](docs/benchmark.md#pr-12-performanc
 
 The construct follows the upstream `BucketDeployment` API where the behavior maps cleanly to the Rust provider.
 
-| Area            | Supported                                                                                                                                            |
-| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Sources         | `sources`, `Source.data`, `Source.jsonData`, `Source.yamlData`, `embeddedCatalog`                                                                    |
-| Destination     | `destinationBucket`, `destinationKeyPrefix`                                                                                                           |
-| Filtering       | `include`, `exclude`                                                                                                                                 |
-| Lifecycle       | `destinationLifecycle`                                                                                                                               |
-| Deployment mode | `extract`                                                                                                                                            |
-| Outputs         | `deployedBucket`, `objectKeys`, `outputObjectKeys`                                                                                                   |
-| CloudFront      | `distribution`, `distributionPaths`, `waitForDistributionInvalidation`                                                                               |
-| Provider Lambda | `architecture`, `bundling`, `logGroup`, `memoryLimit`, `role`, `securityGroups`, `vpc`, `vpcSubnets`                                                 |
-| Runtime tuning  | `maxParallelTransfers`, `advancedRuntimeTuning`                                                                                                      |
+| Area                 | Supported                                                                                                                                      |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| Sources              | `sources`; `Source.asset`, `Source.bucket`, `Source.data`, `Source.jsonData`, `Source.yamlData`; `embeddedCatalog` for directory assets        |
+| Destination          | `destinationBucket`, `destinationKeyPrefix`                                                                                                    |
+| Filtering            | `include`, `exclude`                                                                                                                           |
+| Deployment mode      | `extract`                                                                                                                                      |
+| Lifecycle            | `destinationLifecycle`                                                                                                                         |
+| CloudFront           | `distribution`, `distributionPaths`, `waitForDistributionInvalidation`                                                                         |
+| Provider Lambda      | `architecture`, `logGroup`, `memoryLimit`, `role`, `securityGroups`, `vpc`, `vpcSubnets`                                                       |
+| Provider build       | `rustProjectPath`, `bundling`                                                                                                                  |
+| Runtime tuning       | `maxParallelTransfers`, `advancedRuntimeTuning`                                                                                                |
+| Outputs and response | `deployedBucket`, `objectKeys`, `outputObjectKeys`, `handlerRole`, `handlerFunction`                                                           |
 
 Unsupported upstream props:
 
