@@ -3,7 +3,12 @@ import { readFileSync } from "node:fs";
 export const BENCHMARK_IMPLEMENTATIONS = ["shin", "aws"] as const;
 export type BenchmarkImplementation = (typeof BENCHMARK_IMPLEMENTATIONS)[number];
 
-export const BENCHMARK_ASSET_PROFILES = ["tiny-many", "mixed", "large-few"] as const;
+export const BENCHMARK_ASSET_PROFILES = [
+  "tiny-many",
+  "mixed",
+  "large-few",
+  "marker-heavy",
+] as const;
 export type BenchmarkAssetProfile = (typeof BENCHMARK_ASSET_PROFILES)[number];
 
 export const BENCHMARK_ASSET_STATES = ["baseline", "changed", "pruned"] as const;
@@ -39,6 +44,7 @@ export type ProviderSummary = {
   readonly counts?: Record<string, number | null> | null;
   readonly bytes?: Record<string, number | null> | null;
   readonly transfer?: Record<string, number | null> | null;
+  readonly markerReplacement?: Record<string, string | number | null> | null;
   readonly source?: Record<string, number | null> | null;
   readonly putObject?: Record<string, number | null> | null;
 };

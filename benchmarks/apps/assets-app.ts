@@ -1,4 +1,12 @@
-import { App, CfnOutput, CfnResource, RemovalPolicy, Stack, type StackProps } from "aws-cdk-lib";
+import {
+  App,
+  Aws,
+  CfnOutput,
+  CfnResource,
+  RemovalPolicy,
+  Stack,
+  type StackProps,
+} from "aws-cdk-lib";
 import { Bucket } from "aws-cdk-lib/aws-s3";
 import {
   BucketDeployment as AwsBucketDeployment,
@@ -24,6 +32,8 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
       "SHIN_BENCH_DELETE_CURRENT_OBJECTS_ON_DELETE",
     );
     const deleteStaleObjects = process.env.SHIN_BENCH_DELETE_STALE_OBJECTS !== "false";
+    const markerPayload =
+      bundle.profile === "marker-heavy" ? markerBenchmarkPayload(bundle.state) : undefined;
 
     const websiteBucket = new Bucket(this, "WebsiteBucket", {
       autoDeleteObjects: true,
@@ -54,7 +64,12 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
               }),
         },
         ...(maxParallelTransfers === undefined ? {} : { maxParallelTransfers }),
-        sources: [ShinSource.asset(bundle.root)],
+        sources: [
+          ShinSource.asset(bundle.root),
+          ...(markerPayload === undefined
+            ? []
+            : [ShinSource.data("runtime/marker-heavy.txt", markerPayload)]),
+        ],
       });
     } else {
       deployment = new AwsBucketDeployment(this, "DeployBenchmarkAssets", {
@@ -63,7 +78,12 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
         ...(deleteCurrentObjectsOnDelete === undefined
           ? {}
           : { retainOnDelete: !deleteCurrentObjectsOnDelete }),
-        sources: [AwsSource.asset(bundle.root)],
+        sources: [
+          AwsSource.asset(bundle.root),
+          ...(markerPayload === undefined
+            ? []
+            : [AwsSource.data("runtime/marker-heavy.txt", markerPayload)]),
+        ],
       });
     }
     forceBenchmarkInvocation(deployment, process.env.SHIN_BENCH_INVOCATION_TOKEN);
@@ -85,11 +105,11 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
     });
 
     new CfnOutput(this, "BenchmarkFileCount", {
-      value: String(bundle.fileCount),
+      value: String(bundle.fileCount + (markerPayload === undefined ? 0 : 1)),
     });
 
     new CfnOutput(this, "BenchmarkTotalBytes", {
-      value: String(bundle.totalBytes),
+      value: String(bundle.totalBytes + (markerPayload === undefined ? 0 : markerPayload.length)),
     });
 
     new CfnOutput(this, "BenchmarkMemoryLimitMb", {
@@ -104,6 +124,20 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
       value: implementation,
     });
   }
+}
+
+const MARKER_BENCHMARK_BYTES = 16 * 1024 * 1024;
+
+function markerBenchmarkPayload(state: string): string {
+  const markers = [
+    `region=${Aws.REGION}`,
+    `stack=${Aws.STACK_NAME}`,
+    `revision=${state === "changed" ? "changed" : "stable"}`,
+    "\n",
+  ].join(";");
+  const segmentBytes = 1024 * 1024;
+  const segment = markers.padStart(segmentBytes, "x");
+  return segment.repeat(MARKER_BENCHMARK_BYTES / segmentBytes);
 }
 
 function forceBenchmarkInvocation(deployment: Construct, token: string | undefined): void {
