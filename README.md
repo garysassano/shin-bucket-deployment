@@ -90,7 +90,7 @@ The construct follows the upstream `BucketDeployment` API where the behavior map
 
 | Area                 | Supported                                                                                                                                      |
 | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| Sources              | `sources`; `Source.asset`, `Source.bucket`, `Source.data`, `Source.jsonData`, `Source.yamlData`; `embeddedCatalog` for directory assets        |
+| Sources              | `sources`, `Source.asset`, `Source.bucket`, `Source.data`, `Source.jsonData`, `Source.yamlData`, `embeddedCatalog`                             |
 | Destination          | `destinationBucket`, `destinationKeyPrefix`                                                                                                    |
 | Filtering            | `include`, `exclude`                                                                                                                           |
 | Deployment mode      | `extract`                                                                                                                                      |
