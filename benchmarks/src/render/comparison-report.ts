@@ -6,11 +6,10 @@ import {
   type BenchmarkResultRecord,
   benchmarkMethodologyVersion,
   implementationLabel,
-  isCompleteBenchmarkRecord,
   phaseRank,
   readBenchmarkResultRecords,
-  selectBenchmarkRun,
 } from "../model";
+import { selectValidatedBenchmarkRun } from "../validation";
 
 type BenchmarkRecord = BenchmarkResultRecord;
 
@@ -34,6 +33,7 @@ type RenderOptions = {
   readonly parallel?: number;
   readonly methodologyVersion?: 1 | 2;
   readonly runId?: string;
+  readonly configFile?: string;
 };
 
 type ChartThemeName = "signal" | "forge" | "circuit";
@@ -83,6 +83,7 @@ const CLI_OPTIONS = [
   "chart-output-file",
   "chart-reference",
   "chart-theme",
+  "config",
   "input-file",
   "lambda-max-parallel-transfers",
   "lambda-memory-mb",
@@ -155,20 +156,19 @@ function main(): void {
 }
 
 export function renderBenchmarkReport(options: RenderOptions): string {
-  const records = selectBenchmarkRun(
-    readBenchmarkResultRecords(options.inputFile)
-      .filter(isCompleteBenchmarkRecord)
-      .filter((record) => benchmarkMethodologyVersion(record) === (options.methodologyVersion ?? 2))
-      .filter((record) => (options.methodologyVersion ?? 2) === 1 || record.gitDirty === false)
-      .filter((record) => (options.assetProfile ? record.profile === options.assetProfile : true))
-      .filter((record) => (options.memoryMb ? record.memoryMb === options.memoryMb : true))
-      .filter((record) =>
-        options.parallel
-          ? implementationLabel(record) === "aws" || record.parallel === options.parallel
-          : true,
-      ),
-    options.runId,
-  );
+  const records = selectValidatedBenchmarkRun({
+    records: readBenchmarkResultRecords(options.inputFile),
+    methodologyVersion: options.methodologyVersion ?? 2,
+    runId: options.runId,
+    configFile: options.configFile,
+  })
+    .filter((record) => (options.assetProfile ? record.profile === options.assetProfile : true))
+    .filter((record) => (options.memoryMb ? record.memoryMb === options.memoryMb : true))
+    .filter((record) =>
+      options.parallel
+        ? implementationLabel(record) === "aws" || record.parallel === options.parallel
+        : true,
+    );
   const comparisonRows = buildPhaseComparisonRows(
     records.filter((record) => record.phase && record.profile),
   );
@@ -1221,6 +1221,7 @@ function parseArgs(args: string[]): RenderOptions {
     parallel: parsePositiveInteger(values.get("lambda-max-parallel-transfers")),
     methodologyVersion: parseMethodologyVersion(values.get("methodology-version")),
     runId: values.get("run-id"),
+    configFile: values.get("config"),
     assetProfile: values.get("asset-profile"),
   };
 }

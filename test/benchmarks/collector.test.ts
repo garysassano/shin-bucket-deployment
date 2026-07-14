@@ -228,7 +228,7 @@ describe("benchmark result collector", () => {
       inputFile,
       `${[
         {
-          methodologyVersion: 2,
+          methodologyVersion: 1,
           gitDirty: false,
           snapshotDate: "2026-05-08",
           providerImplementationCommit: "abc1234",
@@ -254,7 +254,7 @@ describe("benchmark result collector", () => {
           notes: null,
         },
         {
-          methodologyVersion: 2,
+          methodologyVersion: 1,
           gitDirty: false,
           snapshotDate: "2026-05-08",
           providerImplementationCommit: null,
@@ -284,7 +284,12 @@ describe("benchmark result collector", () => {
         .join("\n")}\n`,
     );
 
-    const report = renderBenchmarkReport({ assetProfile: "mixed", inputFile, outputFile });
+    const report = renderBenchmarkReport({
+      assetProfile: "mixed",
+      inputFile,
+      outputFile,
+      methodologyVersion: 1,
+    });
 
     expect(readFileSync(outputFile, "utf8")).toEqual(report);
     expect(report).toContain("Benchmark Report: mixed");
@@ -323,7 +328,7 @@ describe("benchmark result collector", () => {
       inputFile,
       `${[
         {
-          methodologyVersion: 2,
+          methodologyVersion: 1,
           gitDirty: false,
           snapshotDate: "2026-05-14",
           region: "ap-southeast-2",
@@ -404,7 +409,7 @@ describe("benchmark result collector", () => {
         .join("\n")}\n`,
     );
 
-    const table = renderBenchmarkResultsTable({ inputFile, outputFile });
+    const table = renderBenchmarkResultsTable({ inputFile, outputFile, methodologyVersion: 1 });
 
     expect(readFileSync(outputFile, "utf8")).toEqual(table);
     expect(table).toContain("# Shin Provider Benchmark Telemetry");

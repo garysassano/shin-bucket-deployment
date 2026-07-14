@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { BenchmarkRunOptions, LambdaConfig } from "./config";
 import type { BenchmarkAssetProfile, BenchmarkImplementation } from "./model";
 
@@ -24,7 +25,7 @@ export function createBenchmarkPlan(options: BenchmarkRunOptions): PlannedBenchm
     deduplicated.map((configuration) => ({
       ...configuration,
       repetition,
-      sampleId: sampleId(options.runId, repetition, configuration),
+      sampleId: benchmarkSampleId(options.runId, repetition, configuration),
     })),
   );
 }
@@ -66,17 +67,23 @@ function deduplicateRuns(
   });
 }
 
-function sampleId(
+export function benchmarkSampleId(
   runId: string,
   repetition: number,
   run: Omit<PlannedBenchmarkRun, "repetition" | "sampleId">,
 ): string {
-  return [
-    runId,
-    repetition,
-    run.implementation,
-    run.assetProfile,
-    run.memoryMb,
-    run.parallel ?? "na",
-  ].join(":");
+  const digest = createHash("sha256")
+    .update(
+      [
+        runId,
+        repetition,
+        run.implementation,
+        run.assetProfile,
+        run.memoryMb,
+        run.parallel ?? "na",
+      ].join("\0"),
+    )
+    .digest("hex")
+    .slice(0, 32);
+  return `${digest.slice(0, 8)}-${digest.slice(8, 12)}-5${digest.slice(13, 16)}-a${digest.slice(17, 20)}-${digest.slice(20)}`;
 }

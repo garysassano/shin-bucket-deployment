@@ -12,6 +12,7 @@
     },
     "runId": {
       "type": "string",
+      "format": "uuid",
       "minLength": 1
     },
     "repetitions": {

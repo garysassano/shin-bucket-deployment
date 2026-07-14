@@ -31,6 +31,7 @@ export type CollectBenchmarkOptions = {
   readonly memoryMb?: number;
   readonly notes?: string;
   readonly outputFile: string;
+  readonly persist?: boolean;
   readonly parallel?: number | null;
   readonly phase: string;
   readonly region?: string;
@@ -145,7 +146,9 @@ export function collectBenchmarkResult(options: CollectBenchmarkOptions): Benchm
     ...(providerSummary === undefined ? {} : { providerSummary }),
   };
 
-  upsertBenchmarkRecord(options.outputFile, record);
+  if (options.persist !== false) {
+    upsertBenchmarkRecord(options.outputFile, record);
+  }
   return record;
 }
 

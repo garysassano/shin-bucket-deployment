@@ -15,11 +15,11 @@ export type BenchmarkSourceMetadata = {
   readonly awsCdkLibVersion: string;
   readonly awsCdkLibIntegrity: string;
   readonly providerBootstrapSha256: string;
+  readonly changedPaths: readonly string[];
 };
 
 export async function collectBenchmarkSourceMetadata(
   repositoryRoot = process.cwd(),
-  evidenceOutputFile?: string,
 ): Promise<BenchmarkSourceMetadata> {
   const packageJson = readJson<PackageJson>(join(repositoryRoot, "package.json"));
   const cdkPackage = readJson<PackageJson>(
@@ -42,7 +42,8 @@ export async function collectBenchmarkSourceMetadata(
   return {
     commit,
     subject,
-    gitDirty: sourceStatusLines(status, repositoryRoot, evidenceOutputFile).length > 0,
+    gitDirty: sourceStatusLines(status, repositoryRoot).length > 0,
+    changedPaths: sourceStatusLines(status, repositoryRoot),
     providerPackageName: requiredPackageField(packageJson.name, "package name"),
     providerPackageVersion: requiredPackageField(packageJson.version, "package version"),
     cdkCliVersion: requiredPackageField(cdkPackage.version, "aws-cdk version"),
@@ -55,7 +56,7 @@ export async function collectBenchmarkSourceMetadata(
 export function sourceStatusLines(
   porcelainStatus: string,
   repositoryRoot: string,
-  evidenceOutputFile: string | undefined,
+  evidenceOutputFile: string | undefined = undefined,
 ): string[] {
   const ignoredPath = evidenceOutputFile
     ? normalizePath(
@@ -68,9 +69,13 @@ export function sourceStatusLines(
     .split(/\r?\n/)
     .filter(Boolean)
     .filter((line) => {
-      const changedPath = normalizePath(line.slice(3).replace(/^"|"$/g, ""));
+      const changedPath = changedPathFromStatusLine(line);
       return ignoredPath === undefined || changedPath !== ignoredPath;
     });
+}
+
+export function changedPathFromStatusLine(line: string): string {
+  return normalizePath(line.slice(3).replace(/^"|"$/g, ""));
 }
 
 function readJson<T>(path: string): T {

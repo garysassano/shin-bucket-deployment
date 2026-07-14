@@ -51,10 +51,34 @@ describe("benchmark assets", () => {
 
     expect(readFileSync(filePath)).toEqual(expectedContents);
     expect(JSON.parse(readFileSync(markerPath, "utf8"))).toMatchObject({
-      generatorVersion: 2,
+      generatorVersion: 3,
       profile: "tiny-many",
       state: "baseline",
     });
+  });
+
+  it("regenerates assets whose contents no longer match the marker digest", () => {
+    const bundle = ensureBenchmarkAssets({
+      assetProfile: "tiny-many",
+      state: "baseline",
+      outputRoot,
+    });
+    const filePath = join(bundle.root, "robots.txt");
+    const expectedContents = readFileSync(filePath);
+
+    const corrupted = Buffer.alloc(expectedContents.length, 0x78);
+    writeFileSync(filePath, corrupted);
+    const markerPath = join(bundle.root, ".generated.json");
+    const marker = JSON.parse(readFileSync(markerPath, "utf8")) as {
+      files: Array<{ path: string; sha256: string }>;
+    };
+    const entry = marker.files.find((file) => file.path === "robots.txt");
+    if (!entry) throw new Error("missing robots.txt marker");
+    entry.sha256 = createHash("sha256").update(corrupted).digest("hex");
+    writeFileSync(markerPath, JSON.stringify(marker));
+    ensureBenchmarkAssets({ assetProfile: "tiny-many", state: "baseline", outputRoot });
+
+    expect(readFileSync(filePath)).toEqual(expectedContents);
   });
 
   it("keeps every retained prune-state file byte-identical to baseline", () => {

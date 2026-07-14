@@ -7,8 +7,9 @@ import { type BenchmarkRunOptions, type PhaseConfig, parseBenchmarkRunOptions } 
 import { runCommand, sleep } from "./execution";
 import { type BenchmarkSourceMetadata, collectBenchmarkSourceMetadata } from "./metadata";
 import type { BenchmarkImplementation, BenchmarkResultRecord } from "./model";
-import { completedSampleIds, upsertBenchmarkRecords } from "./persistence";
+import { completedSampleIds } from "./persistence";
 import { type PlannedBenchmarkRun, createBenchmarkPlan, wallClockCapReached } from "./plan";
+import { type ResumeSession, openResumeSession } from "./resume";
 
 type PhaseEvidence = {
   readonly options: CollectBenchmarkOptions;
@@ -21,11 +22,16 @@ type StackResource = {
   readonly ResourceType?: string;
 };
 
-async function main(): Promise<void> {
+class WallClockCapError extends Error {}
+
+async function main(signal: AbortSignal): Promise<void> {
   const options = parseBenchmarkRunOptions(process.argv.slice(2));
   console.log(`benchmark run id: ${options.runId}`);
+  console.log(`benchmark snapshot date: ${options.snapshotDate}`);
+  console.log(`benchmark scratch root: ${options.scratchRoot}`);
   mkdirSync(options.scratchRoot, { recursive: true });
-  const sourceMetadata = await collectBenchmarkSourceMetadata(process.cwd(), options.outputFile);
+  const sourceMetadata = await collectBenchmarkSourceMetadata(process.cwd());
+  const resumeSession = openResumeSession({ options, sourceMetadata });
   const completed = completedSampleIds(
     options.outputFile,
     options.runId,
@@ -48,7 +54,22 @@ async function main(): Promise<void> {
       console.log("benchmark wall-clock cap reached; no additional stack will be started");
       break;
     }
-    await runBenchmarkStack({ sourceMetadata, options, run });
+    try {
+      await runBenchmarkStack({
+        sourceMetadata,
+        options,
+        run,
+        resumeSession,
+        signal,
+        startedAtMs,
+      });
+    } catch (error) {
+      if (error instanceof WallClockCapError) {
+        console.log("benchmark wall-clock cap reached between phases; active stack was cleaned up");
+        break;
+      }
+      throw error;
+    }
   }
   console.log(`wrote sanitized benchmark rows to ${options.outputFile}`);
 }
@@ -57,8 +78,11 @@ async function runBenchmarkStack(args: {
   readonly run: PlannedBenchmarkRun;
   readonly sourceMetadata: BenchmarkSourceMetadata;
   readonly options: BenchmarkRunOptions;
+  readonly resumeSession: ResumeSession;
+  readonly signal: AbortSignal;
+  readonly startedAtMs: number;
 }): Promise<PhaseEvidence[]> {
-  const { sourceMetadata, options, run } = args;
+  const { sourceMetadata, options, run, resumeSession, signal, startedAtMs } = args;
   const label = `${run.implementation}-${run.assetProfile}-${run.memoryMb}-${run.parallel ?? "na"}-r${run.repetition}`;
   const stackSuffix = stackSuffixFor({ options, run });
   const stackName = `${
@@ -74,6 +98,12 @@ async function runBenchmarkStack(args: {
   let runError: unknown;
   try {
     for (const phase of options.phases) {
+      if (wallClockCapReached(startedAtMs, options.maxWallClockMinutes)) {
+        throw new WallClockCapError("Benchmark wall-clock cap reached before the next phase.");
+      }
+      if (signal.aborted) {
+        throw signal.reason ?? new Error("Benchmark interrupted.");
+      }
       console.log(`${label}: ${phase.name}`);
       const phaseStartedAt = Date.now();
       const deployLog = join(scratch, `${phase.name}.deploy.log`);
@@ -93,6 +123,7 @@ async function runBenchmarkStack(args: {
         env: benchmarkEnv({ options, phase, run, stackSuffix }),
         logFile: deployLog,
         quiet: true,
+        signal,
       });
 
       const reportFile = join(scratch, `${phase.name}.report.json`);
@@ -102,11 +133,13 @@ async function runBenchmarkStack(args: {
         region: options.region,
         stackName,
         scratchFile: join(scratch, `${phase.name}.resources.json`),
+        signal,
       });
       const runtimeMetadata = await providerRuntimeMetadata({
         functionName: handler,
         outputFile: join(scratch, `${phase.name}.function.json`),
         region: options.region,
+        signal,
       });
       await writeLogEvents({
         filterPattern: "REPORT",
@@ -115,6 +148,7 @@ async function runBenchmarkStack(args: {
         handler,
         requireEvents: true,
         startTimeMs: phaseStartedAt,
+        signal,
       });
       if (run.implementation === "shin") {
         await writeLogEvents({
@@ -124,6 +158,7 @@ async function runBenchmarkStack(args: {
           handler,
           requireEvents: true,
           startTimeMs: phaseStartedAt,
+          signal,
         });
       }
 
@@ -151,7 +186,7 @@ async function runBenchmarkStack(args: {
         ...(run.implementation === "shin"
           ? { providerBootstrapSha256: sourceMetadata.providerBootstrapSha256 }
           : {}),
-        gitDirty: sourceMetadata.gitDirty,
+        gitDirty: resumeSession.gitDirty,
         cdkCliVersion: sourceMetadata.cdkCliVersion,
         awsCdkLibVersion: sourceMetadata.awsCdkLibVersion,
         awsCdkLibIntegrity: sourceMetadata.awsCdkLibIntegrity,
@@ -167,9 +202,11 @@ async function runBenchmarkStack(args: {
         decisionRunId: options.decisionRunId,
         comparisonVariant: options.comparisonVariant,
         repetition: run.repetition,
+        persist: false,
       };
       const record = collectBenchmarkResult(collectOptions);
       evidence.push({ options: collectOptions, record });
+      resumeSession.persist([record]);
     }
   } catch (error) {
     runError = error;
@@ -210,8 +247,7 @@ async function runBenchmarkStack(args: {
   }
 
   if (cleanupError === undefined) {
-    upsertBenchmarkRecords(
-      options.outputFile,
+    resumeSession.persist(
       evidence.map(({ record }) => ({ ...record, cleanup: "all benchmark stacks destroyed" })),
     );
   }
@@ -266,6 +302,7 @@ async function benchmarkHandlerName(args: {
   readonly region: string;
   readonly stackName: string;
   readonly scratchFile: string;
+  readonly signal: AbortSignal;
 }): Promise<string> {
   await runCommand({
     command: "aws",
@@ -282,6 +319,7 @@ async function benchmarkHandlerName(args: {
     logFile: args.scratchFile,
     quiet: true,
     appendElapsed: false,
+    signal: args.signal,
   });
   const parsed = JSON.parse(readFileSync(args.scratchFile, "utf8")) as {
     StackResources?: StackResource[];
@@ -312,6 +350,7 @@ async function providerRuntimeMetadata(args: {
   readonly functionName: string;
   readonly outputFile: string;
   readonly region: string;
+  readonly signal: AbortSignal;
 }): Promise<{ readonly architecture: string; readonly codeSha256: string }> {
   await runCommand({
     command: "aws",
@@ -328,6 +367,7 @@ async function providerRuntimeMetadata(args: {
     logFile: args.outputFile,
     quiet: true,
     appendElapsed: false,
+    signal: args.signal,
   });
   const parsed = JSON.parse(readFileSync(args.outputFile, "utf8")) as {
     Architectures?: string[];
@@ -347,6 +387,7 @@ async function writeLogEvents(args: {
   readonly handler: string;
   readonly requireEvents: boolean;
   readonly startTimeMs: number;
+  readonly signal: AbortSignal;
 }): Promise<void> {
   for (let attempt = 1; attempt <= 8; attempt += 1) {
     const status = await runCommand({
@@ -369,6 +410,7 @@ async function writeLogEvents(args: {
       quiet: true,
       allowFailure: true,
       appendElapsed: false,
+      signal: args.signal,
     });
     if (status === 0) {
       const parsed = JSON.parse(readFileSync(args.outputFile, "utf8")) as { events?: unknown[] };
@@ -376,7 +418,7 @@ async function writeLogEvents(args: {
         return;
       }
     }
-    await sleep(attempt * 2500);
+    await sleep(attempt * 2500, args.signal);
   }
   throw new Error(`No ${args.filterPattern} log events found for benchmark handler.`);
 }
@@ -443,8 +485,17 @@ function errorText(error: unknown): string {
 }
 
 if (require.main === module) {
-  main().catch((error: unknown) => {
-    console.error(error instanceof Error ? error.message : error);
-    process.exit(1);
-  });
+  const controller = new AbortController();
+  const onSignal = (): void => controller.abort(new Error("Benchmark interrupted."));
+  process.once("SIGINT", onSignal);
+  process.once("SIGTERM", onSignal);
+  main(controller.signal)
+    .catch((error: unknown) => {
+      console.error(error instanceof Error ? error.message : error);
+      process.exitCode = controller.signal.aborted ? 130 : 1;
+    })
+    .finally(() => {
+      process.removeListener("SIGINT", onSignal);
+      process.removeListener("SIGTERM", onSignal);
+    });
 }

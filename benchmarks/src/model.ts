@@ -158,11 +158,77 @@ export function benchmarkResultKey(
 }
 
 export function isCanonicalBenchmarkRecord(record: BenchmarkResultRecord): boolean {
-  return (
-    benchmarkMethodologyVersion(record) === 2 &&
-    record.gitDirty === false &&
-    isCompleteBenchmarkRecord(record)
-  );
+  return methodologyV2RecordErrors(record).length === 0;
+}
+
+export function methodologyV2RecordErrors(record: BenchmarkResultRecord): string[] {
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  const hexSha256 = /^[0-9a-f]{64}$/i;
+  const errors: string[] = [];
+  const label = `${record.sampleId ?? "missing-sample"}/${record.phase ?? "missing-phase"}`;
+  const requireString = (name: keyof BenchmarkResultRecord): void => {
+    if (typeof record[name] !== "string" || (record[name] as string).length === 0) {
+      errors.push(`${label}: missing ${name}`);
+    }
+  };
+  const requireNumber = (name: keyof BenchmarkResultRecord): void => {
+    const value = record[name];
+    if (typeof value !== "number" || !Number.isFinite(value))
+      errors.push(`${label}: missing ${name}`);
+  };
+  if (record.resultSchemaVersion !== 2) errors.push(`${label}: resultSchemaVersion must be 2`);
+  if (record.methodologyVersion !== 2) errors.push(`${label}: methodologyVersion must be 2`);
+  if (!uuid.test(record.runId ?? "")) errors.push(`${label}: runId must be a UUID`);
+  if (!uuid.test(record.sampleId ?? "")) errors.push(`${label}: sampleId must be an opaque UUID`);
+  for (const name of [
+    "snapshotDate",
+    "providerPackageName",
+    "providerPackageVersion",
+    "providerArchitecture",
+    "providerCodeSha256",
+    "cdkCliVersion",
+    "awsCdkLibVersion",
+    "awsCdkLibIntegrity",
+    "region",
+    "implementation",
+    "profile",
+    "phase",
+    "state",
+  ] as const)
+    requireString(name);
+  for (const name of [
+    "repetition",
+    "memoryMb",
+    "fileCount",
+    "totalBytes",
+    "cdkDeploySeconds",
+    "localWallSeconds",
+    "providerDurationSeconds",
+    "billedDurationSeconds",
+    "maxMemoryMb",
+  ] as const)
+    requireNumber(name);
+  if (record.gitDirty !== false) errors.push(`${label}: gitDirty must be false`);
+  if (record.executionEnvironmentFresh !== true)
+    errors.push(`${label}: executionEnvironmentFresh must be true`);
+  if (record.memoryMeasurementScope !== "phase-local")
+    errors.push(`${label}: memoryMeasurementScope must be phase-local`);
+  if (record.providerInvoked !== true) errors.push(`${label}: providerInvoked must be true`);
+  if (!isCompleteBenchmarkRecord(record)) errors.push(`${label}: cleanup is incomplete`);
+  if (implementationLabel(record) === "aws") {
+    if (record.parallel !== null) errors.push(`${label}: AWS parallel must be null`);
+  } else if (implementationLabel(record) === "shin") {
+    requireNumber("parallel");
+    requireString("providerImplementationCommit");
+    requireString("providerImplementationSubject");
+    if (!hexSha256.test(record.providerBootstrapSha256 ?? ""))
+      errors.push(`${label}: invalid providerBootstrapSha256`);
+    if (record.providerSummary === undefined || record.providerSummary === null)
+      errors.push(`${label}: providerSummary is required for Shin`);
+  } else {
+    errors.push(`${label}: unsupported implementation`);
+  }
+  return errors;
 }
 
 export function isCompleteBenchmarkRecord(record: BenchmarkResultRecord): boolean {

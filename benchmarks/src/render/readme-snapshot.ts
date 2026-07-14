@@ -7,19 +7,14 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { summarize } from "../aggregate";
 import { parseCliOptions } from "../cli";
-import {
-  type BenchmarkResultRecord,
-  benchmarkMethodologyVersion,
-  isCompleteBenchmarkRecord,
-  phaseRank,
-  readBenchmarkResultRecords,
-  selectBenchmarkRun,
-} from "../model";
+import { type BenchmarkResultRecord, phaseRank, readBenchmarkResultRecords } from "../model";
+import { selectValidatedBenchmarkRun } from "../validation";
 
 type ChartVariant = "default" | "aws";
 type HeaderLayout = "two-line" | "three-line";
 const CLI_OPTIONS = [
   "asset-profile",
+  "config",
   "header",
   "input-file",
   "lambda-max-parallel-transfers",
@@ -82,6 +77,7 @@ const requestedMemoryMb = parseNumberArg(cliArgs, "--lambda-memory-mb");
 const requestedShinParallel = parseNumberArg(cliArgs, "--lambda-max-parallel-transfers");
 const requestedMethodologyVersion = parseNumberArg(cliArgs, "--methodology-version") ?? 2;
 const requestedRunId = parseStringArg(cliArgs, "--run-id");
+const requestedConfigFile = parseStringArg(cliArgs, "--config");
 if (requestedMethodologyVersion !== 1 && requestedMethodologyVersion !== 2) {
   throw new Error("--methodology-version must be 1 or 2");
 }
@@ -598,13 +594,12 @@ ${renderHeader(benchmarkData)}
 
 // ═══ OUTPUT ═══
 const benchmarkDataItems = findSelections(
-  selectBenchmarkRun(
-    readBenchmarkResultRecords(inputFile)
-      .filter(isCompleteBenchmarkRecord)
-      .filter((record) => benchmarkMethodologyVersion(record) === requestedMethodologyVersion)
-      .filter((record) => requestedMethodologyVersion === 1 || record.gitDirty === false),
-    requestedRunId,
-  ),
+  selectValidatedBenchmarkRun({
+    records: readBenchmarkResultRecords(inputFile),
+    methodologyVersion: requestedMethodologyVersion,
+    runId: requestedRunId,
+    configFile: requestedConfigFile,
+  }),
 ).map(buildBenchmarkData);
 if (benchmarkDataItems.length === 0) {
   throw new Error("No complete Shin/AWS benchmark pairs matched the selected filters");

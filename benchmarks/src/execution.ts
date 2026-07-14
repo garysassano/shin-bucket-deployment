@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
@@ -10,6 +10,7 @@ export async function runCommand(args: {
   readonly quiet?: boolean;
   readonly allowFailure?: boolean;
   readonly appendElapsed?: boolean;
+  readonly signal?: AbortSignal;
 }): Promise<number> {
   mkdirSync(dirname(args.logFile), { recursive: true });
   writeFileSync(args.logFile, "");
@@ -17,13 +18,30 @@ export async function runCommand(args: {
   const status = await new Promise<number>((resolve) => {
     const child = spawn(args.command, args.args, {
       cwd: process.cwd(),
+      detached: process.platform !== "win32",
       env: args.env ?? process.env,
       stdio: ["ignore", "pipe", "pipe"],
     });
+    let aborted = false;
+    let terminationTimer: NodeJS.Timeout | undefined;
+    const terminate = (): void => {
+      aborted = true;
+      signalProcess(child, "SIGTERM");
+      terminationTimer = setTimeout(() => signalProcess(child, "SIGKILL"), 5_000);
+      terminationTimer.unref();
+    };
+    args.signal?.addEventListener("abort", terminate, { once: true });
+    if (args.signal?.aborted === true) terminate();
     child.stdout.on("data", (chunk: Buffer) => writeChunk(args.logFile, chunk, args.quiet));
     child.stderr.on("data", (chunk: Buffer) => writeChunk(args.logFile, chunk, args.quiet));
-    child.on("close", (code) => resolve(code ?? 1));
+    child.on("close", (code) => {
+      args.signal?.removeEventListener("abort", terminate);
+      if (terminationTimer !== undefined) clearTimeout(terminationTimer);
+      resolve(aborted ? 130 : (code ?? 1));
+    });
     child.on("error", (error) => {
+      args.signal?.removeEventListener("abort", terminate);
+      if (terminationTimer !== undefined) clearTimeout(terminationTimer);
       writeFileSync(args.logFile, `${error.message}\n`, { flag: "a" });
       resolve(1);
     });
@@ -38,11 +56,33 @@ export async function runCommand(args: {
   return status;
 }
 
-export function sleep(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+export function sleep(milliseconds: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    }, milliseconds);
+    const abort = (): void => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+      reject(signal?.reason ?? new Error("Benchmark interrupted."));
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted === true) abort();
+  });
 }
 
 function writeChunk(path: string, chunk: Buffer, quiet: boolean | undefined): void {
   writeFileSync(path, chunk, { flag: "a" });
   if (!quiet) process.stderr.write(chunk);
+}
+
+function signalProcess(child: ChildProcess, signal: NodeJS.Signals): void {
+  if (process.platform !== "win32" && child.pid !== undefined) {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {}
+  }
+  child.kill(signal);
 }

@@ -46,6 +46,7 @@ export type BenchmarkRunOptions = {
 
 const positiveIntegerSchema = z.number().int().positive();
 const nonEmptyStringSchema = z.string().min(1);
+const uuidSchema = z.string().uuid();
 const phaseSchema = z.object({
   assetState: z.enum(BENCHMARK_ASSET_STATES),
   cloudfrontWait: z.boolean().optional(),
@@ -57,7 +58,7 @@ export const benchmarkConfigSchema = z
   .object({
     $schema: nonEmptyStringSchema.optional(),
     methodologyVersion: z.union([z.literal(1), z.literal(2)]).optional(),
-    runId: nonEmptyStringSchema.optional(),
+    runId: uuidSchema.optional(),
     repetitions: positiveIntegerSchema.optional(),
     startRepetition: positiveIntegerSchema.optional(),
     maxWallClockMinutes: z.number().positive().optional(),
@@ -120,7 +121,18 @@ export function parseBenchmarkRunOptions(args: string[]): BenchmarkRunOptions {
     : (config.implementations ?? ["shin", "aws"]);
   const snapshotDate = values.get("snapshot-date") ?? config.snapshotDate ?? today();
   const runId = values.get("run-id") ?? config.runId ?? randomUUID();
-  const runToken = values.get("run-token") ?? config.runToken ?? runId;
+  if (!uuidSchema.safeParse(runId).success) {
+    throw new Error("run-id must be a UUID.");
+  }
+  const configuredRunToken = values.get("run-token") ?? config.runToken;
+  if (
+    methodologyVersion === 2 &&
+    configuredRunToken !== undefined &&
+    configuredRunToken !== runId
+  ) {
+    throw new Error("methodology-v2 run-token must be identical to the opaque run-id.");
+  }
+  const runToken = configuredRunToken ?? runId;
   const concurrency = positiveInteger(
     values.get("concurrency") ?? String(config.concurrency ?? 1),
     "concurrency",

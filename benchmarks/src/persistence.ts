@@ -41,6 +41,13 @@ export function upsertBenchmarkRecords(
   if (records.length === 0) {
     return;
   }
+  writeBenchmarkLedger(outputFile, previewBenchmarkRecords(outputFile, records));
+}
+
+export function previewBenchmarkRecords(
+  outputFile: string,
+  records: readonly BenchmarkResultRecord[],
+): string {
   const replacements = new Map(records.map((record) => [benchmarkResultKey(record), record]));
   const retained = existsSync(outputFile)
     ? readFileSync(outputFile, "utf8")
@@ -55,8 +62,12 @@ export function upsertBenchmarkRecords(
         })
     : [];
   const serialized = records.map((record) => JSON.stringify(record));
+  return `${[...retained, ...serialized].join("\n")}\n`;
+}
+
+export function writeBenchmarkLedger(outputFile: string, contents: string): void {
   mkdirSync(dirname(outputFile), { recursive: true });
   const temporaryFile = `${outputFile}.tmp-${process.pid}`;
-  writeFileSync(temporaryFile, `${[...retained, ...serialized].join("\n")}\n`);
+  writeFileSync(temporaryFile, contents);
   renameSync(temporaryFile, outputFile);
 }

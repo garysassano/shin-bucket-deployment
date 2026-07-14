@@ -1,5 +1,13 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import {
   type BenchmarkAssetProfile,
@@ -25,8 +33,14 @@ type GeneratedBundle = {
 
 const DEFAULT_PROFILE: BenchmarkAssetProfile = "mixed";
 const DEFAULT_STATE: BenchmarkAssetState = "baseline";
-const ASSET_GENERATOR_VERSION = 2;
+const ASSET_GENERATOR_VERSION = 3;
 const SHA256_BYTES = 32;
+
+type GeneratedFileDigest = {
+  readonly path: string;
+  readonly size: number;
+  readonly sha256: string;
+};
 
 type GenerationMarker = {
   readonly generatorVersion: number;
@@ -34,6 +48,7 @@ type GenerationMarker = {
   readonly state: BenchmarkAssetState;
   readonly fileCount: number;
   readonly totalBytes: number;
+  readonly files: readonly GeneratedFileDigest[];
 };
 
 export function ensureBenchmarkAssets(options?: {
@@ -49,7 +64,7 @@ export function ensureBenchmarkAssets(options?: {
   const specs = buildSpecs(profile, state);
   const totalBytes = specs.reduce((sum, spec) => sum + spec.size, 0);
 
-  const expectedMarker: GenerationMarker = {
+  const expectedMarker = {
     generatorVersion: ASSET_GENERATOR_VERSION,
     profile,
     state,
@@ -57,7 +72,7 @@ export function ensureBenchmarkAssets(options?: {
     totalBytes,
   };
 
-  if (markerMatches(markerPath, expectedMarker)) {
+  if (markerMatches(root, markerPath, expectedMarker, specs)) {
     return {
       root,
       sourceRoots: sourceRoots(profile, root),
@@ -71,13 +86,17 @@ export function ensureBenchmarkAssets(options?: {
   rmSync(root, { force: true, recursive: true });
   mkdirSync(root, { recursive: true });
 
+  const files: GeneratedFileDigest[] = [];
   for (const spec of specs) {
     const filePath = join(root, spec.path);
     mkdirSync(dirname(filePath), { recursive: true });
-    writeFileSync(filePath, renderFile(spec, profile, state));
+    const contents = renderFile(spec, profile, state);
+    writeFileSync(filePath, contents);
+    files.push({ path: spec.path, size: contents.length, sha256: digest(contents) });
   }
 
-  writeFileSync(markerPath, `${JSON.stringify(expectedMarker, null, 2)}\n`);
+  const marker: GenerationMarker = { ...expectedMarker, files };
+  writeFileSync(markerPath, `${JSON.stringify(marker, null, 2)}\n`);
 
   return {
     root,
@@ -247,7 +266,12 @@ function seedFor(path: string, profile: BenchmarkAssetProfile, state: BenchmarkA
   return hash(`${profile}:${stateSalt}:${path}`);
 }
 
-function markerMatches(markerPath: string, expected: GenerationMarker): boolean {
+function markerMatches(
+  root: string,
+  markerPath: string,
+  expected: Omit<GenerationMarker, "files">,
+  specs: readonly FileSpec[],
+): boolean {
   if (!existsSync(markerPath)) {
     return false;
   }
@@ -258,16 +282,74 @@ function markerMatches(markerPath: string, expected: GenerationMarker): boolean 
       return false;
     }
     const candidate = marker as Record<string, unknown>;
-    return (
+    if (
       candidate.generatorVersion === expected.generatorVersion &&
       candidate.profile === expected.profile &&
       candidate.state === expected.state &&
       candidate.fileCount === expected.fileCount &&
       candidate.totalBytes === expected.totalBytes
-    );
+    ) {
+      return filesMatch(root, specs, candidate.files, expected.profile, expected.state);
+    }
+    return false;
   } catch {
     return false;
   }
+}
+
+function filesMatch(
+  root: string,
+  specs: readonly FileSpec[],
+  value: unknown,
+  profile: BenchmarkAssetProfile,
+  state: BenchmarkAssetState,
+): boolean {
+  if (!Array.isArray(value) || value.length !== specs.length) {
+    return false;
+  }
+
+  const expectedPaths = specs.map((spec) => spec.path).sort();
+  const actualPaths = listGeneratedFiles(root).sort();
+  if (
+    expectedPaths.length !== actualPaths.length ||
+    expectedPaths.some((path, index) => path !== actualPaths[index])
+  ) {
+    return false;
+  }
+
+  return specs.every((spec, index) => {
+    const candidate: unknown = value[index];
+    if (typeof candidate !== "object" || candidate === null) {
+      return false;
+    }
+    const entry = candidate as Record<string, unknown>;
+    const filePath = join(root, spec.path);
+    const expectedDigest = digest(renderFile(spec, profile, state));
+    return (
+      entry.path === spec.path &&
+      entry.size === spec.size &&
+      typeof entry.sha256 === "string" &&
+      entry.sha256 === expectedDigest &&
+      statSync(filePath).size === spec.size &&
+      digest(readFileSync(filePath)) === expectedDigest
+    );
+  });
+}
+
+function listGeneratedFiles(root: string, directory = root): string[] {
+  return readdirSync(directory).flatMap((entry) => {
+    const path = join(directory, entry);
+    if (path === join(root, ".generated.json")) {
+      return [];
+    }
+    return statSync(path).isDirectory()
+      ? listGeneratedFiles(root, path)
+      : [path.slice(root.length + 1)];
+  });
+}
+
+function digest(contents: Buffer): string {
+  return createHash("sha256").update(contents).digest("hex");
 }
 
 function changedSalt(path: string): string {

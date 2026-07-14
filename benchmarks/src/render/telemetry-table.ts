@@ -4,17 +4,17 @@ import { parseCliOptions } from "../cli";
 import {
   type BenchmarkResultRecord,
   type ProviderSummary,
-  benchmarkMethodologyVersion,
-  isCompleteBenchmarkRecord,
   phaseRank,
   readBenchmarkResultRows,
 } from "../model";
+import { selectValidatedBenchmarkRun } from "../validation";
 
 type RenderOptions = {
   readonly inputFile: string;
   readonly outputFile: string;
   readonly methodologyVersion?: 1 | 2;
   readonly runId?: string;
+  readonly configFile?: string;
 };
 
 type TelemetryRow = {
@@ -35,7 +35,13 @@ type Column<T> = {
   readonly value: (row: T) => unknown;
 };
 
-const CLI_OPTIONS = ["input-file", "methodology-version", "output-file", "run-id"] as const;
+const CLI_OPTIONS = [
+  "config",
+  "input-file",
+  "methodology-version",
+  "output-file",
+  "run-id",
+] as const;
 
 const RUNTIME_COLUMNS: Array<Column<TelemetryRow>> = [
   { header: "Phase", value: phase },
@@ -264,7 +270,12 @@ function main(): void {
 }
 
 export function renderBenchmarkResultsTable(options: RenderOptions): string {
-  const rows = readTelemetryRows(options.inputFile, options.methodologyVersion ?? 2, options.runId);
+  const rows = readTelemetryRows(
+    options.inputFile,
+    options.methodologyVersion ?? 2,
+    options.runId,
+    options.configFile,
+  );
   const groups = buildGroups(rows);
   const report = renderResultsMarkdown(rows, groups, options.inputFile);
   mkdirSync(dirname(options.outputFile), { recursive: true });
@@ -416,22 +427,27 @@ function readTelemetryRows(
   filePath: string,
   methodologyVersion: 1 | 2,
   requestedRunId: string | undefined,
+  configFile: string | undefined,
 ): TelemetryRow[] {
-  const rows = readBenchmarkResultRows(filePath)
-    .filter(({ record }) => isCompleteBenchmarkRecord(record))
-    .filter(({ record }) => benchmarkMethodologyVersion(record) === methodologyVersion)
-    .filter(({ record }) => methodologyVersion === 1 || record.gitDirty === false)
+  const allRows = readBenchmarkResultRows(filePath);
+  const selectedRecords = new Set(
+    selectValidatedBenchmarkRun({
+      records: allRows.map(({ record }) => record),
+      methodologyVersion,
+      runId: requestedRunId,
+      configFile,
+    }),
+  );
+  const rows = allRows
+    .filter(({ record }) => selectedRecords.has(record))
     .filter(
       ({ record }) => record.providerSummary !== undefined && record.providerSummary !== null,
     );
-  const runId = requestedRunId ?? rows.at(-1)?.record.runId;
-  return rows
-    .filter(({ record }) => runId === undefined || runId === null || record.runId === runId)
-    .map(({ line, record }) => ({
-      line,
-      record,
-      summary: record.providerSummary as ProviderSummary,
-    }));
+  return rows.map(({ line, record }) => ({
+    line,
+    record,
+    summary: record.providerSummary as ProviderSummary,
+  }));
 }
 
 function unique<T>(values: Array<T | null | undefined>): T[] {
@@ -466,6 +482,7 @@ function parseArgs(args: string[]): RenderOptions {
     outputFile: values.get("output-file") ?? "benchmarks/telemetry.md",
     methodologyVersion: parseMethodologyVersion(values.get("methodology-version")),
     runId: values.get("run-id"),
+    configFile: values.get("config"),
   };
 }
 
