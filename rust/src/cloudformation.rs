@@ -52,6 +52,13 @@ struct DecodedRequest<'a> {
     old_resource_properties: Option<RawDeploymentRequest>,
 }
 
+struct ProcessedRequest {
+    request_type: &'static str,
+    request: crate::types::DeploymentRequest,
+    stats: Arc<DeploymentStats>,
+    result: Result<Vec<u8>>,
+}
+
 pub(crate) async fn handle_event(
     state: Arc<AppState>,
     event: lambda_runtime::LambdaEvent<Value>,
@@ -65,7 +72,7 @@ pub(crate) async fn handle_event(
         return Err(anyhow!("unsupported CloudFormation custom resource request type").into());
     };
 
-    let response = timeout_at(
+    let processed = timeout_at(
         deadlines.drain(),
         process_request_envelope(&state, &request, deadlines),
     )
@@ -73,16 +80,58 @@ pub(crate) async fn handle_event(
     .context("deployment cancellation did not finish before the callback-only reserve")
     .and_then(|response| response);
 
-    match response {
-        Ok(success_body) => {
-            send_response(
-                &state.http,
-                response_url,
-                &success_body,
-                deadlines.callback(),
-            )
-            .await
-            .context("failed to send success response")?;
+    match processed {
+        Ok(processed) => {
+            let status = if processed.result.is_ok() {
+                "success"
+            } else {
+                "failure"
+            };
+            let callback_result = match processed.result {
+                Ok(success_body) => send_response(
+                    &state.http,
+                    response_url,
+                    &success_body,
+                    deadlines.callback(),
+                    Some(&processed.stats),
+                )
+                .await
+                .context("failed to send success response"),
+                Err(err) => {
+                    let full_reason = format!("{err:#}");
+                    let reason = truncate_failure_reason(&full_reason);
+                    error!(error = %full_reason, "request failed");
+                    let failure = ResponsePayload {
+                        physical_resource_id: physical_resource_id(&request)
+                            .map(ToOwned::to_owned)
+                            .unwrap_or_else(|| request_id.to_string()),
+                        reason: Some(reason),
+                        data: Map::new(),
+                    };
+                    let failure_body = serialize_failure_response(
+                        stack_id,
+                        request_id,
+                        logical_resource_id,
+                        &failure,
+                    )?;
+                    send_response(
+                        &state.http,
+                        response_url,
+                        &failure_body,
+                        deadlines.callback(),
+                        Some(&processed.stats),
+                    )
+                    .await
+                    .context("failed to send failure response")
+                }
+            };
+            log_deployment_summary(
+                &processed.stats,
+                processed.request_type,
+                status,
+                &processed.request,
+            );
+            callback_result?;
         }
         Err(err) => {
             let full_reason = format!("{err:#}");
@@ -103,6 +152,7 @@ pub(crate) async fn handle_event(
                 response_url,
                 &failure_body,
                 deadlines.callback(),
+                None,
             )
             .await
             .context("failed to send failure response")?;
@@ -124,7 +174,7 @@ async fn process_request_envelope(
     state: &AppState,
     request: &RequestEnvelope,
     deadlines: InvocationDeadlines,
-) -> Result<Vec<u8>> {
+) -> Result<ProcessedRequest> {
     let decoded = decode_deployment_request(request)?;
     tracing::info!(
         request_type = decoded.request_type,
@@ -199,13 +249,13 @@ fn decode_deployment_request(request: &RequestEnvelope) -> Result<DecodedRequest
 
 async fn process_request(
     state: &AppState,
-    request_type: &str,
+    request_type: &'static str,
     identity: RequestIdentity<'_>,
     physical_resource_id: Option<&str>,
     resource_properties: &RawDeploymentRequest,
     old_resource_properties: Option<&RawDeploymentRequest>,
     deadlines: InvocationDeadlines,
-) -> Result<Vec<u8>> {
+) -> Result<ProcessedRequest> {
     let request = parse_request(resource_properties)?;
     let physical_resource_id = match request_type {
         "Create" => format!("aws.cdk.cargobucketdeployment.{}", Uuid::new_v4()),
@@ -228,7 +278,6 @@ async fn process_request(
     preflight_invalidation_requests(request_type, &request, previous_destination.as_ref())?;
 
     let stats = Arc::new(DeploymentStats::default());
-    let mut status = "success";
     let result = process_request_inner(
         state,
         request_type,
@@ -241,13 +290,12 @@ async fn process_request(
         Arc::clone(&stats),
     )
     .await;
-
-    if result.is_err() {
-        status = "failure";
-    }
-    log_deployment_summary(&stats, request_type, status, &request);
-    result?;
-    Ok(success_body)
+    Ok(ProcessedRequest {
+        request_type,
+        request,
+        stats,
+        result: result.map(|()| success_body),
+    })
 }
 
 fn validate_resource_type(request: &RequestEnvelope) -> Result<()> {
@@ -686,16 +734,26 @@ async fn send_response(
     response_url: &str,
     body: &[u8],
     deadline: TokioInstant,
+    stats: Option<&DeploymentStats>,
 ) -> Result<()> {
-    validate_response_url(response_url)?;
-    send_response_with_policy(
-        http,
-        response_url,
-        body,
-        deadline,
-        CallbackRetryPolicy::production(),
-    )
-    .await
+    let started = Instant::now();
+    let result = async {
+        validate_response_url(response_url)?;
+        send_response_with_policy(
+            http,
+            response_url,
+            body,
+            deadline,
+            CallbackRetryPolicy::production(),
+            stats,
+        )
+        .await
+    }
+    .await;
+    if let Some(stats) = stats {
+        stats.add_callback_millis(duration_ms(started.elapsed()));
+    }
+    result
 }
 
 fn serialize_response(
@@ -791,6 +849,7 @@ async fn send_response_with_policy(
     body: &[u8],
     deadline: TokioInstant,
     retry: CallbackRetryPolicy,
+    stats: Option<&DeploymentStats>,
 ) -> Result<()> {
     ensure!(
         retry.max_attempts > 0,
@@ -803,6 +862,9 @@ async fn send_response_with_policy(
             "CloudFormation callback deadline was exhausted before attempt {attempt}"
         );
 
+        if let Some(stats) = stats {
+            stats.record_callback_attempt(attempt > 1);
+        }
         let response = timeout_at(
             deadline,
             http.put(response_url)
@@ -811,29 +873,58 @@ async fn send_response_with_policy(
                 .body(body.to_vec())
                 .send(),
         )
-        .await
-        .with_context(|| {
-            format!("CloudFormation callback deadline was exhausted during attempt {attempt}")
-        })?;
+        .await;
+        let response = match response {
+            Ok(response) => response,
+            Err(error) => {
+                if let Some(stats) = stats {
+                    stats.record_callback_failure();
+                }
+                return Err(error).with_context(|| {
+                    format!(
+                        "CloudFormation callback deadline was exhausted during attempt {attempt}"
+                    )
+                });
+            }
+        };
 
         let retry_error = match response {
-            Ok(response) if response.status().is_success() => return Ok(()),
-            Ok(response) if response.status().is_server_error() => anyhow!(
-                "CloudFormation callback attempt {attempt} returned retryable status {}",
-                response.status()
-            ),
+            Ok(response) if response.status().is_success() => {
+                if let Some(stats) = stats {
+                    stats.record_callback_success();
+                }
+                return Ok(());
+            }
+            Ok(response) if response.status().is_server_error() => {
+                if let Some(stats) = stats {
+                    stats.record_callback_failure();
+                }
+                anyhow!(
+                    "CloudFormation callback attempt {attempt} returned retryable status {}",
+                    response.status()
+                )
+            }
             Ok(response) => {
+                if let Some(stats) = stats {
+                    stats.record_callback_failure();
+                }
                 return Err(anyhow!(
                     "CloudFormation callback attempt {attempt} returned non-retryable status {}",
                     response.status()
                 ));
             }
             Err(error) if error.is_connect() || error.is_timeout() => {
+                if let Some(stats) = stats {
+                    stats.record_callback_failure();
+                }
                 anyhow!(error).context(format!(
                     "CloudFormation callback attempt {attempt} failed with a retryable transport error"
                 ))
             }
             Err(error) => {
+                if let Some(stats) = stats {
+                    stats.record_callback_failure();
+                }
                 return Err(error).context(format!(
                     "CloudFormation callback attempt {attempt} failed with a non-retryable transport error"
                 ));
@@ -1087,6 +1178,19 @@ mod tests {
         let stats = crate::types::DeploymentStats::default();
         stats.add_marker_planning_pass();
         stats.add_marker_upload_pass();
+        stats.add_trusted_catalog(3);
+        stats.add_untrusted_catalog();
+        stats.add_catalog_fallback_hash_attempt();
+        stats.add_catalog_skip();
+        stats.record_delete_attempt(5);
+        stats.record_delete_response(3, 2);
+        stats.record_delete_attempt(4);
+        stats.record_delete_not_found(4);
+        stats.record_callback_attempt(false);
+        stats.record_callback_failure();
+        stats.record_callback_attempt(true);
+        stats.record_callback_success();
+        stats.add_callback_millis(12);
         let summary = serde_json::to_value(stats.snapshot("Create", "success", &request))
             .expect("serializable summary");
 
@@ -1099,6 +1203,12 @@ mod tests {
         assert_eq!(summary["markerReplacement"]["plannedPassesPerUpload"], 2);
         assert_eq!(summary["markerReplacement"]["planningPasses"], 1);
         assert_eq!(summary["markerReplacement"]["uploadPasses"], 1);
+        assert_eq!(summary["phaseMs"]["callback"], 12);
+        assert_eq!(summary["catalog"]["trustedArchives"], 1);
+        assert_eq!(summary["catalog"]["untrustedArchives"], 1);
+        assert_eq!(summary["catalog"]["trustedEntries"], 3);
+        assert_eq!(summary["catalog"]["fallbackHashAttempts"], 1);
+        assert_eq!(summary["catalog"]["sparseSkips"], 1);
         assert_eq!(summary["source"]["getAttempts"], 0);
         assert_eq!(summary["source"]["bodyReplays"], 0);
         assert_eq!(summary["source"]["globalBudgetBytes"], 0);
@@ -1107,6 +1217,16 @@ mod tests {
         assert_eq!(summary["counts"]["destinationMetadataRetained"], 0);
         assert_eq!(summary["counts"]["destinationPageObjectsHighWater"], 0);
         assert_eq!(summary["putObject"]["wireAttempts"], 0);
+        assert_eq!(summary["counts"]["deleteObjects"], 3);
+        assert_eq!(summary["deleteObject"]["wireAttempts"], 2);
+        assert_eq!(summary["deleteObject"]["requestedObjects"], 9);
+        assert_eq!(summary["deleteObject"]["confirmedObjects"], 3);
+        assert_eq!(summary["deleteObject"]["unconfirmedObjects"], 2);
+        assert_eq!(summary["deleteObject"]["notFoundObjects"], 4);
+        assert_eq!(summary["callback"]["wireAttempts"], 2);
+        assert_eq!(summary["callback"]["failedAttempts"], 1);
+        assert_eq!(summary["callback"]["retryAttempts"], 1);
+        assert_eq!(summary["callback"]["confirmedResponses"], 1);
     }
 
     #[tokio::test]
@@ -1118,6 +1238,7 @@ mod tests {
             b"{}",
             TokioInstant::now() + Duration::from_secs(1),
             test_retry_policy(3),
+            None,
         )
         .await;
         let requests = server.finish();
@@ -1135,6 +1256,7 @@ mod tests {
             b"{}",
             TokioInstant::now() + Duration::from_secs(1),
             test_retry_policy(3),
+            None,
         )
         .await;
         let requests = server.finish();
@@ -1150,6 +1272,7 @@ mod tests {
 
     #[tokio::test]
     async fn callback_retries_5xx_until_success() {
+        let stats = crate::types::DeploymentStats::default();
         let server = MockCallbackServer::start(vec![
             MockCallback::Status(500),
             MockCallback::Status(503),
@@ -1161,12 +1284,20 @@ mod tests {
             b"{}",
             TokioInstant::now() + Duration::from_secs(1),
             test_retry_policy(3),
+            Some(&stats),
         )
         .await;
         let requests = server.finish();
 
         assert!(result.is_ok());
         assert_eq!(requests, 3);
+        let request = deployment_request_with_paths(vec!["/*".to_string()]);
+        let summary = serde_json::to_value(stats.snapshot("Create", "success", &request))
+            .expect("serializable summary");
+        assert_eq!(summary["callback"]["wireAttempts"], 3);
+        assert_eq!(summary["callback"]["failedAttempts"], 2);
+        assert_eq!(summary["callback"]["retryAttempts"], 2);
+        assert_eq!(summary["callback"]["confirmedResponses"], 1);
     }
 
     #[tokio::test]
@@ -1181,6 +1312,7 @@ mod tests {
             b"{}",
             TokioInstant::now() + Duration::from_secs(1),
             test_retry_policy(2),
+            None,
         )
         .await;
         let requests = server.finish();
@@ -1201,6 +1333,7 @@ mod tests {
             b"{}",
             TokioInstant::now() + Duration::from_secs(1),
             test_retry_policy(3),
+            None,
         )
         .await
         .expect_err("connection failures must exhaust the attempt bound");
@@ -1210,6 +1343,7 @@ mod tests {
 
     #[tokio::test]
     async fn callback_request_cannot_run_past_its_absolute_deadline() {
+        let stats = crate::types::DeploymentStats::default();
         let server =
             MockCallbackServer::start(vec![MockCallback::Timeout(Duration::from_millis(150))]);
         let result = send_response_with_policy(
@@ -1218,6 +1352,7 @@ mod tests {
             b"{}",
             TokioInstant::now() + Duration::from_millis(30),
             test_retry_policy(3),
+            Some(&stats),
         )
         .await;
         let requests = server.finish();
@@ -1230,6 +1365,13 @@ mod tests {
             .contains("callback deadline was exhausted")
         );
         assert_eq!(requests, 1);
+        let request = deployment_request_with_paths(vec!["/*".to_string()]);
+        let summary = serde_json::to_value(stats.snapshot("Create", "failure", &request))
+            .expect("serializable summary");
+        assert_eq!(summary["callback"]["wireAttempts"], 1);
+        assert_eq!(summary["callback"]["failedAttempts"], 1);
+        assert_eq!(summary["callback"]["retryAttempts"], 0);
+        assert_eq!(summary["callback"]["confirmedResponses"], 0);
     }
 
     #[test]

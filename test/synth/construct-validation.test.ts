@@ -196,7 +196,7 @@ describe("ShinBucketDeployment validation and option coverage", () => {
         destinationBucket,
         distributionPaths: ["/index.html"],
       });
-    }).toThrow(/Distribution must be specified/);
+    }).toThrow(/Set distribution when distributionPaths is provided/);
   });
 
   test("throws when a distribution path does not start with a slash", () => {
@@ -217,7 +217,7 @@ describe("ShinBucketDeployment validation and option coverage", () => {
         distribution,
         distributionPaths: ["index.html"],
       });
-    }).toThrow(/Distribution paths must start with "\/"/);
+    }).toThrow(/Every distributionPaths entry must start with "\/"/);
   });
 
   test.each([
@@ -322,7 +322,7 @@ describe("ShinBucketDeployment validation and option coverage", () => {
       bundling: testBundling(),
     });
 
-    expect(() => app.synth()).toThrow(/sources with deploy-time values must be extracted/);
+    expect(() => app.synth()).toThrow(/marker replacement requires extraction/);
   });
 
   test("renders CloudFront properties and permissions", () => {

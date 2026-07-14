@@ -88,11 +88,44 @@ type UpstreamAssetOptions = AssetOptions & {
 
 export type CatalogedAssetOptions = CatalogedOptions | UpstreamAssetOptions;
 
+/**
+ * Deployment source helpers compatible with `aws-cdk-lib/aws-s3-deployment`.
+ *
+ * Bucket, data, JSON, and YAML sources delegate directly to CDK. Directory
+ * assets additionally use Shin's authenticated catalog by default; any
+ * upstream `ISource` can still be passed to `ShinBucketDeployment` without
+ * using this class.
+ */
 export class Source {
+  /**
+   * Use a ZIP archive already stored in S3.
+   *
+   * The source delegates to CDK and does not claim an authenticated Shin
+   * catalog. Ensure the provider role can read the source bucket and its KMS
+   * key, when applicable.
+   *
+   * @param bucket Bucket containing the source ZIP.
+   * @param zipObjectKey Object key of the source ZIP.
+   */
   public static bucket(bucket: IBucket, zipObjectKey: string): ISource {
     return CdkSource.bucket(bucket, zipObjectKey);
   }
 
+  /**
+   * Use a local directory or ZIP archive as a deployment source.
+   *
+   * Local directories include an authenticated `.shin/catalog.v1.json` by
+   * default. Cataloged packaging requires CDK asset staging, rejects symlinks
+   * and non-regular files, does not run CDK bundling, and changes the staged
+   * ZIP bytes compared with upstream packaging. Pass `embeddedCatalog:false`
+   * to delegate packaging to CDK when bundling or symlink handling is needed;
+   * that fallback remains deployable but cannot use trusted catalog skips.
+   * Local ZIP files always delegate to CDK and must come from a trusted
+   * producer.
+   *
+   * @param path Path to a local directory or ZIP archive.
+   * @param options Asset and authenticated-catalog options.
+   */
   public static asset(path: string, options?: CatalogedAssetOptions): ISource {
     if (options?.embeddedCatalog === false) {
       const { embeddedCatalog: _, ...assetOptions } = options;
@@ -104,7 +137,7 @@ export class Source {
         if (!context) {
           throw new ValidationError(
             literalString("ShinBucketDeploymentCatalogedSourceContext"),
-            "To use Source.asset(), context must be provided",
+            "Use Source.asset() through ShinBucketDeployment.sources or addSource(); binding a cataloged asset directly requires a deployment source context.",
             scope,
           );
         }
@@ -182,10 +215,24 @@ export class Source {
     };
   }
 
+  /**
+   * Deploy one UTF-8 string object, including deploy-time CDK token values.
+   *
+   * @param objectKey Destination key relative to `destinationKeyPrefix`.
+   * @param data Object contents.
+   * @param markersConfig Marker replacement options.
+   */
   public static data(objectKey: string, data: string, markersConfig?: MarkersConfig): ISource {
     return CdkSource.data(objectKey, data, markersConfig);
   }
 
+  /**
+   * Serialize and deploy one JSON object, including deploy-time CDK token values.
+   *
+   * @param objectKey Destination key relative to `destinationKeyPrefix`.
+   * @param obj JSON-serializable value.
+   * @param jsonProcessingOptions JSON token-processing options.
+   */
   public static jsonData(
     objectKey: string,
     obj: unknown,
@@ -194,6 +241,12 @@ export class Source {
     return CdkSource.jsonData(objectKey, obj, jsonProcessingOptions);
   }
 
+  /**
+   * Serialize and deploy one YAML object, including deploy-time CDK token values.
+   *
+   * @param objectKey Destination key relative to `destinationKeyPrefix`.
+   * @param obj JSON-serializable value to format as YAML.
+   */
   public static yamlData(objectKey: string, obj: unknown): ISource {
     return CdkSource.yamlData(objectKey, obj);
   }

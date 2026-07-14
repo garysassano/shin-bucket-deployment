@@ -10,6 +10,8 @@ The published package ships prebuilt Rust provider binaries for both Lambda arch
 
 Install the package in your CDK v2 project. It includes prebuilt provider binaries, so your app does not need a Rust toolchain or a provider build step.
 
+The published construct supports Node.js 22 or newer and AWS CDK 2.257.0 or newer.
+
 ```sh
 npm install shin-bucket-deployment
 ```
@@ -24,6 +26,8 @@ The operational props map closely to the upstream construct, so a deployment tha
 ```
 
 See [What It Supports](#what-it-supports) for the intentionally narrow public surface.
+
+Shin accepts upstream CDK `ISource` values. Its exported `Source.asset()` adds an authenticated catalog for sparse marker-free SSE-S3 comparisons; use `embeddedCatalog: false` when CDK bundling or symlink-following behavior is required. Cataloged packaging rejects symlinks and non-regular files, and the embedded catalog changes the staged ZIP bytes and asset hash compared with upstream packaging.
 
 ### Example
 
@@ -148,7 +152,7 @@ Destination planning retains metadata only for manifest keys. When the compariso
 
 CloudFront invalidation is created after S3 changes when `distribution` is provided. If `distributionPaths` is omitted, the default path is the destination prefix plus `*`, for example `/site/*`.
 
-The provider logs one sanitized `shin_deployment_summary` JSON line per custom-resource request plus structured source scheduler and destination `PutObject` diagnostics to CloudWatch Logs. Diagnostics schema v2 separates logical scheduled objects, wire attempts, consumed body replays, throttled attempts, cancellations, panics, and true active-reader high-water. `markerReplacement` reports the strategy, semantics, nominal passes per uploaded object, and actual planning/upload passes. The summary excludes bucket names, object keys, account IDs, distribution IDs, URLs, and ETags.
+The provider logs one sanitized `shin_deployment_summary` JSON line per custom-resource request after the CloudFormation callback attempt, plus structured source scheduler and destination `PutObject` diagnostics to CloudWatch Logs. Diagnostics schema v2 separates logical scheduled objects, wire attempts, consumed body replays, throttled attempts, cancellations, panics, and true active-reader high-water. It also records authenticated-catalog trust and fallback hashing, confirmed versus unconfirmed deletion work, and callback attempts, retries, failures, and confirmed responses. `markerReplacement` reports the strategy, semantics, nominal passes per uploaded object, and actual planning/upload passes. The summary excludes bucket names, object keys, account IDs, distribution IDs, URLs, and ETags.
 
 ## Limits
 
@@ -174,6 +178,8 @@ Source archives are read with S3 ranges and do not need to fit in Lambda memory 
 Before destination mutation, the provider validates the complete final key against S3's [1024-byte UTF-8 key limit](https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html), checks archive and aggregate size arithmetic, and rejects oversized single-request uploads and copies. Marker output size is enforced incrementally during planning, and the upload body withholds its final frame until the second pass validates source CRC/size/catalog integrity and matches the planned length and digest. Earlier independent object writes may already have completed before a later object fails; deployments are not transactional.
 
 This construct targets static asset deployment to S3. It is not a general-purpose sync engine and does not provide byte-range diffing, persistent manifests, or non-S3 backend behavior.
+
+Deployments in the same CDK stack share one provider Lambda, IAM role, and log group. Permissions from every deployment accumulate on that shared role, and changing provider settings such as memory or runtime tuning changes the shared handler used by all of them.
 
 ## Development
 

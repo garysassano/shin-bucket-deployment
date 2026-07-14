@@ -352,7 +352,6 @@ export interface ShinBucketDeploymentDestinationLifecycle {
 export interface ShinBucketDeploymentProps
   extends Pick<
     BucketDeploymentProps,
-    | "sources"
     | "destinationKeyPrefix"
     | "extract"
     | "exclude"
@@ -360,14 +359,20 @@ export interface ShinBucketDeploymentProps
     | "distribution"
     | "distributionPaths"
     | "waitForDistributionInvalidation"
-    | "logGroup"
-    | "memoryLimit"
-    | "role"
     | "vpc"
     | "vpcSubnets"
-    | "outputObjectKeys"
     | "securityGroups"
   > {
+  /**
+   * Sources deployed in array order. Later sources replace earlier sources
+   * with the same destination key.
+   *
+   * Any upstream CDK `ISource` is accepted. Shin's `Source.asset` adds an
+   * authenticated catalog to local directories by default; other source
+   * implementations use the normal streamed validation path.
+   */
+  readonly sources: ISource[];
+
   /**
    * Bucket that receives the deployed objects.
    *
@@ -376,6 +381,46 @@ export interface ShinBucketDeploymentProps
    * otherwise uninspectable buckets are rejected.
    */
   readonly destinationBucket: Bucket;
+
+  /**
+   * Memory allocated to the shared provider Lambda, in MiB.
+   *
+   * The provider derives its invocation-global source-block budget from the
+   * actual Lambda memory and caps it at 50%. Deployments with the same provider
+   * configuration in one stack share a handler.
+   *
+   * @default 1024
+   */
+  readonly memoryLimit?: BucketDeploymentProps["memoryLimit"];
+
+  /**
+   * Existing execution role for the provider Lambda.
+   *
+   * Deployments with the same provider configuration in one stack share a
+   * handler and role. Source, destination, KMS, and CloudFront permissions from
+   * every sharing deployment accumulate on that role.
+   *
+   * @default - a role is created for the shared provider
+   */
+  readonly role?: BucketDeploymentProps["role"];
+
+  /**
+   * Log group used by the shared provider Lambda.
+   *
+   * @default - a default log group created by Lambda
+   */
+  readonly logGroup?: BucketDeploymentProps["logGroup"];
+
+  /**
+   * Return deployed object keys through the custom-resource response.
+   *
+   * CloudFormation limits the complete response to 4096 bytes. Set this to
+   * `false` for deployments whose object-key list would exceed that boundary;
+   * `objectKeys` then resolves to an empty list.
+   *
+   * @default true
+   */
+  readonly outputObjectKeys?: BucketDeploymentProps["outputObjectKeys"];
 
   /**
    * Lambda architecture for the Rust provider.
@@ -425,6 +470,11 @@ export interface ShinBucketDeploymentProps
   /**
    * Cleanup behavior for deployments, destination changes, and deletion.
    *
+   * Cleanup deletes objects, never bucket or distribution resources. Previous
+   * buckets and changed distributions require the explicit `onChange`
+   * authorization fields so the shared provider receives the necessary IAM
+   * permissions. Object changes are not transactional across a deployment.
+   *
    * @default - delete stale objects during deployment, retain previous objects
    * after destination changes, and retain current objects on Delete
    */
@@ -437,6 +487,11 @@ export interface ShinBucketDeploymentProps
  * By default the provider runs a prebuilt Rust `bootstrap` from an archive
  * shipped with the package, so consumers do not need a Rust toolchain. Passing
  * `bundling` or `rustProjectPath` opts into compiling the provider locally.
+ *
+ * Deployments with identical provider settings in one stack reuse a single
+ * Lambda function. Its role accumulates permissions for every source,
+ * destination, KMS key, and CloudFront distribution used by those deployments;
+ * changing the shared handler affects all of them.
  */
 export class ShinBucketDeployment extends Construct {
   private readonly cr: CustomResource;
@@ -446,12 +501,14 @@ export class ShinBucketDeployment extends Construct {
   private requestDestinationArn = false;
 
   /**
-   * Execution role of the custom resource Lambda function.
+   * Execution role of the shared custom-resource Lambda function.
+   *
+   * Permissions from every deployment sharing the handler accumulate here.
    */
   public readonly handlerRole: IRole;
 
   /**
-   * The backing Rust Lambda function.
+   * The shared backing Rust Lambda function.
    */
   public readonly handlerFunction: LambdaFunction;
 
@@ -520,7 +577,7 @@ export class ShinBucketDeployment extends Construct {
       if (!props.distribution) {
         throw new ValidationError(
           literalString("DistributionSpecifiedDistributionPathsSpecified"),
-          "Distribution must be specified if distribution paths are specified",
+          "Set distribution when distributionPaths is provided.",
           this,
         );
       }
@@ -533,7 +590,7 @@ export class ShinBucketDeployment extends Construct {
         ) {
           throw new ValidationError(
             literalString("DistributionPathsStart"),
-            'Distribution paths must start with "/"',
+            'Every distributionPaths entry must start with "/".',
             this,
           );
         }
@@ -784,7 +841,7 @@ export class ShinBucketDeployment extends Construct {
       validate: () => {
         if (this.sources.some((source) => source.markers) && props.extract === false) {
           return [
-            "Some sources are incompatible with extract=false; sources with deploy-time values must be extracted.",
+            "Set extract:true or remove deploy-time Source.data/jsonData/yamlData values; marker replacement requires extraction.",
           ];
         }
         return [];
@@ -915,6 +972,12 @@ export class ShinBucketDeployment extends Construct {
     Tags.of(this.destinationBucket).add(tagKey, "true");
   }
 
+  /**
+   * Destination bucket reconstructed from the custom-resource response.
+   *
+   * Accessing this property asks the provider to return the destination ARN and
+   * therefore consumes part of CloudFormation's 4096-byte response budget.
+   */
   public get deployedBucket(): IBucket {
     this.requestDestinationArn = true;
     this._deployedBucket =
@@ -928,10 +991,24 @@ export class ShinBucketDeployment extends Construct {
     return this._deployedBucket;
   }
 
+  /**
+   * Object keys returned by the provider when `outputObjectKeys` is enabled.
+   *
+   * Large deployments should set `outputObjectKeys:false` to stay within the
+   * complete 4096-byte CloudFormation response limit; this property then
+   * resolves to an empty list.
+   */
   public get objectKeys(): string[] {
     return Token.asList(this.cr.getAtt("SourceObjectKeys"));
   }
 
+  /**
+   * Add a deployment source after construction.
+   *
+   * The source is bound immediately and receives read permissions on the
+   * shared provider role. An equivalent marker-free source already present in
+   * the deployment is not added twice.
+   */
   public addSource(source: ISource): void {
     const config = source.bind(this, { handlerRole: this.handlerRole });
     if (!this.sources.some((c) => sourceConfigEqual(Stack.of(this), c, config))) {

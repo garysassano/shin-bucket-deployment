@@ -339,7 +339,13 @@ describe("benchmark result collector", () => {
             status: "success",
             destinationChecksumStrategy: "sse-s3-etag",
             durationMs: 3207,
-            phaseMs: { plan: 328, destinationList: 34, transfer: 2843, delete: 0 },
+            phaseMs: {
+              plan: 328,
+              destinationList: 34,
+              transfer: 2843,
+              delete: 0,
+              callback: 12,
+            },
             counts: { uploadedObjects: 2585, skippedObjects: 0, catalogSkips: 0 },
             transfer: {
               scheduledObjects: 2585,
@@ -359,6 +365,27 @@ describe("benchmark result collector", () => {
               bodyReplays: 0,
             },
             putObject: { wireAttempts: 2585, retryAttempts: 0, throttledAttempts: 0 },
+            catalog: {
+              trustedArchives: 1,
+              untrustedArchives: 0,
+              trustedEntries: 2585,
+              fallbackHashAttempts: 0,
+              sparseSkips: 0,
+            },
+            deleteObject: {
+              wireAttempts: 1,
+              failedAttempts: 0,
+              requestedObjects: 10,
+              confirmedObjects: 10,
+              unconfirmedObjects: 0,
+              notFoundObjects: 0,
+            },
+            callback: {
+              wireAttempts: 1,
+              failedAttempts: 0,
+              retryAttempts: 0,
+              confirmedResponses: 1,
+            },
           },
         },
       ]
@@ -376,11 +403,17 @@ describe("benchmark result collector", () => {
       "| cold-create | baseline | Create | success | 2584 | 8178618 | 66.1 | 120.069 | 3.261 | 3207 | 3.386 | 0.124 | 97 | null | null | sse-s3-etag | 1 |",
     );
     expect(table).toContain("### Provider Phase Timing");
-    expect(table).toContain("| cold-create | 328 | 34 | 2843 | 0 | null | null |");
+    expect(table).toContain("| cold-create | 328 | 34 | 2843 | 0 | null | null | 12 |");
+    expect(table).toContain("### Catalog Trust And Fallback");
+    expect(table).toContain("| cold-create | 1 | 0 | 2585 | 0 | 0 |");
     expect(table).toContain("### Source Range Reads");
     expect(table).toContain("### Transfer Scheduler");
     expect(table).toContain("| cold-create | 2585 | 2585 | 0 | 0 | 0 | 32 |");
     expect(table).toContain("### PutObject Pressure");
+    expect(table).toContain("### DeleteObjects Pressure");
+    expect(table).toContain("| cold-create | 1 | 0 | 10 | 10 | 0 | 0 |");
+    expect(table).toContain("### CloudFormation Callback");
+    expect(table).toContain("| cold-create | 1 | 0 | 0 | 1 |");
     expect(table).toContain("| Shin telemetry rows | 1 |");
   });
 });
