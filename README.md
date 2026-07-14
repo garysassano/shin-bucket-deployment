@@ -77,8 +77,6 @@ The official `BucketDeployment` is a good default for many stacks, but its provi
 > [!CAUTION]
 > These are historical exploratory snapshots with single-sample methodology. They are being revalidated and should not be treated as performance guarantees or used to choose production defaults.
 
-Controlled decision runs are documented separately from these historical charts. The corrected stable-payload [marker replacement run](docs/benchmark.md#marker-replacement-performance-decision) confirmed that the bounded streaming path was 5.5x to 11.0x faster and used 42% to 47% less peak memory than its whole-entry baseline while remaining 8.4x to 16.9x faster than upstream. The [PR #12 run](docs/benchmark.md#pr-12-performance-decision-run) measured the encryption-aware SSE-S3 and KMS paths. The charts below remain the older canonical snapshot and are intentionally not relabeled with decision-run variants.
-
 <img src="https://raw.githubusercontent.com/garysassano/shin-bucket-deployment/main/benchmarks/snapshots/tiny-many-1024mib-32.svg" alt="ShinBucketDeployment tiny-many 1024 MiB parallel 32 benchmark" width="100%">
 
 <img src="https://raw.githubusercontent.com/garysassano/shin-bucket-deployment/main/benchmarks/snapshots/tiny-many-2048mib-64.svg" alt="ShinBucketDeployment tiny-many 2048 MiB parallel 64 benchmark" width="100%">
