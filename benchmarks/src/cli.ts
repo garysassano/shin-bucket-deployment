@@ -17,7 +17,12 @@ export function parseCliOptions(
     if (inlineIndex !== -1) {
       const name = key.slice(2, inlineIndex);
       assertOption(name, allowed, usage);
-      values.set(name, key.slice(inlineIndex + 1));
+      assertUniqueOption(name, values, usage);
+      const value = key.slice(inlineIndex + 1);
+      if (value === "") {
+        usage();
+      }
+      values.set(name, value);
       continue;
     }
 
@@ -27,11 +32,22 @@ export function parseCliOptions(
     }
     const name = key.slice(2);
     assertOption(name, allowed, usage);
+    assertUniqueOption(name, values, usage);
     values.set(name, value);
     index += 1;
   }
 
   return values;
+}
+
+function assertUniqueOption(
+  name: string,
+  values: ReadonlyMap<string, string>,
+  usage: () => never,
+): void {
+  if (values.has(name)) {
+    usage();
+  }
 }
 
 function assertOption(name: string, allowed: ReadonlySet<string>, usage: () => never): void {

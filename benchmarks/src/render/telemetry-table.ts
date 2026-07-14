@@ -4,7 +4,8 @@ import { parseCliOptions } from "../cli";
 import {
   type BenchmarkResultRecord,
   type ProviderSummary,
-  isCanonicalBenchmarkRecord,
+  benchmarkMethodologyVersion,
+  isCompleteBenchmarkRecord,
   phaseRank,
   readBenchmarkResultRows,
 } from "../model";
@@ -12,6 +13,8 @@ import {
 type RenderOptions = {
   readonly inputFile: string;
   readonly outputFile: string;
+  readonly methodologyVersion?: 1 | 2;
+  readonly runId?: string;
 };
 
 type TelemetryRow = {
@@ -32,7 +35,7 @@ type Column<T> = {
   readonly value: (row: T) => unknown;
 };
 
-const CLI_OPTIONS = ["input-file", "output-file"] as const;
+const CLI_OPTIONS = ["input-file", "methodology-version", "output-file", "run-id"] as const;
 
 const RUNTIME_COLUMNS: Array<Column<TelemetryRow>> = [
   { header: "Phase", value: phase },
@@ -261,7 +264,7 @@ function main(): void {
 }
 
 export function renderBenchmarkResultsTable(options: RenderOptions): string {
-  const rows = readTelemetryRows(options.inputFile);
+  const rows = readTelemetryRows(options.inputFile, options.methodologyVersion ?? 2, options.runId);
   const groups = buildGroups(rows);
   const report = renderResultsMarkdown(rows, groups, options.inputFile);
   mkdirSync(dirname(options.outputFile), { recursive: true });
@@ -409,10 +412,21 @@ function renderMarkdownTable<T>(rows: T[], columns: Array<Column<T>>): string {
   ].join("\n");
 }
 
-function readTelemetryRows(filePath: string): TelemetryRow[] {
-  return readBenchmarkResultRows(filePath)
-    .filter(({ record }) => isCanonicalBenchmarkRecord(record))
-    .filter(({ record }) => record.providerSummary !== undefined && record.providerSummary !== null)
+function readTelemetryRows(
+  filePath: string,
+  methodologyVersion: 1 | 2,
+  requestedRunId: string | undefined,
+): TelemetryRow[] {
+  const rows = readBenchmarkResultRows(filePath)
+    .filter(({ record }) => isCompleteBenchmarkRecord(record))
+    .filter(({ record }) => benchmarkMethodologyVersion(record) === methodologyVersion)
+    .filter(({ record }) => methodologyVersion === 1 || record.gitDirty === false)
+    .filter(
+      ({ record }) => record.providerSummary !== undefined && record.providerSummary !== null,
+    );
+  const runId = requestedRunId ?? rows.at(-1)?.record.runId;
+  return rows
+    .filter(({ record }) => runId === undefined || runId === null || record.runId === runId)
     .map(({ line, record }) => ({
       line,
       record,
@@ -450,7 +464,16 @@ function parseArgs(args: string[]): RenderOptions {
   return {
     inputFile: values.get("input-file") ?? "benchmarks/results.jsonl",
     outputFile: values.get("output-file") ?? "benchmarks/telemetry.md",
+    methodologyVersion: parseMethodologyVersion(values.get("methodology-version")),
+    runId: values.get("run-id"),
   };
+}
+
+function parseMethodologyVersion(value: string | undefined): 1 | 2 | undefined {
+  if (value === undefined) return undefined;
+  if (value === "1") return 1;
+  if (value === "2") return 2;
+  usage();
 }
 
 function usage(): never {

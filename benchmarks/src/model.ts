@@ -56,12 +56,27 @@ export type ProviderSummary = {
 };
 
 export type BenchmarkResultRecord = {
+  readonly resultSchemaVersion?: number | null;
+  readonly methodologyVersion?: number | null;
+  readonly runId?: string | null;
+  readonly sampleId?: string | null;
   readonly snapshotDate?: string | null;
   readonly decisionRunId?: string | null;
   readonly comparisonVariant?: string | null;
   readonly repetition?: number | null;
   readonly providerImplementationCommit?: string | null;
   readonly providerImplementationSubject?: string | null;
+  readonly providerPackageName?: string | null;
+  readonly providerPackageVersion?: string | null;
+  readonly providerArchitecture?: string | null;
+  readonly providerCodeSha256?: string | null;
+  readonly providerBootstrapSha256?: string | null;
+  readonly gitDirty?: boolean | null;
+  readonly cdkCliVersion?: string | null;
+  readonly awsCdkLibVersion?: string | null;
+  readonly awsCdkLibIntegrity?: string | null;
+  readonly executionEnvironmentFresh?: boolean | null;
+  readonly memoryMeasurementScope?: "phase-local" | "cumulative" | null;
   readonly resultDocumentationCommit?: string | null;
   readonly region?: string | null;
   readonly implementation?: string | null;
@@ -117,6 +132,9 @@ export function benchmarkResultKey(
     | "phase"
     | "state"
     | "decisionRunId"
+    | "runId"
+    | "sampleId"
+    | "methodologyVersion"
     | "comparisonVariant"
     | "repetition"
   >,
@@ -129,6 +147,9 @@ export function benchmarkResultKey(
     record.phase,
     record.state,
     record.decisionRunId,
+    record.methodologyVersion,
+    record.runId,
+    record.sampleId,
     record.comparisonVariant,
     record.repetition,
   ]
@@ -137,7 +158,29 @@ export function benchmarkResultKey(
 }
 
 export function isCanonicalBenchmarkRecord(record: BenchmarkResultRecord): boolean {
-  return record.decisionRunId === undefined || record.decisionRunId === null;
+  return (
+    benchmarkMethodologyVersion(record) === 2 &&
+    record.gitDirty === false &&
+    isCompleteBenchmarkRecord(record)
+  );
+}
+
+export function isCompleteBenchmarkRecord(record: BenchmarkResultRecord): boolean {
+  return record.cleanup === "all benchmark stacks destroyed";
+}
+
+export function benchmarkMethodologyVersion(record: BenchmarkResultRecord): number {
+  return record.methodologyVersion ?? 1;
+}
+
+export function selectBenchmarkRun(
+  records: readonly BenchmarkResultRecord[],
+  requestedRunId?: string,
+): BenchmarkResultRecord[] {
+  const runId = requestedRunId ?? [...records].reverse().find((record) => record.runId)?.runId;
+  return runId === undefined || runId === null
+    ? [...records]
+    : records.filter((record) => record.runId === runId);
 }
 
 export function phaseRank(phase: string | null | undefined): number {

@@ -1,13 +1,29 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { basename, dirname } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { basename } from "node:path";
 import { parseCliOptions } from "./cli";
-import { type BenchmarkResultRecord, benchmarkResultKey, normalizeImplementation } from "./model";
+import { type BenchmarkResultRecord, normalizeImplementation } from "./model";
+import { upsertBenchmarkRecord } from "./persistence";
 
 export type CollectBenchmarkOptions = {
+  readonly resultSchemaVersion?: number;
+  readonly methodologyVersion?: number;
+  readonly runId?: string;
+  readonly sampleId?: string;
   readonly assetProfile?: string;
   readonly cleanup?: string;
   readonly comparisonVariant?: string;
   readonly commit?: string;
+  readonly providerPackageName?: string;
+  readonly providerPackageVersion?: string;
+  readonly providerArchitecture?: string;
+  readonly providerCodeSha256?: string;
+  readonly providerBootstrapSha256?: string;
+  readonly gitDirty?: boolean;
+  readonly cdkCliVersion?: string;
+  readonly awsCdkLibVersion?: string;
+  readonly awsCdkLibIntegrity?: string;
+  readonly executionEnvironmentFresh?: boolean;
+  readonly memoryMeasurementScope?: "phase-local" | "cumulative";
   readonly decisionRunId?: string;
   readonly fileCount?: number;
   readonly implementation?: string;
@@ -15,7 +31,7 @@ export type CollectBenchmarkOptions = {
   readonly memoryMb?: number;
   readonly notes?: string;
   readonly outputFile: string;
-  readonly parallel?: number;
+  readonly parallel?: number | null;
   readonly phase: string;
   readonly region?: string;
   readonly repetition?: number;
@@ -34,6 +50,21 @@ const CLI_OPTIONS = [
   "cleanup",
   "comparison-variant",
   "commit",
+  "result-schema-version",
+  "methodology-version",
+  "run-id",
+  "sample-id",
+  "provider-package-name",
+  "provider-package-version",
+  "provider-architecture",
+  "provider-code-sha256",
+  "provider-bootstrap-sha256",
+  "git-dirty",
+  "cdk-cli-version",
+  "aws-cdk-lib-version",
+  "aws-cdk-lib-integrity",
+  "execution-environment-fresh",
+  "memory-measurement-scope",
   "decision-run-id",
   "file-count",
   "implementation",
@@ -66,12 +97,27 @@ export function collectBenchmarkResult(options: CollectBenchmarkOptions): Benchm
   const report = options.reportFile ? readReportFile(options.reportFile) : undefined;
   const providerSummary = options.summaryFile ? readSummaryFile(options.summaryFile) : undefined;
   const record: BenchmarkResultRecord = {
+    resultSchemaVersion: options.resultSchemaVersion ?? null,
+    methodologyVersion: options.methodologyVersion ?? null,
+    runId: options.runId ?? null,
+    sampleId: options.sampleId ?? null,
     snapshotDate: options.snapshotDate ?? today(),
     decisionRunId: options.decisionRunId ?? null,
     comparisonVariant: options.comparisonVariant ?? null,
     repetition: options.repetition ?? null,
     providerImplementationCommit: options.commit ?? null,
     providerImplementationSubject: options.subject ?? null,
+    providerPackageName: options.providerPackageName ?? null,
+    providerPackageVersion: options.providerPackageVersion ?? null,
+    providerArchitecture: options.providerArchitecture ?? null,
+    providerCodeSha256: options.providerCodeSha256 ?? null,
+    providerBootstrapSha256: options.providerBootstrapSha256 ?? null,
+    gitDirty: options.gitDirty ?? null,
+    cdkCliVersion: options.cdkCliVersion ?? null,
+    awsCdkLibVersion: options.awsCdkLibVersion ?? null,
+    awsCdkLibIntegrity: options.awsCdkLibIntegrity ?? null,
+    executionEnvironmentFresh: options.executionEnvironmentFresh ?? null,
+    memoryMeasurementScope: options.memoryMeasurementScope ?? null,
     resultDocumentationCommit: options.resultCommit ?? null,
     region: options.region ?? null,
     implementation: normalizeImplementation(
@@ -79,7 +125,10 @@ export function collectBenchmarkResult(options: CollectBenchmarkOptions): Benchm
     ),
     profile: options.assetProfile ?? outputString(logText, "BenchmarkAssetProfile"),
     memoryMb: options.memoryMb ?? outputNumber(logText, "BenchmarkMemoryLimitMb"),
-    parallel: options.parallel ?? outputNumber(logText, "BenchmarkMaxParallelTransfers"),
+    parallel:
+      options.parallel === undefined
+        ? outputNumber(logText, "BenchmarkMaxParallelTransfers")
+        : options.parallel,
     phase: options.phase,
     state: options.state ?? outputString(logText, "BenchmarkState"),
     fileCount: options.fileCount ?? outputNumber(logText, "BenchmarkFileCount"),
@@ -96,29 +145,8 @@ export function collectBenchmarkResult(options: CollectBenchmarkOptions): Benchm
     ...(providerSummary === undefined ? {} : { providerSummary }),
   };
 
-  upsertBenchmarkResult(options.outputFile, record);
+  upsertBenchmarkRecord(options.outputFile, record);
   return record;
-}
-
-function upsertBenchmarkResult(outputFile: string, record: BenchmarkResultRecord): void {
-  const key = benchmarkResultKey(record);
-  const retainedRows = existsSync(outputFile)
-    ? readFileSync(outputFile, "utf8")
-        .split(/\n/)
-        .filter((line) => line.trim() !== "")
-        .filter((line) => rowKey(line) !== key)
-    : [];
-  mkdirSync(dirname(outputFile), { recursive: true });
-  writeFileSync(outputFile, `${[...retainedRows, JSON.stringify(record)].join("\n")}\n`);
-}
-
-function rowKey(line: string): string | null {
-  try {
-    const parsed = JSON.parse(line) as Partial<BenchmarkResultRecord>;
-    return benchmarkResultKey(parsed as BenchmarkResultRecord);
-  } catch {
-    return null;
-  }
 }
 
 function parseArgs(args: string[]): CollectBenchmarkOptions {
@@ -129,10 +157,25 @@ function parseArgs(args: string[]): CollectBenchmarkOptions {
   const phase = required(values, "phase");
 
   return {
+    resultSchemaVersion: optionalPositiveInteger(values, "result-schema-version"),
+    methodologyVersion: optionalPositiveInteger(values, "methodology-version"),
+    runId: values.get("run-id"),
+    sampleId: values.get("sample-id"),
     assetProfile: values.get("asset-profile"),
     cleanup: values.get("cleanup"),
     comparisonVariant: values.get("comparison-variant"),
     commit: values.get("commit"),
+    providerPackageName: values.get("provider-package-name"),
+    providerPackageVersion: values.get("provider-package-version"),
+    providerArchitecture: values.get("provider-architecture"),
+    providerCodeSha256: values.get("provider-code-sha256"),
+    providerBootstrapSha256: values.get("provider-bootstrap-sha256"),
+    gitDirty: optionalBoolean(values, "git-dirty"),
+    cdkCliVersion: values.get("cdk-cli-version"),
+    awsCdkLibVersion: values.get("aws-cdk-lib-version"),
+    awsCdkLibIntegrity: values.get("aws-cdk-lib-integrity"),
+    executionEnvironmentFresh: optionalBoolean(values, "execution-environment-fresh"),
+    memoryMeasurementScope: optionalMemoryScope(values.get("memory-measurement-scope")),
     decisionRunId: values.get("decision-run-id"),
     fileCount: optionalNumber(values, "file-count"),
     implementation: values.get("implementation"),
@@ -152,6 +195,20 @@ function parseArgs(args: string[]): CollectBenchmarkOptions {
     summaryFile: values.get("summary-file"),
     totalBytes: optionalNumber(values, "total-bytes"),
   };
+}
+
+function optionalBoolean(values: ReadonlyMap<string, string>, name: string): boolean | undefined {
+  const value = values.get(name);
+  if (value === undefined) return undefined;
+  if (value === "true") return true;
+  if (value === "false") return false;
+  usage();
+}
+
+function optionalMemoryScope(value: string | undefined): "phase-local" | "cumulative" | undefined {
+  if (value === undefined) return undefined;
+  if (value === "phase-local" || value === "cumulative") return value;
+  usage();
 }
 
 function required(values: Map<string, string>, name: string): string {

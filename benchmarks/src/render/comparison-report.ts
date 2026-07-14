@@ -1,12 +1,15 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, join, relative } from "node:path";
+import { type BenchmarkAggregate, aggregateMetric, comparisonGroupKey } from "../aggregate";
 import { parseCliOptions } from "../cli";
 import {
   type BenchmarkResultRecord,
+  benchmarkMethodologyVersion,
   implementationLabel,
-  isCanonicalBenchmarkRecord,
+  isCompleteBenchmarkRecord,
   phaseRank,
   readBenchmarkResultRecords,
+  selectBenchmarkRun,
 } from "../model";
 
 type BenchmarkRecord = BenchmarkResultRecord;
@@ -29,6 +32,8 @@ type RenderOptions = {
   readonly assetProfile?: string;
   readonly memoryMb?: number;
   readonly parallel?: number;
+  readonly methodologyVersion?: 1 | 2;
+  readonly runId?: string;
 };
 
 type ChartThemeName = "signal" | "forge" | "circuit";
@@ -81,7 +86,9 @@ const CLI_OPTIONS = [
   "input-file",
   "lambda-max-parallel-transfers",
   "lambda-memory-mb",
+  "methodology-version",
   "output-file",
+  "run-id",
 ] as const;
 
 const CHART_THEMES: Record<ChartThemeName, ChartTheme> = {
@@ -148,11 +155,20 @@ function main(): void {
 }
 
 export function renderBenchmarkReport(options: RenderOptions): string {
-  const records = readBenchmarkResultRecords(options.inputFile)
-    .filter(isCanonicalBenchmarkRecord)
-    .filter((record) => (options.assetProfile ? record.profile === options.assetProfile : true))
-    .filter((record) => (options.memoryMb ? record.memoryMb === options.memoryMb : true))
-    .filter((record) => (options.parallel ? record.parallel === options.parallel : true));
+  const records = selectBenchmarkRun(
+    readBenchmarkResultRecords(options.inputFile)
+      .filter(isCompleteBenchmarkRecord)
+      .filter((record) => benchmarkMethodologyVersion(record) === (options.methodologyVersion ?? 2))
+      .filter((record) => (options.methodologyVersion ?? 2) === 1 || record.gitDirty === false)
+      .filter((record) => (options.assetProfile ? record.profile === options.assetProfile : true))
+      .filter((record) => (options.memoryMb ? record.memoryMb === options.memoryMb : true))
+      .filter((record) =>
+        options.parallel
+          ? implementationLabel(record) === "aws" || record.parallel === options.parallel
+          : true,
+      ),
+    options.runId,
+  );
   const comparisonRows = buildPhaseComparisonRows(
     records.filter((record) => record.phase && record.profile),
   );
@@ -213,11 +229,25 @@ function renderScope(records: BenchmarkRecord[]): string {
   const memoryValues = unique(records.map((record) => record.memoryMb));
   const parallelValues = unique(records.map((record) => record.parallel));
   const phases = unique(records.map((record) => record.phase));
+  const methodologyVersions = unique(records.map(benchmarkMethodologyVersion));
+  const runIds = unique(records.map((record) => record.runId));
+  const sampleCounts = unique(
+    aggregateRows(records, "providerDurationSeconds").map((row) => row.count),
+  );
+  const completeness =
+    methodologyVersions.length === 1 && methodologyVersions[0] === 2
+      ? sampleCounts.length === 1 && sampleCounts[0] === 5
+        ? "complete (n=5 per provider-duration cell)"
+        : `incomplete (observed n=${sampleCounts.join(", ") || "0"}; canonical target is n=5)`
+      : "historical methodology; no v2 completeness claim";
 
   return [
     "## Scope",
     "",
     `- Snapshot date: ${snapshotDates.join(", ")}`,
+    `- Methodology: ${methodologyVersions.map((version) => `v${version}`).join(", ")}`,
+    `- Run ID: ${runIds.join(", ") || "not recorded"}`,
+    `- Sample completeness: ${completeness}`,
     `- Implementations: ${implementations.join(", ")}`,
     `- Asset profiles: ${assetProfiles.join(", ")}`,
     `- Memory MiB: ${memoryValues.join(", ")}`,
@@ -256,11 +286,11 @@ function renderMetricSection(
 
 function renderMetricTable(rows: AggregatedRow[], unit: string): string {
   return [
-    `| Asset profile | Phase | Memory MiB | Parallel | Implementation | n | median (${unit}) | p90 (${unit}) | min (${unit}) | max (${unit}) |`,
-    "| --- | --- | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: |",
+    `| Asset profile | Phase | Memory MiB | Parallel | Implementation | n | median (${unit}) | Q1 (${unit}) | Q3 (${unit}) | IQR (${unit}) | min (${unit}) | max (${unit}) |`,
+    "| --- | --- | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ...rows.map(
       (row) =>
-        `| ${row.profile} | ${row.phase} | ${row.memoryMb ?? ""} | ${row.parallel ?? ""} | ${row.implementation} | ${row.count} | ${formatNumber(row.median)} | ${formatNumber(row.p90)} | ${formatNumber(row.min)} | ${formatNumber(row.max)} |`,
+        `| ${row.profile} | ${row.phase} | ${row.memoryMb ?? ""} | ${row.parallel ?? ""} | ${row.implementation} | ${row.count} | ${formatNumber(row.median)} | ${formatNumber(row.q1)} | ${formatNumber(row.q3)} | ${formatNumber(row.iqr)} | ${formatNumber(row.min)} | ${formatNumber(row.max)} |`,
     ),
   ].join("\n");
 }
@@ -957,31 +987,31 @@ function metricPairs(records: BenchmarkRecord[], metric: MetricName): MetricPair
   const rows = aggregateRows(records, metric);
   const grouped = new Map<string, AggregatedRow[]>();
   for (const row of rows) {
-    const key = `${row.profile}\u0000${row.phase}\u0000${row.memoryMb ?? ""}\u0000${row.parallel ?? ""}`;
+    const key = comparisonGroupKey(row);
     const group = grouped.get(key) ?? [];
     group.push(row);
     grouped.set(key, group);
   }
 
   return [...grouped.values()]
-    .map((group) => {
+    .flatMap((group) => {
       const aws = group.find((row) => row.implementation.startsWith("aws"));
-      const shin = group.find((row) => row.implementation.startsWith("shin"));
-      if (!aws || !shin || shin.median === 0) {
-        return undefined;
+      if (!aws) {
+        return [];
       }
-      return {
-        key: comparisonKey(shin),
-        profile: shin.profile,
-        phase: shin.phase,
-        memoryMb: shin.memoryMb,
-        parallel: shin.parallel,
-        shin: shin.median,
-        aws: aws.median,
-        ratio: aws.median / shin.median,
-      };
+      return group
+        .filter((row) => row.implementation.startsWith("shin") && row.median !== 0)
+        .map((shin) => ({
+          key: comparisonKey(shin),
+          profile: shin.profile,
+          phase: shin.phase,
+          memoryMb: shin.memoryMb,
+          parallel: shin.parallel,
+          shin: shin.median,
+          aws: aws.median,
+          ratio: aws.median / shin.median,
+        }));
     })
-    .filter((row) => row !== undefined)
     .sort(compareMetricPairs);
 }
 
@@ -1020,55 +1050,10 @@ type MetricPair = {
   readonly ratio: number;
 };
 
-type AggregatedRow = {
-  readonly profile: string;
-  readonly phase: string;
-  readonly implementation: string;
-  readonly memoryMb: number | null;
-  readonly parallel: number | null;
-  readonly count: number;
-  readonly median: number;
-  readonly p90: number;
-  readonly min: number;
-  readonly max: number;
-};
+type AggregatedRow = BenchmarkAggregate;
 
 function aggregateRows(records: BenchmarkRecord[], metric: MetricName): AggregatedRow[] {
-  const groups = new Map<string, { record: BenchmarkRecord; values: number[] }>();
-  for (const record of records) {
-    const value = record[metric];
-    if (typeof value !== "number" || !Number.isFinite(value)) {
-      continue;
-    }
-    const key = [
-      record.profile,
-      record.phase,
-      implementationLabel(record),
-      record.memoryMb,
-      record.parallel,
-    ].join("\u0000");
-    const group = groups.get(key) ?? { record, values: [] };
-    group.values.push(value);
-    groups.set(key, group);
-  }
-
-  return [...groups.values()]
-    .map(({ record, values }) => {
-      const sorted = [...values].sort((left, right) => left - right);
-      return {
-        profile: record.profile ?? "unknown",
-        phase: record.phase ?? "unknown",
-        implementation: implementationLabel(record),
-        memoryMb: record.memoryMb ?? null,
-        parallel: record.parallel ?? null,
-        count: sorted.length,
-        median: percentile(sorted, 0.5),
-        p90: percentile(sorted, 0.9),
-        min: sorted[0] ?? 0,
-        max: sorted.at(-1) ?? 0,
-      };
-    })
-    .sort(compareAggregatedRows);
+  return aggregateMetric(records, metric).sort(compareAggregatedRows);
 }
 
 function comparisonKey(row: {
@@ -1106,18 +1091,6 @@ function comparePhaseGroups(
     phaseRank(left.phase) - phaseRank(right.phase) ||
     left.phase.localeCompare(right.phase)
   );
-}
-
-function percentile(sorted: number[], quantile: number): number {
-  if (sorted.length === 0) {
-    return 0;
-  }
-  const index = Math.ceil(sorted.length * quantile) - 1;
-  const value = sorted[Math.max(0, Math.min(sorted.length - 1, index))];
-  if (value === undefined) {
-    throw new Error(`Unable to read percentile ${quantile} from ${sorted.length} values`);
-  }
-  return value;
 }
 
 function unique<T>(values: Array<T | null | undefined>): T[] {
@@ -1246,8 +1219,17 @@ function parseArgs(args: string[]): RenderOptions {
     chartTheme: parseChartTheme(values.get("chart-theme")),
     memoryMb: parsePositiveInteger(values.get("lambda-memory-mb")),
     parallel: parsePositiveInteger(values.get("lambda-max-parallel-transfers")),
+    methodologyVersion: parseMethodologyVersion(values.get("methodology-version")),
+    runId: values.get("run-id"),
     assetProfile: values.get("asset-profile"),
   };
+}
+
+function parseMethodologyVersion(value: string | undefined): 1 | 2 | undefined {
+  if (value === undefined) return undefined;
+  if (value === "1") return 1;
+  if (value === "2") return 2;
+  usage();
 }
 
 function parsePositiveInteger(value: string | undefined): number | undefined {

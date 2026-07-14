@@ -1,7 +1,8 @@
 {
   "$schema": "../schemas/asset-benchmark-config.schema.json",
+  "methodologyVersion": 1,
   "region": "ap-southeast-2",
-  "concurrency": 8,
+  "concurrency": 1,
   "assetProfiles": ["tiny-many", "large-few"],
   "implementations": ["shin", "aws"],
   "lambdaConfigs": [

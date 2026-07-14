@@ -7,6 +7,7 @@ import {
   Stack,
   type StackProps,
 } from "aws-cdk-lib";
+import { CfnFunction } from "aws-cdk-lib/aws-lambda";
 import { Bucket } from "aws-cdk-lib/aws-s3";
 import {
   BucketDeployment as AwsBucketDeployment,
@@ -105,6 +106,7 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
       });
     }
     forceBenchmarkInvocation(deployment, process.env.SHIN_BENCH_INVOCATION_TOKEN);
+    forceFreshExecutionEnvironment(this, process.env.SHIN_BENCH_EXECUTION_ENVIRONMENT_TOKEN);
 
     new CfnOutput(this, "BucketName", {
       value: websiteBucket.bucketName,
@@ -145,6 +147,21 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
     new CfnOutput(this, "BenchmarkImplementation", {
       value: implementation,
     });
+  }
+}
+
+function forceFreshExecutionEnvironment(stack: Stack, token: string | undefined): void {
+  if (!token) {
+    return;
+  }
+  const functions = stack.node
+    .findAll()
+    .filter((construct): construct is CfnFunction => construct instanceof CfnFunction);
+  for (const handler of functions) {
+    handler.addPropertyOverride(
+      "Environment.Variables.SHIN_BENCH_EXECUTION_ENVIRONMENT_TOKEN",
+      token,
+    );
   }
 }
 

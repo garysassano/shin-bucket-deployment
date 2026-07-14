@@ -1,75 +1,18 @@
-import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
-import { z } from "zod";
+import { join, resolve } from "node:path";
 import { ensureBenchmarkAssets } from "./assets";
-import { parseCliOptions } from "./cli";
 import { type CollectBenchmarkOptions, collectBenchmarkResult } from "./collect-results";
-import {
-  BENCHMARK_ASSET_PROFILES,
-  BENCHMARK_ASSET_STATES,
-  BENCHMARK_IMPLEMENTATIONS,
-  type BenchmarkAssetProfile,
-  type BenchmarkAssetState,
-  type BenchmarkImplementation,
-  type BenchmarkResultRecord,
-  benchmarkResultKey,
-  isBenchmarkAssetProfile,
-  isBenchmarkImplementation,
-} from "./model";
-
-type LambdaConfig = {
-  readonly memoryMb: number;
-  readonly parallel: number;
-};
-
-type PhaseConfig = {
-  readonly assetState: BenchmarkAssetState;
-  readonly cloudfrontWait: boolean;
-  readonly name: string;
-  readonly deleteStaleObjects: boolean;
-  readonly deleteCurrentObjectsOnDelete?: boolean;
-};
-
-type RunnerConfig = {
-  readonly assetProfiles: BenchmarkAssetProfile[];
-  readonly lambdaConfigs: LambdaConfig[];
-  readonly implementations: BenchmarkImplementation[];
-  readonly region: string;
-  readonly outputFile: string;
-  readonly scratchRoot?: string;
-  readonly runToken?: string;
-  readonly snapshotDate?: string;
-  readonly concurrency: number;
-  readonly destinationPrefix: string;
-  readonly phases: PhaseConfig[];
-  readonly decisionRunId?: string;
-  readonly comparisonVariant?: string;
-  readonly repetition?: number;
-};
-
-type BenchmarkConfig = z.infer<typeof benchmarkConfigSchema>;
-
-type RunOptions = {
-  readonly assetProfiles: BenchmarkAssetProfile[];
-  readonly lambdaConfigs: LambdaConfig[];
-  readonly implementations: BenchmarkImplementation[];
-  readonly region: string;
-  readonly outputFile: string;
-  readonly scratchRoot: string;
-  readonly runToken: string;
-  readonly snapshotDate: string;
-  readonly concurrency: number;
-  readonly destinationPrefix: string;
-  readonly phases: PhaseConfig[];
-  readonly decisionRunId?: string;
-  readonly comparisonVariant?: string;
-  readonly repetition?: number;
-};
+import { type BenchmarkRunOptions, type PhaseConfig, parseBenchmarkRunOptions } from "./config";
+import { runCommand, sleep } from "./execution";
+import { type BenchmarkSourceMetadata, collectBenchmarkSourceMetadata } from "./metadata";
+import type { BenchmarkImplementation, BenchmarkResultRecord } from "./model";
+import { completedSampleIds, upsertBenchmarkRecords } from "./persistence";
+import { type PlannedBenchmarkRun, createBenchmarkPlan, wallClockCapReached } from "./plan";
 
 type PhaseEvidence = {
   readonly options: CollectBenchmarkOptions;
+  readonly record: BenchmarkResultRecord;
 };
 
 type StackResource = {
@@ -78,103 +21,20 @@ type StackResource = {
   readonly ResourceType?: string;
 };
 
-const DEFAULT_PHASES: PhaseConfig[] = [
-  {
-    assetState: "baseline",
-    cloudfrontWait: false,
-    name: "cold-create",
-    deleteStaleObjects: true,
-  },
-  {
-    assetState: "baseline",
-    cloudfrontWait: false,
-    name: "unchanged-update",
-    deleteStaleObjects: true,
-    deleteCurrentObjectsOnDelete: false,
-  },
-  {
-    assetState: "changed",
-    cloudfrontWait: false,
-    name: "changed-update",
-    deleteStaleObjects: true,
-  },
-  {
-    assetState: "pruned",
-    cloudfrontWait: false,
-    name: "pruned-update",
-    deleteStaleObjects: true,
-  },
-];
-
-const CLI_OPTIONS = [
-  "config",
-  "asset-profiles",
-  "lambda-configs",
-  "implementations",
-  "region",
-  "output-file",
-  "run-token",
-  "snapshot-date",
-  "scratch-root",
-  "concurrency",
-  "destination-prefix",
-  "decision-run-id",
-  "comparison-variant",
-  "repetition",
-];
-
-const nonEmptyStringSchema = z.string().min(1);
-const positiveIntegerSchema = z.number().int().positive();
-const implementationSchema = z.enum(BENCHMARK_IMPLEMENTATIONS);
-const assetProfileSchema = z.enum(BENCHMARK_ASSET_PROFILES);
-const stateSchema = z.enum(BENCHMARK_ASSET_STATES);
-const lambdaConfigSchema = z.object({
-  memoryMb: positiveIntegerSchema,
-  parallel: positiveIntegerSchema,
-});
-const phaseSchema = z.object({
-  assetState: stateSchema,
-  cloudfrontWait: z.boolean().optional(),
-  name: nonEmptyStringSchema,
-  deleteStaleObjects: z.boolean().optional(),
-  deleteCurrentObjectsOnDelete: z.boolean().optional(),
-});
-const benchmarkConfigSchema = z
-  .object({
-    $schema: nonEmptyStringSchema.optional(),
-    runToken: nonEmptyStringSchema.optional(),
-    snapshotDate: nonEmptyStringSchema.optional(),
-    region: nonEmptyStringSchema.optional(),
-    outputFile: nonEmptyStringSchema.optional(),
-    scratchRoot: nonEmptyStringSchema.optional(),
-    concurrency: positiveIntegerSchema.optional(),
-    destinationPrefix: nonEmptyStringSchema.optional(),
-    assetProfiles: z.array(assetProfileSchema).nonempty().optional(),
-    lambdaConfigs: z.array(lambdaConfigSchema).nonempty().optional(),
-    implementations: z.array(implementationSchema).nonempty().optional(),
-    phases: z.array(phaseSchema).nonempty().optional(),
-    decisionRunId: nonEmptyStringSchema.optional(),
-    comparisonVariant: nonEmptyStringSchema.optional(),
-    repetition: positiveIntegerSchema.optional(),
-  })
-  .strict();
-
 async function main(): Promise<void> {
-  const options = parseArgs(process.argv.slice(2));
+  const options = parseBenchmarkRunOptions(process.argv.slice(2));
+  console.log(`benchmark run id: ${options.runId}`);
   mkdirSync(options.scratchRoot, { recursive: true });
-  const rowsFile = join(options.scratchRoot, `${options.runToken}.rows.jsonl`);
-  writeFileSync(rowsFile, "");
-
-  const git = await gitMetadata();
-  const runs = options.assetProfiles.flatMap((assetProfile) =>
-    options.lambdaConfigs.flatMap((lambdaConfig) =>
-      options.implementations.map((implementation) => ({
-        assetProfile,
-        implementation,
-        ...lambdaConfig,
-      })),
-    ),
+  const sourceMetadata = await collectBenchmarkSourceMetadata(process.cwd(), options.outputFile);
+  const completed = completedSampleIds(
+    options.outputFile,
+    options.runId,
+    options.phases.map((phase) => phase.name),
   );
+  const runs = createBenchmarkPlan(options).filter((run) => !completed.has(run.sampleId));
+  if (completed.size > 0) {
+    console.log(`resuming with ${completed.size} completed sample(s)`);
+  }
   const states = [...new Set(options.phases.map((phase) => phase.assetState))];
   for (const assetProfile of options.assetProfiles) {
     for (const state of states) {
@@ -182,30 +42,24 @@ async function main(): Promise<void> {
     }
   }
 
-  await runWithConcurrency(runs, options.concurrency, async (run) => {
-    const evidence = await runBenchmarkStack({ git, options, run });
-    for (const item of evidence) {
-      collectBenchmarkResult({ ...item.options, outputFile: rowsFile });
+  const startedAtMs = Date.now();
+  for (const run of runs) {
+    if (wallClockCapReached(startedAtMs, options.maxWallClockMinutes)) {
+      console.log("benchmark wall-clock cap reached; no additional stack will be started");
+      break;
     }
-  });
-
-  upsertResultRows({
-    outputFile: options.outputFile,
-    rowsText: readFileSync(rowsFile, "utf8"),
-  });
+    await runBenchmarkStack({ sourceMetadata, options, run });
+  }
   console.log(`wrote sanitized benchmark rows to ${options.outputFile}`);
 }
 
 async function runBenchmarkStack(args: {
-  readonly run: LambdaConfig & {
-    readonly implementation: BenchmarkImplementation;
-    readonly assetProfile: string;
-  };
-  readonly git: { readonly commit: string | null; readonly subject: string | null };
-  readonly options: RunOptions;
+  readonly run: PlannedBenchmarkRun;
+  readonly sourceMetadata: BenchmarkSourceMetadata;
+  readonly options: BenchmarkRunOptions;
 }): Promise<PhaseEvidence[]> {
-  const { git, options, run } = args;
-  const label = `${run.implementation}-${run.assetProfile}-${run.memoryMb}-${run.parallel}`;
+  const { sourceMetadata, options, run } = args;
+  const label = `${run.implementation}-${run.assetProfile}-${run.memoryMb}-${run.parallel ?? "na"}-r${run.repetition}`;
   const stackSuffix = stackSuffixFor({ options, run });
   const stackName = `${
     run.implementation === "shin"
@@ -249,6 +103,11 @@ async function runBenchmarkStack(args: {
         stackName,
         scratchFile: join(scratch, `${phase.name}.resources.json`),
       });
+      const runtimeMetadata = await providerRuntimeMetadata({
+        functionName: handler,
+        outputFile: join(scratch, `${phase.name}.function.json`),
+        region: options.region,
+      });
       await writeLogEvents({
         filterPattern: "REPORT",
         outputFile: reportFile,
@@ -268,28 +127,49 @@ async function runBenchmarkStack(args: {
         });
       }
 
-      evidence.push({
-        options: {
-          logFile: deployLog,
-          reportFile,
-          ...(run.implementation === "shin" ? { summaryFile } : {}),
-          outputFile: "",
-          snapshotDate: options.snapshotDate,
-          phase: phase.name,
-          ...(run.implementation === "shin" && git.commit ? { commit: git.commit } : {}),
-          ...(run.implementation === "shin" && git.subject ? { subject: git.subject } : {}),
-          region: options.region,
-          implementation: run.implementation,
-          assetProfile: run.assetProfile,
-          memoryMb: run.memoryMb,
-          parallel: run.parallel,
-          state: phase.assetState,
-          cleanup: "all benchmark stacks destroyed",
-          decisionRunId: options.decisionRunId,
-          comparisonVariant: options.comparisonVariant,
-          repetition: options.repetition,
-        },
-      });
+      const collectOptions: CollectBenchmarkOptions = {
+        logFile: deployLog,
+        reportFile,
+        ...(run.implementation === "shin" ? { summaryFile } : {}),
+        outputFile: options.outputFile,
+        resultSchemaVersion: 2,
+        methodologyVersion: options.methodologyVersion,
+        runId: options.runId,
+        sampleId: run.sampleId,
+        snapshotDate: options.snapshotDate,
+        phase: phase.name,
+        ...(run.implementation === "shin" ? { commit: sourceMetadata.commit } : {}),
+        ...(run.implementation === "shin" ? { subject: sourceMetadata.subject } : {}),
+        providerPackageName:
+          run.implementation === "shin" ? sourceMetadata.providerPackageName : "aws-cdk-lib",
+        providerPackageVersion:
+          run.implementation === "shin"
+            ? sourceMetadata.providerPackageVersion
+            : sourceMetadata.awsCdkLibVersion,
+        providerArchitecture: runtimeMetadata.architecture,
+        providerCodeSha256: runtimeMetadata.codeSha256,
+        ...(run.implementation === "shin"
+          ? { providerBootstrapSha256: sourceMetadata.providerBootstrapSha256 }
+          : {}),
+        gitDirty: sourceMetadata.gitDirty,
+        cdkCliVersion: sourceMetadata.cdkCliVersion,
+        awsCdkLibVersion: sourceMetadata.awsCdkLibVersion,
+        awsCdkLibIntegrity: sourceMetadata.awsCdkLibIntegrity,
+        executionEnvironmentFresh: true,
+        memoryMeasurementScope: "phase-local",
+        region: options.region,
+        implementation: run.implementation,
+        assetProfile: run.assetProfile,
+        memoryMb: run.memoryMb,
+        parallel: run.parallel,
+        state: phase.assetState,
+        cleanup: "benchmark cleanup pending",
+        decisionRunId: options.decisionRunId,
+        comparisonVariant: options.comparisonVariant,
+        repetition: run.repetition,
+      };
+      const record = collectBenchmarkResult(collectOptions);
+      evidence.push({ options: collectOptions, record });
     }
   } catch (error) {
     runError = error;
@@ -329,6 +209,12 @@ async function runBenchmarkStack(args: {
     cleanupError = error;
   }
 
+  if (cleanupError === undefined) {
+    upsertBenchmarkRecords(
+      options.outputFile,
+      evidence.map(({ record }) => ({ ...record, cleanup: "all benchmark stacks destroyed" })),
+    );
+  }
   if (runError !== undefined && cleanupError !== undefined) {
     throw new Error(
       `${errorText(runError)}; benchmark cleanup also failed: ${errorText(cleanupError)}`,
@@ -344,11 +230,8 @@ async function runBenchmarkStack(args: {
 }
 
 function benchmarkEnv(args: {
-  readonly run: LambdaConfig & {
-    readonly implementation: BenchmarkImplementation;
-    readonly assetProfile: string;
-  };
-  readonly options: RunOptions;
+  readonly run: PlannedBenchmarkRun;
+  readonly options: BenchmarkRunOptions;
   readonly phase: PhaseConfig;
   readonly stackSuffix: string;
 }): NodeJS.ProcessEnv {
@@ -359,8 +242,11 @@ function benchmarkEnv(args: {
     AWS_REGION: options.region,
     SHIN_BENCH_DESTINATION_PREFIX: options.destinationPrefix,
     SHIN_BENCH_IMPLEMENTATION: run.implementation,
-    SHIN_BENCH_INVOCATION_TOKEN: `${options.runToken}:${phase.name}`,
-    SHIN_BENCH_LAMBDA_MAX_PARALLEL_TRANSFERS: String(run.parallel),
+    SHIN_BENCH_INVOCATION_TOKEN: `${options.runToken}:${run.repetition}:${phase.name}`,
+    SHIN_BENCH_EXECUTION_ENVIRONMENT_TOKEN: `${options.runToken}:${run.repetition}:${phase.name}`,
+    ...(run.parallel === null
+      ? {}
+      : { SHIN_BENCH_LAMBDA_MAX_PARALLEL_TRANSFERS: String(run.parallel) }),
     SHIN_BENCH_LAMBDA_MEMORY_MB: String(run.memoryMb),
     SHIN_BENCH_ASSET_STATE: phase.assetState,
     SHIN_BENCH_ASSET_PROFILE: run.assetProfile,
@@ -420,6 +306,38 @@ async function benchmarkHandlerName(args: {
     throw new Error(`Could not identify benchmark handler for ${args.stackName}.`);
   }
   return selected.PhysicalResourceId;
+}
+
+async function providerRuntimeMetadata(args: {
+  readonly functionName: string;
+  readonly outputFile: string;
+  readonly region: string;
+}): Promise<{ readonly architecture: string; readonly codeSha256: string }> {
+  await runCommand({
+    command: "aws",
+    args: [
+      "lambda",
+      "get-function-configuration",
+      "--region",
+      args.region,
+      "--function-name",
+      args.functionName,
+      "--output",
+      "json",
+    ],
+    logFile: args.outputFile,
+    quiet: true,
+    appendElapsed: false,
+  });
+  const parsed = JSON.parse(readFileSync(args.outputFile, "utf8")) as {
+    Architectures?: string[];
+    CodeSha256?: string;
+  };
+  const architecture = parsed.Architectures?.[0];
+  if (!architecture || !parsed.CodeSha256) {
+    throw new Error("Provider configuration did not include architecture and CodeSha256.");
+  }
+  return { architecture, codeSha256: parsed.CodeSha256 };
 }
 
 async function writeLogEvents(args: {
@@ -498,299 +416,13 @@ async function verifyStackDeleted(stackName: string, region: string): Promise<vo
   }
 }
 
-async function runCommand(args: {
-  readonly command: string;
-  readonly args: string[];
-  readonly env?: NodeJS.ProcessEnv;
-  readonly logFile: string;
-  readonly quiet?: boolean;
-  readonly allowFailure?: boolean;
-  readonly appendElapsed?: boolean;
-}): Promise<number> {
-  mkdirSync(dirname(args.logFile), { recursive: true });
-  writeFileSync(args.logFile, "");
-  const start = Date.now();
-  const status = await new Promise<number>((resolve) => {
-    const child = spawn(args.command, args.args, {
-      cwd: process.cwd(),
-      env: args.env ?? process.env,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    child.stdout.on("data", (chunk: Buffer) => writeChunk(args.logFile, chunk, args.quiet));
-    child.stderr.on("data", (chunk: Buffer) => writeChunk(args.logFile, chunk, args.quiet));
-    child.on("close", (code) => resolve(code ?? 1));
-    child.on("error", (error) => {
-      writeFileSync(args.logFile, `${error.message}\n`, { flag: "a" });
-      resolve(1);
-    });
-  });
-  if (args.appendElapsed !== false) {
-    const elapsedSeconds = Math.round(((Date.now() - start) / 1000) * 1000) / 1000;
-    writeFileSync(args.logFile, `real ${elapsedSeconds}\n`, { flag: "a" });
-  }
-  if (status !== 0 && !args.allowFailure) {
-    throw new Error(`${args.command} ${args.args.join(" ")} failed; see ${args.logFile}`);
-  }
-  return status;
-}
-
-function writeChunk(path: string, chunk: Buffer, quiet: boolean | undefined): void {
-  writeFileSync(path, chunk, { flag: "a" });
-  if (!quiet) {
-    process.stderr.write(chunk);
-  }
-}
-
-async function gitMetadata(): Promise<{
-  readonly commit: string | null;
-  readonly subject: string | null;
-}> {
-  const commit = await commandOutput("git", ["rev-parse", "--short", "HEAD"]);
-  const subject = await commandOutput("git", ["log", "-1", "--format=%s"]);
-  return { commit, subject };
-}
-
-async function commandOutput(command: string, args: string[]): Promise<string | null> {
-  const output = await new Promise<{ status: number; text: string }>((resolve) => {
-    const child = spawn(command, args, { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] });
-    const chunks: Buffer[] = [];
-    child.stdout.on("data", (chunk: Buffer) => chunks.push(chunk));
-    child.on("close", (status) =>
-      resolve({ status: status ?? 1, text: Buffer.concat(chunks).toString("utf8").trim() }),
-    );
-    child.on("error", () => resolve({ status: 1, text: "" }));
-  });
-  return output.status === 0 && output.text ? output.text : null;
-}
-
-async function runWithConcurrency<T>(
-  items: T[],
-  concurrency: number,
-  run: (item: T) => Promise<void>,
-): Promise<void> {
-  let nextIndex = 0;
-  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
-    while (nextIndex < items.length) {
-      const item = items[nextIndex];
-      nextIndex += 1;
-      if (item === undefined) {
-        throw new Error(`Missing work item at index ${nextIndex - 1}`);
-      }
-      await run(item);
-    }
-  });
-  await Promise.all(workers);
-}
-
-function parseArgs(args: string[]): RunOptions {
-  const values = parseCliOptions(args, CLI_OPTIONS, usage);
-
-  const config = readConfigFile(values.get("config"));
-  const assetProfiles = values.has("asset-profiles")
-    ? listValue(required(values, "asset-profiles")).map(parseAssetProfile)
-    : config.assetProfiles;
-  const lambdaConfigs = values.has("lambda-configs")
-    ? listValue(required(values, "lambda-configs")).map(parseLambdaConfig)
-    : config.lambdaConfigs;
-  const implementations = values.has("implementations")
-    ? listValue(required(values, "implementations")).map(parseImplementation)
-    : config.implementations;
-  const region = values.get("region") ?? config.region;
-  const snapshotDate = values.get("snapshot-date") ?? config.snapshotDate ?? today();
-  const runToken =
-    values.get("run-token") ??
-    config.runToken ??
-    defaultRunToken(snapshotDate, assetProfiles, lambdaConfigs);
-  const scratchRoot = resolve(
-    values.get("scratch-root") ??
-      config.scratchRoot ??
-      join(tmpdir(), "shin-benchmark-runs", runToken),
-  );
-  const outputFile = values.get("output-file") ?? config.outputFile;
-  const concurrency = positiveInteger(
-    values.get("concurrency") ?? String(config.concurrency),
-    "concurrency",
-  );
-  const destinationPrefix = values.get("destination-prefix") ?? config.destinationPrefix;
-  const phases = config.phases;
-  const decisionRunId = values.get("decision-run-id") ?? config.decisionRunId;
-  const comparisonVariant = values.get("comparison-variant") ?? config.comparisonVariant;
-  const repetitionValue = values.get("repetition");
-  const repetition =
-    repetitionValue === undefined
-      ? config.repetition
-      : positiveInteger(repetitionValue, "repetition");
-
-  return {
-    assetProfiles,
-    lambdaConfigs,
-    implementations,
-    region,
-    outputFile,
-    scratchRoot,
-    runToken,
-    snapshotDate,
-    concurrency,
-    destinationPrefix,
-    phases,
-    decisionRunId,
-    comparisonVariant,
-    repetition,
-  };
-}
-
-function readConfigFile(configPath: string | undefined): RunnerConfig {
-  if (configPath === undefined) {
-    return defaultConfig();
-  }
-
-  const filePath = resolve(process.cwd(), configPath);
-  const parsed = benchmarkConfigSchema.parse(JSON.parse(readFileSync(filePath, "utf8")));
-  const defaults = defaultConfig();
-  const fileConfig = {
-    ...defaults,
-    ...(parsed.assetProfiles === undefined ? {} : { assetProfiles: parsed.assetProfiles }),
-    ...(parsed.lambdaConfigs === undefined ? {} : { lambdaConfigs: parsed.lambdaConfigs }),
-    ...(parsed.implementations === undefined ? {} : { implementations: parsed.implementations }),
-    ...(parsed.region === undefined ? {} : { region: parsed.region }),
-    ...(parsed.outputFile === undefined ? {} : { outputFile: parsed.outputFile }),
-    ...(parsed.scratchRoot === undefined ? {} : { scratchRoot: parsed.scratchRoot }),
-    ...(parsed.runToken === undefined ? {} : { runToken: parsed.runToken }),
-    ...(parsed.snapshotDate === undefined ? {} : { snapshotDate: parsed.snapshotDate }),
-    ...(parsed.destinationPrefix === undefined
-      ? {}
-      : { destinationPrefix: parsed.destinationPrefix }),
-    ...(parsed.concurrency === undefined ? {} : { concurrency: parsed.concurrency }),
-    ...(parsed.phases === undefined ? {} : { phases: parsed.phases.map(configPhaseToRunPhase) }),
-    ...(parsed.decisionRunId === undefined ? {} : { decisionRunId: parsed.decisionRunId }),
-    ...(parsed.comparisonVariant === undefined
-      ? {}
-      : { comparisonVariant: parsed.comparisonVariant }),
-    ...(parsed.repetition === undefined ? {} : { repetition: parsed.repetition }),
-  };
-  return fileConfig;
-}
-
-function configPhaseToRunPhase(phase: NonNullable<BenchmarkConfig["phases"]>[number]): PhaseConfig {
-  return {
-    assetState: phase.assetState,
-    cloudfrontWait: phase.cloudfrontWait ?? false,
-    name: phase.name,
-    deleteStaleObjects: phase.deleteStaleObjects ?? true,
-    deleteCurrentObjectsOnDelete: phase.deleteCurrentObjectsOnDelete,
-  };
-}
-
-function defaultConfig(): RunnerConfig {
-  const assetProfiles: BenchmarkAssetProfile[] = ["tiny-many"];
-  const lambdaConfigs = [
-    { memoryMb: 2048, parallel: 64 },
-    { memoryMb: 4096, parallel: 128 },
-  ];
-  return {
-    assetProfiles,
-    lambdaConfigs,
-    implementations: ["shin", "aws"],
-    region: process.env.AWS_REGION ?? "ap-southeast-2",
-    outputFile: "benchmarks/results.jsonl",
-    concurrency: 1,
-    destinationPrefix: "benchmark-site",
-    phases: DEFAULT_PHASES,
-  };
-}
-
-function listValue(value: string): string[] {
-  return value
-    .split(",")
-    .map((part) => part.trim())
-    .filter(Boolean);
-}
-
-function required(values: Map<string, string>, name: string): string {
-  const value = values.get(name);
-  if (!value) {
-    usage();
-  }
-  return value;
-}
-
-function parseLambdaConfig(value: string): LambdaConfig {
-  const [memory, parallel] = value.split(":");
-  if (!memory || !parallel) {
-    usage();
-  }
-  return {
-    memoryMb: positiveInteger(memory, "memory"),
-    parallel: positiveInteger(parallel, "parallel"),
-  };
-}
-
-function parseImplementation(value: string): BenchmarkImplementation {
-  if (isBenchmarkImplementation(value)) {
-    return value;
-  }
-  usage();
-}
-
-function parseAssetProfile(value: string): BenchmarkAssetProfile {
-  if (isBenchmarkAssetProfile(value)) {
-    return value;
-  }
-  usage();
-}
-
-function positiveInteger(value: string, name: string): number {
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < 1) {
-    throw new Error(`${name} must be a positive integer.`);
-  }
-  return parsed;
-}
-
-function defaultRunToken(
-  snapshotDate: string,
-  assetProfiles: BenchmarkAssetProfile[],
-  lambdaConfigs: LambdaConfig[],
-): string {
-  return `${snapshotDate}-shin-aws-${assetProfiles.join("-")}-${lambdaConfigs
-    .map((lambdaConfig) => `${lambdaConfig.memoryMb}-${lambdaConfig.parallel}`)
-    .join("-")}`;
-}
-
-function upsertResultRows(args: { readonly outputFile: string; readonly rowsText: string }): void {
-  const newRows = args.rowsText.split(/\n/).filter((line) => line.trim() !== "");
-  const newKeys = new Set(newRows.map(rowBenchmarkKey));
-  const retainedRows = existsSync(args.outputFile)
-    ? readFileSync(args.outputFile, "utf8")
-        .split(/\n/)
-        .filter((line) => line.trim() !== "" && !newKeys.has(rowBenchmarkKey(line)))
-    : [];
-  mkdirSync(dirname(args.outputFile), { recursive: true });
-  writeFileSync(args.outputFile, `${[...retainedRows, ...newRows].join("\n")}\n`);
-}
-
-function rowBenchmarkKey(line: string): string | null {
-  try {
-    return benchmarkResultKey(JSON.parse(line) as BenchmarkResultRecord);
-  } catch {
-    return null;
-  }
-}
-
 function stackSuffixFor(args: {
-  readonly run: LambdaConfig & {
-    readonly implementation: BenchmarkImplementation;
-    readonly assetProfile: string;
-  };
-  readonly options: RunOptions;
+  readonly run: PlannedBenchmarkRun;
+  readonly options: BenchmarkRunOptions;
 }): string {
   const dateToken = safeName(args.options.snapshotDate).replace(/-/g, "");
   const runToken = `${dateToken}-${shortHash(args.options.runToken)}`;
-  return `-${runToken}-${safeName(args.run.assetProfile)}-${args.run.implementation}-${args.run.memoryMb}-${args.run.parallel}`;
-}
-
-function today(): string {
-  return new Date().toISOString().slice(0, 10);
+  return `-${runToken}-${safeName(args.run.assetProfile)}-${args.run.implementation}-${args.run.memoryMb}-${args.run.parallel ?? "na"}-r${args.run.repetition}`;
 }
 
 function safeName(value: string): string {
@@ -808,17 +440,6 @@ function shortHash(value: string): string {
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function sleep(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
-}
-
-function usage(): never {
-  console.error(
-    "Usage: node dist/benchmarks/src/run-assets-comparison.js --config benchmarks/configs/shin-aws-2048-64-4096-128.json [--asset-profiles tiny-many,large-few] [--lambda-configs 2048:64,4096:128] [--run-token <id>] [--snapshot-date <YYYY-MM-DD>] [--decision-run-id <id>] [--comparison-variant <name>] [--repetition <n>] [--scratch-root <outside-repo>] [--concurrency 1]",
-  );
-  process.exit(1);
 }
 
 if (require.main === module) {

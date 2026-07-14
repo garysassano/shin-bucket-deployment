@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   type BenchmarkAssetProfile,
@@ -24,7 +25,16 @@ type GeneratedBundle = {
 
 const DEFAULT_PROFILE: BenchmarkAssetProfile = "mixed";
 const DEFAULT_STATE: BenchmarkAssetState = "baseline";
-const BINARY_CHUNK_BYTES = 1024 * 1024;
+const ASSET_GENERATOR_VERSION = 2;
+const SHA256_BYTES = 32;
+
+type GenerationMarker = {
+  readonly generatorVersion: number;
+  readonly profile: BenchmarkAssetProfile;
+  readonly state: BenchmarkAssetState;
+  readonly fileCount: number;
+  readonly totalBytes: number;
+};
 
 export function ensureBenchmarkAssets(options?: {
   readonly assetProfile?: string;
@@ -39,7 +49,15 @@ export function ensureBenchmarkAssets(options?: {
   const specs = buildSpecs(profile, state);
   const totalBytes = specs.reduce((sum, spec) => sum + spec.size, 0);
 
-  if (existsSync(markerPath)) {
+  const expectedMarker: GenerationMarker = {
+    generatorVersion: ASSET_GENERATOR_VERSION,
+    profile,
+    state,
+    fileCount: specs.length,
+    totalBytes,
+  };
+
+  if (markerMatches(markerPath, expectedMarker)) {
     return {
       root,
       sourceRoots: sourceRoots(profile, root),
@@ -59,10 +77,7 @@ export function ensureBenchmarkAssets(options?: {
     writeFileSync(filePath, renderFile(spec, profile, state));
   }
 
-  writeFileSync(
-    markerPath,
-    `${JSON.stringify({ profile, state, fileCount: specs.length, totalBytes }, null, 2)}\n`,
-  );
+  writeFileSync(markerPath, `${JSON.stringify(expectedMarker, null, 2)}\n`);
 
   return {
     root,
@@ -161,7 +176,7 @@ function renderFile(
   const seed = seedFor(spec.path, profile, state);
 
   if (spec.kind === "binary") {
-    return renderBinary(spec.size, seed);
+    return renderBenchmarkBinary(spec.size, seed);
   }
 
   const text = spec.kind === "json" ? renderJsonText(spec.path, seed) : renderText(spec.path, seed);
@@ -177,15 +192,15 @@ function renderFile(
   return output;
 }
 
-function renderBinary(size: number, seed: number): Buffer {
+export function renderBenchmarkBinary(size: number, seed: number): Buffer {
   const output = Buffer.alloc(size);
-  let state = seed || 0x12345678;
-  for (let offset = 0; offset < size; offset += BINARY_CHUNK_BYTES) {
-    const end = Math.min(size, offset + BINARY_CHUNK_BYTES);
-    for (let index = offset; index < end; index++) {
-      state = nextState(state);
-      output[index] = state & 0xff;
-    }
+  const input = Buffer.allocUnsafe(12);
+  input.writeUInt32BE(seed, 0);
+
+  for (let offset = 0, counter = 0; offset < size; offset += SHA256_BYTES, counter++) {
+    input.writeBigUInt64BE(BigInt(counter), 4);
+    const block = createHash("sha256").update(input).digest();
+    block.copy(output, offset, 0, Math.min(SHA256_BYTES, size - offset));
   }
   return output;
 }
@@ -228,9 +243,31 @@ function sized(index: number, minSize: number, maxSize: number): number {
 }
 
 function seedFor(path: string, profile: BenchmarkAssetProfile, state: BenchmarkAssetState): number {
-  const stateSalt =
-    state === "baseline" ? "stable" : state === "changed" ? changedSalt(path) : "pruned";
+  const stateSalt = state === "changed" ? changedSalt(path) : "stable";
   return hash(`${profile}:${stateSalt}:${path}`);
+}
+
+function markerMatches(markerPath: string, expected: GenerationMarker): boolean {
+  if (!existsSync(markerPath)) {
+    return false;
+  }
+
+  try {
+    const marker: unknown = JSON.parse(readFileSync(markerPath, "utf8"));
+    if (typeof marker !== "object" || marker === null) {
+      return false;
+    }
+    const candidate = marker as Record<string, unknown>;
+    return (
+      candidate.generatorVersion === expected.generatorVersion &&
+      candidate.profile === expected.profile &&
+      candidate.state === expected.state &&
+      candidate.fileCount === expected.fileCount &&
+      candidate.totalBytes === expected.totalBytes
+    );
+  } catch {
+    return false;
+  }
 }
 
 function changedSalt(path: string): string {
@@ -267,10 +304,6 @@ function hash(value: string): number {
     state = Math.imul(state, 16777619);
   }
   return state >>> 0;
-}
-
-function nextState(state: number): number {
-  return (Math.imul(state, 1664525) + 1013904223) >>> 0;
 }
 
 function parseProfile(value: string | undefined): BenchmarkAssetProfile {

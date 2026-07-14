@@ -22,6 +22,7 @@ describe("benchmark result collector", () => {
         "Stack.BenchmarkAssetProfile = mixed",
         "Stack.BenchmarkImplementation = shin",
         "Stack.BenchmarkMemoryLimitMb = 512",
+        "Stack.BenchmarkMaxParallelTransfers = 32",
         "Stack.BenchmarkState = baseline",
         "Stack.BenchmarkTotalBytes = 52904649",
         "real 57.72",
@@ -49,6 +50,7 @@ describe("benchmark result collector", () => {
       phase: "unchanged-update",
       commit: "abc1234",
       region: "ap-southeast-2",
+      parallel: null,
     });
 
     const record = JSON.parse(readFileSync(outputFile, "utf8"));
@@ -226,6 +228,8 @@ describe("benchmark result collector", () => {
       inputFile,
       `${[
         {
+          methodologyVersion: 2,
+          gitDirty: false,
           snapshotDate: "2026-05-08",
           providerImplementationCommit: "abc1234",
           providerImplementationSubject: "test",
@@ -246,10 +250,12 @@ describe("benchmark result collector", () => {
           initDurationSeconds: 0.1,
           maxMemoryMb: 80,
           providerInvoked: true,
-          cleanup: null,
+          cleanup: "all benchmark stacks destroyed",
           notes: null,
         },
         {
+          methodologyVersion: 2,
+          gitDirty: false,
           snapshotDate: "2026-05-08",
           providerImplementationCommit: null,
           providerImplementationSubject: null,
@@ -258,7 +264,7 @@ describe("benchmark result collector", () => {
           implementation: "aws",
           profile: "mixed",
           memoryMb: 1024,
-          parallel: 8,
+          parallel: null,
           phase: "cold-create",
           state: "baseline",
           fileCount: 442,
@@ -270,7 +276,7 @@ describe("benchmark result collector", () => {
           initDurationSeconds: 0.2,
           maxMemoryMb: 180,
           providerInvoked: true,
-          cleanup: null,
+          cleanup: "all benchmark stacks destroyed",
           notes: null,
         },
       ]
@@ -282,7 +288,9 @@ describe("benchmark result collector", () => {
 
     expect(readFileSync(outputFile, "utf8")).toEqual(report);
     expect(report).toContain("Benchmark Report: mixed");
-    expect(report).toContain("| mixed | cold-create | 1024 | 8 | shin | 1 | 2 | 2 | 2 | 2 |");
+    expect(report).toContain(
+      "| mixed | cold-create | 1024 | 8 | shin | 1 | 2 | 2 | 2 | 0 | 2 | 2 |",
+    );
     expect(report).toContain("## ShinBucketDeployment vs AWS BucketDeployment");
     expect(report).toContain(
       "| mixed | cold-create | 1024 | 8 | 2 s vs 8 s (4x faster) | 90 s vs 120 s (1.333x faster) | 60 s vs 90 s (1.5x faster) | 80 MiB vs 180 MiB (55.556% lower) |",
@@ -315,6 +323,8 @@ describe("benchmark result collector", () => {
       inputFile,
       `${[
         {
+          methodologyVersion: 2,
+          gitDirty: false,
           snapshotDate: "2026-05-14",
           region: "ap-southeast-2",
           implementation: "shin",

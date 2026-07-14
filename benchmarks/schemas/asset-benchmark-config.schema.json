@@ -7,6 +7,25 @@
     "$schema": {
       "type": "string"
     },
+    "methodologyVersion": {
+      "enum": [1, 2]
+    },
+    "runId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "repetitions": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "startRepetition": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "maxWallClockMinutes": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
     "runToken": {
       "type": "string",
       "minLength": 1
@@ -41,7 +60,7 @@
     },
     "concurrency": {
       "type": "integer",
-      "minimum": 1
+      "const": 1
     },
     "destinationPrefix": {
       "type": "string",
