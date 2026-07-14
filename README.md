@@ -83,8 +83,6 @@ Controlled decision runs are documented separately from these historical charts.
 
 <img src="https://raw.githubusercontent.com/garysassano/shin-bucket-deployment/main/benchmarks/snapshots/tiny-many-2048mib-64.svg" alt="ShinBucketDeployment tiny-many 2048 MiB parallel 64 benchmark" width="100%">
 
-<img src="https://raw.githubusercontent.com/garysassano/shin-bucket-deployment/main/benchmarks/snapshots/tiny-many-4096mib-128.svg" alt="ShinBucketDeployment tiny-many 4096 MiB parallel 128 benchmark" width="100%">
-
 ## What It Supports
 
 The construct follows the upstream `BucketDeployment` API where the behavior maps cleanly to the Rust provider.

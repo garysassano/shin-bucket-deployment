@@ -43,12 +43,6 @@ Four-phase snapshot using the latest tiny-many 2048 MiB Shin `maxParallelTransfe
 
 ![2048 MiB parallel 64 benchmark chart](snapshots/tiny-many-2048mib-64.svg)
 
-## 4096 MiB / 128 Snapshot
-
-Four-phase snapshot using the latest tiny-many 4096 MiB Shin `maxParallelTransfers=128` rows.
-
-![4096 MiB parallel 128 benchmark chart](snapshots/tiny-many-4096mib-128.svg)
-
 ## 10240 MiB / 320 Snapshot
 
 Four-phase snapshot using the latest tiny-many 10240 MiB Shin `maxParallelTransfers=320` rows.
