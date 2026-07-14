@@ -149,8 +149,9 @@ describe("benchmark result collector", () => {
     const outputFile = join(dir, "results.jsonl");
     const summary = {
       event: "shin_deployment_summary",
+      schemaVersion: 3,
       requestType: "Create",
-      status: "success",
+      deploymentStatus: "success",
       destinationChecksumStrategy: "sse-s3-etag",
       maxParallelTransfers: 32,
       durationMs: 3632,
@@ -334,9 +335,9 @@ describe("benchmark result collector", () => {
           cleanup: "all benchmark stacks destroyed",
           notes: null,
           providerSummary: {
-            schemaVersion: 2,
+            schemaVersion: 3,
             requestType: "Create",
-            status: "success",
+            deploymentStatus: "success",
             destinationChecksumStrategy: "sse-s3-etag",
             durationMs: 3207,
             phaseMs: {
@@ -373,12 +374,12 @@ describe("benchmark result collector", () => {
               sparseSkips: 0,
             },
             deleteObject: {
-              wireAttempts: 1,
-              failedAttempts: 0,
+              sdkCalls: 1,
+              failedCalls: 0,
               requestedObjects: 10,
-              confirmedObjects: 10,
+              inferredDeletedObjects: 10,
               unconfirmedObjects: 0,
-              notFoundObjects: 0,
+              noSuchBucketRequestedIdentifiers: 0,
             },
             callback: {
               wireAttempts: 1,

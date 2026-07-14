@@ -152,7 +152,7 @@ Destination planning retains metadata only for manifest keys. When the compariso
 
 CloudFront invalidation is created after S3 changes when `distribution` is provided. If `distributionPaths` is omitted, the default path is the destination prefix plus `*`, for example `/site/*`.
 
-The provider logs one sanitized `shin_deployment_summary` JSON line per custom-resource request after the CloudFormation callback attempt, plus structured source scheduler and destination `PutObject` diagnostics to CloudWatch Logs. Diagnostics schema v2 separates logical scheduled objects, wire attempts, consumed body replays, throttled attempts, cancellations, panics, and true active-reader high-water. It also records authenticated-catalog trust and fallback hashing, confirmed versus unconfirmed deletion work, and callback attempts, retries, failures, and confirmed responses. `markerReplacement` reports the strategy, semantics, nominal passes per uploaded object, and actual planning/upload passes. The summary excludes bucket names, object keys, account IDs, distribution IDs, URLs, and ETags.
+The provider logs one sanitized `shin_deployment_summary` JSON line per custom-resource request after the CloudFormation callback attempt, plus structured source scheduler and destination `PutObject` diagnostics to CloudWatch Logs. Diagnostics schema v3 separates logical scheduled objects, wire attempts, consumed body replays, throttled attempts, cancellations, panics, and true active-reader high-water. It also records authenticated-catalog trust and fallback hashing, deletion SDK calls and inferred outcomes, and callback attempts, retries, failures, and confirmed responses. `deploymentStatus` describes provider work before callback delivery; the callback fields independently show whether the response endpoint returned success. `markerReplacement` reports the strategy, semantics, nominal passes per uploaded object, and actual planning/upload passes. The summary excludes bucket names, object keys, account IDs, distribution IDs, URLs, and ETags.
 
 ## Limits
 
@@ -179,7 +179,7 @@ Before destination mutation, the provider validates the complete final key again
 
 This construct targets static asset deployment to S3. It is not a general-purpose sync engine and does not provide byte-range diffing, persistent manifests, or non-S3 backend behavior.
 
-Deployments in the same CDK stack share one provider Lambda, IAM role, and log group. Permissions from every deployment accumulate on that shared role, and changing provider settings such as memory or runtime tuning changes the shared handler used by all of them.
+Deployments in the same CDK stack with the same handler identity reuse one provider Lambda, IAM role, and log group, and permissions from those deployments accumulate on that role. Handler settings such as `memoryLimit` are part of the identity, so a different value selects a distinct shared handler rather than mutating an existing one. `advancedRuntimeTuning` is carried in each custom-resource request and can differ between deployments that share a handler.
 
 ## Development
 

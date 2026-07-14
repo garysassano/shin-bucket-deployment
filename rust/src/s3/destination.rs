@@ -278,7 +278,7 @@ async fn delete_keys_optional_stats(
             .build()?;
 
         if let Some(stats) = stats {
-            stats.record_delete_attempt(chunk.len() as u64);
+            stats.record_delete_sdk_call(chunk.len() as u64);
         }
         let response = match state
             .destination_s3
@@ -291,7 +291,7 @@ async fn delete_keys_optional_stats(
             Ok(response) => response,
             Err(error) if service_error_code(&error) == Some("NoSuchBucket") => {
                 if let Some(stats) = stats {
-                    stats.record_delete_not_found(chunk.len() as u64);
+                    stats.record_delete_no_such_bucket(chunk.len() as u64);
                 }
                 return Ok(deleted);
             }
@@ -304,12 +304,12 @@ async fn delete_keys_optional_stats(
             }
         };
 
-        let (confirmed, unconfirmed) =
-            delete_confirmation_counts(chunk.len() as u64, response.errors().len() as u64);
+        let (inferred_deleted, unconfirmed) =
+            inferred_delete_counts(chunk.len() as u64, response.errors().len() as u64);
         if let Some(stats) = stats {
-            stats.record_delete_response(confirmed, unconfirmed);
+            stats.record_delete_response(inferred_deleted, unconfirmed);
         }
-        deleted = deleted.saturating_add(confirmed);
+        deleted = deleted.saturating_add(inferred_deleted);
 
         if unconfirmed > 0 {
             let details = response
@@ -332,7 +332,7 @@ async fn delete_keys_optional_stats(
     Ok(deleted)
 }
 
-fn delete_confirmation_counts(requested: u64, service_errors: u64) -> (u64, u64) {
+fn inferred_delete_counts(requested: u64, service_errors: u64) -> (u64, u64) {
     let unconfirmed = service_errors.min(requested);
     (requested - unconfirmed, unconfirmed)
 }
@@ -486,7 +486,7 @@ mod tests {
     use std::collections::HashMap;
 
     use super::{
-        DestinationObject, DestinationRecordContext, delete_confirmation_counts, key_is_excluded,
+        DestinationObject, DestinationRecordContext, inferred_delete_counts, key_is_excluded,
         namespace_list_prefix, normalize_etag, owner_tag_overlaps_cleanup, parse_owner_tag,
         record_destination_object, stale_destination_key,
     };
@@ -499,10 +499,10 @@ mod tests {
     }
 
     #[test]
-    fn delete_confirmation_counts_only_service_successes() {
-        assert_eq!(delete_confirmation_counts(1_000, 0), (1_000, 0));
-        assert_eq!(delete_confirmation_counts(1_000, 3), (997, 3));
-        assert_eq!(delete_confirmation_counts(2, 4), (0, 2));
+    fn delete_counts_are_inferred_from_requested_identifiers_without_errors() {
+        assert_eq!(inferred_delete_counts(1_000, 0), (1_000, 0));
+        assert_eq!(inferred_delete_counts(1_000, 3), (997, 3));
+        assert_eq!(inferred_delete_counts(2, 4), (0, 2));
     }
 
     #[test]

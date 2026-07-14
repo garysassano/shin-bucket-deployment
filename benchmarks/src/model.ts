@@ -32,6 +32,8 @@ export type ProviderSummary = {
   readonly event?: string | null;
   readonly schemaVersion?: number | null;
   readonly requestType?: string | null;
+  readonly deploymentStatus?: string | null;
+  /** Diagnostics schema v2 compatibility. */
   readonly status?: string | null;
   readonly extract?: boolean | null;
   readonly destinationChecksumStrategy?: string | null;

@@ -386,8 +386,9 @@ export interface ShinBucketDeploymentProps
    * Memory allocated to the shared provider Lambda, in MiB.
    *
    * The provider derives its invocation-global source-block budget from the
-   * actual Lambda memory and caps it at 50%. Deployments with the same provider
-   * configuration in one stack share a handler.
+   * actual Lambda memory and caps it at 50%. Memory is part of the handler
+   * identity, so deployments using a different value select a distinct shared
+   * provider rather than changing an existing one.
    *
    * @default 1024
    */
@@ -488,10 +489,11 @@ export interface ShinBucketDeploymentProps
  * shipped with the package, so consumers do not need a Rust toolchain. Passing
  * `bundling` or `rustProjectPath` opts into compiling the provider locally.
  *
- * Deployments with identical provider settings in one stack reuse a single
- * Lambda function. Its role accumulates permissions for every source,
- * destination, KMS key, and CloudFront distribution used by those deployments;
- * changing the shared handler affects all of them.
+ * Deployments with the same handler identity settings in one stack reuse a
+ * single Lambda function. Its role accumulates permissions for every source,
+ * destination, KMS key, and CloudFront distribution used by those deployments.
+ * Handler settings such as memory participate in that identity; request-level
+ * `advancedRuntimeTuning` does not and can differ between sharing deployments.
  */
 export class ShinBucketDeployment extends Construct {
   private readonly cr: CustomResource;

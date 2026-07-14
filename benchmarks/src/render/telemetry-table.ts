@@ -38,7 +38,10 @@ const RUNTIME_COLUMNS: Array<Column<TelemetryRow>> = [
   { header: "Phase", value: phase },
   { header: "State", value: (row) => row.record.state },
   { header: "Request", value: (row) => row.summary.requestType },
-  { header: "Status", value: (row) => row.summary.status },
+  {
+    header: "Deployment work",
+    value: (row) => row.summary.deploymentStatus ?? row.summary.status,
+  },
   { header: "Files", value: (row) => row.record.fileCount },
   { header: "Bytes", value: (row) => row.record.totalBytes },
   { header: "CDK deploy s", value: (row) => row.record.cdkDeploySeconds },
@@ -81,7 +84,7 @@ const OBJECT_COLUMNS: Array<Column<TelemetryRow>> = [
   },
   { header: "Uploaded", value: (row) => nested(row, "counts", "uploadedObjects") },
   { header: "Skipped", value: (row) => nested(row, "counts", "skippedObjects") },
-  { header: "Confirmed deleted", value: (row) => nested(row, "counts", "deleteObjects") },
+  { header: "Inferred deleted", value: (row) => nested(row, "counts", "deleteObjects") },
   { header: "Delete batches", value: (row) => nested(row, "counts", "deleteBatches") },
   {
     header: "Conditional conflicts",
@@ -217,26 +220,26 @@ const CATALOG_COLUMNS: Array<Column<TelemetryRow>> = [
 
 const DELETE_COLUMNS: Array<Column<TelemetryRow>> = [
   { header: "Phase", value: phase },
-  { header: "Wire attempts", value: (row) => nested(row, "deleteObject", "wireAttempts") },
+  { header: "SDK calls", value: (row) => nested(row, "deleteObject", "sdkCalls") },
   {
-    header: "Failed attempts",
-    value: (row) => nested(row, "deleteObject", "failedAttempts"),
+    header: "Failed calls",
+    value: (row) => nested(row, "deleteObject", "failedCalls"),
   },
   {
     header: "Requested objects",
     value: (row) => nested(row, "deleteObject", "requestedObjects"),
   },
   {
-    header: "Confirmed objects",
-    value: (row) => nested(row, "deleteObject", "confirmedObjects"),
+    header: "Inferred deleted objects",
+    value: (row) => nested(row, "deleteObject", "inferredDeletedObjects"),
   },
   {
     header: "Unconfirmed objects",
     value: (row) => nested(row, "deleteObject", "unconfirmedObjects"),
   },
   {
-    header: "Already absent objects",
-    value: (row) => nested(row, "deleteObject", "notFoundObjects"),
+    header: "NoSuchBucket requested identifiers",
+    value: (row) => nested(row, "deleteObject", "noSuchBucketRequestedIdentifiers"),
   },
 ];
 

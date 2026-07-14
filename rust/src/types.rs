@@ -199,11 +199,11 @@ pub(crate) struct DeploymentStats {
     destination_page_objects_high_water: AtomicU64,
     delete_objects: AtomicU64,
     delete_batches: AtomicU64,
-    delete_wire_attempts: AtomicU64,
-    delete_failed_attempts: AtomicU64,
+    delete_sdk_calls: AtomicU64,
+    delete_failed_calls: AtomicU64,
     delete_requested_objects: AtomicU64,
     delete_unconfirmed_objects: AtomicU64,
-    delete_not_found_objects: AtomicU64,
+    delete_no_such_bucket_requested_identifiers: AtomicU64,
     uploaded_objects: AtomicU64,
     uploaded_bytes: AtomicU64,
     skipped_objects: AtomicU64,
@@ -276,7 +276,7 @@ pub(crate) struct DeploymentStatsSnapshot<'a> {
     pub(crate) event: &'static str,
     pub(crate) schema_version: u8,
     pub(crate) request_type: &'a str,
-    pub(crate) status: &'a str,
+    pub(crate) deployment_status: &'a str,
     pub(crate) extract: bool,
     pub(crate) destination_checksum_strategy: DestinationChecksumStrategy,
     pub(crate) delete_stale_objects_on_deployment: bool,
@@ -417,12 +417,12 @@ pub(crate) struct CatalogStats {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DeleteObjectStats {
-    pub(crate) wire_attempts: u64,
-    pub(crate) failed_attempts: u64,
+    pub(crate) sdk_calls: u64,
+    pub(crate) failed_calls: u64,
     pub(crate) requested_objects: u64,
-    pub(crate) confirmed_objects: u64,
+    pub(crate) inferred_deleted_objects: u64,
     pub(crate) unconfirmed_objects: u64,
-    pub(crate) not_found_objects: u64,
+    pub(crate) no_such_bucket_requested_identifiers: u64,
 }
 
 #[derive(Serialize)]
@@ -503,30 +503,31 @@ impl DeploymentStats {
             .fetch_max(count, Ordering::Relaxed);
     }
 
-    pub(crate) fn record_delete_attempt(&self, requested: u64) {
-        self.delete_wire_attempts.fetch_add(1, Ordering::Relaxed);
+    pub(crate) fn record_delete_sdk_call(&self, requested: u64) {
+        self.delete_sdk_calls.fetch_add(1, Ordering::Relaxed);
         self.delete_requested_objects
             .fetch_add(requested, Ordering::Relaxed);
     }
 
     pub(crate) fn record_delete_failure(&self, unconfirmed: u64) {
-        self.delete_failed_attempts.fetch_add(1, Ordering::Relaxed);
+        self.delete_failed_calls.fetch_add(1, Ordering::Relaxed);
         self.delete_unconfirmed_objects
             .fetch_add(unconfirmed, Ordering::Relaxed);
     }
 
-    pub(crate) fn record_delete_not_found(&self, absent: u64) {
-        self.delete_not_found_objects
-            .fetch_add(absent, Ordering::Relaxed);
+    pub(crate) fn record_delete_no_such_bucket(&self, requested_identifiers: u64) {
+        self.delete_no_such_bucket_requested_identifiers
+            .fetch_add(requested_identifiers, Ordering::Relaxed);
     }
 
-    pub(crate) fn record_delete_response(&self, confirmed: u64, unconfirmed: u64) {
-        if confirmed > 0 {
-            self.delete_objects.fetch_add(confirmed, Ordering::Relaxed);
+    pub(crate) fn record_delete_response(&self, inferred_deleted: u64, unconfirmed: u64) {
+        if inferred_deleted > 0 {
+            self.delete_objects
+                .fetch_add(inferred_deleted, Ordering::Relaxed);
             self.delete_batches.fetch_add(1, Ordering::Relaxed);
         }
         if unconfirmed > 0 {
-            self.delete_failed_attempts.fetch_add(1, Ordering::Relaxed);
+            self.delete_failed_calls.fetch_add(1, Ordering::Relaxed);
             self.delete_unconfirmed_objects
                 .fetch_add(unconfirmed, Ordering::Relaxed);
         }
@@ -744,14 +745,14 @@ impl DeploymentStats {
     pub(crate) fn snapshot<'a>(
         &'a self,
         request_type: &'a str,
-        status: &'a str,
+        deployment_status: &'a str,
         request: &DeploymentRequest,
     ) -> DeploymentStatsSnapshot<'a> {
         DeploymentStatsSnapshot {
             event: "shin_deployment_summary",
-            schema_version: 2,
+            schema_version: 3,
             request_type,
-            status,
+            deployment_status,
             extract: request.extract,
             destination_checksum_strategy: request.destination_checksum_strategy,
             delete_stale_objects_on_deployment: request.delete_stale_objects_on_deployment,
@@ -875,12 +876,14 @@ impl DeploymentStats {
                     .load(Ordering::Relaxed),
             },
             delete_object: DeleteObjectStats {
-                wire_attempts: self.delete_wire_attempts.load(Ordering::Relaxed),
-                failed_attempts: self.delete_failed_attempts.load(Ordering::Relaxed),
+                sdk_calls: self.delete_sdk_calls.load(Ordering::Relaxed),
+                failed_calls: self.delete_failed_calls.load(Ordering::Relaxed),
                 requested_objects: self.delete_requested_objects.load(Ordering::Relaxed),
-                confirmed_objects: self.delete_objects.load(Ordering::Relaxed),
+                inferred_deleted_objects: self.delete_objects.load(Ordering::Relaxed),
                 unconfirmed_objects: self.delete_unconfirmed_objects.load(Ordering::Relaxed),
-                not_found_objects: self.delete_not_found_objects.load(Ordering::Relaxed),
+                no_such_bucket_requested_identifiers: self
+                    .delete_no_such_bucket_requested_identifiers
+                    .load(Ordering::Relaxed),
             },
             callback: CallbackStats {
                 wire_attempts: self.callback_wire_attempts.load(Ordering::Relaxed),

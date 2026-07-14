@@ -82,7 +82,7 @@ pub(crate) async fn handle_event(
 
     match processed {
         Ok(processed) => {
-            let status = if processed.result.is_ok() {
+            let deployment_status = if processed.result.is_ok() {
                 "success"
             } else {
                 "failure"
@@ -128,7 +128,7 @@ pub(crate) async fn handle_event(
             log_deployment_summary(
                 &processed.stats,
                 processed.request_type,
-                status,
+                deployment_status,
                 &processed.request,
             );
             callback_result?;
@@ -687,10 +687,10 @@ fn truncate_failure_reason_to(reason: &str, max_bytes: usize) -> String {
 fn log_deployment_summary(
     stats: &DeploymentStats,
     request_type: &str,
-    status: &str,
+    deployment_status: &str,
     request: &crate::types::DeploymentRequest,
 ) {
-    match serde_json::to_string(&stats.snapshot(request_type, status, request)) {
+    match serde_json::to_string(&stats.snapshot(request_type, deployment_status, request)) {
         Ok(summary) => tracing::info!(summary, "shin deployment summary"),
         Err(error) => tracing::warn!(error = %error, "failed to serialize shin deployment summary"),
     }
@@ -1173,7 +1173,7 @@ mod tests {
     }
 
     #[test]
-    fn deployment_summary_uses_diagnostics_schema_v2() {
+    fn deployment_summary_uses_diagnostics_schema_v3() {
         let request = deployment_request_with_paths(vec!["/*".to_string()]);
         let stats = crate::types::DeploymentStats::default();
         stats.add_marker_planning_pass();
@@ -1182,10 +1182,10 @@ mod tests {
         stats.add_untrusted_catalog();
         stats.add_catalog_fallback_hash_attempt();
         stats.add_catalog_skip();
-        stats.record_delete_attempt(5);
+        stats.record_delete_sdk_call(5);
         stats.record_delete_response(3, 2);
-        stats.record_delete_attempt(4);
-        stats.record_delete_not_found(4);
+        stats.record_delete_sdk_call(4);
+        stats.record_delete_no_such_bucket(4);
         stats.record_callback_attempt(false);
         stats.record_callback_failure();
         stats.record_callback_attempt(true);
@@ -1194,7 +1194,9 @@ mod tests {
         let summary = serde_json::to_value(stats.snapshot("Create", "success", &request))
             .expect("serializable summary");
 
-        assert_eq!(summary["schemaVersion"], 2);
+        assert_eq!(summary["schemaVersion"], 3);
+        assert_eq!(summary["deploymentStatus"], "success");
+        assert!(summary.get("status").is_none());
         assert_eq!(summary["transfer"]["scheduledObjects"], 0);
         assert_eq!(
             summary["markerReplacement"]["strategy"],
@@ -1218,11 +1220,15 @@ mod tests {
         assert_eq!(summary["counts"]["destinationPageObjectsHighWater"], 0);
         assert_eq!(summary["putObject"]["wireAttempts"], 0);
         assert_eq!(summary["counts"]["deleteObjects"], 3);
-        assert_eq!(summary["deleteObject"]["wireAttempts"], 2);
+        assert_eq!(summary["deleteObject"]["sdkCalls"], 2);
+        assert_eq!(summary["deleteObject"]["failedCalls"], 1);
         assert_eq!(summary["deleteObject"]["requestedObjects"], 9);
-        assert_eq!(summary["deleteObject"]["confirmedObjects"], 3);
+        assert_eq!(summary["deleteObject"]["inferredDeletedObjects"], 3);
         assert_eq!(summary["deleteObject"]["unconfirmedObjects"], 2);
-        assert_eq!(summary["deleteObject"]["notFoundObjects"], 4);
+        assert_eq!(
+            summary["deleteObject"]["noSuchBucketRequestedIdentifiers"],
+            4
+        );
         assert_eq!(summary["callback"]["wireAttempts"], 2);
         assert_eq!(summary["callback"]["failedAttempts"], 1);
         assert_eq!(summary["callback"]["retryAttempts"], 1);
