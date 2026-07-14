@@ -62,7 +62,10 @@ const records = plan.flatMap((sample) =>
     maxMemoryMb: 1,
     providerInvoked: true,
     cleanup: "all benchmark stacks destroyed",
-    providerSummary: sample.implementation === "shin" ? { event: "shin_deployment_summary" } : null,
+    providerSummary:
+      sample.implementation === "shin"
+        ? { event: "shin_deployment_summary", schemaVersion: 3, deploymentStatus: "success" }
+        : null,
   })),
 );
 validateMethodologyV2Run(records, options);

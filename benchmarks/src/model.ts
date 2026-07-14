@@ -225,6 +225,15 @@ export function methodologyV2RecordErrors(record: BenchmarkResultRecord): string
       errors.push(`${label}: invalid providerBootstrapSha256`);
     if (record.providerSummary === undefined || record.providerSummary === null)
       errors.push(`${label}: providerSummary is required for Shin`);
+    else {
+      if (record.providerSummary.schemaVersion !== 3)
+        errors.push(`${label}: Shin providerSummary schemaVersion must be 3`);
+      if (
+        typeof record.providerSummary.deploymentStatus !== "string" ||
+        record.providerSummary.deploymentStatus.length === 0
+      )
+        errors.push(`${label}: Shin providerSummary deploymentStatus is required`);
+    }
   } else {
     errors.push(`${label}: unsupported implementation`);
   }

@@ -31,7 +31,7 @@ Only README-linked snapshot SVGs are committed under `benchmarks/snapshots`. Tem
 - In-depth Shin provider telemetry: [`telemetry.md`](telemetry.md)
 - Structured JSONL source: [`results.jsonl`](results.jsonl)
 
-Regenerate the currently committed historical telemetry tables with `pnpm benchmark:telemetry-table -- --methodology-version 1`. Omit the selector after methodology-v2 evidence is committed. Provider diagnostics schema v2 adds transfer-scheduler logical/completion/cancellation counters, exact source and destination wire attempts, consumed body replays, typed source throttling/errors, and true active-reader high-water. Current marker rows also include `markerReplacement` strategy, semantics, planning-pass, and upload-pass fields. Historical rows render unavailable fields as `null`.
+Regenerate the currently committed historical telemetry tables with `pnpm benchmark:telemetry-table -- --methodology-version 1`. Omit the selector after methodology-v2 evidence is committed. Provider diagnostics schema v3 separates deployment work status from callback delivery, records transfer-scheduler logical/completion/cancellation counters, exact source and destination upload wire attempts, deletion SDK calls with inferred outcomes, consumed body replays, typed source throttling/errors, callback attempts, and true active-reader high-water. Current marker rows also include `markerReplacement` strategy, semantics, planning-pass, and upload-pass fields. Historical rows render unavailable fields as `null`.
 
 ## 1024 MiB / 16 Snapshot
 
