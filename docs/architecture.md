@@ -12,7 +12,7 @@ The provider Lambda:
 - reads extracted ZIP sources with ranged S3 `GetObject` requests
 - does not download the full ZIP to memory
 - does not write the source ZIP or extracted entries to Lambda `/tmp`
-- lists the destination prefix once for comparison metadata and, when stale deletion is enabled, again page by page after transfers
+- lists the destination prefix once for comparison metadata and, when that list finds a stale candidate, again page by page after transfers
 - skips unchanged objects when destination content identity is sufficient
 - uploads changed extracted objects with `PutObject`
 - copies `extract=false` sources with `CopyObject`
@@ -300,7 +300,7 @@ For `extract=true`:
 15. Skip an unchanged SSE-S3 marker object after that planning pass. Otherwise reopen the entry for a retryable streaming upload pass; each consumed retry body repeats only that bounded upload pass. Hold back the final output frame until source validation and the planning-pass length/digest checks succeed.
 16. Set inferred `Content-Type` on every PUT. SSE-S3 uploads retain streamed MD5 for ambiguous-write reconciliation without storing another checksum. KMS/DSSE uploads request stored full-object SHA-256 and calculate the independent expected digest while streaming.
 17. Admit at most `maxParallelTransfers` logical object tasks, continuously drain completed joins, and stop admission on the first observed error or panic. Abort and drain outstanding work before stale deletion or invalidation can run.
-18. When stale deletion is enabled, list the destination again after successful transfers and delete non-manifest keys from each page before requesting the next page.
+18. When stale deletion is enabled and the comparison list found a stale candidate, list the destination again after successful transfers and delete non-manifest keys from each page before requesting the next page.
 
 For `extract=false`:
 
@@ -310,9 +310,9 @@ For `extract=false`:
 4. List the destination prefix for comparison, retaining metadata only for manifest keys.
 5. On SSE-S3 destinations, skip copies whose destination `ETag` matches the source identity. On KMS/DSSE destinations, copy because encrypted destination `ETag`s do not provide that comparison.
 6. Run copies with `CopyObject`, `MetadataDirective=REPLACE`, and inferred `Content-Type`. No unused copy checksum is requested.
-7. When stale deletion is enabled, perform the same post-transfer page-streamed destination scan and deletion.
+7. When stale deletion is enabled and the comparison list found a stale candidate, perform the same post-transfer page-streamed destination scan and deletion.
 
-The comparison scan retains at most one destination metadata record per manifest key. With `destinationLifecycle.onDeploy.deleteStaleObjects` enabled, a second scan after transfers holds at most one S3 page of keys and removes included objects absent from the deployment plan with `DeleteObjects` in 1000-key chunks. Destination planning memory is therefore O(manifest keys + one page + transfer concurrency), independent of unrelated destination object count.
+The comparison scan retains at most one destination metadata record per manifest key and one scalar indicating whether it saw an included non-manifest key. With `destinationLifecycle.onDeploy.deleteStaleObjects` enabled, that candidate flag gates a second scan after transfers; destinations without stale candidates avoid the scan. When needed, cleanup holds at most one S3 page of keys and removes included objects absent from the deployment plan with `DeleteObjects` in 1000-key chunks. Destination planning memory is therefore O(manifest keys + one page + transfer concurrency), independent of unrelated destination object count.
 
 ## Skip Decisions
 
@@ -338,7 +338,7 @@ flowchart LR
 
 The provider's skip identity is content only. It does not expose deployment-wide object metadata overrides and does not parse `OldResourceProperties` for object settings. Every PUT and COPY infers `Content-Type` from the deployed object's file extension with an `application/octet-stream` fallback; cache behavior belongs in CloudFront, while encryption, storage, and lifecycle defaults belong on the bucket.
 
-`ListObjectsV2` exposes destination `ETag`, but not the actual checksum value needed to compare stored SHA-256. Performing one checksum-mode `HeadObject` per destination object would defeat the bounded comparison model. Shin therefore uses catalog/MD5 skips only for default/SSE-S3 destinations and reserves checksum-mode `HeadObject` for reconciling ambiguous KMS/DSSE writes. The optional second list is a page-streamed stale-cleanup pass and retains no comparison metadata.
+`ListObjectsV2` exposes destination `ETag`, but not the actual checksum value needed to compare stored SHA-256. Performing one checksum-mode `HeadObject` per destination object would defeat the bounded comparison model. Shin therefore uses catalog/MD5 skips only for default/SSE-S3 destinations and reserves checksum-mode `HeadObject` for reconciling ambiguous KMS/DSSE writes. The optional second list runs only when the comparison list found a stale candidate; it is a page-streamed cleanup pass and retains no comparison metadata.
 
 Directory `Source.asset` inputs are packaged with an authenticated source MD5 catalog. On SSE-S3 destinations, marker-free entries with trusted MD5s and matching destination size can be skipped without reading ZIP entry bytes. Without a trusted catalog match, existing marker-free entries are read and decompressed to compute MD5; missing entries stream straight to upload. On KMS/DSSE destinations, entries stream without a destination-comparison pass because encrypted `ETag`s are not plaintext MD5. ZIP entry reads always validate declared uncompressed size and CRC32, and validate authenticated MD5 whenever present, before the final upload chunk is released.
 

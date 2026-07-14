@@ -12,6 +12,7 @@ const OWNER_TAG_BASE: &str = "aws-cdk:cr-owned";
 
 pub(super) struct DestinationPlan {
     pub(super) objects: HashMap<String, DestinationObject>,
+    pub(super) has_stale_candidates: bool,
 }
 
 #[derive(Clone)]
@@ -22,7 +23,9 @@ pub(super) struct DestinationObject {
 
 struct DestinationRecordContext<'a> {
     strip_prefix: &'a str,
+    filters: &'a Filters,
     manifest: &'a DeploymentManifest,
+    detect_stale_candidates: bool,
 }
 
 pub(crate) async fn delete_prefix(
@@ -139,6 +142,7 @@ pub(crate) async fn bucket_has_competing_owner(
 pub(super) async fn plan_destination(
     state: &AppState,
     request: &DeploymentRequest,
+    filters: &Filters,
     manifest: &DeploymentManifest,
     stats: &DeploymentStats,
 ) -> Result<DestinationPlan> {
@@ -147,6 +151,7 @@ pub(super) async fn plan_destination(
     let mut start_after = None;
     let mut objects = HashMap::new();
     let mut listed_objects = 0_u64;
+    let mut has_stale_candidates = false;
 
     loop {
         let response = state
@@ -162,13 +167,16 @@ pub(super) async fn plan_destination(
 
         for object in response.contents() {
             let Some(key) = object.key() else { continue };
-            record_destination_object(
+            has_stale_candidates |= record_destination_object(
                 key,
                 object.e_tag(),
                 object.size().and_then(|size| u64::try_from(size).ok()),
                 DestinationRecordContext {
                     strip_prefix,
+                    filters,
                     manifest,
+                    detect_stale_candidates: request.delete_stale_objects_on_deployment
+                        && !has_stale_candidates,
                 },
                 &mut objects,
             );
@@ -190,7 +198,10 @@ pub(super) async fn plan_destination(
     stats.add_destination_objects(listed_objects);
     stats.set_destination_metadata_retained(objects.len() as u64);
 
-    Ok(DestinationPlan { objects })
+    Ok(DestinationPlan {
+        objects,
+        has_stale_candidates,
+    })
 }
 
 pub(super) async fn delete_stale_objects(
@@ -423,10 +434,13 @@ fn record_destination_object(
     size: Option<u64>,
     context: DestinationRecordContext<'_>,
     objects: &mut HashMap<String, DestinationObject>,
-) {
+) -> bool {
     let relative_key = strip_destination_prefix(context.strip_prefix, key);
-    if relative_key.is_empty() || !context.manifest.contains_key(&relative_key) {
-        return;
+    if relative_key.is_empty() {
+        return false;
+    }
+    if !context.manifest.contains_key(&relative_key) {
+        return context.detect_stale_candidates && context.filters.should_include(&relative_key);
     }
 
     objects.insert(
@@ -436,6 +450,7 @@ fn record_destination_object(
             size,
         },
     );
+    false
 }
 
 fn stale_destination_key(
@@ -488,18 +503,21 @@ mod tests {
         let manifest = DeploymentManifest::new();
         let mut objects = HashMap::<String, DestinationObject>::new();
 
-        record_destination_object(
+        let has_stale_candidate = record_destination_object(
             "site/old.txt",
             Some("\"ABC123\""),
             Some(10),
             DestinationRecordContext {
                 strip_prefix: "site/",
+                filters: &filters,
                 manifest: &manifest,
+                detect_stale_candidates: true,
             },
             &mut objects,
         );
 
         assert!(objects.is_empty());
+        assert!(has_stale_candidate);
         assert!(stale_destination_key(
             "site/old.txt",
             "site/",
@@ -525,29 +543,35 @@ mod tests {
         );
         let mut objects = HashMap::<String, DestinationObject>::new();
 
-        record_destination_object(
+        let manifest_key_is_stale = record_destination_object(
             "site/keep.txt",
             None,
             Some(1),
             DestinationRecordContext {
                 strip_prefix: "site/",
+                filters: &filters,
                 manifest: &manifest,
+                detect_stale_candidates: true,
             },
             &mut objects,
         );
-        record_destination_object(
+        let excluded_key_is_stale = record_destination_object(
             "site/debug.map",
             None,
             Some(1),
             DestinationRecordContext {
                 strip_prefix: "site/",
+                filters: &filters,
                 manifest: &manifest,
+                detect_stale_candidates: true,
             },
             &mut objects,
         );
 
         assert!(objects.contains_key("keep.txt"));
         assert!(!objects.contains_key("debug.map"));
+        assert!(!manifest_key_is_stale);
+        assert!(!excluded_key_is_stale);
         assert!(!stale_destination_key(
             "site/keep.txt",
             "site/",
@@ -564,21 +588,48 @@ mod tests {
 
     #[test]
     fn destination_entry_ignores_empty_relative_key() {
+        let filters = compile_filters(&[], &[]).unwrap();
         let manifest = DeploymentManifest::new();
         let mut objects = HashMap::<String, DestinationObject>::new();
 
-        record_destination_object(
+        let has_stale_candidate = record_destination_object(
             "site/",
             None,
             None,
             DestinationRecordContext {
                 strip_prefix: "site/",
+                filters: &filters,
                 manifest: &manifest,
+                detect_stale_candidates: true,
             },
             &mut objects,
         );
 
         assert!(objects.is_empty());
+        assert!(!has_stale_candidate);
+    }
+
+    #[test]
+    fn destination_entry_does_not_detect_stale_keys_when_cleanup_is_disabled() {
+        let filters = compile_filters(&[], &[]).unwrap();
+        let manifest = DeploymentManifest::new();
+        let mut objects = HashMap::<String, DestinationObject>::new();
+
+        let has_stale_candidate = record_destination_object(
+            "site/old.txt",
+            None,
+            Some(1),
+            DestinationRecordContext {
+                strip_prefix: "site/",
+                filters: &filters,
+                manifest: &manifest,
+                detect_stale_candidates: false,
+            },
+            &mut objects,
+        );
+
+        assert!(objects.is_empty());
+        assert!(!has_stale_candidate);
     }
 
     #[test]

@@ -142,7 +142,7 @@ pub(crate) async fn deploy(
     let started = std::time::Instant::now();
     let destination_plan = timeout_at(
         deadlines.work(),
-        destination::plan_destination(state, request, &deployment_manifest, &stats),
+        destination::plan_destination(state, request, &filters, &deployment_manifest, &stats),
     )
     .await
     .context("S3 destination planning exceeded the deployment work deadline")??;
@@ -180,7 +180,7 @@ pub(crate) async fn deploy(
     }
     stats.add_transfer_millis(crate::types::duration_ms(started.elapsed()));
 
-    if request.delete_stale_objects_on_deployment {
+    if request.delete_stale_objects_on_deployment && destination_plan.has_stale_candidates {
         let started = std::time::Instant::now();
         timeout_at(
             deadlines.work(),
