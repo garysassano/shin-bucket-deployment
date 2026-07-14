@@ -2,13 +2,8 @@
   "$schema": "../schemas/asset-benchmark-config.schema.json",
   "region": "eu-central-1",
   "concurrency": 1,
-  "assetProfiles": [
-    "marker-heavy"
-  ],
-  "implementations": [
-    "shin",
-    "aws"
-  ],
+  "assetProfiles": ["marker-heavy"],
+  "implementations": ["shin", "aws"],
   "lambdaConfigs": [
     {
       "memoryMb": 2048,

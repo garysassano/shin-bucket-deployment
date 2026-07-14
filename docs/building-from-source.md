@@ -34,6 +34,16 @@ pnpm prebuild:bootstrap -- x86_64
 
 `pnpm verify:package` rebuilds the package output, creates one tarball, verifies that both archives contain an executable architecture-correct `bootstrap`, and smoke-tests CommonJS and ESM consumers without `cargo-lambda-cdk`.
 
+## Run contributor checks
+
+After the bootstrap archives exist, run the same local contributor gates through one command:
+
+```sh
+pnpm check
+```
+
+The aggregate check covers TypeScript build, package output, strict type checking, Biome, unit tests, Rust formatting, Clippy, Rust tests, npm and Cargo audits, cargo-deny, actionlint, Taplo, the package contract, and verification scenario synthesis. Individual scripts remain available when iterating on one area.
+
 ## Compile a local provider from a CDK app
 
 The construct uses the prebuilt provider by default. Passing `rustProjectPath` or `bundling` opts into compiling the Rust provider during CDK asset bundling instead.
