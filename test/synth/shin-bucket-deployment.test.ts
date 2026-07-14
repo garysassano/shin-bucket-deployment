@@ -62,7 +62,6 @@ test("renders a Rust-backed custom resource", () => {
     Extract: true,
     DeleteStaleObjectsOnDeployment: true,
     DestinationChecksumStrategy: "sse-s3-etag",
-    AvailableMemoryMb: 1024,
   });
 }, 120_000);
 

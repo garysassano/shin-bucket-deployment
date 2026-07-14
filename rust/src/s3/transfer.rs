@@ -39,7 +39,7 @@ use crate::types::{
 };
 
 use super::archive::{
-    MarkerBodyContext, SourceBlockOptions, SourceBlockStore, UploadBodyState,
+    MarkerBodyContext, SourceBlockOptions, SourceBlockStore, SourceByteBudget, UploadBodyState,
     marker_zip_entry_body, plan_marker_zip_entry, validate_zip_entry_output,
     validate_zip_entry_size_not_exceeded, zip_entry_body, zip_entry_reader,
 };
@@ -250,6 +250,7 @@ pub(super) async fn upload_zip_entries(
     request: &DeploymentRequest,
     zip_plans: BTreeMap<usize, Vec<ZipEntryPlan>>,
     destination_objects: &HashMap<String, DestinationObject>,
+    source_budget: Arc<SourceByteBudget>,
     execution: TransferExecution,
 ) -> Result<()> {
     let TransferExecution { stats, deadlines } = execution;
@@ -261,6 +262,10 @@ pub(super) async fn upload_zip_entries(
         request.runtime.max_parallel_transfers,
         Arc::clone(&stats),
         deadlines,
+    );
+    tracing::info!(
+        source_global_budget_bytes = source_budget.limit_bytes(),
+        "configured invocation-global source byte budget"
     );
 
     let transfer_result = async {
@@ -293,6 +298,7 @@ pub(super) async fn upload_zip_entries(
                     get_concurrency: request.runtime.source_get_concurrency,
                     window_bytes: source_window_bytes,
                 },
+                Arc::clone(&source_budget),
             );
             block_stores.push(Arc::clone(&store));
             tracing::info!(
@@ -306,9 +312,9 @@ pub(super) async fn upload_zip_entries(
                 max_parallel_transfers = request.runtime.max_parallel_transfers,
                 "planned source block schedule"
             );
-            store.start_scheduler();
+            let mut scheduler_started = false;
             for plan in plans {
-                let store = store.clone();
+                let task_store = Arc::clone(&store);
                 let state = state.clone();
                 let destination_bucket = request.dest_bucket_name.clone();
                 let source_markers = request.source_markers[plan.source_index].clone();
@@ -323,7 +329,7 @@ pub(super) async fn upload_zip_entries(
                 scheduler
                     .spawn(async move {
                         let Some(payload) = prepare_zip_entry_upload(
-                            &store,
+                            &task_store,
                             &plan,
                             &source_markers,
                             &source_marker_config,
@@ -355,6 +361,10 @@ pub(super) async fn upload_zip_entries(
                         .await
                     })
                     .await?;
+                if !scheduler_started {
+                    store.start_scheduler();
+                    scheduler_started = true;
+                }
             }
         }
 

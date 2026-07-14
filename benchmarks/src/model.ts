@@ -8,6 +8,7 @@ export const BENCHMARK_ASSET_PROFILES = [
   "mixed",
   "large-few",
   "marker-heavy",
+  "multi-source-prune",
 ] as const;
 export type BenchmarkAssetProfile = (typeof BENCHMARK_ASSET_PROFILES)[number];
 

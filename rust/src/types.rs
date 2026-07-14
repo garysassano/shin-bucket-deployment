@@ -122,7 +122,7 @@ pub(crate) struct RuntimeOptions {
     pub(crate) source_block_merge_gap_bytes: usize,
     pub(crate) source_get_concurrency: usize,
     pub(crate) source_window_bytes: Option<usize>,
-    pub(crate) source_window_memory_budget_mb: u64,
+    pub(crate) source_memory_budget_bytes: usize,
     pub(crate) put_object_retry: PutObjectRetryOptions,
 }
 
@@ -194,6 +194,8 @@ pub(crate) struct DeploymentStats {
     filtered_entries: AtomicU64,
     marker_entries: AtomicU64,
     destination_objects: AtomicU64,
+    destination_metadata_retained: AtomicU64,
+    destination_page_objects_high_water: AtomicU64,
     delete_objects: AtomicU64,
     delete_batches: AtomicU64,
     uploaded_objects: AtomicU64,
@@ -234,6 +236,9 @@ pub(crate) struct DeploymentStats {
     source_active_gets_high_water: AtomicU64,
     source_active_readers_high_water: AtomicU64,
     source_resident_bytes_high_water: AtomicU64,
+    source_global_budget_bytes: AtomicU64,
+    source_global_resident_bytes: AtomicU64,
+    source_global_resident_bytes_high_water: AtomicU64,
     transfer_scheduled_objects: AtomicU64,
     transfer_completed_objects: AtomicU64,
     transfer_failed_objects: AtomicU64,
@@ -292,6 +297,8 @@ pub(crate) struct DeploymentCounts {
     pub(crate) filtered_entries: u64,
     pub(crate) marker_entries: u64,
     pub(crate) destination_objects: u64,
+    pub(crate) destination_metadata_retained: u64,
+    pub(crate) destination_page_objects_high_water: u64,
     pub(crate) delete_objects: u64,
     pub(crate) delete_batches: u64,
     pub(crate) uploaded_objects: u64,
@@ -341,6 +348,9 @@ pub(crate) struct SourceStats {
     pub(crate) active_gets_high_water: u64,
     pub(crate) active_readers_high_water: u64,
     pub(crate) resident_bytes_high_water: u64,
+    pub(crate) global_budget_bytes: u64,
+    pub(crate) global_resident_bytes_current: u64,
+    pub(crate) global_resident_bytes_high_water: u64,
 }
 
 #[derive(Serialize)]
@@ -429,6 +439,16 @@ impl DeploymentStats {
 
     pub(crate) fn add_destination_objects(&self, count: u64) {
         self.destination_objects.fetch_add(count, Ordering::Relaxed);
+    }
+
+    pub(crate) fn set_destination_metadata_retained(&self, count: u64) {
+        self.destination_metadata_retained
+            .store(count, Ordering::Relaxed);
+    }
+
+    pub(crate) fn record_destination_page_objects(&self, count: u64) {
+        self.destination_page_objects_high_water
+            .fetch_max(count, Ordering::Relaxed);
     }
 
     pub(crate) fn add_delete_objects(&self, count: u64) {
@@ -534,6 +554,40 @@ impl DeploymentStats {
             .fetch_max(stats.resident_bytes_high_water, Ordering::Relaxed);
     }
 
+    pub(crate) fn configure_source_global_budget(&self, bytes: u64) {
+        self.source_global_budget_bytes
+            .store(bytes, Ordering::Relaxed);
+    }
+
+    pub(crate) fn acquire_source_global_bytes(&self, bytes: u64) {
+        let resident = self
+            .source_global_resident_bytes
+            .fetch_add(bytes, Ordering::AcqRel)
+            .saturating_add(bytes);
+        self.source_global_resident_bytes_high_water
+            .fetch_max(resident, Ordering::Relaxed);
+    }
+
+    pub(crate) fn release_source_global_bytes(&self, bytes: u64) {
+        let previous = self
+            .source_global_resident_bytes
+            .fetch_sub(bytes, Ordering::AcqRel);
+        debug_assert!(
+            previous >= bytes,
+            "global source byte accounting underflowed"
+        );
+    }
+
+    #[cfg(test)]
+    pub(crate) fn source_global_memory_for_test(&self) -> (u64, u64, u64) {
+        (
+            self.source_global_budget_bytes.load(Ordering::Relaxed),
+            self.source_global_resident_bytes.load(Ordering::Relaxed),
+            self.source_global_resident_bytes_high_water
+                .load(Ordering::Relaxed),
+        )
+    }
+
     pub(crate) fn add_transfer_scheduled_object(&self, in_flight: usize) {
         self.transfer_scheduled_objects
             .fetch_add(1, Ordering::Relaxed);
@@ -609,6 +663,12 @@ impl DeploymentStats {
                 filtered_entries: self.filtered_entries.load(Ordering::Relaxed),
                 marker_entries: self.marker_entries.load(Ordering::Relaxed),
                 destination_objects: self.destination_objects.load(Ordering::Relaxed),
+                destination_metadata_retained: self
+                    .destination_metadata_retained
+                    .load(Ordering::Relaxed),
+                destination_page_objects_high_water: self
+                    .destination_page_objects_high_water
+                    .load(Ordering::Relaxed),
                 delete_objects: self.delete_objects.load(Ordering::Relaxed),
                 delete_batches: self.delete_batches.load(Ordering::Relaxed),
                 uploaded_objects: self.uploaded_objects.load(Ordering::Relaxed),
@@ -674,6 +734,13 @@ impl DeploymentStats {
                     .load(Ordering::Relaxed),
                 resident_bytes_high_water: self
                     .source_resident_bytes_high_water
+                    .load(Ordering::Relaxed),
+                global_budget_bytes: self.source_global_budget_bytes.load(Ordering::Relaxed),
+                global_resident_bytes_current: self
+                    .source_global_resident_bytes
+                    .load(Ordering::Relaxed),
+                global_resident_bytes_high_water: self
+                    .source_global_resident_bytes_high_water
                     .load(Ordering::Relaxed),
             },
             put_object: PutObjectStats {

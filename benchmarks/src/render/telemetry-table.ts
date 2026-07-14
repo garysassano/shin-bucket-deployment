@@ -70,6 +70,14 @@ const OBJECT_COLUMNS: Array<Column<TelemetryRow>> = [
   { header: "Filtered", value: (row) => nested(row, "counts", "filteredEntries") },
   { header: "Markers", value: (row) => nested(row, "counts", "markerEntries") },
   { header: "Destination objects", value: (row) => nested(row, "counts", "destinationObjects") },
+  {
+    header: "Destination metadata retained",
+    value: (row) => nested(row, "counts", "destinationMetadataRetained"),
+  },
+  {
+    header: "Destination page objects high",
+    value: (row) => nested(row, "counts", "destinationPageObjectsHighWater"),
+  },
   { header: "Uploaded", value: (row) => nested(row, "counts", "uploadedObjects") },
   { header: "Skipped", value: (row) => nested(row, "counts", "skippedObjects") },
   { header: "Deleted", value: (row) => nested(row, "counts", "deleteObjects") },
@@ -94,6 +102,18 @@ const BYTE_COLUMNS: Array<Column<TelemetryRow>> = [
   {
     header: "Resident bytes high",
     value: (row) => nested(row, "source", "residentBytesHighWater"),
+  },
+  {
+    header: "Global budget bytes",
+    value: (row) => nested(row, "source", "globalBudgetBytes"),
+  },
+  {
+    header: "Global resident bytes current",
+    value: (row) => nested(row, "source", "globalResidentBytesCurrent"),
+  },
+  {
+    header: "Global resident bytes high",
+    value: (row) => nested(row, "source", "globalResidentBytesHighWater"),
   },
 ];
 

@@ -18,7 +18,6 @@ pub(crate) use destination::{bucket_has_competing_owner, delete_prefix, delete_p
 pub(crate) const DEFAULT_MAX_PARALLEL_TRANSFERS: usize = 32;
 pub(crate) const DEFAULT_SOURCE_BLOCK_BYTES: usize = 8 * 1024 * 1024;
 pub(crate) const DEFAULT_SOURCE_BLOCK_MERGE_GAP_BYTES: usize = 256 * 1024;
-pub(crate) const DEFAULT_SOURCE_WINDOW_MEMORY_BUDGET_MB: u64 = 256;
 pub(crate) const ZIP_ENTRY_BODY_CHUNK_BYTES: usize = 256 * 1024;
 pub(crate) const ZIP_ENTRY_BODY_PIPE_BYTES: usize = 1024 * 1024;
 pub(crate) const ZIP_ENTRY_BODY_PIPE_CHUNKS: usize =
@@ -90,24 +89,14 @@ pub(crate) fn adaptive_source_window_bytes(
     usize::try_from(capacity).unwrap_or(usize::MAX)
 }
 
-pub(crate) fn default_source_window_memory_budget_mb(available_memory_mb: u64) -> u64 {
-    if available_memory_mb == 0 {
-        DEFAULT_SOURCE_WINDOW_MEMORY_BUDGET_MB
-    } else {
-        available_memory_mb
-    }
-}
-
 pub(crate) fn source_window_bytes_for_archive(
     runtime: &RuntimeOptions,
     source_zip_bytes: u64,
     zip_file_count: usize,
 ) -> usize {
-    let memory_budget_mb = if runtime.source_window_memory_budget_mb == 0 {
-        runtime.available_memory_mb
-    } else {
-        runtime.source_window_memory_budget_mb
-    };
+    let memory_budget_mb = u64::try_from(runtime.source_memory_budget_bytes / (1024 * 1024))
+        .unwrap_or(u64::MAX)
+        .max(1);
     runtime.source_window_bytes.unwrap_or_else(|| {
         adaptive_source_window_bytes(
             memory_budget_mb,
@@ -128,11 +117,15 @@ pub(crate) async fn deploy(
 ) -> Result<()> {
     let started = std::time::Instant::now();
     planner::validate_request_lengths(request)?;
+    let source_budget = archive::SourceByteBudget::new(
+        request.runtime.source_memory_budget_bytes,
+        Arc::clone(&stats),
+    );
 
     let filters = compile_filters(&request.exclude, &request.include)?;
     let (archives, deployment_manifest) = timeout_at(
         deadlines.work(),
-        planner::plan_deployment(state, request, &filters, &stats),
+        planner::plan_deployment(state, request, &filters, &stats, Arc::clone(&source_budget)),
     )
     .await
     .context("S3 deployment planning exceeded the deployment work deadline")??;
@@ -163,6 +156,7 @@ pub(crate) async fn deploy(
             request,
             zip_plans,
             &destination_plan.objects,
+            source_budget,
             transfer::TransferExecution {
                 stats: Arc::clone(&stats),
                 deadlines,
@@ -186,14 +180,15 @@ pub(crate) async fn deploy(
     }
     stats.add_transfer_millis(crate::types::duration_ms(started.elapsed()));
 
-    if request.delete_stale_objects_on_deployment {
+    if request.delete_stale_objects_on_deployment && destination_plan.has_stale_candidates {
         let started = std::time::Instant::now();
         timeout_at(
             deadlines.work(),
-            destination::delete_keys(
+            destination::delete_stale_objects(
                 state,
-                &request.dest_bucket_name,
-                &destination_plan.keys_to_delete,
+                request,
+                &filters,
+                &deployment_manifest,
                 &stats,
             ),
         )

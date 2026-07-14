@@ -99,6 +99,22 @@ The current provider used 42.4% to 46.5% less peak memory than before and was 5.
 
 Raw AWS output remains outside git. Every repetition captured provider telemetry before cleanup, destroyed its stack, and verified stack absence.
 
+## Invocation memory planning performance decision
+
+The corrected 2026-07-14 invocation-memory decision run completed one `before`, one `current`, and one `upstream` repetition. Its nine sanitized rows are retained in `benchmarks/results.jsonl` under decision-run ID `memory-planning-gated-2026-07-14`. Every variant used the `multi-source-prune` profile at 1024 MiB / 32 transfers, serialized stacks, and the same create, unchanged, and prune phases in `eu-central-1`. Values are single CloudWatch `REPORT` records, not multi-sample medians.
+
+The `before` provider is benchmark-harness commit `add1c20`, whose provider source matches PR #14's merged baseline. The current provider is `af7873d`. Upstream is AWS CDK 2.260.0 `BucketDeployment`. The earlier PR #15 candidate and its unconditional post-transfer destination scan were rejected; its stale rows and claims are not retained.
+
+| Phase | Provider seconds, before / current / upstream | Current vs before | Upstream / current | Peak MiB, before / current / upstream |
+| --- | ---: | ---: | ---: | ---: |
+| `cold-create` | 2.288 / 1.980 / 23.221 | -13.5% | 11.7x | 48 / 50 / 240 |
+| `unchanged-update` | 0.607 / 0.459 / 22.749 | -24.4% | 49.6x | 48 / 51 / 240 |
+| `pruned-update` | 2.747 / 2.755 / 18.796 | +0.3% | 6.8x | 53 / 51 / 240 |
+
+Current bounds retained destination metadata to manifest keys and the page working set to at most 1,000 objects. The initial destination listing now records whether an exact included non-manifest key exists, so the post-transfer page scan runs only when stale cleanup has actual candidates. Cold create retained no destination metadata, unchanged retained 1,284 manifest keys without entering deletion, and prune retained 129 manifest keys while deleting 1,155 stale objects in two batches.
+
+All six Shin rows reported zero source GET retries/errors, destination PUT retries/throttles, transfer failures, cancellations, panics, and consumed body replays. Current source memory returned to zero after every invocation; its high-water remained below the exact 536,870,912-byte global budget. Every benchmark stack was destroyed, and a final scoped check found none remaining. Raw AWS output remains outside git.
+
 ## Current Snapshot
 
 > [!CAUTION]
@@ -138,7 +154,7 @@ The `assets` benchmark scenario generates deterministic bundles under `.benchmar
 
 ## Telemetry Notes
 
-Shin rows may include sanitized `shin_deployment_summary` telemetry. Schema-v2 summaries separate logical transfer objects, source and destination wire attempts, consumed body replays, typed throttling/errors, and cancellations; historical schema-v1 rows do not contain those fields. Use `docs/architecture.md` for exact diagnostics meanings.
+Shin rows may include sanitized `shin_deployment_summary` telemetry. Schema-v2 summaries separate logical transfer objects, source and destination wire attempts, consumed body replays, typed throttling/errors, cancellations, invocation-global source memory, and destination metadata/page high-water; historical rows may not contain every field. Use `docs/architecture.md` for exact diagnostics meanings.
 
 Do not infer S3 throttling from source block waits alone. Source S3 pressure requires source `getRetries` or `getErrors`; destination S3 throttling requires `putObject.throttledAttempts` or retry evidence.
 

@@ -1101,6 +1101,11 @@ mod tests {
         assert_eq!(summary["markerReplacement"]["uploadPasses"], 1);
         assert_eq!(summary["source"]["getAttempts"], 0);
         assert_eq!(summary["source"]["bodyReplays"], 0);
+        assert_eq!(summary["source"]["globalBudgetBytes"], 0);
+        assert_eq!(summary["source"]["globalResidentBytesCurrent"], 0);
+        assert_eq!(summary["source"]["globalResidentBytesHighWater"], 0);
+        assert_eq!(summary["counts"]["destinationMetadataRetained"], 0);
+        assert_eq!(summary["counts"]["destinationPageObjectsHighWater"], 0);
         assert_eq!(summary["putObject"]["wireAttempts"], 0);
     }
 
