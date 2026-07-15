@@ -10,18 +10,43 @@ if (templates.length !== 2) {
 const implementations = new Set();
 for (const path of templates) {
   const template = JSON.parse(readFileSync(path, "utf8"));
-  const functions = Object.values(template.Resources ?? {}).filter(
-    (resource) => resource?.Type === "AWS::Lambda::Function",
+  const implementation = path.includes("AwsBucketDeployment") ? "aws" : "shin";
+  const resourceType =
+    implementation === "aws" ? "Custom::CDKBucketDeployment" : "Custom::ShinBucketDeployment";
+  const customResources = Object.values(template.Resources ?? {}).filter(
+    (resource) => resource?.Type === resourceType,
   );
-  const hasFreshnessToken = functions.some(
-    (resource) =>
-      resource.Properties?.Environment?.Variables?.SHIN_BENCH_EXECUTION_ENVIRONMENT_TOKEN ===
-      "no-aws-synth",
-  );
-  if (!hasFreshnessToken) {
-    throw new Error(`Benchmark provider freshness token missing from ${path}.`);
+  if (customResources.length !== 1) {
+    throw new Error(`Expected one ${resourceType} in ${path}, found ${customResources.length}.`);
   }
-  implementations.add(path.includes("AwsBucketDeployment") ? "aws" : "shin");
+  const handlerId = customResources[0].Properties?.ServiceToken?.["Fn::GetAtt"]?.[0];
+  const handler = template.Resources?.[handlerId];
+  if (typeof handlerId !== "string" || handler?.Type !== "AWS::Lambda::Function") {
+    throw new Error(`Benchmark provider service token is invalid in ${path}.`);
+  }
+  const expectedLogicalPrefix =
+    implementation === "aws" ? "CustomCDKBucketDeployment" : "ShinBucketDeploymentHandler";
+  if (!handlerId.includes(expectedLogicalPrefix)) {
+    throw new Error(`Benchmark provider logical ID is unexpected in ${path}.`);
+  }
+  const expectedRuntime = implementation === "aws" ? "python3.13" : "provided.al2023";
+  const expectedHandler = implementation === "aws" ? "index.handler" : "bootstrap";
+  if (
+    handler.Properties?.MemorySize !== 1024 ||
+    handler.Properties?.Runtime !== expectedRuntime ||
+    handler.Properties?.Handler !== expectedHandler ||
+    handler.Properties?.Environment?.Variables?.SHIN_BENCH_EXECUTION_ENVIRONMENT_TOKEN !==
+      "no-aws-synth"
+  ) {
+    throw new Error(`Benchmark provider runtime contract is invalid in ${path}.`);
+  }
+  if (
+    implementation === "shin" &&
+    JSON.stringify(handler.Properties?.Architectures) !== JSON.stringify(["arm64"])
+  ) {
+    throw new Error(`Shin benchmark provider architecture is invalid in ${path}.`);
+  }
+  implementations.add(implementation);
 }
 
 if (!implementations.has("shin") || !implementations.has("aws")) {

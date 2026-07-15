@@ -12,13 +12,29 @@
 // Requires `cargo-lambda` on PATH.
 
 import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  buildEnvironmentSha256,
+  collectBuildToolchainIdentity,
+  collectSourceIdentity,
+  directorySha256,
+} from "./source-identity.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(__dirname, "..");
-const manifestPath = join(repoRoot, "rust", "Cargo.toml");
 const binaryName = "shin-bucket-deployment-handler";
 
 // Map our public architecture names to cargo-lambda --target triples and the
@@ -34,19 +50,41 @@ const ARCH_TARGETS = {
   },
 };
 
-function run(command, args) {
+function run(command, args, cwd = repoRoot, allowFailure = false) {
   const printable = [command, ...args].join(" ");
   console.log(`> ${printable}`);
-  const result = spawnSync(command, args, { stdio: "inherit", cwd: repoRoot });
+  const result = spawnSync(command, args, { stdio: "inherit", cwd });
   if (result.error) {
     throw result.error;
   }
-  if (result.status !== 0) {
+  if (result.status !== 0 && !allowFailure) {
     throw new Error(`Command failed (${result.status}): ${printable}`);
   }
 }
 
-function buildArch(arch) {
+function output(command, args, encoding = "utf8", cwd = repoRoot) {
+  const result = spawnSync(command, args, {
+    cwd,
+    encoding: encoding === null ? undefined : encoding,
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error(`${command} ${args.join(" ")} failed: ${String(result.stderr ?? "").trim()}`);
+  }
+  return encoding === null ? Buffer.from(result.stdout) : result.stdout.trim();
+}
+
+function toolIdentity(root) {
+  return {
+    ...collectBuildToolchainIdentity(root),
+    buildEnvironmentSha256: buildEnvironmentSha256(),
+  };
+}
+
+function buildArch(arch, sourceRoot = repoRoot, applicationBuildSha256 = undefined) {
   const config = ARCH_TARGETS[arch];
   if (!config) {
     throw new Error(
@@ -54,24 +92,32 @@ function buildArch(arch) {
     );
   }
 
-  run("cargo", [
-    "lambda",
-    "build",
-    "--release",
-    "--manifest-path",
-    manifestPath,
-    "--bin",
-    binaryName,
-    "--target",
-    config.target,
-    "--output-format",
-    "zip",
-    "--lambda-dir",
-    join(repoRoot, "rust", "target", "lambda-packages", arch),
-  ]);
+  const sourceBefore = collectSourceIdentity(sourceRoot);
+  const toolsBefore = toolIdentity(sourceRoot);
+  const manifestPath = join(sourceRoot, "rust", "Cargo.toml");
+
+  run(
+    "cargo",
+    [
+      "lambda",
+      "build",
+      "--release",
+      "--manifest-path",
+      manifestPath,
+      "--bin",
+      binaryName,
+      "--target",
+      config.target,
+      "--output-format",
+      "zip",
+      "--lambda-dir",
+      join(sourceRoot, "rust", "target", "lambda-packages", arch),
+    ],
+    sourceRoot,
+  );
 
   const builtArchive = join(
-    repoRoot,
+    sourceRoot,
     "rust",
     "target",
     "lambda-packages",
@@ -83,19 +129,80 @@ function buildArch(arch) {
     throw new Error(`Could not find built bootstrap archive for ${arch}: ${builtArchive}`);
   }
 
+  const sourceAfter = collectSourceIdentity(sourceRoot);
+  const toolsAfter = toolIdentity(sourceRoot);
+  if (JSON.stringify(sourceAfter) !== JSON.stringify(sourceBefore)) {
+    throw new Error("Source identity changed while building the provider bootstrap.");
+  }
+  if (JSON.stringify(toolsAfter) !== JSON.stringify(toolsBefore)) {
+    throw new Error("Provider build toolchain changed while building the bootstrap.");
+  }
+
   const outDir = join(repoRoot, "assets", `bootstrap-${config.lambdaDir}`);
   rmSync(outDir, { recursive: true, force: true });
   mkdirSync(outDir, { recursive: true });
   const outFile = join(outDir, "bootstrap.zip");
   copyFileSync(builtArchive, outFile);
+  const archive = readFileSync(outFile);
+  const bootstrap = output("unzip", ["-p", outFile, "bootstrap"], null, sourceRoot);
+  const provenance = {
+    schemaVersion: 1,
+    architecture: arch,
+    binaryName,
+    target: config.target,
+    sourceCommit: sourceBefore.commit,
+    sourceDirty: sourceBefore.dirty,
+    sourceTreeSha256: sourceBefore.sourceTreeSha256,
+    applicationBuildSha256,
+    ...toolsBefore,
+    bootstrapSha256: createHash("sha256").update(bootstrap).digest("hex"),
+    bootstrapArchiveSha256: createHash("sha256").update(archive).digest("hex"),
+  };
+  writeFileSync(join(outDir, "build-provenance.json"), `${JSON.stringify(provenance, null, 2)}\n`);
   console.log(`Staged ${arch} bootstrap archive -> ${outFile}`);
 }
 
 function main() {
-  const requested = process.argv.slice(2);
+  const benchmarkBuild = process.argv.includes("--benchmark");
+  const requested = process.argv.slice(2).filter((argument) => argument !== "--benchmark");
   const arches = requested.length > 0 ? requested : Object.keys(ARCH_TARGETS);
-  for (const arch of arches) {
-    buildArch(arch);
+  if (!benchmarkBuild) {
+    for (const arch of arches) buildArch(arch);
+    return;
+  }
+  if (arches.length !== 1 || arches[0] !== "arm64") {
+    throw new Error("Benchmark builds must request exactly the arm64 provider.");
+  }
+  const source = collectSourceIdentity(repoRoot);
+  if (source.dirty) {
+    throw new Error("Methodology-v2 provider builds require a clean source tree.");
+  }
+  const scratch = mkdtempSync(join(tmpdir(), "shin-benchmark-provider-build-"));
+  const worktree = join(scratch, "source");
+  try {
+    run("git", ["worktree", "add", "--detach", worktree, source.commit], repoRoot);
+    const detached = collectSourceIdentity(worktree);
+    if (detached.dirty || detached.commit !== source.commit) {
+      throw new Error("Detached benchmark build source does not match the approved clean commit.");
+    }
+    symlinkSync(join(repoRoot, "node_modules"), join(worktree, "node_modules"), "dir");
+    run("pnpm", ["exec", "tsc", "-p", "tsconfig.build.json"], worktree);
+    const applicationBuildSha256 = directorySha256(join(worktree, "dist"));
+    if (
+      !existsSync(join(repoRoot, "dist")) ||
+      directorySha256(join(repoRoot, "dist")) !== applicationBuildSha256
+    ) {
+      throw new Error(
+        "Current benchmark application build does not match the clean source commit.",
+      );
+    }
+    buildArch("arm64", worktree, applicationBuildSha256);
+    if (JSON.stringify(collectSourceIdentity(repoRoot)) !== JSON.stringify(source)) {
+      throw new Error("Repository source identity changed during the detached benchmark build.");
+    }
+  } finally {
+    run("git", ["worktree", "remove", "--force", worktree], repoRoot, true);
+    rmSync(scratch, { recursive: true, force: true });
   }
 }
 

@@ -1,6 +1,11 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, join, relative } from "node:path";
-import { type BenchmarkAggregate, aggregateMetric, comparisonGroupKey } from "../aggregate";
+import {
+  type BenchmarkAggregate,
+  aggregateMetric,
+  assertCompleteSamples,
+  comparisonGroupKey,
+} from "../aggregate";
 import { parseCliOptions } from "../cli";
 import {
   type BenchmarkResultRecord,
@@ -34,6 +39,7 @@ type RenderOptions = {
   readonly methodologyVersion?: 1 | 2;
   readonly runId?: string;
   readonly configFile?: string;
+  readonly scratchRoot?: string;
 };
 
 type ChartThemeName = "signal" | "forge" | "circuit";
@@ -90,6 +96,7 @@ const CLI_OPTIONS = [
   "methodology-version",
   "output-file",
   "run-id",
+  "scratch-root",
 ] as const;
 
 const CHART_THEMES: Record<ChartThemeName, ChartTheme> = {
@@ -161,6 +168,8 @@ export function renderBenchmarkReport(options: RenderOptions): string {
     methodologyVersion: options.methodologyVersion ?? 2,
     runId: options.runId,
     configFile: options.configFile,
+    inputFile: options.inputFile,
+    scratchRoot: options.scratchRoot,
   })
     .filter((record) => (options.assetProfile ? record.profile === options.assetProfile : true))
     .filter((record) => (options.memoryMb ? record.memoryMb === options.memoryMb : true))
@@ -1053,7 +1062,11 @@ type MetricPair = {
 type AggregatedRow = BenchmarkAggregate;
 
 function aggregateRows(records: BenchmarkRecord[], metric: MetricName): AggregatedRow[] {
-  return aggregateMetric(records, metric).sort(compareAggregatedRows);
+  const rows = aggregateMetric(records, metric).sort(compareAggregatedRows);
+  if (records.some((record) => benchmarkMethodologyVersion(record) === 2)) {
+    assertCompleteSamples(rows);
+  }
+  return rows;
 }
 
 function comparisonKey(row: {
@@ -1222,6 +1235,7 @@ function parseArgs(args: string[]): RenderOptions {
     methodologyVersion: parseMethodologyVersion(values.get("methodology-version")),
     runId: values.get("run-id"),
     configFile: values.get("config"),
+    scratchRoot: values.get("scratch-root"),
     assetProfile: values.get("asset-profile"),
   };
 }

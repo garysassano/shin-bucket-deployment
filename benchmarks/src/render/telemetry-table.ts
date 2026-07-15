@@ -1,5 +1,5 @@
 import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { basename, dirname } from "node:path";
 import { parseCliOptions } from "../cli";
 import {
   type BenchmarkResultRecord,
@@ -15,6 +15,7 @@ type RenderOptions = {
   readonly methodologyVersion?: 1 | 2;
   readonly runId?: string;
   readonly configFile?: string;
+  readonly scratchRoot?: string;
 };
 
 type TelemetryRow = {
@@ -41,6 +42,7 @@ const CLI_OPTIONS = [
   "methodology-version",
   "output-file",
   "run-id",
+  "scratch-root",
 ] as const;
 
 const RUNTIME_COLUMNS: Array<Column<TelemetryRow>> = [
@@ -275,6 +277,7 @@ export function renderBenchmarkResultsTable(options: RenderOptions): string {
     options.methodologyVersion ?? 2,
     options.runId,
     options.configFile,
+    options.scratchRoot,
   );
   const groups = buildGroups(rows);
   const report = renderResultsMarkdown(rows, groups, options.inputFile);
@@ -291,7 +294,7 @@ function renderResultsMarkdown(
   return [
     "# Shin Provider Benchmark Telemetry",
     "",
-    `Generated from Shin rows in \`${inputFile}\`. Raw benchmark evidence stays outside the repo.`,
+    `Generated from Shin rows in \`${basename(inputFile)}\`. Raw benchmark evidence stays outside the repo.`,
     "",
     "## Summary",
     "",
@@ -428,6 +431,7 @@ function readTelemetryRows(
   methodologyVersion: 1 | 2,
   requestedRunId: string | undefined,
   configFile: string | undefined,
+  scratchRoot: string | undefined,
 ): TelemetryRow[] {
   const allRows = readBenchmarkResultRows(filePath);
   const selectedRecords = new Set(
@@ -436,6 +440,8 @@ function readTelemetryRows(
       methodologyVersion,
       runId: requestedRunId,
       configFile,
+      inputFile: filePath,
+      scratchRoot,
     }),
   );
   const rows = allRows
@@ -483,6 +489,7 @@ function parseArgs(args: string[]): RenderOptions {
     methodologyVersion: parseMethodologyVersion(values.get("methodology-version")),
     runId: values.get("run-id"),
     configFile: values.get("config"),
+    scratchRoot: values.get("scratch-root"),
   };
 }
 

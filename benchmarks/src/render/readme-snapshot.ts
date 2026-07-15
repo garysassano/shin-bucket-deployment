@@ -21,6 +21,7 @@ const CLI_OPTIONS = [
   "lambda-memory-mb",
   "methodology-version",
   "run-id",
+  "scratch-root",
   "variant",
 ] as const;
 
@@ -78,6 +79,7 @@ const requestedShinParallel = parseNumberArg(cliArgs, "--lambda-max-parallel-tra
 const requestedMethodologyVersion = parseNumberArg(cliArgs, "--methodology-version") ?? 2;
 const requestedRunId = parseStringArg(cliArgs, "--run-id");
 const requestedConfigFile = parseStringArg(cliArgs, "--config");
+const requestedScratchRoot = parseStringArg(cliArgs, "--scratch-root");
 if (requestedMethodologyVersion !== 1 && requestedMethodologyVersion !== 2) {
   throw new Error("--methodology-version must be 1 or 2");
 }
@@ -599,6 +601,8 @@ const benchmarkDataItems = findSelections(
     methodologyVersion: requestedMethodologyVersion,
     runId: requestedRunId,
     configFile: requestedConfigFile,
+    inputFile,
+    scratchRoot: requestedScratchRoot,
   }),
 ).map(buildBenchmarkData);
 if (benchmarkDataItems.length === 0) {

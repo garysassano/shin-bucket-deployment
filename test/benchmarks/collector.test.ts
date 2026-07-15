@@ -143,6 +143,49 @@ describe("benchmark result collector", () => {
     });
   });
 
+  test("persists source and provider build provenance metadata", () => {
+    const dir = mkdtempSync(join(tmpdir(), "shin-bench-collector-"));
+    const logFile = join(dir, "deploy.log");
+    const outputFile = join(dir, "results.jsonl");
+    writeFileSync(logFile, "Stack.BenchmarkImplementation = shin\n");
+
+    const collected = collectBenchmarkResult({
+      logFile,
+      outputFile,
+      phase: "cold-create",
+      sourceTreeSha256: "1".repeat(64),
+      installedDependenciesSha256: "5".repeat(64),
+      nodeVersion: "v24.0.0",
+      pnpmVersion: "11.0.0",
+      executionEnvironmentSha256: "6".repeat(64),
+      providerBootstrapProvenanceSha256: "2".repeat(64),
+      providerBootstrapBuildDirty: false,
+      providerBootstrapCargoVersion: "cargo 1.0.0",
+      providerBootstrapRustcVersion: "rustc 1.0.0",
+      providerBootstrapCargoLambdaVersion: "cargo-lambda 1.0.0",
+      providerBootstrapZigVersion: "1.0.0",
+      providerBootstrapBuildToolchainSha256: "4".repeat(64),
+      providerBootstrapBuildEnvironmentSha256: "3".repeat(64),
+    });
+
+    expect(JSON.parse(readFileSync(outputFile, "utf8"))).toEqual(collected);
+    expect(collected).toMatchObject({
+      sourceTreeSha256: "1".repeat(64),
+      installedDependenciesSha256: "5".repeat(64),
+      nodeVersion: "v24.0.0",
+      pnpmVersion: "11.0.0",
+      executionEnvironmentSha256: "6".repeat(64),
+      providerBootstrapProvenanceSha256: "2".repeat(64),
+      providerBootstrapBuildDirty: false,
+      providerBootstrapCargoVersion: "cargo 1.0.0",
+      providerBootstrapRustcVersion: "rustc 1.0.0",
+      providerBootstrapCargoLambdaVersion: "cargo-lambda 1.0.0",
+      providerBootstrapZigVersion: "1.0.0",
+      providerBootstrapBuildToolchainSha256: "4".repeat(64),
+      providerBootstrapBuildEnvironmentSha256: "3".repeat(64),
+    });
+  });
+
   test("extracts sanitized provider summary from raw CloudWatch log events", () => {
     const dir = mkdtempSync(join(tmpdir(), "shin-bench-collector-"));
     const logFile = join(dir, "deploy.log");
@@ -218,6 +261,75 @@ describe("benchmark result collector", () => {
       maxMemoryMb: 96,
       providerInvoked: true,
     });
+  });
+
+  test("rejects unsanitized provider summary fields", () => {
+    const dir = mkdtempSync(join(tmpdir(), "shin-bench-collector-"));
+    const logFile = join(dir, "deploy.log");
+    const summaryFile = join(dir, "summary.json");
+    writeFileSync(logFile, "Stack.BenchmarkImplementation = shin\n");
+    writeFileSync(
+      summaryFile,
+      `${JSON.stringify({
+        event: "shin_deployment_summary",
+        schemaVersion: 3,
+        requestId: "must-not-be-persisted",
+      })}\n`,
+    );
+    expect(() =>
+      collectBenchmarkResult({
+        logFile,
+        summaryFile,
+        outputFile: join(dir, "results.jsonl"),
+        phase: "cold-create",
+      }),
+    ).toThrow("unexpected field requestId");
+  });
+
+  test("correlates strict REPORT and summary evidence by stream and request ID", () => {
+    const dir = mkdtempSync(join(tmpdir(), "shin-bench-collector-"));
+    const logFile = join(dir, "deploy.log");
+    const reportFile = join(dir, "report.json");
+    const summaryFile = join(dir, "summary.json");
+    writeFileSync(logFile, "Stack.BenchmarkImplementation = shin\n");
+    writeFileSync(
+      reportFile,
+      JSON.stringify({
+        events: [
+          {
+            timestamp: 2,
+            logStreamName: "stream",
+            message:
+              "REPORT RequestId: report-id Duration: 1 ms Billed Duration: 1 ms Memory Size: 1024 MB Max Memory Used: 1 MB Init Duration: 1 ms",
+          },
+        ],
+      }),
+    );
+    writeFileSync(
+      summaryFile,
+      JSON.stringify({
+        events: [
+          {
+            timestamp: 1,
+            logStreamName: "stream",
+            message: `requestId="summary-id": summary=${JSON.stringify(
+              JSON.stringify({ event: "shin_deployment_summary" }),
+            )}`,
+          },
+        ],
+      }),
+    );
+    expect(() =>
+      collectBenchmarkResult({
+        methodologyVersion: 2,
+        implementation: "shin",
+        logFile,
+        reportFile,
+        summaryFile,
+        outputFile: join(dir, "results.jsonl"),
+        phase: "cold-create",
+      }),
+    ).toThrow("request IDs do not match");
   });
 
   test("renders markdown benchmark comparison reports", () => {

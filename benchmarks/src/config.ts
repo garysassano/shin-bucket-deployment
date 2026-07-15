@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
@@ -29,6 +29,7 @@ export type BenchmarkRunOptions = {
   readonly repetitions: number;
   readonly startRepetition: number;
   readonly maxWallClockMinutes?: number;
+  readonly approvedThroughRepetition: number;
   readonly assetProfiles: BenchmarkAssetProfile[];
   readonly lambdaConfigs: LambdaConfig[];
   readonly implementations: BenchmarkImplementation[];
@@ -47,10 +48,12 @@ export type BenchmarkRunOptions = {
 const positiveIntegerSchema = z.number().int().positive();
 const nonEmptyStringSchema = z.string().min(1);
 const uuidSchema = z.string().uuid();
+const snapshotDateSchema = z.string().refine(isIsoDate, "must be a valid YYYY-MM-DD date");
+const evidenceLabelSchema = z.string().regex(/^[A-Za-z0-9._-]+$/);
 const phaseSchema = z.object({
   assetState: z.enum(BENCHMARK_ASSET_STATES),
   cloudfrontWait: z.boolean().optional(),
-  name: nonEmptyStringSchema,
+  name: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
   deleteStaleObjects: z.boolean().optional(),
   deleteCurrentObjectsOnDelete: z.boolean().optional(),
 });
@@ -63,7 +66,7 @@ export const benchmarkConfigSchema = z
     startRepetition: positiveIntegerSchema.optional(),
     maxWallClockMinutes: z.number().positive().optional(),
     runToken: nonEmptyStringSchema.optional(),
-    snapshotDate: nonEmptyStringSchema.optional(),
+    snapshotDate: snapshotDateSchema.optional(),
     region: nonEmptyStringSchema.optional(),
     outputFile: nonEmptyStringSchema.optional(),
     scratchRoot: nonEmptyStringSchema.optional(),
@@ -76,8 +79,8 @@ export const benchmarkConfigSchema = z
       .optional(),
     implementations: z.array(z.enum(BENCHMARK_IMPLEMENTATIONS)).nonempty().optional(),
     phases: z.array(phaseSchema).nonempty().optional(),
-    decisionRunId: nonEmptyStringSchema.optional(),
-    comparisonVariant: nonEmptyStringSchema.optional(),
+    decisionRunId: evidenceLabelSchema.optional(),
+    comparisonVariant: evidenceLabelSchema.optional(),
   })
   .strict();
 
@@ -90,6 +93,7 @@ const CLI_OPTIONS = [
   "repetitions",
   "start-repetition",
   "max-wall-clock-minutes",
+  "approved-through-repetition",
   "asset-profiles",
   "lambda-configs",
   "implementations",
@@ -120,6 +124,9 @@ export function parseBenchmarkRunOptions(args: string[]): BenchmarkRunOptions {
     ? listValue(required(values, "implementations")).map(parseImplementation)
     : (config.implementations ?? ["shin", "aws"]);
   const snapshotDate = values.get("snapshot-date") ?? config.snapshotDate ?? today();
+  if (!snapshotDateSchema.safeParse(snapshotDate).success) {
+    throw new Error("snapshot-date must use YYYY-MM-DD.");
+  }
   const runId = values.get("run-id") ?? config.runId ?? randomUUID();
   if (!uuidSchema.safeParse(runId).success) {
     throw new Error("run-id must be a UUID.");
@@ -152,6 +159,10 @@ export function parseBenchmarkRunOptions(args: string[]): BenchmarkRunOptions {
     values.get("max-wall-clock-minutes") ?? config.maxWallClockMinutes,
     "max-wall-clock-minutes",
   );
+  const approvedThroughRepetition = positiveInteger(
+    values.get("approved-through-repetition") ?? "1",
+    "approved-through-repetition",
+  );
   const scratchRoot = resolve(
     values.get("scratch-root") ??
       config.scratchRoot ??
@@ -164,12 +175,28 @@ export function parseBenchmarkRunOptions(args: string[]): BenchmarkRunOptions {
   ) {
     throw new Error("Benchmark scratchRoot must be outside the repository.");
   }
+  const phases = (config.phases ?? defaultPhases()).map(normalizePhase);
+  if (new Set(phases.map((phase) => phase.name)).size !== phases.length) {
+    throw new Error("Benchmark phase names must be unique.");
+  }
+  const decisionRunId = values.get("decision-run-id") ?? config.decisionRunId;
+  const comparisonVariant = values.get("comparison-variant") ?? config.comparisonVariant;
+  if (decisionRunId !== undefined && !evidenceLabelSchema.safeParse(decisionRunId).success) {
+    throw new Error("decision-run-id contains unsupported characters.");
+  }
+  if (
+    comparisonVariant !== undefined &&
+    !evidenceLabelSchema.safeParse(comparisonVariant).success
+  ) {
+    throw new Error("comparison-variant contains unsupported characters.");
+  }
   return {
     methodologyVersion,
     runId,
     repetitions,
     startRepetition,
     maxWallClockMinutes,
+    approvedThroughRepetition,
     assetProfiles,
     lambdaConfigs,
     implementations,
@@ -181,10 +208,54 @@ export function parseBenchmarkRunOptions(args: string[]): BenchmarkRunOptions {
     concurrency: 1,
     destinationPrefix:
       values.get("destination-prefix") ?? config.destinationPrefix ?? "benchmark-site",
-    phases: (config.phases ?? defaultPhases()).map(normalizePhase),
-    decisionRunId: values.get("decision-run-id") ?? config.decisionRunId,
-    comparisonVariant: values.get("comparison-variant") ?? config.comparisonVariant,
+    phases,
+    decisionRunId,
+    comparisonVariant,
   };
+}
+
+export function assertBenchmarkExecutionAuthorized(options: BenchmarkRunOptions): void {
+  if (options.methodologyVersion !== 2) return;
+  if (options.maxWallClockMinutes === undefined) {
+    throw new Error("Methodology-v2 AWS execution requires an explicit wall-clock cap.");
+  }
+  const lastRepetition = options.startRepetition + options.repetitions - 1;
+  if (lastRepetition > 5 || lastRepetition > options.approvedThroughRepetition) {
+    throw new Error("Requested repetitions exceed the explicitly approved methodology-v2 range.");
+  }
+  const smoke =
+    options.startRepetition === 1 &&
+    options.repetitions === 1 &&
+    options.approvedThroughRepetition === 1;
+  const continuation =
+    options.startRepetition === 2 &&
+    options.repetitions === 4 &&
+    options.approvedThroughRepetition === 5;
+  if (!smoke && !continuation) {
+    throw new Error(
+      "Methodology-v2 execution must be either the approved repetition-1 smoke or repetitions 2-5 continuation.",
+    );
+  }
+}
+
+export function benchmarkConfigurationSha256(options: BenchmarkRunOptions): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        methodologyVersion: options.methodologyVersion,
+        expectedRepetitions: options.methodologyVersion === 2 ? 5 : options.repetitions,
+        concurrency: options.concurrency,
+        region: options.region,
+        destinationPrefix: options.destinationPrefix,
+        assetProfiles: options.assetProfiles,
+        lambdaConfigs: options.lambdaConfigs,
+        implementations: options.implementations,
+        phases: options.phases,
+        decisionRunId: options.decisionRunId ?? null,
+        comparisonVariant: options.comparisonVariant ?? null,
+      }),
+    )
+    .digest("hex");
 }
 
 function readConfig(path: string | undefined): ConfigInput {
@@ -259,8 +330,13 @@ function optionalPositiveNumber(
 function today(): string {
   return new Date().toISOString().slice(0, 10);
 }
+function isIsoDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const timestamp = Date.parse(`${value}T00:00:00.000Z`);
+  return Number.isFinite(timestamp) && new Date(timestamp).toISOString().slice(0, 10) === value;
+}
 function usage(): never {
   throw new Error(
-    "Usage: benchmark:run-assets --config <file> [--run-id <uuid>] [--repetitions 5] [--start-repetition 1] [--max-wall-clock-minutes <minutes>] [--concurrency 1]",
+    "Usage: benchmark:run-assets --config <file> [--run-id <uuid>] [--repetitions 5] [--start-repetition 1] [--approved-through-repetition <n>] [--max-wall-clock-minutes <minutes>] [--concurrency 1]",
   );
 }

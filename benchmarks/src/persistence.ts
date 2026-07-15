@@ -1,18 +1,31 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { type BenchmarkResultRecord, benchmarkResultKey } from "./model";
+import { type BenchmarkResultRecord, benchmarkResultKey, methodologyV2RecordErrors } from "./model";
 
 export function completedSampleIds(
   outputFile: string,
   runId: string,
   expectedPhases: readonly string[],
+  methodologyVersion: 1 | 2 = 2,
 ): Set<string> {
   if (!existsSync(outputFile)) return new Set();
   const phasesBySample = new Map<string, Set<string>>();
   for (const line of readFileSync(outputFile, "utf8").split(/\r?\n/).filter(Boolean)) {
     const record = JSON.parse(line) as BenchmarkResultRecord;
     if (
+      record.runId === runId &&
+      record.cleanup === "all benchmark stacks destroyed" &&
+      record.methodologyVersion === methodologyVersion &&
+      methodologyVersion === 2
+    ) {
+      const errors = methodologyV2RecordErrors(record);
+      if (errors.length > 0) {
+        throw new Error(`Completed methodology-v2 row is invalid: ${errors.join("; ")}`);
+      }
+    }
+    if (
       record.runId !== runId ||
+      (record.methodologyVersion ?? 1) !== methodologyVersion ||
       !record.sampleId ||
       !record.phase ||
       record.cleanup !== "all benchmark stacks destroyed"

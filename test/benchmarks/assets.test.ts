@@ -39,7 +39,7 @@ describe("benchmark assets", () => {
       state: "baseline",
       outputRoot,
     });
-    const markerPath = join(bundle.root, ".generated.json");
+    const markerPath = `${bundle.root}.generated.json`;
     const filePath = join(bundle.root, "robots.txt");
     const expectedContents = readFileSync(filePath);
     const marker = JSON.parse(readFileSync(markerPath, "utf8")) as Record<string, unknown>;
@@ -68,7 +68,7 @@ describe("benchmark assets", () => {
 
     const corrupted = Buffer.alloc(expectedContents.length, 0x78);
     writeFileSync(filePath, corrupted);
-    const markerPath = join(bundle.root, ".generated.json");
+    const markerPath = `${bundle.root}.generated.json`;
     const marker = JSON.parse(readFileSync(markerPath, "utf8")) as {
       files: Array<{ path: string; sha256: string }>;
     };
@@ -92,13 +92,38 @@ describe("benchmark assets", () => {
       state: "pruned",
       outputRoot,
     });
-    const retainedFiles = listFiles(pruned.root).filter((path) => path !== ".generated.json");
+    const retainedFiles = listFiles(pruned.root);
 
     expect(retainedFiles.length).toBeGreaterThan(0);
     expect(retainedFiles.length).toBeLessThan(baseline.fileCount);
     for (const path of retainedFiles) {
       expect(fileDigest(join(pruned.root, path)), path).toBe(fileDigest(join(baseline.root, path)));
     }
+  });
+
+  it("keeps generator metadata outside the deployed source and accounts for data sources", () => {
+    const baseline = ensureBenchmarkAssets({
+      assetProfile: "marker-heavy",
+      state: "baseline",
+      outputRoot,
+    });
+    const changed = ensureBenchmarkAssets({
+      assetProfile: "marker-heavy",
+      state: "changed",
+      outputRoot,
+    });
+
+    expect(listFiles(baseline.root)).not.toContain(".generated.json");
+    expect(baseline.fileCount).toBe(listFiles(baseline.root).length + 1);
+    expect(baseline.totalBytes).toBe(
+      listFiles(baseline.root).reduce(
+        (sum, path) => sum + statSync(join(baseline.root, path)).size,
+        0,
+      ) +
+        16 * 1024 * 1024,
+    );
+    expect(baseline.sourceCount).toBe(2);
+    expect(changed.assetManifestSha256).not.toBe(baseline.assetManifestSha256);
   });
 });
 
