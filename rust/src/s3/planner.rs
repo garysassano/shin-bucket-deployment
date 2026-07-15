@@ -317,6 +317,7 @@ async fn add_archive_entries_to_manifest(
         .await
         {
             Ok(catalog) => {
+                stats.add_trusted_catalog(catalog.len() as u64);
                 tracing::info!(
                     source_index,
                     catalog_trust = "trusted",
@@ -336,6 +337,7 @@ async fn add_archive_entries_to_manifest(
             }
         }
     } else {
+        stats.add_untrusted_catalog();
         tracing::info!(
             source_index,
             catalog_trust = "untrusted",

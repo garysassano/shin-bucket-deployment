@@ -188,6 +188,7 @@ pub(crate) struct DeploymentStats {
     delete_millis: AtomicU64,
     cloudfront_millis: AtomicU64,
     old_prefix_delete_millis: AtomicU64,
+    callback_millis: AtomicU64,
     source_archives: AtomicU64,
     source_zip_bytes: AtomicU64,
     planned_entries: AtomicU64,
@@ -198,15 +199,24 @@ pub(crate) struct DeploymentStats {
     destination_page_objects_high_water: AtomicU64,
     delete_objects: AtomicU64,
     delete_batches: AtomicU64,
+    delete_sdk_calls: AtomicU64,
+    delete_failed_calls: AtomicU64,
+    delete_requested_objects: AtomicU64,
+    delete_unconfirmed_objects: AtomicU64,
+    delete_no_such_bucket_requested_identifiers: AtomicU64,
     uploaded_objects: AtomicU64,
     uploaded_bytes: AtomicU64,
     skipped_objects: AtomicU64,
     conditional_conflicts: AtomicU64,
     copied_objects: AtomicU64,
     copied_bytes: AtomicU64,
-    md5_hash_attempts: AtomicU64,
+    md5_non_fallback_hash_attempts: AtomicU64,
     md5_skips: AtomicU64,
     catalog_skips: AtomicU64,
+    catalog_trusted_archives: AtomicU64,
+    catalog_untrusted_archives: AtomicU64,
+    catalog_trusted_entries: AtomicU64,
+    catalog_fallback_hash_attempts: AtomicU64,
     marker_planning_passes: AtomicU64,
     marker_upload_passes: AtomicU64,
     source_planned_blocks: AtomicU64,
@@ -252,6 +262,10 @@ pub(crate) struct DeploymentStats {
     put_retry_wait_millis: AtomicU64,
     put_throttle_cooldown_waits: AtomicU64,
     put_throttle_cooldown_wait_millis: AtomicU64,
+    callback_wire_attempts: AtomicU64,
+    callback_failed_attempts: AtomicU64,
+    callback_retry_attempts: AtomicU64,
+    callback_confirmed_responses: AtomicU64,
 }
 
 struct OnceInstant(Instant);
@@ -262,7 +276,7 @@ pub(crate) struct DeploymentStatsSnapshot<'a> {
     pub(crate) event: &'static str,
     pub(crate) schema_version: u8,
     pub(crate) request_type: &'a str,
-    pub(crate) status: &'a str,
+    pub(crate) deployment_status: &'a str,
     pub(crate) extract: bool,
     pub(crate) destination_checksum_strategy: DestinationChecksumStrategy,
     pub(crate) delete_stale_objects_on_deployment: bool,
@@ -274,8 +288,11 @@ pub(crate) struct DeploymentStatsSnapshot<'a> {
     pub(crate) bytes: DeploymentBytes,
     pub(crate) transfer: TransferStats,
     pub(crate) marker_replacement: MarkerReplacementStats,
+    pub(crate) catalog: CatalogStats,
     pub(crate) source: SourceStats,
     pub(crate) put_object: PutObjectStats,
+    pub(crate) delete_object: DeleteObjectStats,
+    pub(crate) callback: CallbackStats,
 }
 
 #[derive(Serialize)]
@@ -287,6 +304,7 @@ pub(crate) struct PhaseMillis {
     pub(crate) delete: u64,
     pub(crate) cloudfront: u64,
     pub(crate) old_prefix_delete: u64,
+    pub(crate) callback: u64,
 }
 
 #[derive(Serialize)]
@@ -386,6 +404,36 @@ pub(crate) struct PutObjectStats {
     pub(crate) throttle_cooldown_wait_ms: u64,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CatalogStats {
+    pub(crate) trusted_archives: u64,
+    pub(crate) untrusted_archives: u64,
+    pub(crate) trusted_entries: u64,
+    pub(crate) fallback_hash_attempts: u64,
+    pub(crate) sparse_skips: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DeleteObjectStats {
+    pub(crate) sdk_calls: u64,
+    pub(crate) failed_calls: u64,
+    pub(crate) requested_objects: u64,
+    pub(crate) inferred_deleted_objects: u64,
+    pub(crate) unconfirmed_objects: u64,
+    pub(crate) no_such_bucket_requested_identifiers: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CallbackStats {
+    pub(crate) wire_attempts: u64,
+    pub(crate) failed_attempts: u64,
+    pub(crate) retry_attempts: u64,
+    pub(crate) confirmed_responses: u64,
+}
+
 impl Default for OnceInstant {
     fn default() -> Self {
         Self(Instant::now())
@@ -417,6 +465,10 @@ impl DeploymentStats {
     pub(crate) fn add_old_prefix_delete_millis(&self, millis: u64) {
         self.old_prefix_delete_millis
             .fetch_add(millis, Ordering::Relaxed);
+    }
+
+    pub(crate) fn add_callback_millis(&self, millis: u64) {
+        self.callback_millis.fetch_add(millis, Ordering::Relaxed);
     }
 
     pub(crate) fn add_source_archive(&self, source_zip_bytes: u64) {
@@ -451,10 +503,33 @@ impl DeploymentStats {
             .fetch_max(count, Ordering::Relaxed);
     }
 
-    pub(crate) fn add_delete_objects(&self, count: u64) {
-        if count > 0 {
-            self.delete_objects.fetch_add(count, Ordering::Relaxed);
+    pub(crate) fn record_delete_sdk_call(&self, requested: u64) {
+        self.delete_sdk_calls.fetch_add(1, Ordering::Relaxed);
+        self.delete_requested_objects
+            .fetch_add(requested, Ordering::Relaxed);
+    }
+
+    pub(crate) fn record_delete_failure(&self, unconfirmed: u64) {
+        self.delete_failed_calls.fetch_add(1, Ordering::Relaxed);
+        self.delete_unconfirmed_objects
+            .fetch_add(unconfirmed, Ordering::Relaxed);
+    }
+
+    pub(crate) fn record_delete_no_such_bucket(&self, requested_identifiers: u64) {
+        self.delete_no_such_bucket_requested_identifiers
+            .fetch_add(requested_identifiers, Ordering::Relaxed);
+    }
+
+    pub(crate) fn record_delete_response(&self, inferred_deleted: u64, unconfirmed: u64) {
+        if inferred_deleted > 0 {
+            self.delete_objects
+                .fetch_add(inferred_deleted, Ordering::Relaxed);
             self.delete_batches.fetch_add(1, Ordering::Relaxed);
+        }
+        if unconfirmed > 0 {
+            self.delete_failed_calls.fetch_add(1, Ordering::Relaxed);
+            self.delete_unconfirmed_objects
+                .fetch_add(unconfirmed, Ordering::Relaxed);
         }
     }
 
@@ -477,7 +552,13 @@ impl DeploymentStats {
     }
 
     pub(crate) fn add_md5_hash_attempt(&self) {
-        self.md5_hash_attempts.fetch_add(1, Ordering::Relaxed);
+        self.md5_non_fallback_hash_attempts
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn add_catalog_fallback_hash_attempt(&self) {
+        self.catalog_fallback_hash_attempts
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     pub(crate) fn add_md5_skip(&self) {
@@ -487,6 +568,35 @@ impl DeploymentStats {
     pub(crate) fn add_catalog_skip(&self) {
         self.catalog_skips.fetch_add(1, Ordering::Relaxed);
         self.add_skipped_object();
+    }
+
+    pub(crate) fn add_trusted_catalog(&self, entries: u64) {
+        self.catalog_trusted_archives
+            .fetch_add(1, Ordering::Relaxed);
+        self.catalog_trusted_entries
+            .fetch_add(entries, Ordering::Relaxed);
+    }
+
+    pub(crate) fn add_untrusted_catalog(&self) {
+        self.catalog_untrusted_archives
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn record_callback_attempt(&self, retry: bool) {
+        self.callback_wire_attempts.fetch_add(1, Ordering::Relaxed);
+        if retry {
+            self.callback_retry_attempts.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    pub(crate) fn record_callback_failure(&self) {
+        self.callback_failed_attempts
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn record_callback_success(&self) {
+        self.callback_confirmed_responses
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     pub(crate) fn add_marker_planning_pass(&self) {
@@ -635,14 +745,14 @@ impl DeploymentStats {
     pub(crate) fn snapshot<'a>(
         &'a self,
         request_type: &'a str,
-        status: &'a str,
+        deployment_status: &'a str,
         request: &DeploymentRequest,
     ) -> DeploymentStatsSnapshot<'a> {
         DeploymentStatsSnapshot {
             event: "shin_deployment_summary",
-            schema_version: 2,
+            schema_version: 3,
             request_type,
-            status,
+            deployment_status,
             extract: request.extract,
             destination_checksum_strategy: request.destination_checksum_strategy,
             delete_stale_objects_on_deployment: request.delete_stale_objects_on_deployment,
@@ -656,6 +766,7 @@ impl DeploymentStats {
                 delete: self.delete_millis.load(Ordering::Relaxed),
                 cloudfront: self.cloudfront_millis.load(Ordering::Relaxed),
                 old_prefix_delete: self.old_prefix_delete_millis.load(Ordering::Relaxed),
+                callback: self.callback_millis.load(Ordering::Relaxed),
             },
             counts: DeploymentCounts {
                 source_archives: self.source_archives.load(Ordering::Relaxed),
@@ -675,7 +786,10 @@ impl DeploymentStats {
                 skipped_objects: self.skipped_objects.load(Ordering::Relaxed),
                 conditional_conflicts: self.conditional_conflicts.load(Ordering::Relaxed),
                 copied_objects: self.copied_objects.load(Ordering::Relaxed),
-                md5_hash_attempts: self.md5_hash_attempts.load(Ordering::Relaxed),
+                md5_hash_attempts: self
+                    .md5_non_fallback_hash_attempts
+                    .load(Ordering::Relaxed)
+                    .saturating_add(self.catalog_fallback_hash_attempts.load(Ordering::Relaxed)),
                 md5_skips: self.md5_skips.load(Ordering::Relaxed),
                 catalog_skips: self.catalog_skips.load(Ordering::Relaxed),
             },
@@ -698,6 +812,13 @@ impl DeploymentStats {
                 planned_passes_per_upload: 2,
                 planning_passes: self.marker_planning_passes.load(Ordering::Relaxed),
                 upload_passes: self.marker_upload_passes.load(Ordering::Relaxed),
+            },
+            catalog: CatalogStats {
+                trusted_archives: self.catalog_trusted_archives.load(Ordering::Relaxed),
+                untrusted_archives: self.catalog_untrusted_archives.load(Ordering::Relaxed),
+                trusted_entries: self.catalog_trusted_entries.load(Ordering::Relaxed),
+                fallback_hash_attempts: self.catalog_fallback_hash_attempts.load(Ordering::Relaxed),
+                sparse_skips: self.catalog_skips.load(Ordering::Relaxed),
             },
             source: SourceStats {
                 planned_blocks: self.source_planned_blocks.load(Ordering::Relaxed),
@@ -753,6 +874,22 @@ impl DeploymentStats {
                 throttle_cooldown_wait_ms: self
                     .put_throttle_cooldown_wait_millis
                     .load(Ordering::Relaxed),
+            },
+            delete_object: DeleteObjectStats {
+                sdk_calls: self.delete_sdk_calls.load(Ordering::Relaxed),
+                failed_calls: self.delete_failed_calls.load(Ordering::Relaxed),
+                requested_objects: self.delete_requested_objects.load(Ordering::Relaxed),
+                inferred_deleted_objects: self.delete_objects.load(Ordering::Relaxed),
+                unconfirmed_objects: self.delete_unconfirmed_objects.load(Ordering::Relaxed),
+                no_such_bucket_requested_identifiers: self
+                    .delete_no_such_bucket_requested_identifiers
+                    .load(Ordering::Relaxed),
+            },
+            callback: CallbackStats {
+                wire_attempts: self.callback_wire_attempts.load(Ordering::Relaxed),
+                failed_attempts: self.callback_failed_attempts.load(Ordering::Relaxed),
+                retry_attempts: self.callback_retry_attempts.load(Ordering::Relaxed),
+                confirmed_responses: self.callback_confirmed_responses.load(Ordering::Relaxed),
             },
         }
     }

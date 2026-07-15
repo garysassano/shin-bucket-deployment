@@ -32,6 +32,8 @@ export type ProviderSummary = {
   readonly event?: string | null;
   readonly schemaVersion?: number | null;
   readonly requestType?: string | null;
+  readonly deploymentStatus?: string | null;
+  /** Diagnostics schema v2 compatibility. */
   readonly status?: string | null;
   readonly extract?: boolean | null;
   readonly destinationChecksumStrategy?: string | null;
@@ -46,8 +48,11 @@ export type ProviderSummary = {
   readonly bytes?: Record<string, number | null> | null;
   readonly transfer?: Record<string, number | null> | null;
   readonly markerReplacement?: Record<string, string | number | null> | null;
+  readonly catalog?: Record<string, number | null> | null;
   readonly source?: Record<string, number | null> | null;
   readonly putObject?: Record<string, number | null> | null;
+  readonly deleteObject?: Record<string, number | null> | null;
+  readonly callback?: Record<string, number | null> | null;
 };
 
 export type BenchmarkResultRecord = {

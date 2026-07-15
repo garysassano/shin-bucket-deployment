@@ -38,7 +38,10 @@ const RUNTIME_COLUMNS: Array<Column<TelemetryRow>> = [
   { header: "Phase", value: phase },
   { header: "State", value: (row) => row.record.state },
   { header: "Request", value: (row) => row.summary.requestType },
-  { header: "Status", value: (row) => row.summary.status },
+  {
+    header: "Deployment work",
+    value: (row) => row.summary.deploymentStatus ?? row.summary.status,
+  },
   { header: "Files", value: (row) => row.record.fileCount },
   { header: "Bytes", value: (row) => row.record.totalBytes },
   { header: "CDK deploy s", value: (row) => row.record.cdkDeploySeconds },
@@ -62,6 +65,7 @@ const PHASE_COLUMNS: Array<Column<TelemetryRow>> = [
   { header: "Delete ms", value: (row) => nested(row, "phaseMs", "delete") },
   { header: "CloudFront ms", value: (row) => nested(row, "phaseMs", "cloudfront") },
   { header: "Old prefix delete ms", value: (row) => nested(row, "phaseMs", "oldPrefixDelete") },
+  { header: "Callback ms", value: (row) => nested(row, "phaseMs", "callback") },
 ];
 
 const OBJECT_COLUMNS: Array<Column<TelemetryRow>> = [
@@ -80,7 +84,7 @@ const OBJECT_COLUMNS: Array<Column<TelemetryRow>> = [
   },
   { header: "Uploaded", value: (row) => nested(row, "counts", "uploadedObjects") },
   { header: "Skipped", value: (row) => nested(row, "counts", "skippedObjects") },
-  { header: "Deleted", value: (row) => nested(row, "counts", "deleteObjects") },
+  { header: "Inferred deleted", value: (row) => nested(row, "counts", "deleteObjects") },
   { header: "Delete batches", value: (row) => nested(row, "counts", "deleteBatches") },
   {
     header: "Conditional conflicts",
@@ -199,6 +203,57 @@ const PUT_COLUMNS: Array<Column<TelemetryRow>> = [
   },
 ];
 
+const CATALOG_COLUMNS: Array<Column<TelemetryRow>> = [
+  { header: "Phase", value: phase },
+  { header: "Trusted archives", value: (row) => nested(row, "catalog", "trustedArchives") },
+  {
+    header: "Untrusted archives",
+    value: (row) => nested(row, "catalog", "untrustedArchives"),
+  },
+  { header: "Trusted entries", value: (row) => nested(row, "catalog", "trustedEntries") },
+  {
+    header: "Fallback hash attempts",
+    value: (row) => nested(row, "catalog", "fallbackHashAttempts"),
+  },
+  { header: "Sparse skips", value: (row) => nested(row, "catalog", "sparseSkips") },
+];
+
+const DELETE_COLUMNS: Array<Column<TelemetryRow>> = [
+  { header: "Phase", value: phase },
+  { header: "SDK calls", value: (row) => nested(row, "deleteObject", "sdkCalls") },
+  {
+    header: "Failed calls",
+    value: (row) => nested(row, "deleteObject", "failedCalls"),
+  },
+  {
+    header: "Requested objects",
+    value: (row) => nested(row, "deleteObject", "requestedObjects"),
+  },
+  {
+    header: "Inferred deleted objects",
+    value: (row) => nested(row, "deleteObject", "inferredDeletedObjects"),
+  },
+  {
+    header: "Unconfirmed objects",
+    value: (row) => nested(row, "deleteObject", "unconfirmedObjects"),
+  },
+  {
+    header: "NoSuchBucket requested identifiers",
+    value: (row) => nested(row, "deleteObject", "noSuchBucketRequestedIdentifiers"),
+  },
+];
+
+const CALLBACK_COLUMNS: Array<Column<TelemetryRow>> = [
+  { header: "Phase", value: phase },
+  { header: "Wire attempts", value: (row) => nested(row, "callback", "wireAttempts") },
+  { header: "Failed attempts", value: (row) => nested(row, "callback", "failedAttempts") },
+  { header: "Retry attempts", value: (row) => nested(row, "callback", "retryAttempts") },
+  {
+    header: "Confirmed responses",
+    value: (row) => nested(row, "callback", "confirmedResponses"),
+  },
+];
+
 function main(): void {
   const options = parseArgs(process.argv.slice(2));
   renderBenchmarkResultsTable(options);
@@ -261,6 +316,10 @@ function renderGroup(group: TelemetryGroup): string[] {
     "",
     renderMarkdownTable(group.rows, OBJECT_COLUMNS),
     "",
+    "### Catalog Trust And Fallback",
+    "",
+    renderMarkdownTable(group.rows, CATALOG_COLUMNS),
+    "",
     "### Bytes And Memory Window",
     "",
     renderMarkdownTable(group.rows, BYTE_COLUMNS),
@@ -276,6 +335,14 @@ function renderGroup(group: TelemetryGroup): string[] {
     "### PutObject Pressure",
     "",
     renderMarkdownTable(group.rows, PUT_COLUMNS),
+    "",
+    "### DeleteObjects Pressure",
+    "",
+    renderMarkdownTable(group.rows, DELETE_COLUMNS),
+    "",
+    "### CloudFormation Callback",
+    "",
+    renderMarkdownTable(group.rows, CALLBACK_COLUMNS),
     "",
   ];
 }
@@ -317,7 +384,16 @@ function phase(row: TelemetryRow): string {
 
 function nested(
   row: TelemetryRow,
-  section: "phaseMs" | "counts" | "bytes" | "transfer" | "source" | "putObject",
+  section:
+    | "phaseMs"
+    | "counts"
+    | "bytes"
+    | "transfer"
+    | "catalog"
+    | "source"
+    | "putObject"
+    | "deleteObject"
+    | "callback",
   key: string,
 ): unknown {
   return row.summary[section]?.[key];

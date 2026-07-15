@@ -19,6 +19,13 @@ export class ValidationError extends Error {
    */
   public readonly constructPath?: string;
 
+  /**
+   * Create a construct-scoped validation failure.
+   *
+   * @param code Stable machine-readable error code.
+   * @param message User-facing validation message.
+   * @param scope Construct whose path identifies the invalid configuration.
+   */
   constructor(code: string, message: string, scope?: IConstruct) {
     super(message);
     this.name = "ValidationError";

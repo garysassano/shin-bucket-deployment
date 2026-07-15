@@ -434,7 +434,11 @@ async fn prepare_zip_entry_upload(
     if checksum_strategy == DestinationChecksumStrategy::SseS3Etag
         || plan.trusted_integrity.is_some()
     {
-        stats.add_md5_hash_attempt();
+        if source_markers.is_empty() && plan.trusted_integrity.is_none() {
+            stats.add_catalog_fallback_hash_attempt();
+        } else {
+            stats.add_md5_hash_attempt();
+        }
     }
     let prepared = prepare_zip_entry_for_comparison(
         store.clone(),

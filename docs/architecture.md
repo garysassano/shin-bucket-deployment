@@ -466,7 +466,7 @@ Cataloged asset packaging limitations:
 
 ## Diagnostics
 
-Each extracted deployment logs the effective source schedule and a final source diagnostics record per source archive. These records include planned entries and blocks, planned and fetched source bytes, source amplification, ranged `GetObject` wire attempts and typed failures, block hits/misses/releases/refetches, split wait counters for in-flight fetches versus source-window capacity, consumed body attempts/replays, per-archive resident source-window high-water, true active ZIP entry reader high-water, and active source GET high-water. The aggregate `shin_deployment_summary` is schema version 2. It adds the actual Lambda memory, invocation-global source budget/current/high-water values, and destination metadata/page high-water. It separates logical transfer objects and cancellations from source and destination wire attempts; the upload path also logs destination `PutObject` retry settings, throttling, wait time, and failures grouped by error code. Its `markerReplacement` object names the strategy and semantics, declares the nominal two passes for an uploaded marker object, and reports actual planning and upload passes for the invocation.
+Each extracted deployment logs the effective source schedule and a final source diagnostics record per source archive. These records include planned entries and blocks, planned and fetched source bytes, source amplification, ranged `GetObject` wire attempts and typed failures, block hits/misses/releases/refetches, split wait counters for in-flight fetches versus source-window capacity, consumed body attempts/replays, per-archive resident source-window high-water, true active ZIP entry reader high-water, and active source GET high-water. The aggregate `shin_deployment_summary` is schema version 3 and is emitted after the CloudFormation callback attempt so `durationMs` and callback telemetry include callback delivery time even when the callback fails. Its `deploymentStatus` reports whether deployment work succeeded before callback delivery; callback delivery has independent counters because a successful deployment can still have a failed callback. The summary adds the actual Lambda memory, invocation-global source budget/current/high-water values, destination metadata/page high-water, catalog trust and fallback work, inferred deletion outcomes, and callback attempts. It separates logical transfer objects and cancellations from source and destination SDK work; the upload path also logs destination `PutObject` retry settings, throttling, wait time, and failures grouped by error code. Its `markerReplacement` object names the strategy and semantics, declares the nominal two passes for an uploaded marker object, and reports actual planning and upload passes for the invocation.
 
 Diagnostics are emitted to CloudWatch Logs through structured `tracing` fields. They are not returned in the CloudFormation custom-resource response because that response has a small practical size limit and is already used for `objectKeys` and `deployedBucket` outputs.
 
@@ -536,6 +536,29 @@ Runtime and destination planning diagnostics field reference:
 | `destinationMetadataRetained` | Initial destination records retained because their relative keys occur in the manifest. | Verify metadata memory scales with the manifest, not the destination. |
 | `destinationPageObjectsHighWater` | Largest `ListObjectsV2` page observed by comparison or stale cleanup. | Verify page-streamed cleanup retained at most one S3 page. |
 
+Catalog diagnostics field reference:
+
+| Field | Meaning | Use when debugging |
+| --- | --- | --- |
+| `trustedArchives` | Source archives whose embedded catalog was authenticated by the synthesized request. | Confirm sparse catalog decisions used trusted metadata. |
+| `untrustedArchives` | Source archives without an authenticated catalog binding. | Identify archives that require ordinary byte-based comparison work. |
+| `trustedEntries` | Catalog entries available across authenticated source archives. | Compare catalog coverage with planned manifest work. |
+| `sparseSkips` | Marker-free destination objects skipped using an authenticated catalog digest. | Measure catalog-enabled sparse skips. |
+| `fallbackHashAttempts` | Untrusted marker-free entries hashed for SSE-S3 comparison because no authenticated catalog digest was available. | Quantify catalog fallback work without treating it as a second hash pass. |
+
+Destination deletion diagnostics field reference:
+
+| Field | Meaning | Use when debugging |
+| --- | --- | --- |
+| `sdkCalls` | Provider calls to the AWS SDK `DeleteObjects` operation. The SDK may make more than one wire attempt for a call. | Measure provider-level deletion calls independently from object count without inferring wire traffic. |
+| `failedCalls` | SDK call failures or responses containing per-object errors. | Identify incomplete deletion calls. |
+| `requestedObjects` | Object identifiers submitted across `DeleteObjects` SDK calls. | Compare requested cleanup with inferred and unconfirmed outcomes. |
+| `inferredDeletedObjects` | Requested identifiers not represented by errors in a `quiet=true` response. S3 does not return successful deletion entries in quiet mode, so this is inferred rather than proof that an object previously existed or was mutated. | Compare inferred completion with requested and unconfirmed identifiers. |
+| `unconfirmedObjects` | Requested identifiers returned as per-object deletion errors or whose SDK call failed. | Identify cleanup work whose outcome was not confirmed. |
+| `noSuchBucketRequestedIdentifiers` | Requested identifiers in an SDK call that returned `NoSuchBucket`. This describes the call outcome, not whether any object existed. | Separate missing-bucket idempotency from per-object response inference. |
+| `counts.deleteObjects` | Same inferred deletion count exposed in the aggregate counts object. | Compare schema-v3 records with their detailed deletion accounting. |
+| `counts.deleteBatches` | `DeleteObjects` responses containing at least one requested identifier not represented by an error. | Count responses with inferred deletion outcomes, including partial-error responses. |
+
 Destination upload diagnostics field reference:
 
 | Field | Meaning | Use when debugging |
@@ -547,6 +570,16 @@ Destination upload diagnostics field reference:
 | `retryWaitMs` | Milliseconds spent waiting for ordinary retry backoff. | Estimate retry cost. |
 | `throttleCooldownWaits` | Worker waits caused by shared throttle cooldown. | Diagnose throttle fan-out control. |
 | `throttleCooldownWaitMs` | Milliseconds spent in shared throttle cooldown waits. | Estimate throttle cooldown cost. |
+
+CloudFormation callback diagnostics field reference:
+
+| Field | Meaning | Use when debugging |
+| --- | --- | --- |
+| `phaseMs.callback` | Total time spent validating and delivering the CloudFormation response callback. | Separate callback delivery time from provider data-path work. |
+| `wireAttempts` | Callback HTTP requests sent to the presigned CloudFormation response URL. | Measure callback delivery attempts without logging the URL. |
+| `failedAttempts` | Callback attempts that timed out, failed transport, or returned a non-success response. | Identify callback delivery instability. |
+| `retryAttempts` | Callback wire attempts after the first. | Measure provider-owned callback retries. |
+| `confirmedResponses` | Callback attempts that received a successful HTTP response. | Confirm the response endpoint acknowledged the final response body. |
 
 ## Compatibility Tradeoffs
 
