@@ -61,7 +61,13 @@ async function main(signal: AbortSignal): Promise<void> {
   if (options.methodologyVersion === 2 && options.startRepetition === 1 && !resumeManifestExists) {
     await runCommand({
       command: "node",
-      args: ["scripts/build-bootstrap.mjs", "--benchmark", "arm64"],
+      args: [
+        "scripts/build-bootstrap.mjs",
+        "--benchmark",
+        "--evidence-output",
+        options.outputFile,
+        "arm64",
+      ],
       logFile: join(options.scratchRoot, "provider-build.log"),
       quiet: false,
       appendElapsed: false,

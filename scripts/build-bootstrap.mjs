@@ -24,7 +24,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   buildEnvironmentSha256,
@@ -84,7 +84,12 @@ function toolIdentity(root) {
   };
 }
 
-function buildArch(arch, sourceRoot = repoRoot, applicationBuildSha256 = undefined) {
+function buildArch(
+  arch,
+  sourceRoot = repoRoot,
+  applicationBuildSha256 = undefined,
+  excludedPaths = [],
+) {
   const config = ARCH_TARGETS[arch];
   if (!config) {
     throw new Error(
@@ -92,7 +97,7 @@ function buildArch(arch, sourceRoot = repoRoot, applicationBuildSha256 = undefin
     );
   }
 
-  const sourceBefore = collectSourceIdentity(sourceRoot);
+  const sourceBefore = collectSourceIdentity(sourceRoot, excludedPaths);
   const toolsBefore = toolIdentity(sourceRoot);
   const manifestPath = join(sourceRoot, "rust", "Cargo.toml");
 
@@ -129,7 +134,7 @@ function buildArch(arch, sourceRoot = repoRoot, applicationBuildSha256 = undefin
     throw new Error(`Could not find built bootstrap archive for ${arch}: ${builtArchive}`);
   }
 
-  const sourceAfter = collectSourceIdentity(sourceRoot);
+  const sourceAfter = collectSourceIdentity(sourceRoot, excludedPaths);
   const toolsAfter = toolIdentity(sourceRoot);
   if (JSON.stringify(sourceAfter) !== JSON.stringify(sourceBefore)) {
     throw new Error("Source identity changed while building the provider bootstrap.");
@@ -164,7 +169,20 @@ function buildArch(arch, sourceRoot = repoRoot, applicationBuildSha256 = undefin
 
 function main() {
   const benchmarkBuild = process.argv.includes("--benchmark");
-  const requested = process.argv.slice(2).filter((argument) => argument !== "--benchmark");
+  const evidenceOutputIndex = process.argv.indexOf("--evidence-output");
+  const evidenceOutput =
+    evidenceOutputIndex === -1 ? "benchmarks/results.jsonl" : process.argv[evidenceOutputIndex + 1];
+  if (evidenceOutputIndex !== -1 && !evidenceOutput) {
+    throw new Error("--evidence-output requires a path.");
+  }
+  const requested = process.argv
+    .slice(2)
+    .filter(
+      (argument, index, args) =>
+        argument !== "--benchmark" &&
+        argument !== "--evidence-output" &&
+        args[index - 1] !== "--evidence-output",
+    );
   const arches = requested.length > 0 ? requested : Object.keys(ARCH_TARGETS);
   if (!benchmarkBuild) {
     for (const arch of arches) buildArch(arch);
@@ -173,7 +191,15 @@ function main() {
   if (arches.length !== 1 || arches[0] !== "arm64") {
     throw new Error("Benchmark builds must request exactly the arm64 provider.");
   }
-  const source = collectSourceIdentity(repoRoot);
+  const evidenceRelative = relative(repoRoot, resolve(repoRoot, evidenceOutput));
+  const excludedPaths =
+    evidenceRelative !== "" &&
+    evidenceRelative !== ".." &&
+    !evidenceRelative.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) &&
+    !isAbsolute(evidenceRelative)
+      ? [evidenceRelative]
+      : [];
+  const source = collectSourceIdentity(repoRoot, excludedPaths);
   if (source.dirty) {
     throw new Error("Methodology-v2 provider builds require a clean source tree.");
   }
@@ -181,7 +207,7 @@ function main() {
   const worktree = join(scratch, "source");
   try {
     run("git", ["worktree", "add", "--detach", worktree, source.commit], repoRoot);
-    const detached = collectSourceIdentity(worktree);
+    const detached = collectSourceIdentity(worktree, excludedPaths);
     if (detached.dirty || detached.commit !== source.commit) {
       throw new Error("Detached benchmark build source does not match the approved clean commit.");
     }
@@ -196,8 +222,8 @@ function main() {
         "Current benchmark application build does not match the clean source commit.",
       );
     }
-    buildArch("arm64", worktree, applicationBuildSha256);
-    if (JSON.stringify(collectSourceIdentity(repoRoot)) !== JSON.stringify(source)) {
+    buildArch("arm64", worktree, applicationBuildSha256, excludedPaths);
+    if (JSON.stringify(collectSourceIdentity(repoRoot, excludedPaths)) !== JSON.stringify(source)) {
       throw new Error("Repository source identity changed during the detached benchmark build.");
     }
   } finally {
