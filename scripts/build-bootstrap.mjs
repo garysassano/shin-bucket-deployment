@@ -186,7 +186,7 @@ function main() {
       throw new Error("Detached benchmark build source does not match the approved clean commit.");
     }
     symlinkSync(join(repoRoot, "node_modules"), join(worktree, "node_modules"), "dir");
-    run("pnpm", ["exec", "tsc", "-p", "tsconfig.build.json"], worktree);
+    run(join(repoRoot, "node_modules", ".bin", "tsc"), ["-p", "tsconfig.build.json"], worktree);
     const applicationBuildSha256 = directorySha256(join(worktree, "dist"));
     if (
       !existsSync(join(repoRoot, "dist")) ||
