@@ -120,7 +120,7 @@ export async function collectBenchmarkSourceMetadata(
   if (!identity.Account || !identity.Arn) throw new Error("AWS caller identity is incomplete.");
   const selectedProfile =
     process.env.AWS_PROFILE ?? process.env.AWS_DEFAULT_PROFILE ?? "default-chain";
-  const changedPaths = sourceStatusLines(status, repositoryRoot);
+  const changedPaths = sourceStatusLines(status, repositoryRoot, evidenceOutputFile);
   const archive = readFileSync(bootstrapArchive);
   const provenanceText = readFileSync(bootstrapProvenance, "utf8");
   const provenance = JSON.parse(provenanceText) as BootstrapBuildProvenance;
