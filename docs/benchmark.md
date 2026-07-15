@@ -6,11 +6,49 @@ Runbooks, evidence collection rules, schema guidance, and sanitization rules liv
 
 ## Methodology v2 status
 
-The local methodology-v2 harness is implemented, but no methodology-v2 AWS rows are claimed on this page yet. Existing rows and committed snapshots remain methodology-v1 historical evidence. Default report generation excludes them; use an explicit methodology-v1 selector only to inspect or regenerate historical artifacts.
+The local methodology-v2 harness is implemented. The Rust module-refactor section below records a complete five-repetition decision run. Existing snapshots remain methodology-v1 historical evidence. Default report generation excludes historical and decision rows; use explicit selectors to inspect or regenerate them.
 
 Methodology v2 requires five sequential repetitions, opaque UUID run and sample identities, a clean/dirty Git marker, exact package/CDK/provider identities, Lambda architecture, deployed code and Shin bootstrap SHA-256 values, phase-local execution-environment memory scope, and verified cleanup. A scratch resume manifest binds the source, normalized config, phases, destination, and exact sample matrix, while a two-phase ledger digest distinguishes runner persistence from preexisting or external evidence edits. Binary fixtures use deterministic SHA-256 counter bytes and a per-file digest manifest; retained files in prune phases are byte-identical to their baseline versions. AWS CDK rows use `parallel: null`; comparison pairing does not treat Shin parallelism as an upstream input.
 
 AWS evidence remains approval-gated. Run one complete repetition per selected variant first, report elapsed time and the preliminary signal, agree a wall-clock cap, and only then resume repetitions 2–5 with the printed run UUID. Completed sanitized rows are persisted incrementally; raw AWS output remains outside the repository. The cap is enforced before stacks and between phases, at external-command granularity: an active CDK/AWS command may finish after the nominal deadline, after which cleanup begins. Signals terminate the active process group and also route the active stack through cleanup.
+
+## Rust module refactor performance decision
+
+The 2026-07-15 decision run compared the released pre-refactor provider at `ce3db3c`, the Rust module-refactor candidate at `0b63387`, and upstream AWS CDK `BucketDeployment`. The serialized run used deterministic `tiny-many` and `large-few` assets, 1024 MiB Lambda memory, 32 Shin transfers, the same four ordered phases, five repetitions, and the configured test profile in `eu-central-1`. Its 120 complete methodology-v2 rows are retained in `benchmarks/results.jsonl` under decision-run ID `rust-refactor-acceptance`.
+
+CloudWatch provider duration is shown as median `[Q1, Q3]`, followed by IQR; every cell has `n=5`:
+
+| Profile | Phase | Before seconds [Q1, Q3], IQR | Current seconds [Q1, Q3], IQR | Upstream seconds [Q1, Q3], IQR | Current vs before | Upstream / current |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| `tiny-many` | `cold-create` | 2.731 [2.495, 2.752], 0.257 | 2.957 [2.901, 3.545], 0.644 | 25.771 [25.584, 26.082], 0.498 | +8.3% | 8.7x |
+| `tiny-many` | `unchanged-update` | 0.531 [0.514, 0.543], 0.029 | 0.467 [0.461, 0.482], 0.021 | 27.688 [27.484, 27.842], 0.358 | -12.1% | 59.3x |
+| `tiny-many` | `changed-update` | 0.681 [0.679, 0.683], 0.004 | 0.617 [0.603, 0.638], 0.035 | 26.691 [25.354, 26.970], 1.616 | -9.4% | 43.3x |
+| `tiny-many` | `pruned-update` | 3.256 [3.154, 3.279], 0.125 | 3.135 [3.128, 3.179], 0.051 | 25.457 [25.132, 26.648], 1.516 | -3.7% | 8.1x |
+| `large-few` | `cold-create` | 2.397 [2.325, 2.475], 0.150 | 2.539 [2.499, 2.650], 0.151 | 9.091 [8.897, 9.112], 0.215 | +5.9% | 3.6x |
+| `large-few` | `unchanged-update` | 0.321 [0.307, 0.346], 0.039 | 0.319 [0.282, 0.324], 0.042 | 8.876 [8.874, 9.272], 0.398 | -0.6% | 27.8x |
+| `large-few` | `changed-update` | 0.586 [0.527, 0.604], 0.077 | 0.551 [0.544, 0.552], 0.008 | 9.300 [9.075, 9.367], 0.292 | -6.0% | 16.9x |
+| `large-few` | `pruned-update` | 0.851 [0.777, 0.913], 0.136 | 0.812 [0.811, 0.855], 0.044 | 8.628 [8.625, 8.675], 0.050 | -4.6% | 10.6x |
+
+Median billed duration and peak memory remained comparable to before:
+
+| Profile | Phase | Billed seconds, before / current / upstream | Peak MiB, before / current / upstream |
+| --- | --- | ---: | ---: |
+| `tiny-many` | `cold-create` | 2.880 / 3.112 / 26.289 | 45 / 47 / 217 |
+| `tiny-many` | `unchanged-update` | 0.678 / 0.595 / 28.245 | 36 / 36 / 210 |
+| `tiny-many` | `changed-update` | 0.812 / 0.762 / 27.213 | 36 / 36 / 210 |
+| `tiny-many` | `pruned-update` | 3.374 / 3.289 / 25.966 | 36 / 36 / 209 |
+| `large-few` | `cold-create` | 2.516 / 2.667 / 9.614 | 114 / 118 / 433 |
+| `large-few` | `unchanged-update` | 0.466 / 0.466 / 9.393 | 34 / 34 / 434 |
+| `large-few` | `changed-update` | 0.702 / 0.698 / 9.850 | 36 / 38 / 433 |
+| `large-few` | `pruned-update` | 1.008 / 0.933 / 9.142 | 55 / 54 / 405 |
+
+Six of eight current provider-duration medians improved or stayed effectively flat. The two cold-create medians increased by 5.9% and 8.3%, with overlapping quartile ranges, while median end-to-end local wall time decreased from 65.445 to 64.998 seconds for `tiny-many` and from 65.050 to 64.777 seconds for `large-few`. Current remained 3.6x to 59.3x faster than upstream in provider time across all eight cells.
+
+Before and current performed identical logical work across the 40 Shin phases: 51,005 planned entries, 13,130 uploads, 37,875 skips, 1,315 stale deletions, 37,875 catalog skips, 844,034,960 uploaded bytes, and no marker passes. Both had zero source GET retries/errors, destination throttles, and transfer failures/cancellations/panics. Resident-source high-water was identical at 33,442,577 bytes.
+
+One retained current `tiny-many` cold-create sample encountered nine non-throttling failed PUT attempts. Provider-owned retries completed all 2,584 logical transfers, adding nine source-body replays, eight replay-after-release block refetches, 7,615,416 fetched source bytes, and 1.111 seconds of retry wait relative to the normal path. The other four current samples in that cell and all 40 before samples had zero PUT retries. This isolated destination-request instability explains the high current Q3/IQR and is retained rather than discarded; it does not indicate a new unconditional pass or request in the refactored path.
+
+The complete matrix therefore accepts the structural refactor as having no detected systematic performance regression or new normal-path work. Every sample captured complete provider telemetry, destroyed its benchmark stack, and passed the final scoped cleanup check. Raw AWS output remains outside git.
 
 ## Where To Look
 

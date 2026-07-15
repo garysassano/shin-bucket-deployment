@@ -3,17 +3,17 @@
 This page is the current human-readable correctness snapshot for `ShinBucketDeployment`. Performance evidence and AWS CDK `BucketDeployment` comparisons remain separate in [benchmark](./benchmark.md). Verification is replaced rather than appended; runbooks and sanitization rules live in `.agents/skills/shin-verification/SKILL.md`.
 
 > [!IMPORTANT]
-> The API and diagnostics candidate at `710e61e` has complete local verification, a fresh 21-phase AWS deployment pass, and a live schema-v3 callback-telemetry probe. Detailed AWS state assertions remain recorded in the component snapshots below; this rerun verified provider invocation and CloudFormation convergence without repeating those independent state probes. Raw AWS output and identifiers remain outside git.
+> The Rust module-refactor candidate at `0b63387` has complete local verification and a fresh 21-phase AWS deployment pass. Detailed AWS state assertions remain recorded in the component snapshots below; this rerun verified provider invocation and CloudFormation convergence without repeating those independent state probes. Raw AWS output and identifiers remain outside git.
 
 ## Current Snapshot
 
 | Field | Value |
 | --- | --- |
-| Latest verification date | 2026-07-14 |
-| Current verification baseline | API and diagnostics candidate at `710e61e` |
-| Current verification category | Deterministic local gates, a deployed 21-phase AWS integration pass, and a live schema-v3 callback-telemetry probe; detailed state assertions retained from the component snapshots |
-| Latest current runs | `2026-07-14-local-api-docs-evidence` and `2026-07-14-aws-api-docs-evidence` |
-| AWS status for combined code | All 21 phases across 16 stacks converged successfully. A separate simple-scenario probe emitted schema v3 with deployment success and one confirmed callback response. Independent state probes were not repeated. |
+| Latest verification date | 2026-07-15 |
+| Current verification baseline | Rust module-refactor candidate at `0b63387` |
+| Current verification category | Deterministic local gates and a deployed 21-phase AWS integration pass; detailed state assertions retained from the component snapshots |
+| Latest current runs | `2026-07-15-local-rust-modules` and `2026-07-15-aws-rust-modules` |
+| AWS status for combined code | All 21 phases across 16 stacks converged successfully using the rebuilt arm64 provider. Independent state probes were not repeated. |
 | Provider architecture exercised in the latest full AWS correctness runs | arm64 |
 | Packaged provider architectures | arm64 and x86_64 rebuilt from each recorded provider source |
 | Cleanup | All verification and benchmark stacks destroyed; retained test buckets were emptied and deleted; final scoped stack and captured-bucket counts were zero |
@@ -45,6 +45,8 @@ This page is the current human-readable correctness snapshot for `ShinBucketDepl
 
 | Run | Category | Scope | Status | Evidence |
 | --- | --- | --- | --- | --- |
+| `2026-07-15-aws-rust-modules` | aws | 21 phases across 16 stacks using the rebuilt arm64 Rust module-refactor provider at `0b63387` | Pass and cleaned | Every ordered phase and custom resource converged successfully. The run verified integration and CloudFormation success; it did not repeat the component snapshots' independent object-state probes. All scoped stacks and intentionally retained test buckets were removed, and final scoped counts were zero. |
+| `2026-07-15-local-rust-modules` | local | Rust module extraction, package consumers, benchmark harness, and all scenarios at `0b63387` | Pass | 135 Rust tests passed with one AWS-only test ignored; 107 Vitest and five Node tests passed; build/package/typecheck/lint/fmt/clippy/audit/deny/workflow/TOML gates passed; all scenarios synthesized; both Lambda architectures rebuilt and package-verified. Normalized before/current scenario and benchmark synthesis matched apart from the expected provider asset hash. |
 | `2026-07-14-aws-api-docs-evidence` | aws | 21 phases across 16 stacks using the rebuilt arm64 diagnostics-v3 provider at `710e61e`, plus a live simple-scenario telemetry probe | Pass and cleaned | Every ordered phase and custom resource converged successfully. The live probe confirmed schema v3, deployment success, and one confirmed callback response. The run verified integration and CloudFormation success; it did not repeat the component snapshots' independent object-state probes. All scoped stacks and captured test buckets were removed, and final scoped counts were zero. |
 | `2026-07-14-local-api-docs-evidence` | local | Public error contract, API documentation, diagnostics-v3 provider, package consumers, benchmark telemetry reader, and scenarios at `710e61e` | Pass | 135 Rust tests passed with one AWS-only test ignored; 107 Vitest and five Node tests passed; build/package/typecheck/lint/fmt/clippy/audit/deny/workflow/TOML gates passed; all scenarios synthesized; both Lambda architectures rebuilt and package-verified. |
 | `2026-07-14-aws-pr15-rebased` | aws | 21 phases across 16 stacks using the rebuilt arm64 combined provider at `af7873d` | Pass and cleaned | Every ordered phase and custom resource converged successfully, including stale cleanup/retention, destination changes, KMS/DSSE, and CloudFront sync/async paths. The run verified integration and CloudFormation success; it did not repeat the component snapshots' independent object-state probes. All scoped stacks were removed and the final count was zero. |
