@@ -302,6 +302,12 @@ describe("benchmark methodology v2", () => {
     ).toEqual([" M benchmarks/src/model.ts"]);
   });
 
+  test("preserves porcelain status columns when filtering the active ledger", () => {
+    expect(
+      sourceStatusLines(" M benchmarks/results.jsonl\n", process.cwd(), "benchmarks/results.jsonl"),
+    ).toEqual([]);
+  });
+
   test("rejects source, dependency, bootstrap, account, or dirty-state drift", () => {
     const repositoryRoot = "/repository";
     const expected = sourceMetadata();

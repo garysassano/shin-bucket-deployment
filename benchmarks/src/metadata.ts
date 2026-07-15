@@ -102,7 +102,7 @@ export async function collectBenchmarkSourceMetadata(
     await Promise.all([
       commandText("git", ["rev-parse", "HEAD"], repositoryRoot),
       commandText("git", ["log", "-1", "--format=%s"], repositoryRoot),
-      commandText("git", ["status", "--porcelain", "--untracked-files=all"], repositoryRoot),
+      commandRawText("git", ["status", "--porcelain", "--untracked-files=all"], repositoryRoot),
       commandBytes("unzip", ["-p", bootstrapArchive, "bootstrap"], repositoryRoot),
       commandText("aws", ["sts", "get-caller-identity", "--output", "json"], repositoryRoot),
       commandText("pnpm", ["--version"], repositoryRoot),
@@ -395,6 +395,14 @@ export function packageIntegrity(
 
 async function commandText(command: string, args: readonly string[], cwd: string): Promise<string> {
   return (await commandBytes(command, args, cwd)).toString("utf8").trim();
+}
+
+async function commandRawText(
+  command: string,
+  args: readonly string[],
+  cwd: string,
+): Promise<string> {
+  return (await commandBytes(command, args, cwd)).toString("utf8");
 }
 
 async function commandBytes(
