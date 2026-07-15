@@ -34,6 +34,7 @@ import { createBenchmarkPlan, wallClockCapReached } from "../../benchmarks/src/p
 import { openResumeSession } from "../../benchmarks/src/resume";
 import {
   assertProviderRuntimeMetadata,
+  benchmarkStackTags,
   providerLogGroupName,
 } from "../../benchmarks/src/run-assets-comparison";
 import {
@@ -178,6 +179,15 @@ describe("benchmark methodology v2", () => {
       "/benchmark/provider-logs",
     );
     expect(() => providerLogGroupName({})).toThrow("CloudWatch log group");
+  });
+
+  test("passes each CDK stack tag with its own option", () => {
+    expect(benchmarkStackTags("run", "sample")).toEqual([
+      "--tags",
+      "ShinBenchmarkRun=run",
+      "--tags",
+      "ShinBenchmarkSample=sample",
+    ]);
   });
 
   test("enforces exact deployed provider runtime contracts", () => {

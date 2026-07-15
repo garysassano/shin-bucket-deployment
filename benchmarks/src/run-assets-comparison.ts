@@ -212,9 +212,7 @@ async function runBenchmarkStack(args: {
           cdkOutput,
           "--require-approval",
           "never",
-          "--tags",
-          `ShinBenchmarkRun=${options.runId}`,
-          `ShinBenchmarkSample=${run.sampleId}`,
+          ...benchmarkStackTags(options.runId, run.sampleId),
         ],
         env: benchmarkEnv({ options, phase, run, stackSuffix }),
         logFile: deployLog,
@@ -392,6 +390,10 @@ async function runBenchmarkStack(args: {
     throw cleanupError;
   }
   return evidence;
+}
+
+export function benchmarkStackTags(runId: string, sampleId: string): string[] {
+  return ["--tags", `ShinBenchmarkRun=${runId}`, "--tags", `ShinBenchmarkSample=${sampleId}`];
 }
 
 function benchmarkEnv(args: {
