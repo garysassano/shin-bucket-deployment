@@ -7,25 +7,41 @@
     "$schema": {
       "type": "string"
     },
+    "methodologyVersion": {
+      "enum": [1, 2]
+    },
+    "runId": {
+      "type": "string",
+      "format": "uuid",
+      "minLength": 1
+    },
+    "repetitions": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "startRepetition": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "maxWallClockMinutes": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
     "runToken": {
       "type": "string",
       "minLength": 1
     },
     "snapshotDate": {
       "type": "string",
-      "minLength": 1
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
     },
     "decisionRunId": {
       "type": "string",
-      "minLength": 1
+      "pattern": "^[A-Za-z0-9._-]+$"
     },
     "comparisonVariant": {
       "type": "string",
-      "minLength": 1
-    },
-    "repetition": {
-      "type": "integer",
-      "minimum": 1
+      "pattern": "^[A-Za-z0-9._-]+$"
     },
     "region": {
       "type": "string",
@@ -41,7 +57,7 @@
     },
     "concurrency": {
       "type": "integer",
-      "minimum": 1
+      "const": 1
     },
     "destinationPrefix": {
       "type": "string",
@@ -80,7 +96,7 @@
           },
           "name": {
             "type": "string",
-            "minLength": 1
+            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
           },
           "deleteStaleObjects": {
             "type": "boolean"

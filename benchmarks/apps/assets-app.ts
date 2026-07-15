@@ -6,7 +6,10 @@ import {
   RemovalPolicy,
   Stack,
   type StackProps,
+  Tags,
 } from "aws-cdk-lib";
+import { CfnFunction } from "aws-cdk-lib/aws-lambda";
+import { LogGroup, RetentionDays } from "aws-cdk-lib/aws-logs";
 import { Bucket } from "aws-cdk-lib/aws-s3";
 import {
   BucketDeployment as AwsBucketDeployment,
@@ -16,7 +19,6 @@ import type { Construct } from "constructs";
 import { ShinBucketDeployment, Source as ShinSource } from "../../src";
 import { ensureBenchmarkAssets } from "../src/assets";
 import {
-  MARKER_BENCHMARK_BYTES,
   MARKER_BENCHMARK_VALUE_A,
   MARKER_BENCHMARK_VALUE_B,
   markerBenchmarkPayload,
@@ -27,13 +29,25 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
   constructor(scope: App, id: string, props?: StackProps) {
     super(scope, id, props);
 
-    const bundle = ensureBenchmarkAssets();
+    const bundle = ensureBenchmarkAssets({
+      verifyOnly: process.env.SHIN_BENCH_VERIFY_ASSETS_ONLY === "true",
+      trustExisting: process.env.SHIN_BENCH_TRUST_ASSETS === "true",
+    });
     const destinationPrefix = process.env.SHIN_BENCH_DESTINATION_PREFIX ?? "benchmark-site";
     const memoryLimitMb = parseOptionalPositiveIntegerEnv("SHIN_BENCH_LAMBDA_MEMORY_MB") ?? 1024;
     const maxParallelTransfers = parseOptionalPositiveIntegerEnv(
       "SHIN_BENCH_LAMBDA_MAX_PARALLEL_TRANSFERS",
     );
     const implementation = parseImplementation(process.env.SHIN_BENCH_IMPLEMENTATION);
+    const runOwner = process.env.SHIN_BENCH_RUN_OWNER;
+    const sampleOwner = process.env.SHIN_BENCH_SAMPLE_OWNER;
+    if ((runOwner === undefined) !== (sampleOwner === undefined)) {
+      throw new Error("Benchmark stack ownership tags are required.");
+    }
+    if (runOwner && sampleOwner) {
+      Tags.of(this).add("ShinBenchmarkRun", runOwner);
+      Tags.of(this).add("ShinBenchmarkSample", sampleOwner);
+    }
     const deleteCurrentObjectsOnDelete = parseOptionalBooleanEnv(
       "SHIN_BENCH_DELETE_CURRENT_OBJECTS_ON_DELETE",
     );
@@ -57,11 +71,16 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
       autoDeleteObjects: true,
       removalPolicy: RemovalPolicy.DESTROY,
     });
+    const providerLogGroup = new LogGroup(this, "ProviderLogGroup", {
+      retention: RetentionDays.ONE_DAY,
+      removalPolicy: RemovalPolicy.DESTROY,
+    });
 
     const deploymentProps = {
       destinationBucket: websiteBucket,
       destinationKeyPrefix: destinationPrefix,
       memoryLimit: memoryLimitMb,
+      logGroup: providerLogGroup,
       waitForDistributionInvalidation: process.env.SHIN_BENCH_WAIT_FOR_CLOUDFRONT === "true",
     };
 
@@ -105,6 +124,7 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
       });
     }
     forceBenchmarkInvocation(deployment, process.env.SHIN_BENCH_INVOCATION_TOKEN);
+    forceFreshExecutionEnvironment(this, process.env.SHIN_BENCH_EXECUTION_ENVIRONMENT_TOKEN);
 
     new CfnOutput(this, "BucketName", {
       value: websiteBucket.bucketName,
@@ -123,15 +143,19 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
     });
 
     new CfnOutput(this, "BenchmarkFileCount", {
-      value: String(bundle.fileCount + (markerPayload === undefined ? 0 : 1)),
+      value: String(bundle.fileCount),
     });
 
     new CfnOutput(this, "BenchmarkSourceCount", {
-      value: String(bundle.sourceRoots.length),
+      value: String(bundle.sourceCount),
     });
 
     new CfnOutput(this, "BenchmarkTotalBytes", {
-      value: String(bundle.totalBytes + (markerPayload === undefined ? 0 : MARKER_BENCHMARK_BYTES)),
+      value: String(bundle.totalBytes),
+    });
+
+    new CfnOutput(this, "BenchmarkAssetManifestSha256", {
+      value: bundle.assetManifestSha256,
     });
 
     new CfnOutput(this, "BenchmarkMemoryLimitMb", {
@@ -145,6 +169,21 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
     new CfnOutput(this, "BenchmarkImplementation", {
       value: implementation,
     });
+  }
+}
+
+function forceFreshExecutionEnvironment(stack: Stack, token: string | undefined): void {
+  if (!token) {
+    return;
+  }
+  const functions = stack.node
+    .findAll()
+    .filter((construct): construct is CfnFunction => construct instanceof CfnFunction);
+  for (const handler of functions) {
+    handler.addPropertyOverride(
+      "Environment.Variables.SHIN_BENCH_EXECUTION_ENVIRONMENT_TOKEN",
+      token,
+    );
   }
 }
 

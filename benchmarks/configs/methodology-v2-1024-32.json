@@ -1,9 +1,10 @@
 {
   "$schema": "../schemas/asset-benchmark-config.schema.json",
-  "methodologyVersion": 1,
+  "methodologyVersion": 2,
+  "repetitions": 5,
   "region": "eu-central-1",
   "concurrency": 1,
-  "assetProfiles": ["multi-source-prune"],
+  "assetProfiles": ["tiny-many", "large-few"],
   "implementations": ["shin", "aws"],
   "lambdaConfigs": [
     {
@@ -18,7 +19,12 @@
     },
     {
       "name": "unchanged-update",
-      "assetState": "baseline"
+      "assetState": "baseline",
+      "deleteCurrentObjectsOnDelete": false
+    },
+    {
+      "name": "changed-update",
+      "assetState": "changed"
     },
     {
       "name": "pruned-update",

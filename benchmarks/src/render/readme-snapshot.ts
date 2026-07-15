@@ -5,22 +5,23 @@
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { summarize } from "../aggregate";
 import { parseCliOptions } from "../cli";
-import {
-  type BenchmarkResultRecord,
-  isCanonicalBenchmarkRecord,
-  phaseRank,
-  readBenchmarkResultRecords,
-} from "../model";
+import { type BenchmarkResultRecord, phaseRank, readBenchmarkResultRecords } from "../model";
+import { selectValidatedBenchmarkRun } from "../validation";
 
 type ChartVariant = "default" | "aws";
 type HeaderLayout = "two-line" | "three-line";
 const CLI_OPTIONS = [
   "asset-profile",
+  "config",
   "header",
   "input-file",
   "lambda-max-parallel-transfers",
   "lambda-memory-mb",
+  "methodology-version",
+  "run-id",
+  "scratch-root",
   "variant",
 ] as const;
 
@@ -75,6 +76,13 @@ const headerLayout = parseHeaderLayout(cliArgs);
 const requestedProfile = parseStringArg(cliArgs, "--asset-profile");
 const requestedMemoryMb = parseNumberArg(cliArgs, "--lambda-memory-mb");
 const requestedShinParallel = parseNumberArg(cliArgs, "--lambda-max-parallel-transfers");
+const requestedMethodologyVersion = parseNumberArg(cliArgs, "--methodology-version") ?? 2;
+const requestedRunId = parseStringArg(cliArgs, "--run-id");
+const requestedConfigFile = parseStringArg(cliArgs, "--config");
+const requestedScratchRoot = parseStringArg(cliArgs, "--scratch-root");
+if (requestedMethodologyVersion !== 1 && requestedMethodologyVersion !== 2) {
+  throw new Error("--methodology-version must be 1 or 2");
+}
 const inputFile = resolve(
   process.cwd(),
   parseStringArg(cliArgs, "--input-file") ?? "benchmarks/results.jsonl",
@@ -187,11 +195,20 @@ function comparablePhases(records: BenchmarkRecord[]): string[] {
     .sort((left, right) => phaseRank(left) - phaseRank(right));
 }
 
-function requireNumber(value: number | null | undefined, label: string): number {
-  if (value === null || value === undefined) {
-    throw new Error(`Missing ${label}`);
+function medianMetric(
+  records: BenchmarkRecord[],
+  phase: string,
+  implementation: "shin" | "aws",
+  metric: "maxMemoryMb" | "providerDurationSeconds",
+): number {
+  const values = records
+    .filter((record) => record.phase === phase && record.implementation === implementation)
+    .map((record) => record[metric])
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+  if (values.length === 0) {
+    throw new Error(`Missing ${phase} ${implementation} ${metric}`);
   }
-  return value;
+  return summarize(values).median;
 }
 
 function recordsByPhase(
@@ -223,11 +240,8 @@ function formatBytes(value: number): string {
 }
 
 function findSelections(records: BenchmarkRecord[]): DataSelection[] {
-  const groups = new Map<string, BenchmarkRecord[]>();
-  for (const record of records) {
-    if (record.implementation !== "shin" && record.implementation !== "aws") {
-      continue;
-    }
+  const shinGroups = new Map<string, BenchmarkRecord[]>();
+  for (const record of records.filter((record) => record.implementation === "shin")) {
     if (
       record.profile === null ||
       record.profile === undefined ||
@@ -249,18 +263,11 @@ function findSelections(records: BenchmarkRecord[]): DataSelection[] {
       continue;
     }
     const key = [record.profile, record.memoryMb, record.parallel].join("\u0000");
-    groups.set(key, [...(groups.get(key) ?? []), record]);
+    shinGroups.set(key, [...(shinGroups.get(key) ?? []), record]);
   }
 
-  const selections = [...groups.values()].flatMap((runRecords) => {
-    const phases = new Set(comparablePhases(runRecords));
-    if (phases.size === 0) {
-      return [];
-    }
-    const comparableRecords = runRecords.filter(
-      (record) => record.phase !== undefined && phases.has(record.phase),
-    );
-    const metadataRecord = comparableRecords[0];
+  const selections = [...shinGroups.values()].flatMap((shinRecords) => {
+    const metadataRecord = shinRecords[0];
     if (
       metadataRecord?.profile === null ||
       metadataRecord?.profile === undefined ||
@@ -271,6 +278,23 @@ function findSelections(records: BenchmarkRecord[]): DataSelection[] {
     ) {
       return [];
     }
+    const awsRecords = records.filter(
+      (record) =>
+        record.implementation === "aws" &&
+        record.profile === metadataRecord.profile &&
+        record.memoryMb === metadataRecord.memoryMb &&
+        (requestedMethodologyVersion === 1
+          ? record.parallel === metadataRecord.parallel
+          : record.parallel === null),
+    );
+    const runRecords = [...shinRecords, ...awsRecords];
+    const phases = new Set(comparablePhases(runRecords));
+    if (phases.size === 0) {
+      return [];
+    }
+    const comparableRecords = runRecords.filter(
+      (record) => record.phase !== undefined && phases.has(record.phase),
+    );
     return [
       {
         runRecords: comparableRecords,
@@ -302,27 +326,21 @@ function buildBenchmarkData(selection: DataSelection): BenchmarkData {
   }
 
   const duration = phases.map((phase) => {
-    const shin = selection.shinRecords.get(phase);
-    const aws = selection.awsRecords.get(phase);
-    if (shin === undefined || aws === undefined) {
-      throw new Error(`Missing comparable records for ${phase}`);
-    }
     return {
       label: phase,
-      shin: formatDuration(requireNumber(shin.providerDurationSeconds, `${phase} shin duration`)),
-      aws: formatDuration(requireNumber(aws.providerDurationSeconds, `${phase} aws duration`)),
+      shin: formatDuration(
+        medianMetric(selection.runRecords, phase, "shin", "providerDurationSeconds"),
+      ),
+      aws: formatDuration(
+        medianMetric(selection.runRecords, phase, "aws", "providerDurationSeconds"),
+      ),
     };
   });
   const memory = phases.map((phase) => {
-    const shin = selection.shinRecords.get(phase);
-    const aws = selection.awsRecords.get(phase);
-    if (shin === undefined || aws === undefined) {
-      throw new Error(`Missing comparable records for ${phase}`);
-    }
     return {
       label: phase,
-      shin: requireNumber(shin.maxMemoryMb, `${phase} shin max memory`),
-      aws: requireNumber(aws.maxMemoryMb, `${phase} aws max memory`),
+      shin: medianMetric(selection.runRecords, phase, "shin", "maxMemoryMb"),
+      aws: medianMetric(selection.runRecords, phase, "aws", "maxMemoryMb"),
     };
   });
 
@@ -578,7 +596,14 @@ ${renderHeader(benchmarkData)}
 
 // ═══ OUTPUT ═══
 const benchmarkDataItems = findSelections(
-  readBenchmarkResultRecords(inputFile).filter(isCanonicalBenchmarkRecord),
+  selectValidatedBenchmarkRun({
+    records: readBenchmarkResultRecords(inputFile),
+    methodologyVersion: requestedMethodologyVersion,
+    runId: requestedRunId,
+    configFile: requestedConfigFile,
+    inputFile,
+    scratchRoot: requestedScratchRoot,
+  }),
 ).map(buildBenchmarkData);
 if (benchmarkDataItems.length === 0) {
   throw new Error("No complete Shin/AWS benchmark pairs matched the selected filters");

@@ -1,5 +1,16 @@
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
+import { MARKER_BENCHMARK_BYTES, markerBenchmarkPayloadSha256 } from "./marker-payload";
 import {
   type BenchmarkAssetProfile,
   type BenchmarkAssetState,
@@ -13,64 +24,157 @@ type FileSpec = {
   readonly kind: "text" | "json" | "binary";
 };
 
-type GeneratedBundle = {
+export type GeneratedBundle = {
   readonly root: string;
   readonly sourceRoots: readonly string[];
   readonly profile: BenchmarkAssetProfile;
   readonly state: BenchmarkAssetState;
   readonly fileCount: number;
   readonly totalBytes: number;
+  readonly sourceCount: number;
+  readonly assetManifestSha256: string;
 };
 
 const DEFAULT_PROFILE: BenchmarkAssetProfile = "mixed";
 const DEFAULT_STATE: BenchmarkAssetState = "baseline";
-const BINARY_CHUNK_BYTES = 1024 * 1024;
+const ASSET_GENERATOR_VERSION = 3;
+const SHA256_BYTES = 32;
+
+type GeneratedFileDigest = {
+  readonly path: string;
+  readonly size: number;
+  readonly sha256: string;
+};
+
+type GenerationMarker = {
+  readonly generatorVersion: number;
+  readonly profile: BenchmarkAssetProfile;
+  readonly state: BenchmarkAssetState;
+  readonly fileCount: number;
+  readonly totalBytes: number;
+  readonly files: readonly GeneratedFileDigest[];
+};
 
 export function ensureBenchmarkAssets(options?: {
   readonly assetProfile?: string;
   readonly state?: string;
   readonly outputRoot?: string;
+  readonly verifyOnly?: boolean;
+  readonly trustExisting?: boolean;
 }): GeneratedBundle {
   const profile = parseProfile(options?.assetProfile ?? process.env.SHIN_BENCH_ASSET_PROFILE);
   const state = parseState(options?.state ?? process.env.SHIN_BENCH_ASSET_STATE);
   const outputRoot = options?.outputRoot ?? join(process.cwd(), ".benchmark-assets");
   const root = join(outputRoot, profile, state);
-  const markerPath = join(root, ".generated.json");
+  const markerPath = `${root}.generated.json`;
   const specs = buildSpecs(profile, state);
   const totalBytes = specs.reduce((sum, spec) => sum + spec.size, 0);
 
-  if (existsSync(markerPath)) {
-    return {
-      root,
-      sourceRoots: sourceRoots(profile, root),
-      profile,
-      state,
-      fileCount: specs.length,
-      totalBytes,
-    };
+  const expectedMarker = {
+    generatorVersion: ASSET_GENERATOR_VERSION,
+    profile,
+    state,
+    fileCount: specs.length,
+    totalBytes,
+  };
+
+  const existingMarker = matchingMarker(
+    root,
+    markerPath,
+    expectedMarker,
+    specs,
+    options?.trustExisting !== true,
+  );
+  if (existingMarker !== undefined) {
+    return generatedBundle(root, profile, state, existingMarker.files);
+  }
+  if (options?.verifyOnly === true) {
+    throw new Error(`Benchmark assets changed for ${profile}/${state}.`);
   }
 
   rmSync(root, { force: true, recursive: true });
   mkdirSync(root, { recursive: true });
 
+  const files: GeneratedFileDigest[] = [];
   for (const spec of specs) {
     const filePath = join(root, spec.path);
     mkdirSync(dirname(filePath), { recursive: true });
-    writeFileSync(filePath, renderFile(spec, profile, state));
+    const contents = renderFile(spec, profile, state);
+    writeFileSync(filePath, contents);
+    files.push({ path: spec.path, size: contents.length, sha256: digest(contents) });
   }
 
-  writeFileSync(
-    markerPath,
-    `${JSON.stringify({ profile, state, fileCount: specs.length, totalBytes }, null, 2)}\n`,
-  );
+  const marker: GenerationMarker = { ...expectedMarker, files };
+  writeFileSync(markerPath, `${JSON.stringify(marker, null, 2)}\n`);
 
+  return generatedBundle(root, profile, state, files);
+}
+
+export function verifyBenchmarkAssets(options: {
+  readonly assetProfile: BenchmarkAssetProfile;
+  readonly state: BenchmarkAssetState;
+  readonly outputRoot?: string;
+}): GeneratedBundle {
+  const root = join(
+    options.outputRoot ?? join(process.cwd(), ".benchmark-assets"),
+    options.assetProfile,
+    options.state,
+  );
+  const markerPath = `${root}.generated.json`;
+  const specs = buildSpecs(options.assetProfile, options.state);
+  const totalBytes = specs.reduce((sum, spec) => sum + spec.size, 0);
+  if (
+    matchingMarker(
+      root,
+      markerPath,
+      {
+        generatorVersion: ASSET_GENERATOR_VERSION,
+        profile: options.assetProfile,
+        state: options.state,
+        fileCount: specs.length,
+        totalBytes,
+      },
+      specs,
+      true,
+    ) === undefined
+  ) {
+    throw new Error(`Benchmark assets changed for ${options.assetProfile}/${options.state}.`);
+  }
+  const marker = readGenerationMarker(markerPath);
+  if (marker === undefined) throw new Error("Verified benchmark asset marker disappeared.");
+  return generatedBundle(root, options.assetProfile, options.state, marker.files);
+}
+
+function generatedBundle(
+  root: string,
+  profile: BenchmarkAssetProfile,
+  state: BenchmarkAssetState,
+  files: readonly GeneratedFileDigest[],
+): GeneratedBundle {
+  const roots = sourceRoots(profile, root);
+  const dataFiles = markerDataFiles(profile, state);
   return {
     root,
-    sourceRoots: sourceRoots(profile, root),
+    sourceRoots: roots,
     profile,
     state,
-    fileCount: specs.length,
-    totalBytes,
+    fileCount: files.length + dataFiles.length,
+    totalBytes:
+      files.reduce((sum, file) => sum + file.size, 0) +
+      dataFiles.reduce((sum, file) => sum + file.size, 0),
+    sourceCount: roots.length + dataFiles.length,
+    assetManifestSha256: createHash("sha256")
+      .update(
+        JSON.stringify({
+          generatorVersion: ASSET_GENERATOR_VERSION,
+          profile,
+          state,
+          sourceRoots: roots.map((sourceRoot) => sourceRoot.slice(root.length + 1) || "."),
+          assetFiles: files,
+          dataFiles,
+        }),
+      )
+      .digest("hex"),
   };
 }
 
@@ -161,7 +265,7 @@ function renderFile(
   const seed = seedFor(spec.path, profile, state);
 
   if (spec.kind === "binary") {
-    return renderBinary(spec.size, seed);
+    return renderBenchmarkBinary(spec.size, seed);
   }
 
   const text = spec.kind === "json" ? renderJsonText(spec.path, seed) : renderText(spec.path, seed);
@@ -177,15 +281,15 @@ function renderFile(
   return output;
 }
 
-function renderBinary(size: number, seed: number): Buffer {
+export function renderBenchmarkBinary(size: number, seed: number): Buffer {
   const output = Buffer.alloc(size);
-  let state = seed || 0x12345678;
-  for (let offset = 0; offset < size; offset += BINARY_CHUNK_BYTES) {
-    const end = Math.min(size, offset + BINARY_CHUNK_BYTES);
-    for (let index = offset; index < end; index++) {
-      state = nextState(state);
-      output[index] = state & 0xff;
-    }
+  const input = Buffer.allocUnsafe(12);
+  input.writeUInt32BE(seed, 0);
+
+  for (let offset = 0, counter = 0; offset < size; offset += SHA256_BYTES, counter++) {
+    input.writeBigUInt64BE(BigInt(counter), 4);
+    const block = createHash("sha256").update(input).digest();
+    block.copy(output, offset, 0, Math.min(SHA256_BYTES, size - offset));
   }
   return output;
 }
@@ -228,9 +332,127 @@ function sized(index: number, minSize: number, maxSize: number): number {
 }
 
 function seedFor(path: string, profile: BenchmarkAssetProfile, state: BenchmarkAssetState): number {
-  const stateSalt =
-    state === "baseline" ? "stable" : state === "changed" ? changedSalt(path) : "pruned";
+  const stateSalt = state === "changed" ? changedSalt(path) : "stable";
   return hash(`${profile}:${stateSalt}:${path}`);
+}
+
+function matchingMarker(
+  root: string,
+  markerPath: string,
+  expected: Omit<GenerationMarker, "files">,
+  specs: readonly FileSpec[],
+  verifyContents: boolean,
+): GenerationMarker | undefined {
+  const candidate = readGenerationMarker(markerPath);
+  if (
+    candidate === undefined ||
+    candidate.generatorVersion !== expected.generatorVersion ||
+    candidate.profile !== expected.profile ||
+    candidate.state !== expected.state ||
+    candidate.fileCount !== expected.fileCount ||
+    candidate.totalBytes !== expected.totalBytes ||
+    !markerFilesMatchSpecs(candidate.files, specs)
+  ) {
+    return undefined;
+  }
+  return verifyContents
+    ? filesMatch(root, specs, candidate.files, expected.profile, expected.state)
+      ? candidate
+      : undefined
+    : candidate;
+}
+
+function readGenerationMarker(markerPath: string): GenerationMarker | undefined {
+  if (!existsSync(markerPath)) return undefined;
+  try {
+    const value: unknown = JSON.parse(readFileSync(markerPath, "utf8"));
+    return typeof value === "object" && value !== null ? (value as GenerationMarker) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function markerFilesMatchSpecs(
+  files: readonly GeneratedFileDigest[],
+  specs: readonly FileSpec[],
+): boolean {
+  return (
+    Array.isArray(files) &&
+    files.length === specs.length &&
+    specs.every((spec, index) => {
+      const file = files[index];
+      return (
+        file?.path === spec.path &&
+        file.size === spec.size &&
+        typeof file.sha256 === "string" &&
+        /^[0-9a-f]{64}$/.test(file.sha256)
+      );
+    })
+  );
+}
+
+function filesMatch(
+  root: string,
+  specs: readonly FileSpec[],
+  value: readonly GeneratedFileDigest[],
+  profile: BenchmarkAssetProfile,
+  state: BenchmarkAssetState,
+): boolean {
+  const expectedPaths = specs.map((spec) => spec.path).sort();
+  const actualPaths = listGeneratedFiles(root).sort();
+  if (
+    expectedPaths.length !== actualPaths.length ||
+    expectedPaths.some((path, index) => path !== actualPaths[index])
+  ) {
+    return false;
+  }
+
+  return specs.every((spec, index) => {
+    const candidate: unknown = value[index];
+    if (typeof candidate !== "object" || candidate === null) {
+      return false;
+    }
+    const entry = candidate as Record<string, unknown>;
+    const filePath = join(root, spec.path);
+    const expectedDigest = digest(renderFile(spec, profile, state));
+    return (
+      entry.path === spec.path &&
+      entry.size === spec.size &&
+      typeof entry.sha256 === "string" &&
+      entry.sha256 === expectedDigest &&
+      statSync(filePath).size === spec.size &&
+      digest(readFileSync(filePath)) === expectedDigest
+    );
+  });
+}
+
+function listGeneratedFiles(root: string, directory = root): string[] {
+  return readdirSync(directory).flatMap((entry) => {
+    const path = join(directory, entry);
+    const stat = lstatSync(path);
+    if (stat.isSymbolicLink() || (!stat.isDirectory() && !stat.isFile())) {
+      throw new Error(`Unsupported generated benchmark asset entry: ${path}`);
+    }
+    return stat.isDirectory() ? listGeneratedFiles(root, path) : [path.slice(root.length + 1)];
+  });
+}
+
+function markerDataFiles(
+  profile: BenchmarkAssetProfile,
+  state: BenchmarkAssetState,
+): readonly GeneratedFileDigest[] {
+  if (profile !== "marker-heavy") return [];
+  return [
+    {
+      path: "runtime/marker-heavy.txt",
+      size: MARKER_BENCHMARK_BYTES,
+      sha256: markerBenchmarkPayloadSha256(state),
+    },
+  ];
+}
+
+function digest(contents: Buffer): string {
+  return createHash("sha256").update(contents).digest("hex");
 }
 
 function changedSalt(path: string): string {
@@ -267,10 +489,6 @@ function hash(value: string): number {
     state = Math.imul(state, 16777619);
   }
   return state >>> 0;
-}
-
-function nextState(state: number): number {
-  return (Math.imul(state, 1664525) + 1013904223) >>> 0;
 }
 
 function parseProfile(value: string | undefined): BenchmarkAssetProfile {

@@ -4,6 +4,14 @@ This page is the compact benchmark index for `ShinBucketDeployment`. Benchmarks 
 
 Runbooks, evidence collection rules, schema guidance, and sanitization rules live in `.agents/skills/shin-benchmark/SKILL.md`.
 
+## Methodology v2 status
+
+The local methodology-v2 harness is implemented, but no methodology-v2 AWS rows are claimed on this page yet. Existing rows and committed snapshots remain methodology-v1 historical evidence. Default report generation excludes them; use an explicit methodology-v1 selector only to inspect or regenerate historical artifacts.
+
+Methodology v2 requires five sequential repetitions, opaque UUID run and sample identities, a clean/dirty Git marker, exact package/CDK/provider identities, Lambda architecture, deployed code and Shin bootstrap SHA-256 values, phase-local execution-environment memory scope, and verified cleanup. A scratch resume manifest binds the source, normalized config, phases, destination, and exact sample matrix, while a two-phase ledger digest distinguishes runner persistence from preexisting or external evidence edits. Binary fixtures use deterministic SHA-256 counter bytes and a per-file digest manifest; retained files in prune phases are byte-identical to their baseline versions. AWS CDK rows use `parallel: null`; comparison pairing does not treat Shin parallelism as an upstream input.
+
+AWS evidence remains approval-gated. Run one complete repetition per selected variant first, report elapsed time and the preliminary signal, agree a wall-clock cap, and only then resume repetitions 2–5 with the printed run UUID. Completed sanitized rows are persisted incrementally; raw AWS output remains outside the repository. The cap is enforced before stacks and between phases, at external-command granularity: an active CDK/AWS command may finish after the nominal deadline, after which cleanup begins. Signals terminate the active process group and also route the active stack through cleanup.
+
 ## Where To Look
 
 | Artifact | Purpose |
@@ -137,13 +145,13 @@ Use `benchmarks/README.md` first for visual snapshots. Use `benchmarks/telemetry
 Regenerate the Shin telemetry Markdown tables from the JSONL source with:
 
 ```bash
-pnpm benchmark:telemetry-table
+pnpm benchmark:telemetry-table -- --methodology-version 1
 ```
 
 Generate filtered comparison reports and SVG charts with:
 
 ```bash
-pnpm benchmark:comparison-report -- --asset-profile tiny-many --lambda-memory-mb 2048 --lambda-max-parallel-transfers 64
+pnpm benchmark:comparison-report -- --methodology-version 1 --asset-profile tiny-many --lambda-memory-mb 2048 --lambda-max-parallel-transfers 64
 ```
 
 ## Methodology Summary
@@ -154,7 +162,7 @@ The `assets` benchmark scenario generates deterministic bundles under `.benchmar
 
 ## Telemetry Notes
 
-Shin rows may include sanitized `shin_deployment_summary` telemetry. Schema-v2 summaries separate logical transfer objects, source and destination wire attempts, consumed body replays, typed throttling/errors, cancellations, invocation-global source memory, and destination metadata/page high-water; historical rows may not contain every field. Use `docs/architecture.md` for exact diagnostics meanings.
+Shin rows may include sanitized `shin_deployment_summary` telemetry. Schema-v3 summaries separate deployment work status from callback delivery, logical transfer objects from source and destination upload wire attempts, and deletion SDK calls from inferred object outcomes. They also expose consumed body replays, typed throttling/errors, cancellations, invocation-global source memory, destination metadata/page high-water, and callback attempts; historical rows may not contain every field. Use `docs/architecture.md` for exact diagnostics meanings.
 
 Do not infer S3 throttling from source block waits alone. Source S3 pressure requires source `getRetries` or `getErrors`; destination S3 throttling requires `putObject.throttledAttempts` or retry evidence.
 

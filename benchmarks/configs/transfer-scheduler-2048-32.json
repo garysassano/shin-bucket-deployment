@@ -1,5 +1,6 @@
 {
   "$schema": "../schemas/asset-benchmark-config.schema.json",
+  "methodologyVersion": 1,
   "region": "eu-central-1",
   "concurrency": 1,
   "assetProfiles": ["tiny-many", "large-few"],

@@ -97,10 +97,12 @@ Prefer the automated asset comparison runner for Shin-vs-AWS asset benchmarks:
 ```bash
 AWS_PROFILE=<profile> AWS_REGION=ap-southeast-2 AWS_DEFAULT_REGION=ap-southeast-2 \
 pnpm benchmark:run-assets -- \
-  --config benchmarks/configs/shin-aws-2048-64-4096-128.json
+  --config benchmarks/configs/methodology-v2-1024-32.json \
+  --repetitions 1 \
+  --max-wall-clock-minutes <approved-smoke-cap>
 ```
 
-The config file defines the asset profiles, Lambda configs, implementations, phases, region, output file, and default concurrency. Prefer adding or editing a committed JSON config under `benchmarks/configs/` over building long CLI invocations. Use `assetProfiles` in JSON files and `--asset-profiles <name>` for CLI overrides. Use `lambdaConfigs` in JSON files and `--lambda-configs <memory>:<parallel>` for Lambda config CLI overrides. The runner deploys each stack through the configured phases, captures CloudWatch `REPORT` events and Shin `shin_deployment_summary` events before cleanup, destroys the stack, verifies cleanup, and writes sanitized result rows. Keep `concurrency` or `--concurrency` at `1` unless intentionally running multiple stacks in parallel; each stack is stateful and its phases must stay ordered.
+The config file defines the asset profiles, Lambda configs, implementations, phases, region, output file, repetitions, and sequential execution policy. Prefer adding or editing a committed JSON config under `benchmarks/configs/` over building long CLI invocations. Use `assetProfiles` in JSON files and `--asset-profiles <name>` for CLI overrides. Use `lambdaConfigs` in JSON files and `--lambda-configs <memory>:<parallel>` for Lambda config CLI overrides. The runner deploys each stack through the configured phases, captures CloudWatch `REPORT` events and Shin `shin_deployment_summary` events before cleanup, destroys the stack, verifies cleanup, and writes sanitized result rows incrementally. Methodology v2 requires `concurrency: 1`; do not run multiple benchmark stacks in parallel. Preserve the printed run UUID and its external scratch resume manifest. Resume only with the same source/bootstrap, normalized config, phases, destination, and planned matrix. The wall-clock cap is checked between phases at external-command granularity; signals terminate the active process group, and both paths must attempt cleanup of the active stack.
 
 Choose benchmark configs deliberately. Paired Shin vs AWS comparisons should use:
 
@@ -109,7 +111,7 @@ Choose benchmark configs deliberately. Paired Shin vs AWS comparisons should use
 - same states and phase sequence
 - same destination prefix
 - same memory setting
-- same parallel setting, recorded in the top-level `parallel` field
+- the selected Shin parallel setting, recorded for Shin and stored as `null` for upstream AWS
 - same repetition count
 - same stack suffix pattern
 
@@ -181,13 +183,29 @@ Do not parse `summary=...` tracing lines by hand. If parsing fails, fix `benchma
 
 ## Benchmark Records
 
-Write one JSON object per measured phase to `benchmarks/results.jsonl`. This file is current-result data for reports and charts, not append-only history. Rows are upserted by `profile`, `memoryMb`, `parallel`, `implementation`, `phase`, and `state`.
+Write one JSON object per measured phase to `benchmarks/results.jsonl`. This file is current-result data for reports and charts, not append-only history. Methodology-v2 rows are upserted by their methodology, run, sample, repetition, implementation, configuration, phase, and state identity. Rows without `methodologyVersion` are preserved and interpreted as methodology-v1 historical evidence; default reports exclude them.
 
 Required fields:
 
+- `resultSchemaVersion`
+- `methodologyVersion`
+- `runId`
+- `sampleId`
+- `repetition`
 - `snapshotDate`
 - `providerImplementationCommit`
 - `providerImplementationSubject`
+- `providerPackageName`
+- `providerPackageVersion`
+- `providerArchitecture`
+- `providerCodeSha256`
+- `providerBootstrapSha256` for Shin
+- `gitDirty`
+- `cdkCliVersion`
+- `awsCdkLibVersion`
+- `awsCdkLibIntegrity`
+- `executionEnvironmentFresh`
+- `memoryMeasurementScope`
 - `resultDocumentationCommit`
 - `region`
 - `implementation`: `shin` or `aws`
@@ -263,7 +281,7 @@ pnpm benchmark:comparison-report -- --input-file benchmarks/results.jsonl --asse
 Before committing benchmark updates:
 
 ```bash
-pnpm benchmark:comparison-report -- --input-file benchmarks/results.jsonl --output-file /tmp/benchmark-report-check.md
+pnpm benchmark:comparison-report -- --input-file benchmarks/results.jsonl --methodology-version 1 --output-file /tmp/benchmark-report-check.md
 git diff --check
 pnpm exec vitest run test/benchmarks/collector.test.ts
 ```

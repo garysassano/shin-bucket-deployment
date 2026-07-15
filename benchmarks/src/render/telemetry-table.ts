@@ -1,17 +1,21 @@
 import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { basename, dirname } from "node:path";
 import { parseCliOptions } from "../cli";
 import {
   type BenchmarkResultRecord,
   type ProviderSummary,
-  isCanonicalBenchmarkRecord,
   phaseRank,
   readBenchmarkResultRows,
 } from "../model";
+import { selectValidatedBenchmarkRun } from "../validation";
 
 type RenderOptions = {
   readonly inputFile: string;
   readonly outputFile: string;
+  readonly methodologyVersion?: 1 | 2;
+  readonly runId?: string;
+  readonly configFile?: string;
+  readonly scratchRoot?: string;
 };
 
 type TelemetryRow = {
@@ -32,7 +36,14 @@ type Column<T> = {
   readonly value: (row: T) => unknown;
 };
 
-const CLI_OPTIONS = ["input-file", "output-file"] as const;
+const CLI_OPTIONS = [
+  "config",
+  "input-file",
+  "methodology-version",
+  "output-file",
+  "run-id",
+  "scratch-root",
+] as const;
 
 const RUNTIME_COLUMNS: Array<Column<TelemetryRow>> = [
   { header: "Phase", value: phase },
@@ -261,7 +272,13 @@ function main(): void {
 }
 
 export function renderBenchmarkResultsTable(options: RenderOptions): string {
-  const rows = readTelemetryRows(options.inputFile);
+  const rows = readTelemetryRows(
+    options.inputFile,
+    options.methodologyVersion ?? 2,
+    options.runId,
+    options.configFile,
+    options.scratchRoot,
+  );
   const groups = buildGroups(rows);
   const report = renderResultsMarkdown(rows, groups, options.inputFile);
   mkdirSync(dirname(options.outputFile), { recursive: true });
@@ -277,7 +294,7 @@ function renderResultsMarkdown(
   return [
     "# Shin Provider Benchmark Telemetry",
     "",
-    `Generated from Shin rows in \`${inputFile}\`. Raw benchmark evidence stays outside the repo.`,
+    `Generated from Shin rows in \`${basename(inputFile)}\`. Raw benchmark evidence stays outside the repo.`,
     "",
     "## Summary",
     "",
@@ -409,15 +426,34 @@ function renderMarkdownTable<T>(rows: T[], columns: Array<Column<T>>): string {
   ].join("\n");
 }
 
-function readTelemetryRows(filePath: string): TelemetryRow[] {
-  return readBenchmarkResultRows(filePath)
-    .filter(({ record }) => isCanonicalBenchmarkRecord(record))
-    .filter(({ record }) => record.providerSummary !== undefined && record.providerSummary !== null)
-    .map(({ line, record }) => ({
-      line,
-      record,
-      summary: record.providerSummary as ProviderSummary,
-    }));
+function readTelemetryRows(
+  filePath: string,
+  methodologyVersion: 1 | 2,
+  requestedRunId: string | undefined,
+  configFile: string | undefined,
+  scratchRoot: string | undefined,
+): TelemetryRow[] {
+  const allRows = readBenchmarkResultRows(filePath);
+  const selectedRecords = new Set(
+    selectValidatedBenchmarkRun({
+      records: allRows.map(({ record }) => record),
+      methodologyVersion,
+      runId: requestedRunId,
+      configFile,
+      inputFile: filePath,
+      scratchRoot,
+    }),
+  );
+  const rows = allRows
+    .filter(({ record }) => selectedRecords.has(record))
+    .filter(
+      ({ record }) => record.providerSummary !== undefined && record.providerSummary !== null,
+    );
+  return rows.map(({ line, record }) => ({
+    line,
+    record,
+    summary: record.providerSummary as ProviderSummary,
+  }));
 }
 
 function unique<T>(values: Array<T | null | undefined>): T[] {
@@ -450,7 +486,18 @@ function parseArgs(args: string[]): RenderOptions {
   return {
     inputFile: values.get("input-file") ?? "benchmarks/results.jsonl",
     outputFile: values.get("output-file") ?? "benchmarks/telemetry.md",
+    methodologyVersion: parseMethodologyVersion(values.get("methodology-version")),
+    runId: values.get("run-id"),
+    configFile: values.get("config"),
+    scratchRoot: values.get("scratch-root"),
   };
+}
+
+function parseMethodologyVersion(value: string | undefined): 1 | 2 | undefined {
+  if (value === undefined) return undefined;
+  if (value === "1") return 1;
+  if (value === "2") return 2;
+  usage();
 }
 
 function usage(): never {

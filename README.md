@@ -81,6 +81,8 @@ The official `BucketDeployment` is a good default for many stacks, but its provi
 > [!CAUTION]
 > These are historical exploratory snapshots with single-sample methodology. They are being revalidated and should not be treated as performance guarantees or used to choose production defaults.
 
+The methodology-v2 harness is ready locally, but its five-repetition AWS evidence has not yet been collected. Default benchmark reports exclude the historical methodology-v1 rows.
+
 <img src="https://raw.githubusercontent.com/garysassano/shin-bucket-deployment/main/benchmarks/snapshots/tiny-many-1024mib-32.svg" alt="ShinBucketDeployment tiny-many 1024 MiB parallel 32 benchmark" width="100%">
 
 <img src="https://raw.githubusercontent.com/garysassano/shin-bucket-deployment/main/benchmarks/snapshots/tiny-many-2048mib-64.svg" alt="ShinBucketDeployment tiny-many 2048 MiB parallel 64 benchmark" width="100%">
