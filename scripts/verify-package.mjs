@@ -20,11 +20,24 @@ import { inflateRawSync } from "node:zlib";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(__dirname, "..");
 const packageName = "shin-bucket-deployment";
-const requiredFiles = [
-  "package/lib/index.js",
+const expectedLibraryFiles = [
+  "package/lib/cataloged-source.d.ts",
+  "package/lib/cataloged-source.js",
+  "package/lib/destination.js",
+  "package/lib/errors.d.ts",
+  "package/lib/errors.js",
+  "package/lib/iam.js",
   "package/lib/index.d.ts",
-  "package/lib/shin-bucket-deployment.js",
+  "package/lib/index.js",
+  "package/lib/provider.js",
   "package/lib/shin-bucket-deployment.d.ts",
+  "package/lib/shin-bucket-deployment.js",
+  "package/lib/source-config.js",
+  "package/lib/stable-json.js",
+  "package/lib/validation.js",
+].sort();
+const requiredFiles = [
+  ...expectedLibraryFiles,
   "package/assets/bootstrap-arm64/bootstrap.zip",
   "package/assets/bootstrap-x86_64/bootstrap.zip",
   "package/README.md",
@@ -277,6 +290,14 @@ function verifyTarball(tarball, workDir) {
   for (const requiredFile of requiredFiles) {
     assert(listing.includes(requiredFile), `Packed tarball is missing ${requiredFile}.`);
   }
+
+  const libraryFiles = listing
+    .filter((entry) => entry.startsWith("package/lib/") && !entry.endsWith("/"))
+    .sort();
+  assert(
+    JSON.stringify(libraryFiles) === JSON.stringify(expectedLibraryFiles),
+    `Packed library file set differs from the allowlist.\n${libraryFiles.join("\n")}`,
+  );
 
   for (const entry of listing) {
     assert(!entry.endsWith(".map"), `Packed tarball includes source map ${entry}.`);
