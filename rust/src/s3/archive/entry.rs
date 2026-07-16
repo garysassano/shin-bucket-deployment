@@ -315,6 +315,19 @@ impl EntryDataReader {
         }
     }
 
+    fn clear_consumed_buffer(&mut self) {
+        let buffer_end = self.buffer_start.saturating_add(self.buffer.len() as u64);
+        if self.position >= buffer_end {
+            self.buffer = Bytes::new();
+            self.buffer_start = self.position;
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn buffered_source_bytes_for_test(&self) -> usize {
+        self.buffer.len()
+    }
+
     fn poll_fetch(&mut self, cx: &mut TaskContext<'_>) -> Poll<io::Result<()>> {
         if self.position >= self.end {
             return Poll::Ready(Ok(()));
@@ -351,6 +364,9 @@ impl EntryDataReader {
 
 impl Drop for EntryDataReader {
     fn drop(&mut self) {
+        // Reader-owned block views must disappear before releasing their permits.
+        self.buffer = Bytes::new();
+        self.in_flight = None;
         while let Some(index) = self.remaining_blocks.pop_front() {
             self.store.release_block_reader(index);
         }
@@ -365,11 +381,13 @@ impl AsyncRead for EntryDataReader {
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
         if self.position >= self.end || buf.remaining() == 0 {
+            self.clear_consumed_buffer();
             self.release_finished_blocks();
             return Poll::Ready(Ok(()));
         }
 
         if self.available().is_none() {
+            self.clear_consumed_buffer();
             self.release_finished_blocks();
             std::task::ready!(self.poll_fetch(cx))?;
         }
@@ -379,6 +397,7 @@ impl AsyncRead for EntryDataReader {
         let len = available.len().min(remaining).min(buf.remaining());
         buf.put_slice(&available[..len]);
         self.position += len as u64;
+        self.clear_consumed_buffer();
         self.release_finished_blocks();
         Poll::Ready(Ok(()))
     }

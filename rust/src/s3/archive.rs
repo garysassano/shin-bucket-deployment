@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::io;
 use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
@@ -25,8 +25,10 @@ use crate::types::{AppState, DeploymentStats};
 
 use super::planner::ZipEntryPlan;
 
+mod directory;
 mod entry;
 
+pub(crate) use directory::prepare_zip_directory_reader;
 #[cfg(test)]
 use entry::{
     LOCAL_FILE_HEADER_LEN, open_entry_data_reader, send_marker_zip_entry_chunks,
@@ -148,6 +150,7 @@ pub(crate) struct S3RangeReader {
     buffer: Bytes,
     in_flight: Option<Pin<Box<dyn Future<Output = io::Result<Bytes>> + Send>>>,
     in_flight_start: u64,
+    preloaded: BTreeMap<u64, Bytes>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -212,6 +215,10 @@ struct SourceBudgetPermit {
     bytes: u64,
     _permit: OwnedSemaphorePermit,
     stats: Arc<DeploymentStats>,
+}
+
+pub(crate) struct SourcePlanningPermit {
+    _permit: SourceBudgetPermit,
 }
 
 struct RangeGetError {
@@ -668,6 +675,13 @@ impl SourceByteBudget {
         self.limit_bytes
     }
 
+    async fn reserve_planning(self: &Arc<Self>, bytes: u64) -> io::Result<SourcePlanningPermit> {
+        let cancel = Arc::new(Notify::new());
+        self.acquire(bytes, enabled_notification(&cancel))
+            .await
+            .map(|permit| SourcePlanningPermit { _permit: permit })
+    }
+
     async fn acquire(
         self: &Arc<Self>,
         bytes: u64,
@@ -710,7 +724,11 @@ impl Drop for SourceBudgetPermit {
 }
 
 impl S3RangeReader {
-    pub(crate) fn new(source: Arc<SourceClient>, chunk_size: usize) -> Self {
+    fn with_preloaded(
+        source: Arc<SourceClient>,
+        chunk_size: usize,
+        preloaded: BTreeMap<u64, Bytes>,
+    ) -> Self {
         Self {
             source,
             position: 0,
@@ -719,6 +737,7 @@ impl S3RangeReader {
             buffer: Bytes::new(),
             in_flight: None,
             in_flight_start: 0,
+            preloaded,
         }
     }
 
@@ -732,7 +751,7 @@ impl S3RangeReader {
         }
     }
 
-    fn start_fetch(&mut self) {
+    fn start_fetch(&mut self) -> bool {
         let chunk_size = self.chunk_size.max(1) as u64;
         let start = align_down(self.position, chunk_size);
         let end = self
@@ -740,9 +759,16 @@ impl S3RangeReader {
             .len
             .saturating_sub(1)
             .min(start.saturating_add(chunk_size - 1));
+        if let Some(bytes) = self.preloaded.remove(&start) {
+            self.buffer_start = start;
+            self.buffer = bytes;
+            self.in_flight = None;
+            return true;
+        }
         let source = Arc::clone(&self.source);
         self.in_flight_start = start;
         self.in_flight = Some(Box::pin(async move { source.get_range(start, end).await }));
+        false
     }
 
     fn poll_fetch(&mut self, cx: &mut TaskContext<'_>) -> Poll<io::Result<()>> {
@@ -750,8 +776,8 @@ impl S3RangeReader {
             return Poll::Ready(Ok(()));
         }
 
-        if self.in_flight.is_none() {
-            self.start_fetch();
+        if self.in_flight.is_none() && self.start_fetch() {
+            return Poll::Ready(Ok(()));
         }
 
         let fetched = match self
@@ -1499,6 +1525,8 @@ mod tests {
 
     use aws_sdk_s3::primitives::SdkBody;
     use aws_smithy_http_client::test_util::{ReplayEvent, StaticReplayClient};
+    use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
     use http::{Request, Response};
     use proptest::prelude::*;
     use tokio::io::AsyncReadExt;
@@ -1509,8 +1537,8 @@ mod tests {
     use super::{
         LOCAL_FILE_HEADER_LEN, SourceClient, SourceDiagnostics, UploadBodyState,
         block_indices_for_span, marker_zip_entry_body, plan_marker_zip_entry, plan_source_blocks,
-        range_get_request_error, send_marker_zip_entry_chunks, send_zip_entry_chunks,
-        zip_entry_body, zip_entry_reader,
+        prepare_zip_directory_reader, range_get_request_error, send_marker_zip_entry_chunks,
+        send_zip_entry_chunks, zip_entry_body, zip_entry_reader,
     };
     use crate::replace::MarkerReplacements;
     use crate::s3::archive::{
@@ -1522,7 +1550,118 @@ mod tests {
         DeploymentStats, DestinationChecksumStrategy, MarkerConfig, TrustedEntryIntegrity,
     };
 
+    const INFO_ZIP_FIXTURE: &str =
+        include_str!("../../test-fixtures/external-zips/info-zip.zip.b64");
+    const PYTHON_FORCE_ZIP64_FIXTURE: &str =
+        include_str!("../../test-fixtures/external-zips/python-force-zip64.zip.b64");
+
     struct DropSignal(Arc<AtomicBool>);
+
+    #[tokio::test]
+    async fn external_zip_local_extra_fields_stream_with_directory_bounds() {
+        for (encoded, expected, expected_local_extra, expected_central_extra) in [
+            (
+                INFO_ZIP_FIXTURE,
+                b"info-zip external archive\n" as &[u8],
+                28_u16,
+                24_u16,
+            ),
+            (
+                PYTHON_FORCE_ZIP64_FIXTURE,
+                b"python force_zip64 external archive\n" as &[u8],
+                20_u16,
+                0_u16,
+            ),
+        ] {
+            let bytes = BASE64_STANDARD.decode(encoded.trim()).unwrap();
+            let central_directory_start = bytes
+                .windows(4)
+                .position(|window| window == b"PK\x01\x02")
+                .expect("central directory signature")
+                as u64;
+            let reader = async_zip::base::read::seek::ZipFileReader::with_tokio(
+                std::io::Cursor::new(bytes.clone()),
+            )
+            .await
+            .expect("fixture central directory");
+            let stored = &reader.file().entries()[0];
+            let source_offset = stored.header_offset();
+            let local_extra_offset = usize::try_from(source_offset).unwrap() + 28;
+            let central_extra_offset = usize::try_from(central_directory_start).unwrap() + 30;
+            assert_eq!(
+                u16::from_le_bytes([bytes[local_extra_offset], bytes[local_extra_offset + 1]]),
+                expected_local_extra
+            );
+            assert_eq!(
+                u16::from_le_bytes([bytes[central_extra_offset], bytes[central_extra_offset + 1]]),
+                expected_central_extra
+            );
+
+            let plan = ZipEntryPlan {
+                source_index: 0,
+                relative_key: "index.html".to_string(),
+                destination_key: "index.html".to_string(),
+                size: stored.uncompressed_size(),
+                compressed_size: stored.compressed_size(),
+                compression_code: u16::from(stored.compression()),
+                crc32: stored.crc32(),
+                trusted_integrity: None,
+                source_offset,
+                source_span_end: central_directory_start,
+            };
+            let store = ready_store_for_plan(&bytes, &plan);
+            let mut entry = zip_entry_reader(store, plan).expect("fixture entry reader");
+            let mut output = Vec::new();
+            entry.read_to_end(&mut output).await.unwrap();
+
+            assert_eq!(output, expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn directory_preflight_reuses_its_single_source_request_and_accounts_memory() {
+        for encoded in [INFO_ZIP_FIXTURE, PYTHON_FORCE_ZIP64_FIXTURE] {
+            let bytes = BASE64_STANDARD.decode(encoded.trim()).unwrap();
+            let replay = StaticReplayClient::new(vec![get_success_bytes(bytes.clone())]);
+            let source = replay_source_client(replay.clone(), bytes.len() as u64);
+            let stats = Arc::new(DeploymentStats::default());
+            let budget = super::SourceByteBudget::new(64 * 1024 * 1024, Arc::clone(&stats));
+
+            let prepared = prepare_zip_directory_reader(source, 8 * 1024 * 1024, budget, 0)
+                .await
+                .expect("directory preflight");
+            let planning_permit = prepared._planning_permit;
+            let reader = async_zip::base::read::seek::ZipFileReader::with_tokio(prepared.reader)
+                .await
+                .expect("preloaded parser");
+
+            assert_eq!(reader.file().entries().len(), 1);
+            assert_eq!(replay.actual_requests().count(), 1);
+            let (_, current, high_water) = stats.source_global_memory_for_test();
+            assert!(current > bytes.len() as u64);
+            assert_eq!(current, high_water);
+
+            drop(reader);
+            drop(planning_permit);
+            assert_eq!(stats.source_global_memory_for_test().1, 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn completed_entry_reader_drops_its_source_block_slice_before_releasing_capacity() {
+        let zip = zip_from_entry("buffer.txt", b"source buffer lifetime");
+        let plan = zip_plan_from_archive(&zip, "buffer.txt");
+        let store = ready_store_for_plan(&zip, &plan);
+        let mut reader = super::open_entry_data_reader(store, plan)
+            .await
+            .expect("entry data reader");
+        let mut compressed = Vec::new();
+
+        reader.read_to_end(&mut compressed).await.unwrap();
+
+        assert!(!compressed.is_empty());
+        assert_eq!(reader.buffered_source_bytes_for_test(), 0);
+    }
 
     impl Drop for DropSignal {
         fn drop(&mut self) {
@@ -2337,6 +2476,22 @@ mod tests {
                 .status(206)
                 .header("content-length", bytes.len())
                 .header("content-range", format!("bytes 0-{}/5", bytes.len() - 1))
+                .body(SdkBody::from(bytes))
+                .unwrap(),
+        )
+    }
+
+    fn get_success_bytes(bytes: Vec<u8>) -> ReplayEvent {
+        let len = bytes.len();
+        ReplayEvent::new(
+            Request::builder()
+                .uri("https://s3.test/expected")
+                .body(SdkBody::empty())
+                .unwrap(),
+            Response::builder()
+                .status(206)
+                .header("content-length", len)
+                .header("content-range", format!("bytes 0-{}/{len}", len - 1))
                 .body(SdkBody::from(bytes))
                 .unwrap(),
         )

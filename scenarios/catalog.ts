@@ -12,6 +12,7 @@ export const VERIFY_SCENARIOS = {
     "content/source-overwrite-order-app.js",
     "ShinBucketDeploymentSourceOverwriteOrderDemo",
   ),
+  "external-zips": scenario("content/external-zips-app.js", "ShinBucketDeploymentExternalZipsDemo"),
   "stale-object-cleanup-initial": scenario(
     "updates/stale-object-cleanup-initial-app.js",
     "ShinBucketDeploymentStaleObjectCleanupDemo",
@@ -96,6 +97,7 @@ export const VERIFY_DEFAULT_GROUPS = [
   ["marker-replacement"],
   ["filters"],
   ["source-overwrite-order"],
+  ["external-zips"],
   ["stale-object-cleanup-initial", "stale-object-cleanup-updated"],
   ["stale-object-retention-initial", "stale-object-retention-updated"],
   ["default-retention-initial", "default-retention-updated"],
@@ -122,6 +124,7 @@ export const VERIFY_DESTROY_ORDER = [
   "object-deletion-bucket-only",
   "replacement-safety-updated",
   "source-overwrite-order",
+  "external-zips",
   "large-archive",
   "kms-destination",
   "kms-managed-destination",

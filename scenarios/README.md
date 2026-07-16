@@ -19,6 +19,8 @@ The `marker-replacement` scenario exercises plain, JSON-escaped, JSON, YAML, and
 
 The `replacement-safety-initial` / `replacement-safety-updated` chain changes provider memory while destructive Delete cleanup is enabled. It verifies that a handler replacement keeps the same destination identity and does not remove the newly deployed object.
 
+The `external-zips` scenario deploys archives built by Info-ZIP and Python's forced ZIP64 writer through `Source.bucket`. Both fixtures intentionally have longer local-header extra fields than their central-directory entries.
+
 `pnpm benchmark` runs only the named benchmark scenario and expands the requested config matrix:
 
 ```bash
