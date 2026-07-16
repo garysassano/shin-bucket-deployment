@@ -103,6 +103,10 @@ export const VERIFY_SCENARIOS = {
     "security/dsse-managed-destination-app.js",
     "ShinBucketDeploymentDsseManagedDestinationDemo",
   ),
+  "handler-isolation": scenario(
+    "security/handler-isolation-app.js",
+    "ShinBucketDeploymentHandlerIsolationDemo",
+  ),
   "cloudfront-sync": scenario(
     "cloudfront/cloudfront-sync-app.js",
     "ShinBucketDeploymentCloudFrontSyncDemo",
@@ -144,6 +148,7 @@ export const VERIFY_DEFAULT_GROUPS = [
   ["kms-destination"],
   ["kms-managed-destination"],
   ["dsse-managed-destination"],
+  ["handler-isolation"],
   ["cloudfront-sync"],
   ["cloudfront-async"],
 ] as const satisfies ReadonlyArray<ReadonlyArray<keyof typeof VERIFY_SCENARIOS>>;
@@ -169,6 +174,7 @@ export const VERIFY_DESTROY_ORDER = [
   "kms-destination",
   "kms-managed-destination",
   "dsse-managed-destination",
+  "handler-isolation",
   "cloudfront-sync",
   "cloudfront-async",
 ] as const;

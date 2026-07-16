@@ -38,6 +38,14 @@ export function validateDeploymentProps(scope: Construct, props: ShinBucketDeplo
       }
     | undefined;
 
+  if (props.shareHandler !== undefined && typeof props.shareHandler !== "boolean") {
+    throw new ValidationError(
+      "ShinBucketDeploymentInvalidShareHandler",
+      "shareHandler must be a boolean.",
+      scope,
+    );
+  }
+
   if (maybeUnsupported.prune !== undefined) {
     throw new ValidationError(
       "ShinBucketDeploymentPruneUnsupported",
