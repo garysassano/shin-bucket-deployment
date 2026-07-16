@@ -83,7 +83,7 @@ describe("ShinBucketDeployment validation and option coverage", () => {
       PolicyDocument: {
         Statement: Match.arrayWith([
           Match.objectLike({
-            Action: "s3:DeleteObject*",
+            Action: "s3:DeleteObject",
             Resource: {
               "Fn::Join": [
                 "",
@@ -161,7 +161,7 @@ describe("ShinBucketDeployment validation and option coverage", () => {
       PolicyDocument: {
         Statement: Match.arrayWith([
           Match.objectLike({
-            Action: "s3:DeleteObject*",
+            Action: "s3:DeleteObject",
             Resource: {
               "Fn::Join": [
                 "",

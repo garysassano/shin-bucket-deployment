@@ -317,7 +317,7 @@ test("scopes destination object permissions to the destination prefix", () => {
     PolicyDocument: {
       Statement: Match.arrayWith([
         Match.objectLike({
-          Action: Match.arrayWith(["s3:GetObject", "s3:PutObject", "s3:Abort*"]),
+          Action: Match.arrayWith(["s3:GetObject", "s3:PutObject"]),
           Resource: {
             "Fn::Join": [
               "",
@@ -329,7 +329,7 @@ test("scopes destination object permissions to the destination prefix", () => {
           },
         }),
         Match.objectLike({
-          Action: "s3:DeleteObject*",
+          Action: "s3:DeleteObject",
           Resource: {
             "Fn::Join": [
               "",
@@ -359,6 +359,11 @@ test("scopes destination object permissions to the destination prefix", () => {
   expect(rendered).not.toContain("s3:GetObjectAcl");
   expect(rendered).not.toContain("s3:GetBucketAcl");
   expect(rendered).not.toContain("s3:PutObjectAcl");
+  expect(rendered).not.toContain("s3:PutObjectLegalHold");
+  expect(rendered).not.toContain("s3:PutObjectRetention");
+  expect(rendered).not.toContain("s3:PutObjectTagging");
+  expect(rendered).not.toContain("s3:PutObjectVersionTagging");
+  expect(rendered).not.toContain("s3:Abort");
 });
 
 test.each([
@@ -620,7 +625,7 @@ test("keeps delete and list permissions scoped when current object deletion is e
     PolicyDocument: {
       Statement: Match.arrayWith([
         Match.objectLike({
-          Action: "s3:DeleteObject*",
+          Action: "s3:DeleteObject",
           Resource: {
             "Fn::Join": [
               "",
@@ -665,13 +670,7 @@ test("grants destination KMS permissions when the destination bucket is encrypte
     PolicyDocument: {
       Statement: Match.arrayWith([
         Match.objectLike({
-          Action: Match.arrayWith([
-            "kms:Decrypt",
-            "kms:DescribeKey",
-            "kms:Encrypt",
-            "kms:ReEncrypt*",
-            "kms:GenerateDataKey*",
-          ]),
+          Action: Match.arrayWith(["kms:Decrypt", "kms:GenerateDataKey"]),
           Resource: {
             "Fn::GetAtt": ["Key961B73FD", "Arn"],
           },
@@ -679,4 +678,104 @@ test("grants destination KMS permissions when the destination bucket is encrypte
       ]),
     },
   });
+
+  const rendered = JSON.stringify(template.toJSON());
+  expect(rendered).not.toContain("kms:DescribeKey");
+  expect(rendered).not.toContain("kms:Encrypt");
+  expect(rendered).not.toContain("kms:ReEncrypt");
+});
+
+test("omits delete and ownership-read permissions when all deletion is disabled", () => {
+  const stack = new Stack();
+  const destinationBucket = new Bucket(stack, "Dest");
+
+  new ShinBucketDeployment(stack, "Deploy", {
+    sources: [Source.data("index.html", "ok")],
+    destinationBucket,
+    destinationKeyPrefix: "site",
+    destinationLifecycle: {
+      onDeploy: { deleteStaleObjects: false },
+    },
+    bundling: testBundling(),
+  });
+
+  const rendered = JSON.stringify(Template.fromStack(stack).findResources("AWS::IAM::Policy"));
+  expect(rendered).not.toContain("s3:DeleteObject");
+  expect(rendered).not.toContain("s3:GetBucketTagging");
+});
+
+test("keeps explicit same-bucket previous cleanup broad and deliberate", () => {
+  const stack = new Stack();
+  const destinationBucket = new Bucket(stack, "Dest");
+
+  new ShinBucketDeployment(stack, "Deploy", {
+    sources: [Source.data("index.html", "ok")],
+    destinationBucket,
+    destinationKeyPrefix: "site/current",
+    destinationLifecycle: {
+      onDeploy: { deleteStaleObjects: false },
+      onChange: { deleteObjects: true },
+    },
+    bundling: testBundling(),
+  });
+
+  Template.fromStack(stack).hasResourceProperties("AWS::IAM::Policy", {
+    PolicyDocument: {
+      Statement: Match.arrayWith([
+        Match.objectLike({
+          Action: "s3:DeleteObject",
+          Resource: {
+            "Fn::Join": [
+              "",
+              Match.arrayWith([
+                Match.objectLike({ "Fn::GetAtt": Match.arrayWith(["DestC383B82A", "Arn"]) }),
+                "/*",
+              ]),
+            ],
+          },
+        }),
+        Match.objectLike({
+          Action: "s3:ListBucket",
+          Resource: Match.objectLike({ "Fn::GetAtt": Match.arrayWith(["DestC383B82A", "Arn"]) }),
+        }),
+        Match.objectLike({
+          Action: "s3:GetBucketTagging",
+          Resource: Match.objectLike({ "Fn::GetAtt": Match.arrayWith(["DestC383B82A", "Arn"]) }),
+        }),
+      ]),
+    },
+  });
+});
+
+test("limits cross-bucket cleanup authority to the explicitly authorized old bucket", () => {
+  const stack = new Stack();
+  const previousBucket = new Bucket(stack, "PreviousDest");
+  const destinationBucket = new Bucket(stack, "CurrentDest");
+
+  new ShinBucketDeployment(stack, "Deploy", {
+    sources: [Source.data("index.html", "ok")],
+    destinationBucket,
+    destinationKeyPrefix: "site/current",
+    destinationLifecycle: {
+      onDeploy: { deleteStaleObjects: false },
+      onChange: { deleteObjects: true, fromBucket: previousBucket },
+    },
+    bundling: testBundling(),
+  });
+
+  const policies = Template.fromStack(stack).findResources("AWS::IAM::Policy") as Record<
+    string,
+    { Properties: { PolicyDocument: { Statement: Array<Record<string, unknown>> } } }
+  >;
+  const statements = Object.values(policies).flatMap(
+    ({ Properties }) => Properties.PolicyDocument.Statement,
+  );
+  const deleteStatements = statements.filter(({ Action }) => Action === "s3:DeleteObject");
+  const ownershipStatements = statements.filter(({ Action }) => Action === "s3:GetBucketTagging");
+
+  expect(deleteStatements).toHaveLength(1);
+  expect(JSON.stringify(deleteStatements)).toContain("PreviousDest");
+  expect(JSON.stringify(deleteStatements)).not.toContain("CurrentDest");
+  expect(ownershipStatements).toHaveLength(1);
+  expect(JSON.stringify(ownershipStatements)).toContain("PreviousDest");
 });

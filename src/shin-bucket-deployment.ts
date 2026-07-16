@@ -545,6 +545,7 @@ export class ShinBucketDeployment extends Construct {
     grantDestinationPermissions(this, this.handlerFunction, {
       destinationBucket: this.destinationBucket,
       destinationKeyPrefix: props.destinationKeyPrefix,
+      deleteCurrentObjects: deleteStaleObjectsOnDeploy || deleteObjectsOnDelete,
       previousDestinationBucket,
       distribution: props.distribution,
       previousDistribution,

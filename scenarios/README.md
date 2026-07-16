@@ -21,7 +21,7 @@ The `replacement-safety-initial` / `replacement-safety-updated` chain changes pr
 
 The `external-zips` scenario deploys archives built by Info-ZIP and Python's forced ZIP64 writer through `Source.bucket`. Both fixtures intentionally have longer local-header extra fields than their central-directory entries.
 
-The lifecycle safety chains cover a root deployment sharing a bucket with a child-prefix deployment, a child-to-parent move without cleanup authorization, and the same move with explicit `onChange.deleteObjects`. Together they prove that owner overlap retains co-tenant data and that child cleanup is authorization-controlled and manifest-aware.
+The lifecycle safety chains cover a root deployment sharing a bucket with a child-prefix deployment, a child-to-parent move without cleanup authorization, the same move with explicit `onChange.deleteObjects`, and an explicitly authorized cross-bucket move. Together they prove that owner overlap retains co-tenant data and that previous-destination cleanup is authorization-controlled and manifest-aware.
 
 `pnpm benchmark` runs only the named benchmark scenario and expands the requested config matrix:
 
