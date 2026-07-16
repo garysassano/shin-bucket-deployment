@@ -10,7 +10,6 @@ use aws_sdk_s3::config::RequestChecksumCalculation;
 use aws_sdk_s3::config::retry::RetryConfig;
 use aws_sdk_s3::error::ProvideErrorMetadata;
 use aws_sdk_s3::error::SdkError;
-use aws_sdk_s3::operation::put_object::PutObjectError;
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::{ChecksumAlgorithm, ChecksumMode, ChecksumType, MetadataDirective};
 #[cfg(test)]
@@ -22,7 +21,6 @@ use bytes::Bytes;
 use crc32fast::Hasher as Crc32Hasher;
 use fastrand::Rng;
 use md5::{Digest as Md5Digest, Md5};
-#[cfg(test)]
 use sha2::Sha256;
 use tokio::io::{AsyncRead, AsyncReadExt};
 
@@ -39,13 +37,20 @@ use super::archive::{
     validate_zip_entry_size_not_exceeded, zip_entry_body, zip_entry_reader,
 };
 use super::content_type::{apply_copy_content_type, apply_put_content_type};
-use super::destination::{DestinationObject, destination_md5_and_size_match};
+use super::destination::{
+    DestinationObject, DestinationWritePrecondition, destination_md5_and_size_match,
+    destination_write_precondition,
+};
 use super::planner::{CopyPlan, ZipEntryPlan};
 use super::{S3_SINGLE_PUT_LIMIT, ZIP_ENTRY_READ_CHUNK_BYTES, source_window_bytes_for_archive};
 
 mod scheduler;
 
 use scheduler::TransferScheduler;
+
+const COPY_RECONCILIATION_METADATA_KEY: &str = "shin-copy-identity";
+// Bump whenever the CopyObject output contract changes (for example, inferred metadata).
+const COPY_RECONCILIATION_TOKEN_VERSION: &str = "shin-copy-v1";
 
 enum UploadPayload {
     #[cfg(test)]
@@ -148,7 +153,7 @@ struct PreparedUploadPayload {
 }
 
 #[derive(Default)]
-struct PutDiagnostics {
+struct WriteDiagnostics {
     wire_attempts: AtomicU64,
     failed_attempts: AtomicU64,
     retry_attempts: AtomicU64,
@@ -160,7 +165,7 @@ struct PutDiagnostics {
 }
 
 #[derive(Debug)]
-struct PutDiagnosticsSnapshot {
+struct WriteDiagnosticsSnapshot {
     wire_attempts: u64,
     failed_attempts: u64,
     retry_attempts: u64,
@@ -171,7 +176,7 @@ struct PutDiagnosticsSnapshot {
     failures_by_error_code: BTreeMap<String, u64>,
 }
 
-struct PutRetryCoordinator {
+struct WriteRetryCoordinator {
     throttle_until: Mutex<Option<Instant>>,
     jitter: Mutex<Rng>,
 }
@@ -181,52 +186,71 @@ struct PutContext<'a> {
     destination_bucket: &'a str,
     checksum_strategy: DestinationChecksumStrategy,
     retry: &'a PutObjectRetryOptions,
-    retry_coordinator: &'a PutRetryCoordinator,
-    diagnostics: &'a PutDiagnostics,
+    retry_coordinator: &'a WriteRetryCoordinator,
+    diagnostics: &'a WriteDiagnostics,
     stats: &'a DeploymentStats,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum PutPrecondition {
-    IfMatch(String),
-    IfNoneMatch,
+struct CopyContext<'a> {
+    destination_s3: &'a S3Client,
+    destination_bucket: &'a str,
+    retry: &'a PutObjectRetryOptions,
+    retry_coordinator: &'a WriteRetryCoordinator,
+    diagnostics: &'a WriteDiagnostics,
+    stats: &'a DeploymentStats,
 }
 
 pub(super) async fn execute_copy_plans(
     state: &AppState,
-    destination_bucket: &str,
+    request: &DeploymentRequest,
     copy_plans: Vec<CopyPlan>,
-    max_parallel_transfers: usize,
     execution: TransferExecution,
 ) -> Result<()> {
     let TransferExecution { stats, deadlines } = execution;
-    let mut scheduler =
-        TransferScheduler::new(max_parallel_transfers, Arc::clone(&stats), deadlines);
+    let copy_diagnostics = Arc::new(WriteDiagnostics::default());
+    let retry_coordinator = Arc::new(WriteRetryCoordinator::new());
+    let retry = request.runtime.put_object_retry.clone();
+    let mut scheduler = TransferScheduler::new(
+        request.runtime.max_parallel_transfers,
+        Arc::clone(&stats),
+        deadlines,
+    );
 
-    for plan in copy_plans {
-        let state = state.clone();
-        let destination_bucket = destination_bucket.to_string();
-        let copied_bytes = plan.size.unwrap_or(0);
-        let stats = Arc::clone(&stats);
+    let copy_result = async {
+        for plan in copy_plans {
+            let state = state.clone();
+            let destination_bucket = request.dest_bucket_name.clone();
+            let copied_bytes = plan.size;
+            let retry = retry.clone();
+            let retry_coordinator = Arc::clone(&retry_coordinator);
+            let diagnostics = Arc::clone(&copy_diagnostics);
+            let stats = Arc::clone(&stats);
 
-        scheduler
-            .spawn(async move {
-                copy_source_object(
-                    &state,
-                    &destination_bucket,
-                    &plan.source_bucket,
-                    &plan.source_key,
-                    plan.expected_etag.as_deref(),
-                    &plan.destination_key,
-                )
+            scheduler
+                .spawn(async move {
+                    copy_source_object(
+                        CopyContext {
+                            destination_s3: &state.destination_s3,
+                            destination_bucket: &destination_bucket,
+                            retry: &retry,
+                            retry_coordinator: &retry_coordinator,
+                            diagnostics: &diagnostics,
+                            stats: &stats,
+                        },
+                        &plan,
+                    )
+                    .await?;
+                    stats.add_copied_object(copied_bytes);
+                    Ok(())
+                })
                 .await?;
-                stats.add_copied_object(copied_bytes);
-                Ok(())
-            })
-            .await?;
-    }
+        }
 
-    scheduler.finish().await
+        scheduler.finish().await
+    }
+    .await;
+    log_copy_diagnostics(&retry, &copy_diagnostics);
+    copy_result
 }
 
 pub(super) async fn upload_zip_entries(
@@ -239,8 +263,8 @@ pub(super) async fn upload_zip_entries(
     execution: TransferExecution,
 ) -> Result<()> {
     let TransferExecution { stats, deadlines } = execution;
-    let put_diagnostics = Arc::new(PutDiagnostics::default());
-    let put_retry_coordinator = Arc::new(PutRetryCoordinator::new());
+    let put_diagnostics = Arc::new(WriteDiagnostics::default());
+    let put_retry_coordinator = Arc::new(WriteRetryCoordinator::new());
     let mut archive_diagnostics_sources = Vec::new();
     let mut block_stores = Vec::new();
     let mut scheduler = TransferScheduler::new(
@@ -328,7 +352,7 @@ pub(super) async fn upload_zip_entries(
                         };
 
                         let precondition =
-                            put_precondition_for_destination(destination_object.as_ref());
+                            destination_write_precondition(destination_object.as_ref());
                         upload_payload(
                             PutContext {
                                 destination_s3: &state.destination_s3,
@@ -463,51 +487,179 @@ fn should_compare_marker_free_entry(
         && destination_object.is_some_and(|object| object.size == Some(plan.size))
 }
 
-async fn copy_source_object(
-    state: &AppState,
-    destination_bucket: &str,
-    source_bucket: &str,
-    source_key: &str,
-    expected_etag: Option<&str>,
-    destination_key: &str,
-) -> Result<()> {
+async fn copy_source_object(context: CopyContext<'_>, plan: &CopyPlan) -> Result<()> {
     let copy_source = format!(
         "{}/{}",
-        source_bucket,
-        urlencoding::encode(source_key).replace('+', "%20")
+        plan.source_bucket,
+        urlencoding::encode(&plan.source_key).replace('+', "%20")
     );
+    let reconciliation_identity = copy_reconciliation_identity(context.destination_bucket, plan);
 
     tracing::info!(
-        source_bucket,
-        source_key,
-        destination_key,
+        source_bucket = plan.source_bucket,
+        source_key = plan.source_key,
+        destination_key = plan.destination_key,
         "copying source object"
     );
 
-    let mut builder = state
-        .destination_s3
-        .copy_object()
-        .bucket(destination_bucket)
-        .key(destination_key)
-        .copy_source(copy_source)
-        .metadata_directive(MetadataDirective::Replace);
+    let max_attempts = context.retry.max_attempts.max(1);
+    for attempt in 1..=max_attempts {
+        context
+            .retry_coordinator
+            .wait_for_throttle_cooldown(context.diagnostics)
+            .await;
+        let request = context
+            .destination_s3
+            .copy_object()
+            .bucket(context.destination_bucket)
+            .key(&plan.destination_key)
+            .copy_source(&copy_source)
+            .copy_source_if_match(quoted_etag(&plan.expected_etag))
+            .metadata(COPY_RECONCILIATION_METADATA_KEY, &reconciliation_identity)
+            .metadata_directive(MetadataDirective::Replace);
+        let request = apply_copy_precondition(request, plan.destination_precondition.as_ref());
+        context
+            .diagnostics
+            .wire_attempts
+            .fetch_add(1, Ordering::Relaxed);
 
-    if let Some(etag) = expected_etag {
-        builder = builder.copy_source_if_match(quoted_etag(etag));
+        match apply_copy_content_type(request, &plan.destination_key)
+            .customize()
+            .config_override(
+                aws_sdk_s3::config::Builder::new().retry_config(RetryConfig::disabled()),
+            )
+            .send()
+            .await
+        {
+            Ok(_) => return Ok(()),
+            Err(error) => {
+                let code = write_error_code(&error);
+                let throttled = code.as_deref().is_some_and(is_write_throttle_error_code);
+                context.diagnostics.record_failure(&error, throttled);
+                let conditional_conflict = is_conditional_write_conflict(&error);
+                if conditional_conflict {
+                    context.stats.add_conditional_conflict();
+                }
+                let retryable = is_retryable_write_error(&error)
+                    || is_retryable_conditional_write_conflict(&error);
+                if (conditional_conflict || (retryable && attempt == max_attempts))
+                    && reconcile_copy(&context, plan, &reconciliation_identity).await
+                {
+                    return Ok(());
+                }
+                if retryable && attempt < max_attempts {
+                    context
+                        .diagnostics
+                        .retry_attempts
+                        .fetch_add(1, Ordering::Relaxed);
+                    tracing::warn!(
+                        destination_key = plan.destination_key,
+                        attempt,
+                        max_attempts,
+                        error_code = ?code.as_deref(),
+                        error = %write_error_message(&error),
+                        "destination CopyObject attempt failed; retrying"
+                    );
+                    wait_for_write_retry(
+                        context.retry_coordinator,
+                        context.diagnostics,
+                        context.retry,
+                        attempt,
+                        throttled,
+                    )
+                    .await;
+                    continue;
+                }
+                return Err(error).with_context(|| {
+                    format!(
+                        "failed to copy {}/{} to {}",
+                        plan.source_bucket, plan.source_key, plan.destination_key
+                    )
+                });
+            }
+        }
     }
 
-    apply_copy_content_type(builder, destination_key)
-        .send()
-        .await
-        .with_context(|| {
-            format!("failed to copy {source_bucket}/{source_key} to {destination_key}")
-        })?;
-
-    Ok(())
+    Err(anyhow!("failed to copy {}", plan.destination_key))
 }
 
 fn quoted_etag(etag: &str) -> String {
     format!("\"{etag}\"")
+}
+
+fn apply_copy_precondition(
+    request: aws_sdk_s3::operation::copy_object::builders::CopyObjectFluentBuilder,
+    precondition: Option<&DestinationWritePrecondition>,
+) -> aws_sdk_s3::operation::copy_object::builders::CopyObjectFluentBuilder {
+    match precondition {
+        Some(DestinationWritePrecondition::IfMatch(etag)) => request.if_match(etag.as_str()),
+        Some(DestinationWritePrecondition::IfNoneMatch) => request.if_none_match("*"),
+        None => request,
+    }
+}
+
+fn copy_reconciliation_identity(destination_bucket: &str, plan: &CopyPlan) -> String {
+    let mut hasher = Sha256::new();
+    for component in [
+        COPY_RECONCILIATION_TOKEN_VERSION,
+        destination_bucket,
+        &plan.destination_key,
+        &plan.source_bucket,
+        &plan.source_key,
+        &plan.expected_etag,
+    ] {
+        hasher.update(
+            u64::try_from(component.len())
+                .unwrap_or(u64::MAX)
+                .to_be_bytes(),
+        );
+        hasher.update(component.as_bytes());
+    }
+    hasher.update(plan.size.to_be_bytes());
+    lower_hex(&hasher.finalize())
+}
+
+async fn reconcile_copy(
+    context: &CopyContext<'_>,
+    plan: &CopyPlan,
+    expected_identity: &str,
+) -> bool {
+    let head = match context
+        .destination_s3
+        .head_object()
+        .bucket(context.destination_bucket)
+        .key(&plan.destination_key)
+        .customize()
+        .config_override(aws_sdk_s3::config::Builder::new().retry_config(RetryConfig::disabled()))
+        .send()
+        .await
+    {
+        Ok(head) => head,
+        Err(error) => {
+            tracing::warn!(
+                destination_key = plan.destination_key,
+                error = %error,
+                "could not reconcile an ambiguous CopyObject result"
+            );
+            return false;
+        }
+    };
+    let size_matches = head
+        .content_length()
+        .and_then(|size| u64::try_from(size).ok())
+        == Some(plan.size);
+    let identity_matches = head
+        .metadata()
+        .and_then(|metadata| metadata.get(COPY_RECONCILIATION_METADATA_KEY))
+        .is_some_and(|identity| identity == expected_identity);
+    if !size_matches || !identity_matches {
+        return false;
+    }
+    tracing::info!(
+        destination_key = plan.destination_key,
+        "ambiguous CopyObject result matched the intended object"
+    );
+    true
 }
 
 async fn prepare_zip_entry_for_comparison(
@@ -559,7 +711,7 @@ async fn upload_payload(
     context: PutContext<'_>,
     destination_key: &str,
     payload: UploadPayload,
-    precondition: Option<PutPrecondition>,
+    precondition: Option<DestinationWritePrecondition>,
 ) -> Result<()> {
     payload.prepare_checksum(context.checksum_strategy);
     let mut last_error = None;
@@ -608,13 +760,13 @@ async fn upload_payload(
                 return Ok(());
             }
             Err(error)
-                if !is_conditional_put_conflict(&error)
+                if !is_conditional_write_conflict(&error)
                     && payload.body_state().validation_error().is_none()
-                    && is_retryable_put_error(&error)
+                    && is_retryable_write_error(&error)
                     && attempt < max_attempts =>
             {
-                let code = put_error_code(&error);
-                let throttled = code.as_deref().is_some_and(is_put_throttle_error_code);
+                let code = write_error_code(&error);
+                let throttled = code.as_deref().is_some_and(is_write_throttle_error_code);
                 context.diagnostics.record_failure(&error, throttled);
                 context
                     .diagnostics
@@ -625,30 +777,25 @@ async fn upload_payload(
                     attempt,
                     max_attempts,
                     error_code = ?code.as_deref(),
-                    error = %put_error_message(&error),
+                    error = %write_error_message(&error),
                     "destination PutObject attempt failed; retrying"
                 );
-                let delay =
-                    context
-                        .retry_coordinator
-                        .retry_delay(attempt, throttled, context.retry);
-                if throttled {
-                    context.retry_coordinator.extend_throttle_cooldown(delay);
-                } else {
-                    context
-                        .diagnostics
-                        .retry_wait_millis
-                        .fetch_add(duration_millis_u64(delay), Ordering::Relaxed);
-                    tokio::time::sleep(delay).await;
-                }
+                wait_for_write_retry(
+                    context.retry_coordinator,
+                    context.diagnostics,
+                    context.retry,
+                    attempt,
+                    throttled,
+                )
+                .await;
                 last_error = Some(error);
             }
             Err(error) => {
-                let throttled = put_error_code(&error)
+                let throttled = write_error_code(&error)
                     .as_deref()
-                    .is_some_and(is_put_throttle_error_code);
+                    .is_some_and(is_write_throttle_error_code);
                 context.diagnostics.record_failure(&error, throttled);
-                if is_conditional_put_conflict(&error) {
+                if is_conditional_write_conflict(&error) {
                     context.stats.add_conditional_conflict();
                     if reconcile_conditional_put(&context, destination_key, &payload).await {
                         context.stats.add_uploaded_object(payload.content_length());
@@ -685,34 +832,18 @@ fn request_checksum_calculation(
     }
 }
 
-fn put_precondition_for_destination(
-    destination_object: Option<&DestinationObject>,
-) -> Option<PutPrecondition> {
-    match destination_object {
-        None => Some(PutPrecondition::IfNoneMatch),
-        Some(object) => object
-            .etag
-            .as_deref()
-            .map(|etag| PutPrecondition::IfMatch(quote_etag(etag))),
-    }
-}
-
-fn quote_etag(etag: &str) -> String {
-    format!("\"{}\"", etag.trim_matches('"'))
-}
-
 fn apply_put_precondition(
     request: aws_sdk_s3::operation::put_object::builders::PutObjectFluentBuilder,
-    precondition: Option<&PutPrecondition>,
+    precondition: Option<&DestinationWritePrecondition>,
 ) -> aws_sdk_s3::operation::put_object::builders::PutObjectFluentBuilder {
     match precondition {
-        Some(PutPrecondition::IfMatch(etag)) => request.if_match(etag.as_str()),
-        Some(PutPrecondition::IfNoneMatch) => request.if_none_match("*"),
+        Some(DestinationWritePrecondition::IfMatch(etag)) => request.if_match(etag.as_str()),
+        Some(DestinationWritePrecondition::IfNoneMatch) => request.if_none_match("*"),
         None => request,
     }
 }
 
-fn is_conditional_put_conflict(error: &SdkError<PutObjectError>) -> bool {
+fn is_conditional_write_conflict<E: ProvideErrorMetadata>(error: &SdkError<E>) -> bool {
     if let SdkError::ServiceError(service) = error {
         let status = service.raw().status().as_u16();
         if status == 409 || status == 412 {
@@ -721,9 +852,18 @@ fn is_conditional_put_conflict(error: &SdkError<PutObjectError>) -> bool {
     }
 
     matches!(
-        put_error_code(error).as_deref(),
+        write_error_code(error).as_deref(),
         Some("ConditionalRequestConflict" | "PreconditionFailed")
     )
+}
+
+fn is_retryable_conditional_write_conflict<E: ProvideErrorMetadata>(error: &SdkError<E>) -> bool {
+    if let SdkError::ServiceError(service) = error
+        && service.raw().status().as_u16() == 409
+    {
+        return true;
+    }
+    write_error_code(error).as_deref() == Some("ConditionalRequestConflict")
 }
 
 fn payload_body(
@@ -920,10 +1060,12 @@ fn md5_hex(bytes: &[u8]) -> String {
 }
 
 fn finalize_md5(hasher: Md5) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-
     let digest = hasher.finalize();
-    let bytes: &[u8] = digest.as_ref();
+    lower_hex(digest.as_ref())
+}
+
+fn lower_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut output = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
         output.push(HEX[(byte >> 4) as usize] as char);
@@ -949,21 +1091,27 @@ async fn abort_and_drain_body_tasks(
     first_error.map_or(Ok(()), Err)
 }
 
-fn put_retry_cap_millis(attempt: usize, throttled: bool, retry: &PutObjectRetryOptions) -> u64 {
-    let (base, max) = put_retry_delay_bounds(throttled, retry);
+fn write_retry_cap_millis(attempt: usize, throttled: bool, retry: &PutObjectRetryOptions) -> u64 {
+    let (base, max) = write_retry_delay_bounds(throttled, retry);
     let shift = u32::try_from(attempt.saturating_sub(1)).unwrap_or(u32::MAX);
     let multiplier = 1_u64.checked_shl(shift).unwrap_or(u64::MAX);
     base.saturating_mul(multiplier).min(max)
 }
 
-fn is_retryable_put_error(error: &SdkError<PutObjectError>) -> bool {
+fn is_retryable_write_error<E: ProvideErrorMetadata>(error: &SdkError<E>) -> bool {
     match error {
         SdkError::ServiceError(service) => {
             let status = service.raw().status().as_u16();
             status == 408
                 || status == 429
                 || status >= 500
-                || service.err().code().is_some_and(is_put_throttle_error_code)
+                || service.err().code().is_some_and(|code| {
+                    is_write_throttle_error_code(code)
+                        || matches!(
+                            code,
+                            "InternalError" | "RequestTimeout" | "RequestTimeoutException"
+                        )
+                })
         }
         SdkError::TimeoutError(_) | SdkError::DispatchFailure(_) => true,
         SdkError::ResponseError(response) => {
@@ -975,7 +1123,7 @@ fn is_retryable_put_error(error: &SdkError<PutObjectError>) -> bool {
     }
 }
 
-fn put_retry_delay_bounds(throttled: bool, retry: &PutObjectRetryOptions) -> (u64, u64) {
+fn write_retry_delay_bounds(throttled: bool, retry: &PutObjectRetryOptions) -> (u64, u64) {
     if throttled {
         (
             retry.slowdown_retry_base_delay_ms,
@@ -997,22 +1145,40 @@ fn duration_millis_u64(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
-impl PutDiagnostics {
-    fn record_failure(&self, error: &SdkError<PutObjectError>, throttled: bool) {
+async fn wait_for_write_retry(
+    coordinator: &WriteRetryCoordinator,
+    diagnostics: &WriteDiagnostics,
+    retry: &PutObjectRetryOptions,
+    attempt: usize,
+    throttled: bool,
+) {
+    let delay = coordinator.retry_delay(attempt, throttled, retry);
+    if throttled {
+        coordinator.extend_throttle_cooldown(delay);
+    } else {
+        diagnostics
+            .retry_wait_millis
+            .fetch_add(duration_millis_u64(delay), Ordering::Relaxed);
+        tokio::time::sleep(delay).await;
+    }
+}
+
+impl WriteDiagnostics {
+    fn record_failure<E: ProvideErrorMetadata>(&self, error: &SdkError<E>, throttled: bool) {
         self.failed_attempts.fetch_add(1, Ordering::Relaxed);
         if throttled {
             self.throttled_attempts.fetch_add(1, Ordering::Relaxed);
         }
-        let code = put_error_code(error).unwrap_or_else(|| put_error_kind(error).to_string());
+        let code = write_error_code(error).unwrap_or_else(|| write_error_kind(error).to_string());
         let mut failures = self
             .failures_by_error_code
             .lock()
-            .expect("put diagnostics mutex should not be poisoned");
+            .expect("write diagnostics mutex should not be poisoned");
         *failures.entry(code).or_default() += 1;
     }
 
-    fn snapshot(&self) -> PutDiagnosticsSnapshot {
-        PutDiagnosticsSnapshot {
+    fn snapshot(&self) -> WriteDiagnosticsSnapshot {
+        WriteDiagnosticsSnapshot {
             wire_attempts: self.wire_attempts.load(Ordering::Relaxed),
             failed_attempts: self.failed_attempts.load(Ordering::Relaxed),
             retry_attempts: self.retry_attempts.load(Ordering::Relaxed),
@@ -1025,13 +1191,13 @@ impl PutDiagnostics {
             failures_by_error_code: self
                 .failures_by_error_code
                 .lock()
-                .expect("put diagnostics mutex should not be poisoned")
+                .expect("write diagnostics mutex should not be poisoned")
                 .clone(),
         }
     }
 }
 
-impl PutRetryCoordinator {
+impl WriteRetryCoordinator {
     fn new() -> Self {
         Self {
             throttle_until: Mutex::new(None),
@@ -1039,13 +1205,13 @@ impl PutRetryCoordinator {
         }
     }
 
-    async fn wait_for_throttle_cooldown(&self, diagnostics: &PutDiagnostics) {
+    async fn wait_for_throttle_cooldown(&self, diagnostics: &WriteDiagnostics) {
         loop {
             let delay = {
                 let throttle_until = self
                     .throttle_until
                     .lock()
-                    .expect("put retry coordinator mutex should not be poisoned");
+                    .expect("write retry coordinator mutex should not be poisoned");
                 throttle_until.and_then(|deadline| deadline.checked_duration_since(Instant::now()))
             };
             let Some(delay) = delay else {
@@ -1071,7 +1237,7 @@ impl PutRetryCoordinator {
         throttled: bool,
         retry: &PutObjectRetryOptions,
     ) -> Duration {
-        let delay_millis = put_retry_cap_millis(attempt, throttled, retry);
+        let delay_millis = write_retry_cap_millis(attempt, throttled, retry);
         match retry.jitter {
             PutObjectRetryJitter::Full => full_jitter_delay(delay_millis, self.next_jitter()),
             PutObjectRetryJitter::None => Duration::from_millis(delay_millis),
@@ -1088,7 +1254,7 @@ impl PutRetryCoordinator {
         let mut throttle_until = self
             .throttle_until
             .lock()
-            .expect("put retry coordinator mutex should not be poisoned");
+            .expect("write retry coordinator mutex should not be poisoned");
         if throttle_until.is_none_or(|current| deadline > current) {
             *throttle_until = Some(deadline);
         }
@@ -1097,12 +1263,12 @@ impl PutRetryCoordinator {
     fn next_jitter(&self) -> u64 {
         self.jitter
             .lock()
-            .expect("put retry jitter mutex should not be poisoned")
+            .expect("write retry jitter mutex should not be poisoned")
             .u64(..)
     }
 }
 
-fn put_error_kind(error: &SdkError<PutObjectError>) -> &'static str {
+fn write_error_kind<E>(error: &SdkError<E>) -> &'static str {
     match error {
         SdkError::ConstructionFailure(_) => "ConstructionFailure",
         SdkError::TimeoutError(_) => "TimeoutError",
@@ -1163,7 +1329,7 @@ fn log_source_diagnostics(
 
 fn log_put_diagnostics(
     retry: &PutObjectRetryOptions,
-    diagnostics: &PutDiagnostics,
+    diagnostics: &WriteDiagnostics,
     stats: &DeploymentStats,
 ) {
     let diagnostics = diagnostics.snapshot();
@@ -1195,7 +1361,28 @@ fn log_put_diagnostics(
     );
 }
 
-fn is_put_throttle_error_code(code: &str) -> bool {
+fn log_copy_diagnostics(retry: &PutObjectRetryOptions, diagnostics: &WriteDiagnostics) {
+    let diagnostics = diagnostics.snapshot();
+    tracing::info!(
+        max_attempts = retry.max_attempts,
+        retry_base_delay_ms = retry.retry_base_delay_ms,
+        retry_max_delay_ms = retry.retry_max_delay_ms,
+        slowdown_retry_base_delay_ms = retry.slowdown_retry_base_delay_ms,
+        slowdown_retry_max_delay_ms = retry.slowdown_retry_max_delay_ms,
+        retry_jitter = ?retry.jitter,
+        wire_attempts = diagnostics.wire_attempts,
+        failed_attempts = diagnostics.failed_attempts,
+        retry_attempts = diagnostics.retry_attempts,
+        throttled_attempts = diagnostics.throttled_attempts,
+        retry_wait_millis = diagnostics.retry_wait_millis,
+        throttle_cooldown_waits = diagnostics.throttle_cooldown_waits,
+        throttle_cooldown_wait_millis = diagnostics.throttle_cooldown_wait_millis,
+        failures_by_error_code = ?diagnostics.failures_by_error_code,
+        "destination CopyObject diagnostics"
+    );
+}
+
+fn is_write_throttle_error_code(code: &str) -> bool {
     matches!(
         code,
         "SlowDown"
@@ -1210,14 +1397,17 @@ fn is_put_throttle_error_code(code: &str) -> bool {
     )
 }
 
-fn put_error_code(error: &SdkError<PutObjectError>) -> Option<String> {
+fn write_error_code<E: ProvideErrorMetadata>(error: &SdkError<E>) -> Option<String> {
     match error {
         SdkError::ServiceError(service) => service.err().code().map(ToOwned::to_owned),
         _ => None,
     }
 }
 
-fn put_error_message(error: &SdkError<PutObjectError>) -> String {
+fn write_error_message<E>(error: &SdkError<E>) -> String
+where
+    E: ProvideErrorMetadata + std::fmt::Display,
+{
     match error {
         SdkError::ServiceError(service) => service
             .err()
@@ -1241,19 +1431,21 @@ mod tests {
     use aws_smithy_http_client::test_util::{ReplayEvent, StaticReplayClient};
     use http::{Request, Response};
 
-    use super::super::destination::DestinationObject;
-    use crate::s3::planner::ZipEntryPlan;
+    use super::super::destination::{
+        DestinationObject, DestinationWritePrecondition, destination_write_precondition,
+    };
+    use crate::s3::planner::{CopyPlan, ZipEntryPlan};
     use crate::types::{
-        AppState, DeploymentStats, DestinationChecksumStrategy, PutObjectRetryJitter,
-        PutObjectRetryOptions, TrustedEntryIntegrity,
+        DeploymentStats, DestinationChecksumStrategy, PutObjectRetryJitter, PutObjectRetryOptions,
+        TrustedEntryIntegrity,
     };
 
     use super::{
-        PutContext, PutDiagnostics, PutPrecondition, PutRetryCoordinator, UploadPayload,
-        catalog_skips_zip_entry, copy_source_object, digest_async_reader, duration_millis_u64,
-        md5_hex, put_precondition_for_destination, put_retry_cap_millis, quoted_etag,
-        read_async_reader_to_vec, request_checksum_calculation, sha256_base64,
-        should_compare_marker_free_entry, upload_payload,
+        COPY_RECONCILIATION_METADATA_KEY, CopyContext, PutContext, UploadPayload, WriteDiagnostics,
+        WriteDiagnosticsSnapshot, WriteRetryCoordinator, catalog_skips_zip_entry,
+        copy_reconciliation_identity, copy_source_object, digest_async_reader, duration_millis_u64,
+        md5_hex, quoted_etag, read_async_reader_to_vec, request_checksum_calculation,
+        sha256_base64, should_compare_marker_free_entry, upload_payload, write_retry_cap_millis,
     };
 
     #[test]
@@ -1396,9 +1588,9 @@ mod tests {
     async fn permanent_put_4xx_is_not_retried() {
         let replay = StaticReplayClient::new(vec![error_event(400, "InvalidRequest")]);
         let client = replay_s3_client(replay.clone());
-        let diagnostics = PutDiagnostics::default();
+        let diagnostics = WriteDiagnostics::default();
         let stats = DeploymentStats::default();
-        let retry_coordinator = PutRetryCoordinator::new();
+        let retry_coordinator = WriteRetryCoordinator::new();
         let retry = test_retry_options();
 
         let result = upload_payload(
@@ -1446,9 +1638,9 @@ mod tests {
     async fn kms_byte_put_sends_precomputed_sha256_checksum() {
         let replay = StaticReplayClient::new(vec![error_event(400, "InvalidRequest")]);
         let client = replay_s3_client(replay.clone());
-        let diagnostics = PutDiagnostics::default();
+        let diagnostics = WriteDiagnostics::default();
         let stats = DeploymentStats::default();
-        let retry_coordinator = PutRetryCoordinator::new();
+        let retry_coordinator = WriteRetryCoordinator::new();
         let mut retry = test_retry_options();
         retry.max_attempts = 1;
 
@@ -1499,44 +1691,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn copy_sets_inferred_content_type_without_requesting_a_checksum() {
-        let replay = StaticReplayClient::new(vec![copy_success_event()]);
-        let destination_s3 = replay_s3_client(replay.clone());
-        let state = AppState {
-            source_s3: destination_s3.clone(),
-            destination_s3,
-            cloudfront: aws_sdk_cloudfront::Client::from_conf(
-                aws_sdk_cloudfront::Config::builder()
-                    .behavior_version_latest()
-                    .region(aws_sdk_cloudfront::config::Region::new("us-east-1"))
-                    .credentials_provider(aws_sdk_cloudfront::config::Credentials::new(
-                        "test-access-key",
-                        "test-secret-key",
-                        None,
-                        None,
-                        "shin-bucket-deployment-test",
-                    ))
-                    .build(),
-            ),
-            http: reqwest::Client::new(),
-        };
-
-        copy_source_object(
-            &state,
-            "destination",
-            "source",
-            "archive.zip",
-            Some("source-etag"),
-            "site/file.txt",
-        )
-        .await
-        .expect("copy should succeed");
+    async fn copy_sets_guards_reconciliation_identity_and_content_type_without_a_checksum() {
+        let plan = test_copy_plan(Some(DestinationWritePrecondition::IfNoneMatch));
+        let expected_identity = copy_reconciliation_identity("destination", &plan);
+        let (result, replay, diagnostics) =
+            run_test_copy(vec![copy_success_event()], plan, 2).await;
+        result.expect("copy should succeed");
 
         let request = replay.actual_requests().next().expect("one COPY request");
         assert_eq!(request.headers().get("content-type"), Some("text/plain"));
         assert_eq!(
             request.headers().get("x-amz-metadata-directive"),
             Some("REPLACE")
+        );
+        assert_eq!(
+            request.headers().get("x-amz-copy-source-if-match"),
+            Some("\"source-etag\"")
+        );
+        assert_eq!(request.headers().get("if-none-match"), Some("*"));
+        assert_eq!(
+            request
+                .headers()
+                .get(format!("x-amz-meta-{COPY_RECONCILIATION_METADATA_KEY}")),
+            Some(expected_identity.as_str())
         );
         assert!(request.headers().get("x-amz-checksum-algorithm").is_none());
         assert!(
@@ -1545,15 +1722,254 @@ mod tests {
                 .get("x-amz-sdk-checksum-algorithm")
                 .is_none()
         );
+        assert_eq!(diagnostics.wire_attempts, 1);
+        assert_eq!(diagnostics.failed_attempts, 0);
+    }
+
+    #[test]
+    fn copy_reconciliation_identity_is_opaque_and_binds_the_complete_operation() {
+        let baseline = test_copy_plan(None);
+        let identity = copy_reconciliation_identity("destination", &baseline);
+        assert_eq!(identity.len(), 64);
+        assert!(
+            identity
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        );
+        for changed in [
+            CopyPlan {
+                source_bucket: "other-source".to_string(),
+                ..baseline.clone()
+            },
+            CopyPlan {
+                source_key: "other.zip".to_string(),
+                ..baseline.clone()
+            },
+            CopyPlan {
+                expected_etag: "other-etag".to_string(),
+                ..baseline.clone()
+            },
+            CopyPlan {
+                destination_key: "site/other.txt".to_string(),
+                ..baseline.clone()
+            },
+            CopyPlan {
+                size: baseline.size + 1,
+                ..baseline.clone()
+            },
+        ] {
+            assert_ne!(
+                copy_reconciliation_identity("destination", &changed),
+                identity
+            );
+        }
+        assert_ne!(
+            copy_reconciliation_identity("other-destination", &baseline),
+            identity
+        );
+    }
+
+    #[tokio::test]
+    async fn copy_retries_are_provider_owned_and_one_sdk_attempt_each() {
+        let (result, replay, diagnostics) = run_test_copy(
+            vec![error_event(200, "InternalError"), copy_success_event()],
+            test_copy_plan(Some(DestinationWritePrecondition::IfNoneMatch)),
+            2,
+        )
+        .await;
+
+        result.expect("provider retry should succeed");
+        assert_eq!(
+            replay
+                .actual_requests()
+                .filter(|request| request.headers().contains_key("x-amz-copy-source"))
+                .count(),
+            2,
+            "the client is configured for three SDK attempts, so two requests prove SDK retries were disabled and the provider owned both attempts"
+        );
+        assert_eq!(diagnostics.wire_attempts, 2);
+        assert_eq!(diagnostics.failed_attempts, 1);
+        assert_eq!(diagnostics.retry_attempts, 1);
+    }
+
+    #[tokio::test]
+    async fn copy_existing_destination_uses_if_match_guard() {
+        let (result, replay, _) = run_test_copy(
+            vec![copy_success_event()],
+            test_copy_plan(Some(DestinationWritePrecondition::IfMatch(
+                "\"destination-etag\"".to_string(),
+            ))),
+            1,
+        )
+        .await;
+
+        result.expect("guarded copy should succeed");
+        let request = replay.actual_requests().next().expect("one COPY request");
+        assert_eq!(
+            request.headers().get("if-match"),
+            Some("\"destination-etag\"")
+        );
+        assert!(request.headers().get("if-none-match").is_none());
+    }
+
+    #[tokio::test]
+    async fn permanent_copy_failure_is_not_retried() {
+        let (result, replay, diagnostics) = run_test_copy(
+            vec![error_event(400, "InvalidRequest")],
+            test_copy_plan(Some(DestinationWritePrecondition::IfNoneMatch)),
+            2,
+        )
+        .await;
+
+        assert!(result.is_err());
+        assert_eq!(
+            replay
+                .actual_requests()
+                .filter(|request| request.headers().contains_key("x-amz-copy-source"))
+                .count(),
+            1
+        );
+        assert_eq!(diagnostics.wire_attempts, 1);
+        assert_eq!(diagnostics.failed_attempts, 1);
+        assert_eq!(diagnostics.retry_attempts, 0);
+    }
+
+    #[tokio::test]
+    async fn final_ambiguous_copy_reconciles_exact_marker_and_size() {
+        let plan = test_copy_plan(Some(DestinationWritePrecondition::IfNoneMatch));
+        let identity = copy_reconciliation_identity("destination", &plan);
+        let metadata_header = format!("x-amz-meta-{COPY_RECONCILIATION_METADATA_KEY}");
+        let (result, replay, diagnostics) = run_test_copy(
+            vec![
+                error_event(500, "InternalError"),
+                head_event(vec![
+                    ("content-length", "5"),
+                    (metadata_header.as_str(), identity.as_str()),
+                ]),
+            ],
+            plan,
+            1,
+        )
+        .await;
+
+        result.expect("exact destination marker should reconcile the lost copy response");
+        assert_eq!(
+            replay
+                .actual_requests()
+                .filter(|request| request.headers().contains_key("x-amz-copy-source"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            replay
+                .actual_requests()
+                .map(|request| request.method().to_string())
+                .collect::<Vec<_>>(),
+            vec!["PUT", "HEAD"]
+        );
+        assert_eq!(diagnostics.wire_attempts, 1);
+        assert_eq!(diagnostics.failed_attempts, 1);
+    }
+
+    #[tokio::test]
+    async fn conditional_copy_conflict_reconciles_only_the_intended_object() {
+        let plan = test_copy_plan(Some(DestinationWritePrecondition::IfNoneMatch));
+        let identity = copy_reconciliation_identity("destination", &plan);
+        let metadata_header = format!("x-amz-meta-{COPY_RECONCILIATION_METADATA_KEY}");
+        let (result, replay, diagnostics) = run_test_copy(
+            vec![
+                error_event(412, "PreconditionFailed"),
+                head_event(vec![
+                    ("content-length", "5"),
+                    (metadata_header.as_str(), identity.as_str()),
+                ]),
+            ],
+            plan,
+            2,
+        )
+        .await;
+
+        result.expect("the matching marker should prove an earlier copy succeeded");
+        assert_eq!(
+            replay
+                .actual_requests()
+                .filter(|request| request.headers().contains_key("x-amz-copy-source"))
+                .count(),
+            1
+        );
+        assert_eq!(diagnostics.retry_attempts, 0);
+    }
+
+    #[tokio::test]
+    async fn copy_retries_a_409_when_reconciliation_finds_no_completed_write() {
+        let (result, replay, diagnostics) = run_test_copy(
+            vec![
+                error_event(409, "ConditionalRequestConflict"),
+                error_event(404, "NoSuchKey"),
+                copy_success_event(),
+            ],
+            test_copy_plan(Some(DestinationWritePrecondition::IfNoneMatch)),
+            2,
+        )
+        .await;
+
+        result.expect("a transient conditional conflict should be retried");
+        assert_eq!(
+            replay
+                .actual_requests()
+                .filter(|request| request.headers().contains_key("x-amz-copy-source"))
+                .count(),
+            2
+        );
+        assert_eq!(diagnostics.retry_attempts, 1);
+    }
+
+    #[tokio::test]
+    async fn ambiguous_copy_reconciliation_fails_closed_on_marker_or_size_mismatch() {
+        for headers in [
+            vec![
+                ("content-length".to_string(), "5".to_string()),
+                (
+                    format!("x-amz-meta-{COPY_RECONCILIATION_METADATA_KEY}"),
+                    "different-copy".to_string(),
+                ),
+            ],
+            vec![
+                ("content-length".to_string(), "6".to_string()),
+                (
+                    format!("x-amz-meta-{COPY_RECONCILIATION_METADATA_KEY}"),
+                    copy_reconciliation_identity("destination", &test_copy_plan(None)),
+                ),
+            ],
+        ] {
+            let owned_headers = headers
+                .iter()
+                .map(|(name, value)| (name.as_str(), value.as_str()))
+                .collect();
+            let (result, replay, _) = run_test_copy(
+                vec![error_event(500, "InternalError"), head_event(owned_headers)],
+                test_copy_plan(None),
+                1,
+            )
+            .await;
+            assert!(result.is_err());
+            assert_eq!(
+                replay
+                    .actual_requests()
+                    .filter(|request| request.headers().contains_key("x-amz-copy-source"))
+                    .count(),
+                1
+            );
+        }
     }
 
     #[tokio::test]
     async fn each_application_put_attempt_uses_one_sdk_attempt() {
         let replay = StaticReplayClient::new(vec![error_event(500, "InternalError")]);
         let client = replay_s3_client(replay.clone());
-        let diagnostics = PutDiagnostics::default();
+        let diagnostics = WriteDiagnostics::default();
         let stats = DeploymentStats::default();
-        let retry_coordinator = PutRetryCoordinator::new();
+        let retry_coordinator = WriteRetryCoordinator::new();
         let mut retry = test_retry_options();
         retry.max_attempts = 1;
 
@@ -1614,8 +2030,8 @@ mod tests {
     #[test]
     fn put_precondition_uses_if_none_match_for_missing_destination() {
         assert_eq!(
-            put_precondition_for_destination(None),
-            Some(PutPrecondition::IfNoneMatch)
+            destination_write_precondition(None),
+            Some(DestinationWritePrecondition::IfNoneMatch)
         );
     }
 
@@ -1627,8 +2043,10 @@ mod tests {
         };
 
         assert_eq!(
-            put_precondition_for_destination(Some(&object)),
-            Some(PutPrecondition::IfMatch("\"abc123\"".to_string()))
+            destination_write_precondition(Some(&object)),
+            Some(DestinationWritePrecondition::IfMatch(
+                "\"abc123\"".to_string()
+            ))
         );
     }
 
@@ -1639,7 +2057,7 @@ mod tests {
             size: Some(10),
         };
 
-        assert_eq!(put_precondition_for_destination(Some(&object)), None);
+        assert_eq!(destination_write_precondition(Some(&object)), None);
     }
 
     #[test]
@@ -1648,7 +2066,7 @@ mod tests {
     }
 
     #[test]
-    fn put_retry_cap_uses_capped_exponential_delays() {
+    fn object_write_retry_cap_uses_capped_exponential_delays() {
         let retry = PutObjectRetryOptions {
             max_attempts: 6,
             retry_base_delay_ms: 250,
@@ -1658,16 +2076,16 @@ mod tests {
             jitter: PutObjectRetryJitter::None,
         };
 
-        assert_eq!(put_retry_cap_millis(1, false, &retry), 250);
-        assert_eq!(put_retry_cap_millis(2, false, &retry), 500);
-        assert_eq!(put_retry_cap_millis(3, false, &retry), 1_000);
-        assert_eq!(put_retry_cap_millis(4, false, &retry), 1_000);
-        assert_eq!(put_retry_cap_millis(2, true, &retry), 2_000);
+        assert_eq!(write_retry_cap_millis(1, false, &retry), 250);
+        assert_eq!(write_retry_cap_millis(2, false, &retry), 500);
+        assert_eq!(write_retry_cap_millis(3, false, &retry), 1_000);
+        assert_eq!(write_retry_cap_millis(4, false, &retry), 1_000);
+        assert_eq!(write_retry_cap_millis(2, true, &retry), 2_000);
     }
 
     #[test]
-    fn put_retry_delay_supports_full_jitter_and_no_jitter() {
-        let coordinator = PutRetryCoordinator::new();
+    fn object_write_retry_delay_supports_full_jitter_and_no_jitter() {
+        let coordinator = WriteRetryCoordinator::new();
         let mut retry = PutObjectRetryOptions {
             max_attempts: 6,
             retry_base_delay_ms: 250,
@@ -1714,9 +2132,9 @@ mod tests {
             head_event(headers),
         ]);
         let client = replay_s3_client(replay.clone());
-        let diagnostics = PutDiagnostics::default();
+        let diagnostics = WriteDiagnostics::default();
         let stats = DeploymentStats::default();
-        let retry_coordinator = PutRetryCoordinator::new();
+        let retry_coordinator = WriteRetryCoordinator::new();
         let retry = test_retry_options();
         let result = upload_payload(
             PutContext {
@@ -1730,7 +2148,7 @@ mod tests {
             },
             "file.txt",
             test_payload(checksum_strategy),
-            Some(PutPrecondition::IfNoneMatch),
+            Some(DestinationWritePrecondition::IfNoneMatch),
         )
         .await;
         let requests = replay
@@ -1741,6 +2159,44 @@ mod tests {
             request.method() == "HEAD" && request.headers().get("x-amz-checksum-mode").is_some()
         });
         (result, requests, checksum_mode_requested)
+    }
+
+    async fn run_test_copy(
+        events: Vec<ReplayEvent>,
+        plan: CopyPlan,
+        max_attempts: usize,
+    ) -> (Result<()>, StaticReplayClient, WriteDiagnosticsSnapshot) {
+        let replay = StaticReplayClient::new(events);
+        let client = replay_s3_client(replay.clone());
+        let diagnostics = WriteDiagnostics::default();
+        let stats = DeploymentStats::default();
+        let retry_coordinator = WriteRetryCoordinator::new();
+        let mut retry = test_retry_options();
+        retry.max_attempts = max_attempts;
+        let result = copy_source_object(
+            CopyContext {
+                destination_s3: &client,
+                destination_bucket: "destination",
+                retry: &retry,
+                retry_coordinator: &retry_coordinator,
+                diagnostics: &diagnostics,
+                stats: &stats,
+            },
+            &plan,
+        )
+        .await;
+        (result, replay, diagnostics.snapshot())
+    }
+
+    fn test_copy_plan(destination_precondition: Option<DestinationWritePrecondition>) -> CopyPlan {
+        CopyPlan {
+            source_bucket: "source".to_string(),
+            source_key: "archive.zip".to_string(),
+            expected_etag: "source-etag".to_string(),
+            destination_key: "site/file.txt".to_string(),
+            destination_precondition,
+            size: 5,
+        }
     }
 
     fn replay_s3_client(replay: StaticReplayClient) -> aws_sdk_s3::Client {
