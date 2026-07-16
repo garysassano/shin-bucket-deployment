@@ -1,6 +1,7 @@
 import { Token } from "aws-cdk-lib";
 import type { BucketDeploymentProps } from "aws-cdk-lib/aws-s3-deployment";
 import type { Construct } from "constructs";
+import { validateDestinationKeyPrefix } from "./destination-prefix";
 import { ValidationError } from "./errors";
 import type {
   ShinBucketDeploymentAdvancedRuntimeTuning,
@@ -45,6 +46,7 @@ export function validateDeploymentProps(scope: Construct, props: ShinBucketDeplo
       scope,
     );
   }
+  validateDestinationKeyPrefix(scope, props.destinationKeyPrefix);
 
   if (maybeUnsupported.prune !== undefined) {
     throw new ValidationError(

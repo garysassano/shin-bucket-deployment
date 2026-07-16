@@ -5,7 +5,12 @@ import { AllowedMethods, Distribution, ViewerProtocolPolicy } from "aws-cdk-lib/
 import { S3BucketOrigin } from "aws-cdk-lib/aws-cloudfront-origins";
 import { Bucket } from "aws-cdk-lib/aws-s3";
 import { describe, expect, test } from "vitest";
-import { ShinBucketDeployment, type ShinBucketDeploymentProps, Source } from "../../src";
+import {
+  ShinBucketDeployment,
+  type ShinBucketDeploymentProps,
+  Source,
+  type ValidationError,
+} from "../../src";
 import { testBundling } from "../support/bundling";
 
 function customResourceProperties(stack: Stack) {
@@ -65,6 +70,95 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     expect(customResourceProperties(stack).InvalidatePreviousDistributionOnChange).toBeUndefined();
     expect(customResourceProperties(stack).DeleteCurrentObjectsOnDelete).toBe(false);
     expect(customResourceProperties(stack).DeleteStaleObjectsOnDeployment).toBe(true);
+  });
+
+  test("canonicalizes a slash destination prefix to root ownership", () => {
+    const stack = new Stack();
+    const destinationBucket = new Bucket(stack, "Dest");
+
+    new ShinBucketDeployment(stack, "Deploy", {
+      sources: [Source.data("index.html", "ok")],
+      destinationBucket,
+      destinationKeyPrefix: "/",
+      bundling: testBundling(),
+    });
+
+    const properties = customResourceProperties(stack);
+    expect(properties.DestinationBucketKeyPrefix).toBe("/");
+    Template.fromStack(stack).hasResourceProperties("AWS::S3::Bucket", {
+      Tags: Match.arrayWith([
+        {
+          Key: `aws-cdk:cr-owned:${properties.DestinationOwnerId}`,
+          Value: "true",
+        },
+      ]),
+    });
+  });
+
+  test("accepts a 102-character destination prefix", () => {
+    const stack = new Stack();
+    const destinationBucket = new Bucket(stack, "Dest");
+    const prefix = "a".repeat(102);
+
+    new ShinBucketDeployment(stack, "Deploy", {
+      sources: [Source.data("index.html", "ok")],
+      destinationBucket,
+      destinationKeyPrefix: prefix,
+      bundling: testBundling(),
+    });
+
+    const properties = customResourceProperties(stack);
+    Template.fromStack(stack).hasResourceProperties("AWS::S3::Bucket", {
+      Tags: Match.arrayWith([
+        {
+          Key: `aws-cdk:cr-owned:${prefix}:${properties.DestinationOwnerId}`,
+          Value: "true",
+        },
+      ]),
+    });
+  });
+
+  test("rejects a destination prefix longer than 102 characters with a specific code", () => {
+    const stack = new Stack();
+    const destinationBucket = new Bucket(stack, "Dest");
+
+    expect(() => {
+      new ShinBucketDeployment(stack, "Deploy", {
+        sources: [Source.data("index.html", "ok")],
+        destinationBucket,
+        destinationKeyPrefix: "a".repeat(103),
+        bundling: testBundling(),
+      });
+    }).toThrowError(
+      expect.objectContaining({
+        code: "ShinBucketDeploymentDestinationKeyPrefixTooLong",
+        message: "destinationKeyPrefix must be <=102 characters.",
+      }) as ValidationError,
+    );
+  });
+
+  test("rejects an unresolved destination prefix before creating provider resources", () => {
+    const stack = new Stack();
+    const destinationBucket = new Bucket(stack, "Dest");
+    const prefix = new CfnParameter(stack, "Prefix").valueAsString;
+
+    expect(() => {
+      new ShinBucketDeployment(stack, "Deploy", {
+        sources: [Source.data("index.html", "ok")],
+        destinationBucket,
+        destinationKeyPrefix: prefix,
+        bundling: testBundling(),
+      });
+    }).toThrowError(
+      expect.objectContaining({
+        code: "ShinBucketDeploymentDestinationKeyPrefixUnresolved",
+        message:
+          "destinationKeyPrefix must be a concrete string so destination ownership can be validated.",
+      }) as ValidationError,
+    );
+    expect(stack.node.findAll().some((construct) => construct.node.id === "CustomResource")).toBe(
+      false,
+    );
   });
 
   test("infers the previous prefix and defaults unchanged resources", () => {
