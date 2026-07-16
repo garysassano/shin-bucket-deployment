@@ -174,7 +174,7 @@ flowchart TD
   R -. "CloudFront error" .-> X
 ```
 
-The construct uses the modeled `AWS::CloudFormation::CustomResource` type and includes the handler identity in the custom resource's logical identity. A changed Lambda service token therefore creates a replacement instead of attempting the unsupported in-place token update. Create and Update use the same deterministic destination identity. Retried Creates and handler replacements for an unchanged destination therefore return the same physical resource ID, while a genuine owner, bucket, or prefix change returns a different ID and preserves CloudFormation replacement cleanup semantics. The provider accepts the former custom-named resource type on Delete during migration.
+The construct uses the modeled `AWS::CloudFormation::CustomResource` type and includes the handler identity in the custom resource's logical identity. A changed Lambda service token therefore creates a replacement instead of attempting the unsupported in-place token update. Each custom-resource generation receives a distinct destination-owner identity, while retries of the same generation return the same deterministic physical resource ID. During replacement, the destination bucket's ownership tag is updated before the old generation is deleted; the old handler sees the replacement as an overlapping owner and retains the live namespace. A genuine bucket or prefix change still receives a distinct physical ID and follows the configured cleanup semantics. The provider accepts the former custom-named resource type on Delete during migration.
 
 ## Changing a destination safely
 
