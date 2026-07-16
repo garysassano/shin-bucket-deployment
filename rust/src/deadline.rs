@@ -10,9 +10,15 @@ pub(crate) const CALLBACK_RESERVE: Duration = Duration::from_secs(45);
 /// Maximum time allowed for spawned tasks to observe cancellation and join.
 const TASK_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Time between the child-task drain deadline and the request-processing
+/// backstop. This lets cleanup futures return and drop their task sets before
+/// the outer timeout can cancel the cleanup itself.
+const TASK_DRAIN_BACKSTOP_GUARD: Duration = Duration::from_secs(1);
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct InvocationDeadlines {
     work: Instant,
+    task_drain: Instant,
     drain: Instant,
     callback: Instant,
 }
@@ -39,7 +45,7 @@ impl InvocationDeadlines {
         self.work
     }
 
-    /// Final deadline for cancelling and joining spawned work.
+    /// Final request-processing backstop before callback-only time begins.
     pub(crate) fn drain(self) -> Instant {
         self.drain
     }
@@ -51,7 +57,7 @@ impl InvocationDeadlines {
 
     pub(crate) fn task_drain_budget(self) -> TaskDrainBudget {
         TaskDrainBudget {
-            final_deadline: self.drain,
+            final_deadline: self.task_drain,
             started_deadline: Arc::new(OnceLock::new()),
         }
     }
@@ -62,13 +68,18 @@ impl InvocationDeadlines {
             .checked_sub(CALLBACK_RESERVE)
             .unwrap_or(now)
             .max(now);
-        let work = drain
+        let task_drain = drain
+            .checked_sub(TASK_DRAIN_BACKSTOP_GUARD)
+            .unwrap_or(now)
+            .max(now);
+        let work = task_drain
             .checked_sub(TASK_DRAIN_TIMEOUT)
             .unwrap_or(now)
             .max(now);
 
         Self {
             work,
+            task_drain,
             drain,
             callback,
         }
@@ -94,7 +105,9 @@ mod tests {
 
     use tokio::time::Instant;
 
-    use super::{CALLBACK_RESERVE, InvocationDeadlines, TASK_DRAIN_TIMEOUT};
+    use super::{
+        CALLBACK_RESERVE, InvocationDeadlines, TASK_DRAIN_BACKSTOP_GUARD, TASK_DRAIN_TIMEOUT,
+    };
 
     #[test]
     fn reserves_drain_and_callback_windows() {
@@ -110,11 +123,16 @@ mod tests {
             Duration::from_secs(75)
         );
         assert_eq!(
+            deadlines.task_drain.duration_since(now),
+            Duration::from_secs(74)
+        );
+        assert_eq!(
             deadlines.work().duration_since(now),
-            Duration::from_secs(70)
+            Duration::from_secs(69)
         );
         assert_eq!(CALLBACK_RESERVE, Duration::from_secs(45));
         assert_eq!(TASK_DRAIN_TIMEOUT, Duration::from_secs(5));
+        assert_eq!(TASK_DRAIN_BACKSTOP_GUARD, Duration::from_secs(1));
     }
 
     #[test]
@@ -123,6 +141,7 @@ mod tests {
         let deadlines = InvocationDeadlines::from_remaining_at(now, Duration::from_secs(10));
 
         assert_eq!(deadlines.work(), now);
+        assert_eq!(deadlines.task_drain, now);
         assert_eq!(deadlines.drain(), now);
         assert_eq!(
             deadlines.callback().duration_since(now),
@@ -149,6 +168,21 @@ mod tests {
         );
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn task_drain_finishes_before_the_outer_processing_backstop() {
+        let now = Instant::now();
+        let deadlines = InvocationDeadlines::from_remaining_at(now, Duration::from_secs(120));
+
+        tokio::time::advance(deadlines.work().duration_since(now)).await;
+        let task_drain_deadline = deadlines.task_drain_budget().deadline();
+
+        assert_eq!(task_drain_deadline, deadlines.task_drain);
+        assert_eq!(
+            deadlines.drain().duration_since(task_drain_deadline),
+            TASK_DRAIN_BACKSTOP_GUARD
+        );
+    }
+
     #[test]
     fn task_drain_budget_never_consumes_the_callback_reserve() {
         let now = Instant::now();
@@ -157,7 +191,11 @@ mod tests {
 
         assert_eq!(
             drain_budget.deadline().duration_since(now),
-            Duration::from_secs(3)
+            Duration::from_secs(2)
+        );
+        assert_eq!(
+            deadlines.drain().duration_since(drain_budget.deadline()),
+            TASK_DRAIN_BACKSTOP_GUARD
         );
     }
 }
