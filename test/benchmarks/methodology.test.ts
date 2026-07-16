@@ -34,8 +34,11 @@ import { createBenchmarkPlan, wallClockCapReached } from "../../benchmarks/src/p
 import { openResumeSession } from "../../benchmarks/src/resume";
 import {
   assertProviderRuntimeMetadata,
+  benchmarkDeployArgs,
   benchmarkStackTags,
+  failedPhaseEvidencePaths,
   providerLogGroupName,
+  runWithFailedDeployEvidence,
 } from "../../benchmarks/src/run-assets-comparison";
 import {
   selectValidatedBenchmarkRun,
@@ -190,6 +193,10 @@ describe("benchmark methodology v2", () => {
     ]);
   });
 
+  test("retains a failed benchmark stack until telemetry capture and owned cleanup", () => {
+    expect(benchmarkDeployArgs("cdk.out", "run", "sample")).toContain("--no-rollback");
+  });
+
   test("enforces exact deployed provider runtime contracts", () => {
     const base = {
       codeSha256: Buffer.from("a".repeat(64), "hex").toString("base64"),
@@ -260,6 +267,51 @@ describe("benchmark methodology v2", () => {
     expect(readFileSync(join(dir, "cold-create.deploy.attempt-1.log"), "utf8")).toBe("first");
     expect(readFileSync(join(dir, "cold-create.deploy.attempt-2.log"), "utf8")).toBe("second");
     expect(existsSync(join(dir, "cold-create.deploy.attempt-3.log"))).toBe(false);
+  });
+
+  test("captures failed-deploy evidence before rethrowing the deploy error", async () => {
+    const order: string[] = [];
+    const deployError = new Error("deploy failed");
+
+    await expect(
+      runWithFailedDeployEvidence({
+        deploy: async () => {
+          order.push("deploy");
+          throw deployError;
+        },
+        capture: async () => {
+          order.push("capture");
+        },
+      }),
+    ).rejects.toBe(deployError);
+    expect(order).toEqual(["deploy", "capture"]);
+  });
+
+  test("retains both failed-deploy and telemetry errors", async () => {
+    const deployError = new Error("deploy failed");
+
+    await expect(
+      runWithFailedDeployEvidence({
+        deploy: async () => {
+          throw deployError;
+        },
+        capture: async () => {
+          throw new Error("telemetry failed");
+        },
+      }),
+    ).rejects.toMatchObject({
+      message: "deploy failed; failed benchmark telemetry capture also failed: telemetry failed",
+      cause: deployError,
+    });
+  });
+
+  test("uses failure-specific scratch paths for failed-deploy telemetry", () => {
+    expect(failedPhaseEvidencePaths("/scratch/sample", "cold-create")).toEqual({
+      resources: "/scratch/sample/cold-create.failed.resources.json",
+      function: "/scratch/sample/cold-create.failed.function.json",
+      report: "/scratch/sample/cold-create.failed.report.json",
+      summary: "/scratch/sample/cold-create.failed.summary.json",
+    });
   });
 
   test("calculates median, quartiles, and IQR with interpolation", () => {
