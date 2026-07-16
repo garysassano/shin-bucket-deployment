@@ -55,7 +55,7 @@ The complete matrix therefore accepts the structural refactor as having no detec
 | Artifact | Purpose |
 | --- | --- |
 | `benchmarks/README.md` | Human-viewable benchmark snapshots and links to committed SVG charts. |
-| `benchmarks/telemetry.md` | In-depth Markdown view of Shin provider telemetry grouped by profile, memory, parallelism, and phase. |
+| `benchmarks/telemetry.md` | Historical methodology-v1 Markdown snapshot of Shin provider telemetry grouped by profile, memory, parallelism, and phase. |
 | `benchmarks/results.jsonl` | Structured sanitized benchmark result rows used by reports and charts. |
 | `benchmarks/configs/` | Curated benchmark run matrices. |
 | `benchmarks/src/` | Benchmark runner, collector, table renderer, and report/chart renderers. |
@@ -178,7 +178,7 @@ All six Shin rows reported zero source GET retries/errors, destination PUT retri
 
 ## Reading Results
 
-Use `benchmarks/README.md` first for visual snapshots. Use `benchmarks/telemetry.md` when you need detailed Shin provider telemetry, including runtime timings, provider phase timing, object work, transfer-scheduler completion/cancellation, source range-read diagnostics, bytes/memory windows, consumed body replays, and `PutObject` pressure.
+Use `benchmarks/README.md` first for visual snapshots. The currently committed `benchmarks/telemetry.md` is a historical methodology-v1 view; use it when you need detailed telemetry for those snapshot rows, including runtime timings, provider phase timing, object work, transfer-scheduler completion/cancellation, source range-read diagnostics, bytes/memory windows, consumed body replays, and `PutObject` pressure.
 
 Regenerate the Shin telemetry Markdown tables from the JSONL source with:
 
