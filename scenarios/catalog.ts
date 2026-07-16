@@ -49,6 +49,14 @@ export const VERIFY_SCENARIOS = {
     "retention/object-deletion-bucket-only-app.js",
     "ShinBucketDeploymentObjectDeletionDemo",
   ),
+  "replacement-safety-initial": scenario(
+    "retention/replacement-safety-initial-app.js",
+    "ShinBucketDeploymentReplacementSafetyDemo",
+  ),
+  "replacement-safety-updated": scenario(
+    "retention/replacement-safety-updated-app.js",
+    "ShinBucketDeploymentReplacementSafetyDemo",
+  ),
   "large-archive": scenario("scale/large-archive-app.js", "ShinBucketDeploymentLargeArchiveDemo"),
   "kms-destination": scenario(
     "security/kms-destination-app.js",
@@ -93,6 +101,7 @@ export const VERIFY_DEFAULT_GROUPS = [
   ["default-retention-initial", "default-retention-updated"],
   ["extract-false"],
   ["object-deletion-initial", "object-deletion-updated", "object-deletion-bucket-only"],
+  ["replacement-safety-initial", "replacement-safety-updated"],
   ["large-archive"],
   ["kms-destination"],
   ["kms-managed-destination"],
@@ -111,6 +120,7 @@ export const VERIFY_DESTROY_ORDER = [
   "default-retention-updated",
   "extract-false",
   "object-deletion-bucket-only",
+  "replacement-safety-updated",
   "source-overwrite-order",
   "large-archive",
   "kms-destination",

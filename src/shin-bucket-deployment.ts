@@ -12,8 +12,8 @@ import {
   Token,
 } from "aws-cdk-lib";
 import type { IDistribution } from "aws-cdk-lib/aws-cloudfront";
-import { type IRole } from "aws-cdk-lib/aws-iam";
-import { Architecture, Function as LambdaFunction } from "aws-cdk-lib/aws-lambda";
+import type { IRole } from "aws-cdk-lib/aws-iam";
+import { Architecture, type Function as LambdaFunction } from "aws-cdk-lib/aws-lambda";
 import { Bucket, type IBucket } from "aws-cdk-lib/aws-s3";
 import type { BucketDeploymentProps, ISource, SourceConfig } from "aws-cdk-lib/aws-s3-deployment";
 import { Construct } from "constructs";
@@ -564,10 +564,11 @@ export class ShinBucketDeployment extends Construct {
      *
      * @see https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-cloudformation-customresource.html#cfn-cloudformation-customresource-servicetimeout
      */
-    this.cr = new CustomResource(this, "CustomResource", {
+    const customResourceIdentity = new Construct(this, "CustomResource");
+    const destinationOwnerId = customResourceIdentity.node.addr.slice(-8);
+    this.cr = new CustomResource(customResourceIdentity, this.handlerFunction.node.id, {
       serviceToken: this.handlerFunction.functionArn,
       serviceTimeout: PROVIDER_TIMEOUT,
-      resourceType: "Custom::ShinBucketDeployment",
       properties: {
         SourceBucketNames: Lazy.uncachedList({
           produce: () => this.sources.map((source) => source.bucket.bucketName),
@@ -596,9 +597,7 @@ export class ShinBucketDeployment extends Construct {
           produce: () =>
             destinationChecksumStrategy(this, this.destinationBucket, destinationBucketResource),
         }),
-        DestinationOwnerId: Lazy.string({
-          produce: () => this.cr.node.addr.slice(-8),
-        }),
+        DestinationOwnerId: destinationOwnerId,
         DeletePreviousObjectsOnChange: previousDestinationBucket
           ? {
               DestinationBucketName: previousDestinationBucket.bucketName,
@@ -635,7 +634,7 @@ export class ShinBucketDeployment extends Construct {
     });
 
     let prefix = props.destinationKeyPrefix ? `:${props.destinationKeyPrefix}` : "";
-    prefix += `:${this.cr.node.addr.slice(-8)}`;
+    prefix += `:${destinationOwnerId}`;
     const tagKey = CUSTOM_RESOURCE_OWNER_TAG + prefix;
 
     if (!Token.isUnresolved(tagKey) && tagKey.length > 128) {

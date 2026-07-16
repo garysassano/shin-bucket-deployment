@@ -1,0 +1,47 @@
+import { App, CfnOutput, RemovalPolicy, Stack, type StackProps } from "aws-cdk-lib";
+import { Bucket } from "aws-cdk-lib/aws-s3";
+import { ShinBucketDeployment, Source } from "../../../src";
+
+class ReplacementSafetyShinBucketDeploymentStack extends Stack {
+  constructor(scope: App, id: string, props?: StackProps) {
+    super(scope, id, props);
+
+    const websiteBucket = new Bucket(this, "WebsiteBucket", {
+      autoDeleteObjects: true,
+      removalPolicy: RemovalPolicy.DESTROY,
+    });
+
+    new ShinBucketDeployment(this, "DeployWebsite", {
+      sources: [Source.data("runtime/replacement.txt", "phase=updated\n")],
+      destinationBucket: websiteBucket,
+      destinationKeyPrefix: "replacement-safe",
+      destinationLifecycle: {
+        onDelete: {
+          deleteObjects: true,
+        },
+      },
+      memoryLimit: 2048,
+    });
+
+    new CfnOutput(this, "BucketName", {
+      value: websiteBucket.bucketName,
+    });
+
+    new CfnOutput(this, "FetchReplacementFileCommand", {
+      value: `aws s3 cp s3://${websiteBucket.bucketName}/replacement-safe/runtime/replacement.txt -`,
+    });
+  }
+}
+
+const app = new App();
+const env =
+  process.env.CDK_DEFAULT_ACCOUNT && process.env.CDK_DEFAULT_REGION
+    ? {
+        account: process.env.CDK_DEFAULT_ACCOUNT,
+        region: process.env.CDK_DEFAULT_REGION,
+      }
+    : undefined;
+
+new ReplacementSafetyShinBucketDeploymentStack(app, "ShinBucketDeploymentReplacementSafetyDemo", {
+  env,
+});

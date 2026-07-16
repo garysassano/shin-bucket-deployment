@@ -386,7 +386,7 @@ function verifyCatalogedConsumerAsset(assemblyDir) {
     readFileSync(join(assemblyDir, "ConsumerStack.template.json"), "utf8"),
   );
   const deployment = Object.values(template.Resources ?? {}).find(
-    (resource) => resource.Type === "Custom::ShinBucketDeployment",
+    (resource) => resource.Type === "AWS::CloudFormation::CustomResource",
   );
   assert(deployment, "Consumer template is missing the Shin custom resource.");
   const sourceCatalogs = deployment.Properties?.SourceCatalogs;

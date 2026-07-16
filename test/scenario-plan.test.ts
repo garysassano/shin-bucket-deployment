@@ -13,6 +13,9 @@ describe("scenario planner", () => {
     const deletionGroup = plan.groups.find(
       ({ runs }) => runs[0]?.name === "object-deletion-initial",
     );
+    const replacementGroup = plan.groups.find(
+      ({ runs }) => runs[0]?.name === "replacement-safety-initial",
+    );
 
     expect(plan.concurrency).toBe(3);
     expect(cleanupGroup?.runs.map(({ name }) => name)).toEqual([
@@ -29,6 +32,11 @@ describe("scenario planner", () => {
       "object-deletion-updated",
       "object-deletion-bucket-only",
     ]);
+    expect(replacementGroup?.runs.map(({ name }) => name)).toEqual([
+      "replacement-safety-initial",
+      "replacement-safety-updated",
+    ]);
+    expect(replacementGroup?.cleanupCommand).toBe("pnpm verify destroy replacement-safety-updated");
   });
 
   it("uses final update phases in the default destroy order", () => {
@@ -40,6 +48,8 @@ describe("scenario planner", () => {
     expect(names).not.toContain("stale-object-cleanup-initial");
     expect(names).toContain("object-deletion-bucket-only");
     expect(names).not.toContain("object-deletion-updated");
+    expect(names).toContain("replacement-safety-updated");
+    expect(names).not.toContain("replacement-safety-initial");
   });
 
   it("normalizes verification and benchmark application paths centrally", () => {

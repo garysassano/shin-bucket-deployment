@@ -8,9 +8,9 @@ use aws_lambda_events::event::cloudformation::CloudFormationCustomResourceReques
 use lambda_runtime::Error;
 use md5::{Digest, Md5};
 use serde_json::{Map, Value, json};
+use sha2::Sha256;
 use tokio::time::timeout_at;
 use tracing::error;
-use uuid::Uuid;
 
 use crate::cloudfront::{invalidate as invalidate_cloudfront, validate_invalidation_paths};
 use crate::deadline::InvocationDeadlines;
@@ -29,7 +29,8 @@ use callback::{
     serialize_response, truncate_failure_reason, validate_response_body_size,
 };
 
-const RESOURCE_TYPE: &str = "Custom::ShinBucketDeployment";
+const RESOURCE_TYPE: &str = "AWS::CloudFormation::CustomResource";
+const LEGACY_RESOURCE_TYPE: &str = "Custom::ShinBucketDeployment";
 
 type RequestEnvelope = CloudFormationCustomResourceRequest<Value, Value>;
 
@@ -260,8 +261,8 @@ async fn process_request(
 ) -> Result<ProcessedRequest> {
     let request = parse_request(resource_properties)?;
     let physical_resource_id = match request_type {
-        "Create" => format!("aws.cdk.cargobucketdeployment.{}", Uuid::new_v4()),
-        "Update" | "Delete" => physical_resource_id
+        "Create" | "Update" => destination_physical_resource_id(identity, &request),
+        "Delete" => physical_resource_id
             .map(ToOwned::to_owned)
             .ok_or_else(|| anyhow!("PhysicalResourceId is required for {request_type}"))?,
         other => return Err(anyhow!("Unsupported request type: {other}")),
@@ -301,10 +302,10 @@ async fn process_request(
 }
 
 fn validate_resource_type(request: &RequestEnvelope) -> Result<()> {
-    let resource_type = match request {
-        CloudFormationCustomResourceRequest::Create(request) => &request.resource_type,
-        CloudFormationCustomResourceRequest::Update(request) => &request.resource_type,
-        CloudFormationCustomResourceRequest::Delete(request) => &request.resource_type,
+    let (resource_type, legacy_delete) = match request {
+        CloudFormationCustomResourceRequest::Create(request) => (&request.resource_type, false),
+        CloudFormationCustomResourceRequest::Update(request) => (&request.resource_type, false),
+        CloudFormationCustomResourceRequest::Delete(request) => (&request.resource_type, true),
         _ => {
             return Err(anyhow!(
                 "unsupported CloudFormation custom resource request type"
@@ -313,8 +314,8 @@ fn validate_resource_type(request: &RequestEnvelope) -> Result<()> {
     };
 
     ensure!(
-        resource_type == RESOURCE_TYPE,
-        "unexpected CloudFormation ResourceType `{resource_type}`; expected `{RESOURCE_TYPE}`"
+        resource_type == RESOURCE_TYPE || (legacy_delete && resource_type == LEGACY_RESOURCE_TYPE),
+        "unexpected CloudFormation ResourceType `{resource_type}`; expected the Shin custom resource protocol"
     );
     Ok(())
 }
@@ -641,16 +642,50 @@ fn cloudfront_caller_reference(
     format!("shin-bucket-deployment-{}", finalize_md5(hasher))
 }
 
+fn destination_physical_resource_id(
+    identity: RequestIdentity<'_>,
+    request: &crate::types::DeploymentRequest,
+) -> String {
+    let mut hasher = Sha256::new();
+    hash_identity_field(&mut hasher, "shin-bucket-deployment-physical-resource-v1");
+    match request.destination_owner_id.as_deref() {
+        Some(owner_id) => {
+            hasher.update([1]);
+            hash_identity_field(&mut hasher, owner_id);
+        }
+        None => {
+            hasher.update([0]);
+            hash_identity_field(&mut hasher, identity.stack_id);
+            hash_identity_field(&mut hasher, identity.logical_resource_id);
+        }
+    }
+    hash_identity_field(&mut hasher, &request.dest_bucket_name);
+    hash_identity_field(&mut hasher, &request.dest_bucket_prefix);
+
+    format!(
+        "aws.cdk.shinbucketdeployment.{}",
+        encode_hex(hasher.finalize().as_ref())
+    )
+}
+
+fn hash_identity_field(hasher: &mut Sha256, value: &str) {
+    hasher.update((value.len() as u64).to_be_bytes());
+    hasher.update(value.as_bytes());
+}
+
 fn hash_caller_reference_field(hasher: &mut Md5, value: &str) {
     hasher.update((value.len() as u64).to_be_bytes());
     hasher.update(value.as_bytes());
 }
 
 fn finalize_md5(hasher: Md5) -> String {
+    let digest = hasher.finalize();
+    encode_hex(digest.as_ref())
+}
+
+fn encode_hex(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
 
-    let digest = hasher.finalize();
-    let bytes: &[u8] = digest.as_ref();
     let mut output = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
         output.push(HEX[(byte >> 4) as usize] as char);
@@ -679,8 +714,9 @@ mod tests {
     use crate::request::{RawDeploymentRequest, parse_request};
 
     use super::{
-        RESOURCE_TYPE, cloudfront_caller_reference, decode_deployment_request,
-        decode_request_envelope, decode_resource_properties, merge_distribution_paths,
+        LEGACY_RESOURCE_TYPE, RESOURCE_TYPE, RequestIdentity, cloudfront_caller_reference,
+        decode_deployment_request, decode_request_envelope, decode_resource_properties,
+        destination_physical_resource_id, merge_distribution_paths,
         preflight_invalidation_requests, validate_resource_type,
     };
 
@@ -694,6 +730,26 @@ mod tests {
             "DistributionPaths": paths
         }))
         .expect("raw deployment request");
+        parse_request(&raw).expect("valid request")
+    }
+
+    fn deployment_request_for_destination(
+        bucket: &str,
+        prefix: &str,
+        owner_id: Option<&str>,
+    ) -> crate::types::DeploymentRequest {
+        let mut value = json!({
+            "SourceBucketNames": ["source"],
+            "SourceObjectKeys": ["asset.zip"],
+            "DestinationBucketName": bucket,
+            "DestinationBucketKeyPrefix": prefix,
+            "DestinationChecksumStrategy": "sse-s3-etag"
+        });
+        if let Some(owner_id) = owner_id {
+            value["DestinationOwnerId"] = json!(owner_id);
+        }
+        let raw: RawDeploymentRequest =
+            serde_json::from_value(value).expect("raw deployment request");
         parse_request(&raw).expect("valid request")
     }
 
@@ -779,6 +835,23 @@ mod tests {
         assert!(validate_resource_type(&valid).is_ok());
         assert!(decode_deployment_request(&valid).is_ok());
 
+        let legacy = decode_request_envelope(json!({
+            "RequestType": "Delete",
+            "RequestId": "request-legacy",
+            "ResponseURL": "https://example.com/response",
+            "StackId": "stack-123",
+            "ResourceType": LEGACY_RESOURCE_TYPE,
+            "LogicalResourceId": "Deploy",
+            "PhysicalResourceId": "legacy-physical-id",
+            "ResourceProperties": {
+                "SourceBucketNames": ["source"],
+                "SourceObjectKeys": ["asset.zip"],
+                "DestinationBucketName": "destination"
+            }
+        }))
+        .expect("legacy envelope");
+        assert!(validate_resource_type(&legacy).is_ok());
+
         let invalid = decode_request_envelope(json!({
             "RequestType": "Create",
             "RequestId": "request-123",
@@ -825,6 +898,87 @@ mod tests {
         assert_eq!(
             reference,
             cloudfront_caller_reference("stack-a", "request-123", "Deploy", "distribution", &paths)
+        );
+    }
+
+    #[test]
+    fn physical_resource_id_is_stable_for_the_same_owned_destination() {
+        let request = deployment_request_for_destination("destination", "site", Some("owner-a"));
+        let first_identity = RequestIdentity {
+            stack_id: "stack-a",
+            request_id: "request-a",
+            logical_resource_id: "DeployA",
+        };
+        let replacement_identity = RequestIdentity {
+            stack_id: "stack-a",
+            request_id: "request-b",
+            logical_resource_id: "DeployA",
+        };
+
+        let first = destination_physical_resource_id(first_identity, &request);
+        let replacement = destination_physical_resource_id(replacement_identity, &request);
+
+        assert_eq!(first, replacement);
+        assert!(first.starts_with("aws.cdk.shinbucketdeployment."));
+        assert_eq!(first.len(), "aws.cdk.shinbucketdeployment.".len() + 64);
+    }
+
+    #[test]
+    fn physical_resource_id_changes_with_destination_identity() {
+        let identity = RequestIdentity {
+            stack_id: "stack-a",
+            request_id: "request-a",
+            logical_resource_id: "Deploy",
+        };
+        let baseline = deployment_request_for_destination("destination", "site", Some("owner-a"));
+        let changed_bucket =
+            deployment_request_for_destination("other-destination", "site", Some("owner-a"));
+        let changed_prefix =
+            deployment_request_for_destination("destination", "other-site", Some("owner-a"));
+        let changed_owner =
+            deployment_request_for_destination("destination", "site", Some("owner-b"));
+
+        let baseline_id = destination_physical_resource_id(identity, &baseline);
+        assert_ne!(
+            baseline_id,
+            destination_physical_resource_id(identity, &changed_bucket)
+        );
+        assert_ne!(
+            baseline_id,
+            destination_physical_resource_id(identity, &changed_prefix)
+        );
+        assert_ne!(
+            baseline_id,
+            destination_physical_resource_id(identity, &changed_owner)
+        );
+    }
+
+    #[test]
+    fn physical_resource_id_falls_back_to_cloudformation_identity_without_an_owner() {
+        let request = deployment_request_for_destination("destination", "", None);
+        let first = RequestIdentity {
+            stack_id: "stack-a",
+            request_id: "request-a",
+            logical_resource_id: "DeployA",
+        };
+        let retry = RequestIdentity {
+            stack_id: "stack-a",
+            request_id: "request-b",
+            logical_resource_id: "DeployA",
+        };
+        let other_resource = RequestIdentity {
+            stack_id: "stack-a",
+            request_id: "request-c",
+            logical_resource_id: "DeployB",
+        };
+
+        assert_eq!(
+            destination_physical_resource_id(first, &request),
+            destination_physical_resource_id(retry, &request)
+        );
+        assert_ne!(
+            destination_physical_resource_id(first, &request),
+            destination_physical_resource_id(other_resource, &request)
         );
     }
 

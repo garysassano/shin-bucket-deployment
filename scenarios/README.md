@@ -17,6 +17,8 @@ The `kms-destination`, `kms-managed-destination`, and `dsse-managed-destination`
 
 The `marker-replacement` scenario exercises plain, JSON-escaped, JSON, YAML, and repeated-token replacement. The Rust property and stream tests additionally cover simultaneous leftmost-longest overlap semantics, replacement non-recursion, decompression-chunk boundaries, UTF-8, empty and large values, CRC failures, retry bodies, and exact output limits.
 
+The `replacement-safety-initial` / `replacement-safety-updated` chain changes provider memory while destructive Delete cleanup is enabled. It verifies that a handler replacement keeps the same destination identity and does not remove the newly deployed object.
+
 `pnpm benchmark` runs only the named benchmark scenario and expands the requested config matrix:
 
 ```bash

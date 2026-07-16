@@ -102,10 +102,10 @@ function customResourceProperties(stack: Stack): Record<string, unknown> {
       typeof candidate === "object" &&
       candidate !== null &&
       "Type" in candidate &&
-      candidate.Type === "Custom::ShinBucketDeployment",
+      candidate.Type === "AWS::CloudFormation::CustomResource",
   ) as { Properties?: Record<string, unknown> } | undefined;
   if (!resource?.Properties) {
-    throw new Error("Custom::ShinBucketDeployment resource not found");
+    throw new Error("Shin custom resource not found");
   }
   return resource.Properties;
 }
