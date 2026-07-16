@@ -195,7 +195,9 @@ function forceBenchmarkInvocation(deployment: Construct, token: string | undefin
     .findAll()
     .filter(
       (child): child is CfnResource =>
-        CfnResource.isCfnResource(child) && child.cfnResourceType.startsWith("Custom::"),
+        CfnResource.isCfnResource(child) &&
+        (child.cfnResourceType === "AWS::CloudFormation::CustomResource" ||
+          child.cfnResourceType.startsWith("Custom::")),
     );
   const [customResource] = customResources;
   if (customResource === undefined || customResources.length !== 1) {
