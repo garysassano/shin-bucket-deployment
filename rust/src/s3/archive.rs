@@ -191,6 +191,7 @@ struct SourceBlockState {
 struct SourceBlockSlot {
     remaining_claims: usize,
     live_claims: usize,
+    replay_priority: bool,
     budget_permit: Option<SourceBudgetPermit>,
     status: SourceBlockStatus,
 }
@@ -836,6 +837,7 @@ impl SourceBlockStore {
                     .map(|remaining_claims| SourceBlockSlot {
                         remaining_claims,
                         live_claims: 0,
+                        replay_priority: false,
                         budget_permit: None,
                         status: SourceBlockStatus::Pending,
                     })
@@ -878,7 +880,8 @@ impl SourceBlockStore {
             while tasks.len() < self.source_get_concurrency && next_index < self.blocks.len() {
                 let index = next_index;
                 next_index += 1;
-                let Some(block) = self.reserve_fetch(index).await? else {
+                let Some(block) = self.reserve_fetch(index, SourceFetchMode::Prefetch).await?
+                else {
                     continue;
                 };
                 let store = Arc::clone(&self);
@@ -959,7 +962,11 @@ impl SourceBlockStore {
         tasks.spawn(task);
     }
 
-    async fn reserve_fetch(&self, index: usize) -> io::Result<Option<SourceBlockRange>> {
+    async fn reserve_fetch(
+        &self,
+        index: usize,
+        mode: SourceFetchMode,
+    ) -> io::Result<Option<SourceBlockRange>> {
         if self.blocks.get(index).is_none() {
             return Ok(None);
         }
@@ -987,9 +994,18 @@ impl SourceBlockStore {
                 let block = self.blocks[index];
                 let block_len = block.len();
                 let target_window = self.window_bytes.max(block_len);
-                if state.window_committed_bytes.saturating_add(block_len) <= target_window {
+                // The local window bounds speculative scheduler retention. A body
+                // replay may need an earlier block after that block was released,
+                // while later prefetched blocks occupy the complete window. Let
+                // demand reads borrow unused invocation-global budget so the replay
+                // can make progress; the shared semaphore remains the hard memory
+                // bound.
+                if (mode == SourceFetchMode::Demand && state.slots[index].replay_priority)
+                    || state.window_committed_bytes.saturating_add(block_len) <= target_window
+                {
                     state.window_committed_bytes =
                         state.window_committed_bytes.saturating_add(block_len);
+                    state.slots[index].replay_priority = false;
                     state.slots[index].status = SourceBlockStatus::Reserving;
                     break (block, enabled_notification(&self.cancel_notify));
                 }
@@ -1176,6 +1192,7 @@ impl SourceBlockStore {
                 } else {
                     self.source.diagnostics.record_replay_claim_after_failure();
                 }
+                slot.replay_priority = true;
                 slot.status = SourceBlockStatus::Pending;
             }
         }
@@ -1261,7 +1278,7 @@ impl SourceBlockStore {
 
             match action {
                 SourceBlockAction::Reserve => {
-                    if let Some(block) = self.reserve_fetch(index).await? {
+                    if let Some(block) = self.reserve_fetch(index, SourceFetchMode::Demand).await? {
                         self.fetch_reserved_block(index, block).await;
                     }
                 }
@@ -1334,6 +1351,12 @@ impl SourceBlockStore {
 enum SourceBlockAction {
     Reserve,
     Wait(EnabledNotification),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SourceFetchMode {
+    Prefetch,
+    Demand,
 }
 
 type EnabledNotification = Pin<Box<OwnedNotified>>;
@@ -1543,6 +1566,7 @@ mod tests {
     use crate::replace::MarkerReplacements;
     use crate::s3::archive::{
         SourceBlockOptions, SourceBlockRange, SourceBlockSlot, SourceBlockState, SourceBlockStatus,
+        SourceFetchMode,
     };
     use crate::s3::planner::ZipEntryPlan;
     use crate::s3::{DEFAULT_SOURCE_BLOCK_BYTES, DEFAULT_SOURCE_BLOCK_MERGE_GAP_BYTES};
@@ -1740,11 +1764,21 @@ mod tests {
         let first = pending_store_for_span(48, Arc::clone(&budget));
         let second = pending_store_for_span(48, budget);
 
-        assert!(first.reserve_fetch(0).await.unwrap().is_some());
+        assert!(
+            first
+                .reserve_fetch(0, SourceFetchMode::Prefetch)
+                .await
+                .unwrap()
+                .is_some()
+        );
         assert_eq!(stats.source_global_memory_for_test(), (64, 48, 48));
 
         let waiting_store = Arc::clone(&second);
-        let waiting = tokio::spawn(async move { waiting_store.reserve_fetch(0).await });
+        let waiting = tokio::spawn(async move {
+            waiting_store
+                .reserve_fetch(0, SourceFetchMode::Prefetch)
+                .await
+        });
         tokio::task::yield_now().await;
         assert!(!waiting.is_finished());
 
@@ -1761,6 +1795,88 @@ mod tests {
 
         second.cancel("test complete");
         assert_eq!(stats.source_global_memory_for_test(), (64, 0, 48));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn replay_demand_borrows_global_capacity_when_the_local_window_is_full() {
+        const BLOCK_BYTES: usize = 4 * 1024;
+        let stats = Arc::new(crate::types::DeploymentStats::default());
+        let budget = super::SourceByteBudget::new(BLOCK_BYTES * 2, Arc::clone(&stats));
+        let plans = [
+            plan_with_span("early.txt", 0, BLOCK_BYTES as u64),
+            plan_with_span("later.txt", BLOCK_BYTES as u64, (BLOCK_BYTES * 2) as u64),
+        ];
+        let source = Arc::new(super::SourceClient {
+            client: dummy_s3_client(),
+            bucket: "bucket".to_string(),
+            key: "archive.zip".to_string(),
+            len: (BLOCK_BYTES * 2) as u64,
+            etag: None,
+            diagnostics: Arc::new(SourceDiagnostics::new((BLOCK_BYTES * 2) as u64)),
+        });
+        let store = super::SourceBlockStore::new(
+            source,
+            &plans,
+            SourceBlockOptions {
+                block_bytes: BLOCK_BYTES,
+                merge_gap_bytes: 0,
+                get_concurrency: 1,
+                window_bytes: BLOCK_BYTES,
+            },
+            budget,
+        );
+
+        let later = store
+            .reserve_fetch(1, SourceFetchMode::Prefetch)
+            .await
+            .expect("later prefetch reservation")
+            .expect("later block");
+        store.finish_fetch(1, later, Ok(bytes::Bytes::from(vec![0_u8; BLOCK_BYTES])));
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(1),
+                store.reserve_fetch(0, SourceFetchMode::Demand),
+            )
+            .await
+            .is_err(),
+            "an ordinary demand read must still honor the local window"
+        );
+        {
+            let mut state = store.state.lock().expect("source block state");
+            state.slots[0].remaining_claims = 0;
+            state.slots[0].status = SourceBlockStatus::Released;
+        }
+        store.add_replay_claims(0, BLOCK_BYTES as u64);
+
+        let replay = tokio::time::timeout(
+            Duration::from_secs(1),
+            store.reserve_fetch(0, SourceFetchMode::Demand),
+        )
+        .await
+        .expect("replay demand must not wait behind the local prefetch window")
+        .expect("replay reservation")
+        .expect("replay block");
+
+        assert_eq!(replay.start, 0);
+        assert_eq!(
+            store
+                .state
+                .lock()
+                .expect("source block state")
+                .window_committed_bytes,
+            (BLOCK_BYTES * 2) as u64
+        );
+        assert_eq!(
+            stats.source_global_memory_for_test(),
+            (
+                (BLOCK_BYTES * 2) as u64,
+                (BLOCK_BYTES * 2) as u64,
+                (BLOCK_BYTES * 2) as u64
+            )
+        );
+
+        store.cancel("test complete");
+        assert_eq!(stats.source_global_memory_for_test().1, 0);
     }
 
     #[tokio::test]
@@ -2172,7 +2288,11 @@ mod tests {
             state.window_committed_bytes = store.window_bytes;
         }
         let waiter_store = Arc::clone(&store);
-        let waiter = tokio::spawn(async move { waiter_store.reserve_fetch(0).await });
+        let waiter = tokio::spawn(async move {
+            waiter_store
+                .reserve_fetch(0, SourceFetchMode::Prefetch)
+                .await
+        });
         tokio::task::yield_now().await;
 
         store.cancel("injected scheduler failure");
@@ -2208,6 +2328,7 @@ mod tests {
                 slots: vec![SourceBlockSlot {
                     remaining_claims: 1,
                     live_claims: 0,
+                    replay_priority: false,
                     budget_permit: None,
                     status: SourceBlockStatus::Ready(bytes::Bytes::from(vec![
                         0u8;
@@ -2340,6 +2461,7 @@ mod tests {
                 slots: vec![SourceBlockSlot {
                     remaining_claims: claims,
                     live_claims: 0,
+                    replay_priority: false,
                     budget_permit: None,
                     status: SourceBlockStatus::Ready(bytes::Bytes::copy_from_slice(
                         &zip[block.start as usize..block.end as usize + 1],
