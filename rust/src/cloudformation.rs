@@ -902,6 +902,8 @@ mod tests {
         assert_eq!(summary["catalog"]["trustedEntries"], 3);
         assert_eq!(summary["catalog"]["fallbackHashAttempts"], 1);
         assert_eq!(summary["catalog"]["sparseSkips"], 1);
+        assert_eq!(summary["counts"]["catalogSkips"], 1);
+        assert_eq!(summary["counts"]["skippedObjects"], 1);
         assert_eq!(summary["source"]["getAttempts"], 0);
         assert_eq!(summary["source"]["bodyReplays"], 0);
         assert_eq!(summary["source"]["globalBudgetBytes"], 0);
