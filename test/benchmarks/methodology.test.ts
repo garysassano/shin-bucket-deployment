@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
@@ -240,6 +240,26 @@ describe("benchmark methodology v2", () => {
         signal: controller.signal,
       }),
     ).rejects.toThrow("failed");
+  });
+
+  test("preserves every prior command log when a scratch path is reused", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "shin-benchmark-attempt-log-"));
+    const logFile = join(dir, "cold-create.deploy.log");
+
+    for (const value of ["first", "second", "third"]) {
+      await runCommand({
+        command: process.execPath,
+        args: ["-e", `process.stdout.write(${JSON.stringify(value)})`],
+        logFile,
+        quiet: true,
+        appendElapsed: false,
+      });
+    }
+
+    expect(readFileSync(logFile, "utf8")).toBe("third");
+    expect(readFileSync(join(dir, "cold-create.deploy.attempt-1.log"), "utf8")).toBe("first");
+    expect(readFileSync(join(dir, "cold-create.deploy.attempt-2.log"), "utf8")).toBe("second");
+    expect(existsSync(join(dir, "cold-create.deploy.attempt-3.log"))).toBe(false);
   });
 
   test("calculates median, quartiles, and IQR with interpolation", () => {
