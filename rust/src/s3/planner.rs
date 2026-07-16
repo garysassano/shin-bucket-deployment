@@ -15,8 +15,9 @@ use crate::types::{
 };
 
 use super::archive::{
-    S3RangeReader, SourceBlockOptions, SourceBlockStore, SourceByteBudget, prepare_source_zip,
-    validate_zip_entry_output, validate_zip_entry_size_not_exceeded, zip_entry_reader,
+    SourceBlockOptions, SourceBlockStore, SourceByteBudget, prepare_source_zip,
+    prepare_zip_directory_reader, validate_zip_entry_output, validate_zip_entry_size_not_exceeded,
+    zip_entry_reader,
 };
 use super::destination::{DestinationObject, destination_etag_matches, normalize_etag};
 use super::{
@@ -299,18 +300,35 @@ async fn add_archive_entries_to_manifest(
         stats,
         source_budget,
     } = context;
-    let reader = S3RangeReader::new(source.clone(), request.runtime.source_block_bytes);
-    let reader = ZipFileReader::with_tokio(reader)
+    let prepared = prepare_zip_directory_reader(
+        source.clone(),
+        request.runtime.source_block_bytes,
+        std::sync::Arc::clone(&source_budget),
+        request.source_catalogs[source_index]
+            .as_ref()
+            .map(|_| source.len().min(request.runtime.source_block_bytes as u64))
+            .unwrap_or(0),
+    )
+    .await?;
+    let central_directory_start = prepared.central_directory_start;
+    let _planning_permit = prepared._planning_permit;
+    let reader = ZipFileReader::with_tokio(prepared.reader)
         .await
         .context("failed to read zip archive central directory")?;
-    let zip_file = reader.file().clone();
-    let entries = zip_file.entries();
-    validate_archive_directory(entries, source.len())?;
+    let entries = reader.file().entries();
+    validate_archive_directory(entries, source.len(), central_directory_start)?;
+    let mut source_offsets = entries
+        .iter()
+        .map(StoredZipEntry::header_offset)
+        .collect::<Vec<_>>();
+    source_offsets.sort_unstable();
     let catalog = if let Some(expected) = &request.source_catalogs[source_index] {
         match load_authenticated_catalog(
             source.clone(),
             request,
             entries,
+            &source_offsets,
+            central_directory_start,
             &expected.sha256,
             source_budget,
         )
@@ -346,11 +364,6 @@ async fn add_archive_entries_to_manifest(
         );
         HashMap::new()
     };
-    let mut source_offsets = entries
-        .iter()
-        .map(StoredZipEntry::header_offset)
-        .collect::<Vec<_>>();
-    source_offsets.sort_unstable();
     let mut seen = HashSet::new();
 
     for stored in entries {
@@ -379,21 +392,9 @@ async fn add_archive_entries_to_manifest(
                 source.len()
             ));
         }
-        let payload_span_end = source_offset
-            .checked_add(stored.header_size())
-            .and_then(|offset| offset.checked_add(stored.compressed_size()))
-            .ok_or_else(|| {
-                anyhow!("central directory entry source span overflowed for `{relative_key}`")
-            })?;
-        if payload_span_end > source.len() {
-            return Err(anyhow!(
-                "central directory entry `{relative_key}` source span ends at {payload_span_end}, beyond source ZIP length {}",
-                source.len()
-            ));
-        }
         let source_span_end = next_source_offset(&source_offsets, source_offset)
-            .unwrap_or(payload_span_end)
-            .min(payload_span_end);
+            .unwrap_or(central_directory_start)
+            .min(central_directory_start);
         if source_span_end <= source_offset {
             return Err(anyhow!(
                 "local file source span {source_offset}..{source_span_end} for `{relative_key}` is empty"
@@ -427,6 +428,8 @@ async fn load_authenticated_catalog(
     source: std::sync::Arc<super::archive::SourceClient>,
     request: &DeploymentRequest,
     entries: &[StoredZipEntry],
+    source_offsets: &[u64],
+    central_directory_start: u64,
     expected_sha256: &[u8; 32],
     source_budget: std::sync::Arc<SourceByteBudget>,
 ) -> Result<HashMap<String, TrustedEntryIntegrity>> {
@@ -444,6 +447,9 @@ async fn load_authenticated_catalog(
         0,
         stored,
         EMBEDDED_CATALOG_PATH.to_string(),
+        next_source_offset(source_offsets, stored.header_offset())
+            .unwrap_or(central_directory_start)
+            .min(central_directory_start),
     )?;
     let store = SourceBlockStore::new(
         source.clone(),
@@ -614,6 +620,7 @@ fn zip_entry_plan(
     source_index: usize,
     stored: &StoredZipEntry,
     relative_key: String,
+    source_span_end: u64,
 ) -> Result<ZipEntryPlan> {
     let source_offset = stored.header_offset();
     if source_offset >= source_len {
@@ -621,15 +628,9 @@ fn zip_entry_plan(
             "local file header offset {source_offset} for `{relative_key}` is outside source ZIP length {source_len}"
         ));
     }
-    let source_span_end = source_offset
-        .checked_add(stored.header_size())
-        .and_then(|offset| offset.checked_add(stored.compressed_size()))
-        .ok_or_else(|| {
-            anyhow!("central directory entry source span overflowed for `{relative_key}`")
-        })?;
-    if source_span_end > source_len {
+    if source_span_end > source_len || source_span_end <= source_offset {
         return Err(anyhow!(
-            "central directory entry `{relative_key}` source span ends at {source_span_end}, beyond source ZIP length {source_len}"
+            "local file source span {source_offset}..{source_span_end} for `{relative_key}` is outside source ZIP length {source_len}"
         ));
     }
 
@@ -733,22 +734,26 @@ pub(super) fn validate_deployment_preflight(
     Ok(())
 }
 
-fn validate_archive_directory(entries: &[StoredZipEntry], source_len: u64) -> Result<()> {
+fn validate_archive_directory(
+    entries: &[StoredZipEntry],
+    source_len: u64,
+    central_directory_start: u64,
+) -> Result<()> {
     let _entry_count = u64::try_from(entries.len())
         .map_err(|_| anyhow!("source ZIP entry count cannot be represented safely"))?;
+    if central_directory_start > source_len {
+        return Err(anyhow!(
+            "source ZIP central directory starts beyond the source object"
+        ));
+    }
     let mut totals = (0_u64, 0_u64);
 
     for stored in entries {
         totals =
             checked_archive_totals(totals, stored.compressed_size(), stored.uncompressed_size())?;
-        let span_end = stored
-            .header_offset()
-            .checked_add(stored.header_size())
-            .and_then(|offset| offset.checked_add(stored.compressed_size()))
-            .ok_or_else(|| anyhow!("source ZIP central directory arithmetic overflowed"))?;
-        if span_end > source_len {
+        if stored.header_offset() >= central_directory_start {
             return Err(anyhow!(
-                "source ZIP central directory references data beyond the source object"
+                "source ZIP central directory references a local header inside the directory"
             ));
         }
     }

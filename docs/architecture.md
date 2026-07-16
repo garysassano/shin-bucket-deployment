@@ -52,11 +52,11 @@ Fixed ZIP entry streaming defaults keep per-transfer memory bounded:
 | ZIP entry S3 body chunk | 256 KiB | Size of each `Bytes` frame offered to the destination `PutObject` body. |
 | ZIP entry body pipe capacity | 1 MiB | Backpressure between entry production and the SDK upload body consumer. |
 
-The default provider Lambda memory is 1024 MiB. The runtime reads `AWS_LAMBDA_FUNCTION_MEMORY_SIZE`; the custom-resource payload is not trusted as the memory source. Half of the actual memory becomes the default invocation-global source block cap, leaving the other half for runtime, SDK, transfer, marker, and planning allocations. The 1024 MiB default was selected from historical exploratory measurements whose single-sample methodology is now being revalidated; those rows are not a performance guarantee or a sufficient basis for changing production defaults.
+The default provider Lambda memory is 1024 MiB. The runtime reads `AWS_LAMBDA_FUNCTION_MEMORY_SIZE`; the custom-resource payload is not trusted as the memory source. Half of the actual memory becomes the default invocation-global ZIP planning and source-block cap, leaving the other half for runtime, SDK, transfer, marker, and manifest allocations. The 1024 MiB default was selected from historical exploratory measurements whose single-sample methodology is now being revalidated; those rows are not a performance guarantee or a sufficient basis for changing production defaults.
 
 | Budget item at default settings | Approximate budget |
 | --- | ---: |
-| Invocation-global source block cap | 512 MiB |
+| Invocation-global ZIP planning and source block cap | 512 MiB |
 | Adaptive local-window runtime/base reserve | 64 MiB |
 | Adaptive local-window transfer reserve, `32 * 12 MiB` | 384 MiB |
 | Adaptive local-window in-flight GET reserve, `4 * 8 MiB` | 32 MiB |
@@ -114,6 +114,7 @@ Verification deploy/destroy can run independent scenario chains concurrently wit
 | `marker-replacement` | `scenarios/apps/content/marker-replacement-app.ts` | Deploy-time marker replacement across asset, data, JSON, and YAML sources. |
 | `filters` | `scenarios/apps/content/filters-app.ts` | Include/exclude filter behavior. |
 | `source-overwrite-order` | `scenarios/apps/content/source-overwrite-order-app.ts` | Duplicate source keys where later sources win. |
+| `external-zips` | `scenarios/apps/content/external-zips-app.ts` | External Info-ZIP and Python forced-ZIP64 archives deployed through `Source.bucket`. |
 | `stale-object-cleanup-initial` / `stale-object-cleanup-updated` | `scenarios/apps/updates/stale-object-cleanup-initial-app.ts`, `scenarios/apps/updates/stale-object-cleanup-updated-app.ts` | Ordered update chain that removes destination objects absent from the updated source plan. |
 | `stale-object-retention-initial` / `stale-object-retention-updated` | `scenarios/apps/updates/stale-object-retention-initial-app.ts`, `scenarios/apps/updates/stale-object-retention-updated-app.ts` | Ordered update chain with stale-object deletion disabled, preserving destination objects absent from the updated source plan. |
 | `default-retention-initial` / `default-retention-updated` | `scenarios/apps/retention/default-retention-initial-app.ts`, `scenarios/apps/retention/default-retention-updated-app.ts` | Ordered update chain proving that the default retains previous destination objects and current objects on Delete. |
@@ -288,8 +289,8 @@ For `extract=true`:
 
 1. Accept the synthesis-selected destination checksum strategy: `sse-s3-etag` for default/AES256 buckets or `kms-sha256` for KMS/DSSE buckets.
 2. `HeadObject` the source ZIP.
-3. Read ZIP central directory metadata with ranged `GetObject`.
-4. Validate entry counts, aggregate compressed/uncompressed sizes, and every central-directory span with checked arithmetic.
+3. Locate and validate classic or ZIP64 end records with ranged `GetObject`, reject impossible entry counts, estimate parser and decoded metadata memory, and reserve it from the invocation-global source budget before parser allocation. The parser reuses the prefetched source blocks.
+4. Read and validate the bound central directory. Local entry spans end at the next local header or the directory start rather than using central-header extra-field lengths.
 5. Walk central-directory entries and apply include and exclude filters.
 6. Evaluate the index-aligned `SourceCatalogs` binding. Unbound sources ignore embedded catalog contents; bound sources must authenticate exactly one `.shin/catalog.v1.json` entry against the template digest.
 7. Before applying deployment filters, strictly validate an authenticated catalog and require a one-to-one path and size mapping with every non-directory, non-catalog ZIP entry.
@@ -429,7 +430,7 @@ The provider role uses source grants from each bound CDK source and destination 
 
 The older extract path downloaded each source ZIP from S3, wrote the full archive to Lambda `/tmp`, opened it with `ZipArchive`, and reread the temporary file for planning, fallback hashing, and upload streaming.
 
-The current path reads the ZIP central directory and entry bodies through S3 ranges. Directory assets use a compact v1 size/MD5 catalog with an additional template-bound SHA-256 trust layer. Entry source spans are planned into coalesced blocks, prefetched with bounded source GET concurrency, shared by concurrent readers, retained while claimed, and reopened for retryable upload bodies. This removes the full-archive ephemeral-storage dependency and makes source ZIP and marker-expanded entry size independent of Lambda `/tmp` and whole-entry memory.
+The current path reads the ZIP central directory and entry bodies through S3 ranges. It bounds classic and ZIP64 directory metadata before parser allocation, and supports external archives whose local extra fields differ from their central records. Directory assets use a compact v1 size/MD5 catalog with an additional template-bound SHA-256 trust layer. Entry source spans are planned into coalesced blocks, prefetched with bounded source GET concurrency, shared by concurrent readers, retained while claimed, and reopened for retryable upload bodies. Readers discard their final `Bytes` slice before the corresponding global permit is released. This removes the full-archive ephemeral-storage dependency and makes source ZIP and marker-expanded entry size independent of Lambda `/tmp` and whole-entry memory.
 
 The current implementation:
 

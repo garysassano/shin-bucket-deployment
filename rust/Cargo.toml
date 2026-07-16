@@ -16,7 +16,10 @@ async-compression = { version = "0.4", default-features = false, features = [
   "tokio",
   "deflate",
 ] }
-async_zip = { version = "0.0.18", features = ["tokio", "deflate"] }
+async_zip = { package = "astral_async_zip", version = "0.0.20", features = [
+  "tokio",
+  "deflate",
+] }
 aws-config = { version = "1", default-features = false, features = [
   "behavior-version-latest",
   "default-https-client",
