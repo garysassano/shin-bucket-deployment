@@ -177,6 +177,8 @@ ZIP entries, including marker-expanded output, stream in bounded chunks. Marker 
 
 Source archives are read with S3 ranges and do not need to fit in Lambda memory or ephemeral storage. Individual files inside the asset ZIP, including marker-expanded output, must be <= 5 GiB because extracted uploads currently use S3 `PutObject`, not multipart upload.
 
+`destinationKeyPrefix` must be a concrete string no longer than 102 characters so Shin can validate the complete S3 ownership-tag key during synthesis. `"/"` and an omitted prefix both select the bucket root and share the same canonical ownership namespace.
+
 Before destination mutation, the provider validates the complete final key against S3's [1024-byte UTF-8 key limit](https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html), checks archive and aggregate size arithmetic, and rejects oversized single-request uploads and copies. Marker output size is enforced incrementally during planning, and the upload body withholds its final frame until the second pass validates source CRC/size/catalog integrity and matches the planned length and digest. Earlier independent object writes may already have completed before a later object fails; deployments are not transactional.
 
 This construct targets static asset deployment to S3. It is not a general-purpose sync engine and does not provide byte-range diffing, persistent manifests, or non-S3 backend behavior.

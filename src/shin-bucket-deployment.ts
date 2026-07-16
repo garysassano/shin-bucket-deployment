@@ -27,7 +27,7 @@ import {
   sourceMarkers,
   sourceMarkersConfig,
 } from "./source-config";
-import { validateDeploymentProps } from "./validation";
+import { destinationOwnerPrefix, validateDeploymentProps } from "./validation";
 
 const CUSTOM_RESOURCE_OWNER_TAG = "aws-cdk:cr-owned";
 
@@ -343,7 +343,6 @@ export interface ShinBucketDeploymentDestinationLifecycle {
 export interface ShinBucketDeploymentProps
   extends Pick<
     BucketDeploymentProps,
-    | "destinationKeyPrefix"
     | "extract"
     | "exclude"
     | "include"
@@ -372,6 +371,16 @@ export interface ShinBucketDeploymentProps
    * otherwise uninspectable buckets are rejected.
    */
   readonly destinationBucket: Bucket;
+
+  /**
+   * S3 key prefix under which objects are deployed.
+   *
+   * This must be a concrete string no longer than 102 characters. `"/"` and
+   * an omitted value both select the bucket root.
+   *
+   * @default - the bucket root
+   */
+  readonly destinationKeyPrefix?: string;
 
   /**
    * Whether deployments with the same provider configuration share one Lambda.
@@ -666,17 +675,8 @@ export class ShinBucketDeployment extends Construct {
     });
 
     const destinationOwnerId = this.cr.node.addr.slice(-8);
-    let prefix = props.destinationKeyPrefix ? `:${props.destinationKeyPrefix}` : "";
-    prefix += `:${destinationOwnerId}`;
-    const tagKey = CUSTOM_RESOURCE_OWNER_TAG + prefix;
-
-    if (!Token.isUnresolved(tagKey) && tagKey.length > 128) {
-      throw new ValidationError(
-        "ShinBucketDeploymentConstructRequiresDestination",
-        "The destinationKeyPrefix must be <=104 characters.",
-        this,
-      );
-    }
+    const ownerPrefix = destinationOwnerPrefix(props.destinationKeyPrefix);
+    const tagKey = `${CUSTOM_RESOURCE_OWNER_TAG}${ownerPrefix ? `:${ownerPrefix}` : ""}:${destinationOwnerId}`;
 
     Tags.of(this.destinationBucket).add(tagKey, "true");
   }

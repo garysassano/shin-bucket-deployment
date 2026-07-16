@@ -20,6 +20,11 @@ const DEFAULT_PUT_OBJECT_RETRY_BASE_DELAY_MS = 250;
 const DEFAULT_PUT_OBJECT_RETRY_MAX_DELAY_MS = 5_000;
 const DEFAULT_PUT_OBJECT_SLOWDOWN_RETRY_BASE_DELAY_MS = 1_000;
 const DEFAULT_PUT_OBJECT_SLOWDOWN_RETRY_MAX_DELAY_MS = 30_000;
+const MAX_DESTINATION_KEY_PREFIX_LENGTH = 102;
+
+export function destinationOwnerPrefix(prefix: string | undefined): string {
+  return prefix === "/" ? "" : (prefix ?? "");
+}
 
 export function validateDeploymentProps(scope: Construct, props: ShinBucketDeploymentProps): void {
   const maybeUnsupported = props as BucketDeploymentProps;
@@ -45,6 +50,7 @@ export function validateDeploymentProps(scope: Construct, props: ShinBucketDeplo
       scope,
     );
   }
+  validateDestinationKeyPrefix(scope, props.destinationKeyPrefix);
 
   if (maybeUnsupported.prune !== undefined) {
     throw new ValidationError(
@@ -223,6 +229,24 @@ export function validateDeploymentProps(scope: Construct, props: ShinBucketDeplo
   );
   validatePutObjectRetryProps(scope, putObjectRetryTuning);
   validateSourceMemoryProps(scope, props.memoryLimit, advancedRuntimeTuning);
+}
+
+function validateDestinationKeyPrefix(scope: Construct, prefix: string | undefined): void {
+  if (prefix === undefined) return;
+  if (Token.isUnresolved(prefix)) {
+    throw new ValidationError(
+      "ShinBucketDeploymentDestinationKeyPrefixUnresolved",
+      "destinationKeyPrefix must be a concrete string so destination ownership can be validated.",
+      scope,
+    );
+  }
+  if (prefix.length > MAX_DESTINATION_KEY_PREFIX_LENGTH) {
+    throw new ValidationError(
+      "ShinBucketDeploymentDestinationKeyPrefixTooLong",
+      `destinationKeyPrefix must be <=${MAX_DESTINATION_KEY_PREFIX_LENGTH} characters.`,
+      scope,
+    );
+  }
 }
 
 function validateIntegerProps(
