@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use aws_sdk_s3::Client as S3Client;
@@ -23,6 +23,7 @@ use fastrand::Rng;
 use md5::{Digest as Md5Digest, Md5};
 use sha2::Sha256;
 use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio::time::{Instant, sleep_until};
 
 use crate::deadline::InvocationDeadlines;
 use crate::replace::MarkerReplacements;
@@ -189,6 +190,7 @@ struct PutContext<'a> {
     retry_coordinator: &'a WriteRetryCoordinator,
     diagnostics: &'a WriteDiagnostics,
     stats: &'a DeploymentStats,
+    work_deadline: Instant,
 }
 
 struct CopyContext<'a> {
@@ -198,6 +200,7 @@ struct CopyContext<'a> {
     retry_coordinator: &'a WriteRetryCoordinator,
     diagnostics: &'a WriteDiagnostics,
     stats: &'a DeploymentStats,
+    work_deadline: Instant,
 }
 
 pub(super) async fn execute_copy_plans(
@@ -236,6 +239,7 @@ pub(super) async fn execute_copy_plans(
                             retry_coordinator: &retry_coordinator,
                             diagnostics: &diagnostics,
                             stats: &stats,
+                            work_deadline: deadlines.work(),
                         },
                         &plan,
                     )
@@ -362,6 +366,7 @@ pub(super) async fn upload_zip_entries(
                                 retry_coordinator: &put_retry_coordinator,
                                 diagnostics: &put_diagnostics,
                                 stats: &stats,
+                                work_deadline: deadlines.work(),
                             },
                             &plan.destination_key,
                             payload,
@@ -504,10 +509,16 @@ async fn copy_source_object(context: CopyContext<'_>, plan: &CopyPlan) -> Result
 
     let max_attempts = context.retry.max_attempts.max(1);
     for attempt in 1..=max_attempts {
-        context
+        if !context
             .retry_coordinator
-            .wait_for_throttle_cooldown(context.diagnostics)
-            .await;
+            .wait_for_throttle_cooldown_before_deadline(context.diagnostics, context.work_deadline)
+            .await
+        {
+            return Err(anyhow!(
+                "destination CopyObject throttle cooldown for {} reaches or exceeds the deployment work deadline",
+                plan.destination_key
+            ));
+        }
         let request = context
             .destination_s3
             .copy_object()
@@ -548,6 +559,23 @@ async fn copy_source_object(context: CopyContext<'_>, plan: &CopyPlan) -> Result
                     return Ok(());
                 }
                 if retryable && attempt < max_attempts {
+                    if !wait_for_write_retry_before_deadline(
+                        context.retry_coordinator,
+                        context.diagnostics,
+                        context.retry,
+                        attempt,
+                        throttled,
+                        context.work_deadline,
+                    )
+                    .await
+                    {
+                        return Err(error).with_context(|| {
+                            format!(
+                                "not retrying destination CopyObject for {} because its retry wait reaches or exceeds the deployment work deadline",
+                                plan.destination_key
+                            )
+                        });
+                    }
                     context
                         .diagnostics
                         .retry_attempts
@@ -560,14 +588,6 @@ async fn copy_source_object(context: CopyContext<'_>, plan: &CopyPlan) -> Result
                         error = %write_error_message(&error),
                         "destination CopyObject attempt failed; retrying"
                     );
-                    wait_for_write_retry(
-                        context.retry_coordinator,
-                        context.diagnostics,
-                        context.retry,
-                        attempt,
-                        throttled,
-                    )
-                    .await;
                     continue;
                 }
                 return Err(error).with_context(|| {
@@ -718,10 +738,15 @@ async fn upload_payload(
 
     let max_attempts = context.retry.max_attempts.max(1);
     for attempt in 1..=max_attempts {
-        context
+        if !context
             .retry_coordinator
-            .wait_for_throttle_cooldown(context.diagnostics)
-            .await;
+            .wait_for_throttle_cooldown_before_deadline(context.diagnostics, context.work_deadline)
+            .await
+        {
+            return Err(anyhow!(
+                "destination PutObject throttle cooldown for {destination_key} reaches or exceeds the deployment work deadline"
+            ));
+        }
         let body = payload_body(&payload, context.checksum_strategy);
         let mut request = context
             .destination_s3
@@ -768,6 +793,22 @@ async fn upload_payload(
                 let code = write_error_code(&error);
                 let throttled = code.as_deref().is_some_and(is_write_throttle_error_code);
                 context.diagnostics.record_failure(&error, throttled);
+                if !wait_for_write_retry_before_deadline(
+                    context.retry_coordinator,
+                    context.diagnostics,
+                    context.retry,
+                    attempt,
+                    throttled,
+                    context.work_deadline,
+                )
+                .await
+                {
+                    return Err(error).with_context(|| {
+                        format!(
+                            "not retrying destination PutObject for {destination_key} because its retry wait reaches or exceeds the deployment work deadline"
+                        )
+                    });
+                }
                 context
                     .diagnostics
                     .retry_attempts
@@ -780,14 +821,6 @@ async fn upload_payload(
                     error = %write_error_message(&error),
                     "destination PutObject attempt failed; retrying"
                 );
-                wait_for_write_retry(
-                    context.retry_coordinator,
-                    context.diagnostics,
-                    context.retry,
-                    attempt,
-                    throttled,
-                )
-                .await;
                 last_error = Some(error);
             }
             Err(error) => {
@@ -1145,21 +1178,33 @@ fn duration_millis_u64(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
-async fn wait_for_write_retry(
+async fn wait_for_write_retry_before_deadline(
     coordinator: &WriteRetryCoordinator,
     diagnostics: &WriteDiagnostics,
     retry: &PutObjectRetryOptions,
     attempt: usize,
     throttled: bool,
-) {
+    work_deadline: Instant,
+) -> bool {
     let delay = coordinator.retry_delay(attempt, throttled, retry);
     if throttled {
         coordinator.extend_throttle_cooldown(delay);
+        coordinator
+            .wait_for_throttle_cooldown_before_deadline(diagnostics, work_deadline)
+            .await
     } else {
+        let now = Instant::now();
+        let Some(wake) = now.checked_add(delay) else {
+            return false;
+        };
+        if wake >= work_deadline {
+            return false;
+        }
+        sleep_until(wake).await;
         diagnostics
             .retry_wait_millis
             .fetch_add(duration_millis_u64(delay), Ordering::Relaxed);
-        tokio::time::sleep(delay).await;
+        true
     }
 }
 
@@ -1205,29 +1250,40 @@ impl WriteRetryCoordinator {
         }
     }
 
-    async fn wait_for_throttle_cooldown(&self, diagnostics: &WriteDiagnostics) {
+    async fn wait_for_throttle_cooldown_before_deadline(
+        &self,
+        diagnostics: &WriteDiagnostics,
+        work_deadline: Instant,
+    ) -> bool {
         loop {
-            let delay = {
+            let wait = {
                 let throttle_until = self
                     .throttle_until
                     .lock()
                     .expect("write retry coordinator mutex should not be poisoned");
-                throttle_until.and_then(|deadline| deadline.checked_duration_since(Instant::now()))
+                throttle_until.and_then(|deadline| {
+                    deadline
+                        .checked_duration_since(Instant::now())
+                        .map(|delay| (deadline, delay))
+                })
             };
-            let Some(delay) = delay else {
-                return;
+            let Some((wake, delay)) = wait else {
+                return true;
             };
             if delay.is_zero() {
-                return;
+                return true;
+            }
+            if wake >= work_deadline {
+                return false;
             }
 
+            sleep_until(wake).await;
             diagnostics
                 .throttle_cooldown_waits
                 .fetch_add(1, Ordering::Relaxed);
             diagnostics
                 .throttle_cooldown_wait_millis
                 .fetch_add(duration_millis_u64(delay), Ordering::Relaxed);
-            tokio::time::sleep(delay).await;
         }
     }
 
@@ -1602,6 +1658,7 @@ mod tests {
                 retry_coordinator: &retry_coordinator,
                 diagnostics: &diagnostics,
                 stats: &stats,
+                work_deadline: test_work_deadline(),
             },
             "file.txt",
             test_payload(DestinationChecksumStrategy::SseS3Etag),
@@ -1653,6 +1710,7 @@ mod tests {
                 retry_coordinator: &retry_coordinator,
                 diagnostics: &diagnostics,
                 stats: &stats,
+                work_deadline: test_work_deadline(),
             },
             "file.txt",
             test_payload(DestinationChecksumStrategy::KmsSha256),
@@ -1790,6 +1848,53 @@ mod tests {
         assert_eq!(diagnostics.wire_attempts, 2);
         assert_eq!(diagnostics.failed_attempts, 1);
         assert_eq!(diagnostics.retry_attempts, 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn copy_retry_that_cannot_fit_preserves_the_slowdown_error() {
+        let replay = StaticReplayClient::new(vec![error_event(503, "SlowDown")]);
+        let client = replay_s3_client(replay.clone());
+        let diagnostics = WriteDiagnostics::default();
+        let stats = DeploymentStats::default();
+        let retry_coordinator = WriteRetryCoordinator::new();
+        let retry = PutObjectRetryOptions {
+            max_attempts: 2,
+            retry_base_delay_ms: 30_000,
+            retry_max_delay_ms: 30_000,
+            slowdown_retry_base_delay_ms: 30_000,
+            slowdown_retry_max_delay_ms: 30_000,
+            jitter: PutObjectRetryJitter::None,
+        };
+
+        let error = copy_source_object(
+            CopyContext {
+                destination_s3: &client,
+                destination_bucket: "destination",
+                retry: &retry,
+                retry_coordinator: &retry_coordinator,
+                diagnostics: &diagnostics,
+                stats: &stats,
+                work_deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(1),
+            },
+            &test_copy_plan(None),
+        )
+        .await
+        .expect_err("a CopyObject retry wait beyond the work deadline must be rejected");
+
+        let message = format!("{error:#}");
+        assert!(message.contains("not retrying destination CopyObject"));
+        assert!(message.contains("SlowDown"));
+        assert_eq!(
+            replay
+                .actual_requests()
+                .filter(|request| request.headers().contains_key("x-amz-copy-source"))
+                .count(),
+            1
+        );
+        let snapshot = diagnostics.snapshot();
+        assert_eq!(snapshot.retry_attempts, 0);
+        assert_eq!(snapshot.throttled_attempts, 1);
+        assert_eq!(snapshot.throttle_cooldown_waits, 0);
     }
 
     #[tokio::test]
@@ -1982,6 +2087,7 @@ mod tests {
                 retry_coordinator: &retry_coordinator,
                 diagnostics: &diagnostics,
                 stats: &stats,
+                work_deadline: test_work_deadline(),
             },
             "file.txt",
             test_payload(DestinationChecksumStrategy::SseS3Etag),
@@ -2104,6 +2210,137 @@ mod tests {
         assert!(duration_millis_u64(coordinator.retry_delay(3, false, &retry)) <= 1_000);
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn write_retry_that_cannot_fit_preserves_the_s3_error() {
+        for (status, code, throttled) in [(500, "InternalError", false), (503, "SlowDown", true)] {
+            let replay = StaticReplayClient::new(vec![error_event(status, code)]);
+            let client = replay_s3_client(replay.clone());
+            let diagnostics = WriteDiagnostics::default();
+            let stats = DeploymentStats::default();
+            let retry_coordinator = WriteRetryCoordinator::new();
+            let retry = PutObjectRetryOptions {
+                max_attempts: 2,
+                retry_base_delay_ms: 30_000,
+                retry_max_delay_ms: 30_000,
+                slowdown_retry_base_delay_ms: 30_000,
+                slowdown_retry_max_delay_ms: 30_000,
+                jitter: PutObjectRetryJitter::None,
+            };
+
+            let error = upload_payload(
+                PutContext {
+                    destination_s3: &client,
+                    destination_bucket: "destination",
+                    checksum_strategy: DestinationChecksumStrategy::SseS3Etag,
+                    retry: &retry,
+                    retry_coordinator: &retry_coordinator,
+                    diagnostics: &diagnostics,
+                    stats: &stats,
+                    work_deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(1),
+                },
+                "file.txt",
+                test_payload(DestinationChecksumStrategy::SseS3Etag),
+                None,
+            )
+            .await
+            .expect_err("a retry wait at or beyond the work deadline must be rejected");
+
+            let message = format!("{error:#}");
+            assert!(message.contains("not retrying destination PutObject"));
+            assert!(message.contains("deployment work deadline"));
+            assert!(message.contains(code), "missing {code} in {message}");
+            assert_eq!(replay.actual_requests().count(), 1);
+            let snapshot = diagnostics.snapshot();
+            assert_eq!(snapshot.failed_attempts, 1);
+            assert_eq!(snapshot.retry_attempts, 0);
+            assert_eq!(snapshot.retry_wait_millis, 0);
+            assert_eq!(snapshot.throttled_attempts, u64::from(throttled));
+            assert_eq!(snapshot.throttle_cooldown_waits, 0);
+            assert_eq!(snapshot.throttle_cooldown_wait_millis, 0);
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn shared_throttle_cooldown_stops_new_writes_before_the_work_deadline() {
+        let replay = StaticReplayClient::new(vec![]);
+        let client = replay_s3_client(replay.clone());
+        let diagnostics = WriteDiagnostics::default();
+        let stats = DeploymentStats::default();
+        let retry_coordinator = WriteRetryCoordinator::new();
+        retry_coordinator.extend_throttle_cooldown(std::time::Duration::from_secs(30));
+        let retry = test_retry_options();
+
+        let error = upload_payload(
+            PutContext {
+                destination_s3: &client,
+                destination_bucket: "destination",
+                checksum_strategy: DestinationChecksumStrategy::SseS3Etag,
+                retry: &retry,
+                retry_coordinator: &retry_coordinator,
+                diagnostics: &diagnostics,
+                stats: &stats,
+                work_deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(1),
+            },
+            "file.txt",
+            test_payload(DestinationChecksumStrategy::SseS3Etag),
+            None,
+        )
+        .await
+        .expect_err("a shared cooldown beyond the work deadline must stop admission");
+
+        assert!(
+            error
+                .to_string()
+                .contains("destination PutObject throttle cooldown for file.txt")
+        );
+        assert_eq!(replay.actual_requests().count(), 0);
+        let snapshot = diagnostics.snapshot();
+        assert_eq!(snapshot.wire_attempts, 0);
+        assert_eq!(snapshot.throttle_cooldown_waits, 0);
+        assert_eq!(snapshot.throttle_cooldown_wait_millis, 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn write_retry_that_fits_before_the_deadline_still_retries() {
+        let replay =
+            StaticReplayClient::new(vec![error_event(500, "InternalError"), put_success_event()]);
+        let client = replay_s3_client(replay.clone());
+        let diagnostics = WriteDiagnostics::default();
+        let stats = DeploymentStats::default();
+        let retry_coordinator = WriteRetryCoordinator::new();
+        let retry = PutObjectRetryOptions {
+            max_attempts: 2,
+            retry_base_delay_ms: 500,
+            retry_max_delay_ms: 500,
+            slowdown_retry_base_delay_ms: 500,
+            slowdown_retry_max_delay_ms: 500,
+            jitter: PutObjectRetryJitter::None,
+        };
+
+        upload_payload(
+            PutContext {
+                destination_s3: &client,
+                destination_bucket: "destination",
+                checksum_strategy: DestinationChecksumStrategy::SseS3Etag,
+                retry: &retry,
+                retry_coordinator: &retry_coordinator,
+                diagnostics: &diagnostics,
+                stats: &stats,
+                work_deadline: tokio::time::Instant::now() + std::time::Duration::from_secs(1),
+            },
+            "file.txt",
+            test_payload(DestinationChecksumStrategy::SseS3Etag),
+            None,
+        )
+        .await
+        .expect("a retry wait that fits before the work deadline should succeed");
+
+        assert_eq!(replay.actual_requests().count(), 2);
+        let snapshot = diagnostics.snapshot();
+        assert_eq!(snapshot.retry_attempts, 1);
+        assert_eq!(snapshot.retry_wait_millis, 500);
+    }
+
     fn integrity_plan(bytes: &[u8], md5: Option<String>) -> ZipEntryPlan {
         ZipEntryPlan {
             source_index: 0,
@@ -2145,6 +2382,7 @@ mod tests {
                 retry_coordinator: &retry_coordinator,
                 diagnostics: &diagnostics,
                 stats: &stats,
+                work_deadline: test_work_deadline(),
             },
             "file.txt",
             test_payload(checksum_strategy),
@@ -2181,6 +2419,7 @@ mod tests {
                 retry_coordinator: &retry_coordinator,
                 diagnostics: &diagnostics,
                 stats: &stats,
+                work_deadline: test_work_deadline(),
             },
             &plan,
         )
@@ -2264,6 +2503,19 @@ mod tests {
         )
     }
 
+    fn put_success_event() -> ReplayEvent {
+        ReplayEvent::new(
+            Request::builder()
+                .uri("https://s3.test/expected")
+                .body(SdkBody::empty())
+                .unwrap(),
+            Response::builder()
+                .status(200)
+                .body(SdkBody::empty())
+                .unwrap(),
+        )
+    }
+
     fn test_payload(checksum_strategy: DestinationChecksumStrategy) -> UploadPayload {
         let payload = UploadPayload::from_bytes(b"hello".to_vec());
         payload.body_state().record_etag_md5(md5_hex(b"hello"));
@@ -2282,5 +2534,9 @@ mod tests {
             slowdown_retry_max_delay_ms: 0,
             jitter: PutObjectRetryJitter::None,
         }
+    }
+
+    fn test_work_deadline() -> tokio::time::Instant {
+        tokio::time::Instant::now() + std::time::Duration::from_secs(120)
     }
 }
