@@ -37,6 +37,14 @@ export const VERIFY_SCENARIOS = {
     "lifecycle/child-parent-cleanup-updated-app.js",
     "ShinBucketDeploymentChildParentCleanupDemo",
   ),
+  "cross-bucket-change-initial": scenario(
+    "lifecycle/cross-bucket-change-initial-app.js",
+    "ShinBucketDeploymentCrossBucketChangeDemo",
+  ),
+  "cross-bucket-change-updated": scenario(
+    "lifecycle/cross-bucket-change-updated-app.js",
+    "ShinBucketDeploymentCrossBucketChangeDemo",
+  ),
   "stale-object-cleanup-initial": scenario(
     "updates/stale-object-cleanup-initial-app.js",
     "ShinBucketDeploymentStaleObjectCleanupDemo",
@@ -125,6 +133,7 @@ export const VERIFY_DEFAULT_GROUPS = [
   ["co-tenant-protection-initial", "co-tenant-protection-updated"],
   ["child-parent-retention-initial", "child-parent-retention-updated"],
   ["child-parent-cleanup-initial", "child-parent-cleanup-updated"],
+  ["cross-bucket-change-initial", "cross-bucket-change-updated"],
   ["stale-object-cleanup-initial", "stale-object-cleanup-updated"],
   ["stale-object-retention-initial", "stale-object-retention-updated"],
   ["default-retention-initial", "default-retention-updated"],
@@ -147,6 +156,7 @@ export const VERIFY_DESTROY_ORDER = [
   "co-tenant-protection-updated",
   "child-parent-retention-updated",
   "child-parent-cleanup-updated",
+  "cross-bucket-change-updated",
   "stale-object-cleanup-updated",
   "stale-object-retention-updated",
   "default-retention-updated",

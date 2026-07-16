@@ -8,6 +8,7 @@ import type { Construct } from "constructs";
 interface DestinationPermissions {
   readonly destinationBucket: Bucket;
   readonly destinationKeyPrefix?: string;
+  readonly deleteCurrentObjects: boolean;
   readonly previousDestinationBucket?: IBucket;
   readonly distribution?: IDistributionRef;
   readonly previousDistribution?: IDistributionRef;
@@ -22,39 +23,28 @@ export function grantDestinationPermissions(
     permissions.destinationKeyPrefix,
   );
   const destinationGrants = BucketGrants.fromBucket(permissions.destinationBucket);
-  // `BucketGrants` splits mixed actions by service: `s3:*` actions are granted on
-  // object keys, while `kms:*` actions are granted on the bucket encryption key
-  // only when one exists. This keeps KMS behavior aligned with CDK grants.
+  // `BucketGrants` splits mixed actions by service: S3 actions target object
+  // keys, while KMS actions target the bucket key only when one exists.
   destinationGrants.actionsOnObjectKeys(
     handler,
     destinationObjectKeyPattern,
     "s3:GetObject",
     "s3:PutObject",
-    "s3:PutObjectLegalHold",
-    "s3:PutObjectRetention",
-    "s3:PutObjectTagging",
-    "s3:PutObjectVersionTagging",
-    "s3:Abort*",
     "kms:Decrypt",
-    "kms:DescribeKey",
-    "kms:Encrypt",
-    "kms:ReEncrypt*",
-    "kms:GenerateDataKey*",
+    "kms:GenerateDataKey",
   );
-  destinationGrants.delete(handler, destinationObjectKeyPattern);
+  if (permissions.deleteCurrentObjects) {
+    destinationGrants.actionsOnObjectKeys(handler, destinationObjectKeyPattern, "s3:DeleteObject");
+  }
   handler.addToRolePolicy(
     destinationListPolicyStatement(
       permissions.destinationBucket.bucketArn,
       permissions.destinationKeyPrefix,
     ),
   );
-  handler.addToRolePolicy(
-    new PolicyStatement({
-      effect: Effect.ALLOW,
-      actions: ["s3:GetBucketTagging"],
-      resources: [permissions.destinationBucket.bucketArn],
-    }),
-  );
+  if (permissions.deleteCurrentObjects) {
+    handler.addToRolePolicy(bucketTagReadStatement(permissions.destinationBucket.bucketArn));
+  }
   // A managed-key bucket has no IKey for BucketGrants to target. Keep this
   // tightly conditioned statement on every handler so a later L1/Aspect
   // transition to alias/aws/s3 remains authorized; it is inert for every
@@ -63,16 +53,12 @@ export function grantDestinationPermissions(
 
   if (permissions.previousDestinationBucket) {
     const previousGrants = BucketGrants.fromBucket(permissions.previousDestinationBucket);
-    previousGrants.delete(handler, "*");
+    previousGrants.actionsOnObjectKeys(handler, "*", "s3:DeleteObject");
     handler.addToRolePolicy(
       destinationListPolicyStatement(permissions.previousDestinationBucket.bucketArn, undefined),
     );
     handler.addToRolePolicy(
-      new PolicyStatement({
-        effect: Effect.ALLOW,
-        actions: ["s3:GetBucketTagging"],
-        resources: [permissions.previousDestinationBucket.bucketArn],
-      }),
+      bucketTagReadStatement(permissions.previousDestinationBucket.bucketArn),
     );
   }
 
@@ -90,6 +76,14 @@ export function grantDestinationPermissions(
       ),
     );
   }
+}
+
+function bucketTagReadStatement(bucketArn: string): PolicyStatement {
+  return new PolicyStatement({
+    effect: Effect.ALLOW,
+    actions: ["s3:GetBucketTagging"],
+    resources: [bucketArn],
+  });
 }
 
 function cloudFrontPolicyStatement(scope: Construct, distributionId: string): PolicyStatement {
