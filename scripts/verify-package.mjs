@@ -39,7 +39,9 @@ const expectedLibraryFiles = [
 const requiredFiles = [
   ...expectedLibraryFiles,
   "package/assets/bootstrap-arm64/bootstrap.zip",
+  "package/assets/bootstrap-arm64/build-provenance.json",
   "package/assets/bootstrap-x86_64/bootstrap.zip",
+  "package/assets/bootstrap-x86_64/build-provenance.json",
   "package/README.md",
   "package/LICENSE",
   "package/package.json",
@@ -61,6 +63,11 @@ const ELF_MACHINE_BY_ARCH = {
   arm64: 183,
   x86_64: 62,
 };
+const TARGET_BY_ARCH = {
+  arm64: "aarch64-unknown-linux-gnu",
+  x86_64: "x86_64-unknown-linux-gnu",
+};
+const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 
 function crc32(buffer) {
   let crc = 0xffffffff;
@@ -281,6 +288,41 @@ function sha256File(path) {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
+function verifyBootstrapProvenance(archivePath, provenancePath, arch) {
+  assert(existsSync(archivePath), `Missing ${arch} bootstrap archive.`);
+  assert(existsSync(provenancePath), `Missing ${arch} bootstrap build provenance.`);
+
+  const bootstrap = readBootstrapEntry(archivePath, arch);
+  const provenance = JSON.parse(readFileSync(provenancePath, "utf8"));
+  assert(provenance.schemaVersion === 1, `${arch} provenance has an unsupported schema.`);
+  assert(provenance.architecture === arch, `${arch} provenance has the wrong architecture.`);
+  assert(
+    provenance.binaryName === "shin-bucket-deployment-handler",
+    `${arch} provenance has the wrong binary name.`,
+  );
+  assert(provenance.target === TARGET_BY_ARCH[arch], `${arch} provenance has the wrong target.`);
+  assert(
+    SHA256_PATTERN.test(provenance.sourceTreeSha256),
+    `${arch} provenance has an invalid source-tree digest.`,
+  );
+  assert(
+    SHA256_PATTERN.test(provenance.buildToolchainSha256),
+    `${arch} provenance has an invalid toolchain digest.`,
+  );
+  assert(
+    SHA256_PATTERN.test(provenance.buildEnvironmentSha256),
+    `${arch} provenance has an invalid build-environment digest.`,
+  );
+  assert(
+    provenance.bootstrapArchiveSha256 === sha256File(archivePath),
+    `${arch} provenance does not match the packaged bootstrap archive.`,
+  );
+  assert(
+    provenance.bootstrapSha256 === createHash("sha256").update(bootstrap).digest("hex"),
+    `${arch} provenance does not match the packaged bootstrap binary.`,
+  );
+}
+
 function verifyTarball(tarball, workDir) {
   const listing = run("tar", ["-tf", tarball], { capture: true })
     .trim()
@@ -311,9 +353,12 @@ function verifyTarball(tarball, workDir) {
   run("tar", ["-xzf", tarball, "-C", extractDir]);
 
   for (const arch of ["arm64", "x86_64"]) {
-    const archive = join(extractDir, "package", "assets", `bootstrap-${arch}`, "bootstrap.zip");
-    assert(existsSync(archive), `Missing ${arch} bootstrap archive in extracted tarball.`);
-    readBootstrapEntry(archive, arch);
+    const bootstrapDir = join(extractDir, "package", "assets", `bootstrap-${arch}`);
+    verifyBootstrapProvenance(
+      join(bootstrapDir, "bootstrap.zip"),
+      join(bootstrapDir, "build-provenance.json"),
+      arch,
+    );
   }
 
   const packedPackageJson = JSON.parse(
@@ -575,12 +620,12 @@ function main() {
   const workDir = mkdtempSync(join(tmpdir(), "shin-package-"));
   try {
     for (const arch of ["arm64", "x86_64"]) {
-      const archive = join(repoRoot, "assets", `bootstrap-${arch}`, "bootstrap.zip");
-      assert(
-        existsSync(archive),
-        `Missing ${arch} bootstrap archive. Run pnpm prebuild:bootstrap before package verification.`,
+      const bootstrapDir = join(repoRoot, "assets", `bootstrap-${arch}`);
+      verifyBootstrapProvenance(
+        join(bootstrapDir, "bootstrap.zip"),
+        join(bootstrapDir, "build-provenance.json"),
+        arch,
       );
-      readBootstrapEntry(archive, arch);
     }
     run("pnpm", ["build:package"]);
     verifyDeclarations();

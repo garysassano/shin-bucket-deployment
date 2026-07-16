@@ -37,7 +37,9 @@
     "lib/index.d.ts",
     "lib/shin-bucket-deployment.d.ts",
     "assets/bootstrap-arm64/bootstrap.zip",
+    "assets/bootstrap-arm64/build-provenance.json",
     "assets/bootstrap-x86_64/bootstrap.zip",
+    "assets/bootstrap-x86_64/build-provenance.json",
     "README.md",
     "LICENSE"
   ],
