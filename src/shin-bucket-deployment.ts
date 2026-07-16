@@ -18,7 +18,6 @@ import { Bucket, type IBucket } from "aws-cdk-lib/aws-s3";
 import type { BucketDeploymentProps, ISource, SourceConfig } from "aws-cdk-lib/aws-s3-deployment";
 import { Construct } from "constructs";
 import { destinationChecksumStrategy, inspectableDestinationBucketResource } from "./destination";
-import { destinationOwnerPrefix } from "./destination-prefix";
 import { ValidationError } from "./errors";
 import { grantDestinationPermissions } from "./iam";
 import { PROVIDER_TIMEOUT, getOrCreateHandler } from "./provider";
@@ -28,7 +27,7 @@ import {
   sourceMarkers,
   sourceMarkersConfig,
 } from "./source-config";
-import { validateDeploymentProps } from "./validation";
+import { destinationOwnerPrefix, validateDeploymentProps } from "./validation";
 
 const CUSTOM_RESOURCE_OWNER_TAG = "aws-cdk:cr-owned";
 
