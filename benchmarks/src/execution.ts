@@ -1,6 +1,6 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { basename, dirname, extname, join } from "node:path";
 
 export async function runCommand(args: {
   readonly command: string;
@@ -13,6 +13,7 @@ export async function runCommand(args: {
   readonly signal?: AbortSignal;
 }): Promise<number> {
   mkdirSync(dirname(args.logFile), { recursive: true });
+  preservePriorAttempt(args.logFile);
   writeFileSync(args.logFile, "");
   const start = Date.now();
   const status = await new Promise<number>((resolve) => {
@@ -54,6 +55,20 @@ export async function runCommand(args: {
     throw new Error(`${args.command} ${args.args.join(" ")} failed; see ${args.logFile}`);
   }
   return status;
+}
+
+function preservePriorAttempt(logFile: string): void {
+  if (!existsSync(logFile)) return;
+
+  const extension = extname(logFile);
+  const stem = basename(logFile, extension);
+  for (let attempt = 1; ; attempt += 1) {
+    const preserved = join(dirname(logFile), `${stem}.attempt-${attempt}${extension}`);
+    if (!existsSync(preserved)) {
+      renameSync(logFile, preserved);
+      return;
+    }
+  }
 }
 
 export function sleep(milliseconds: number, signal?: AbortSignal): Promise<void> {
