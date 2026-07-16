@@ -26,7 +26,7 @@ Runtime tuning defaults:
 | `maxParallelTransfers` | 32 | Bounds the continuously drained set of copy, hash, upload, and related logical object tasks; valid range 1–256. |
 | `memoryLimit` | 1024 MiB | Sizes the Lambda. The provider reads the actual value from the Lambda runtime environment. |
 
-Most deployments should tune only `memoryLimit` and, when needed, `maxParallelTransfers`. Source block/window and `PutObject` retry settings remain available under `advancedRuntimeTuning` as support and benchmark escape hatches:
+Most deployments should tune only `memoryLimit` and, when needed, `maxParallelTransfers`. Source block/window and destination-write retry settings remain available under `advancedRuntimeTuning` as support and benchmark escape hatches. The `putObjectRetry` property name predates provider-owned `CopyObject` retries and remains stable for compatibility:
 
 | Advanced setting | Default | Purpose |
 | --- | ---: | --- |
@@ -35,10 +35,10 @@ Most deployments should tune only `memoryLimit` and, when needed, `maxParallelTr
 | `advancedRuntimeTuning.sourceGetConcurrency` | derived from actual Lambda memory, 1 to 8 | Maximum concurrent source ranged `GetObject` block fetches per archive; explicit valid range 1–64. Block size times concurrency must fit the global budget. |
 | `advancedRuntimeTuning.sourceWindowBytes` | derived from the global budget and ZIP file count | Per-archive source block window. It must be at least one block and no greater than the invocation-global budget. |
 | `advancedRuntimeTuning.sourceWindowMemoryBudgetMb` | 50% of actual Lambda memory | Optional lower invocation-global source block budget. It cannot raise the 50% cap. |
-| `advancedRuntimeTuning.putObjectRetry.maxAttempts` | 6 | Maximum application-level `PutObject` attempts; valid range 1–10. |
-| `advancedRuntimeTuning.putObjectRetry.baseDelayMs` / `maxDelayMs` | 250 / 5000 | Non-throttling retry delays; each is 0–60000 ms and base cannot exceed max. |
-| `advancedRuntimeTuning.putObjectRetry.slowdownBaseDelayMs` / `slowdownMaxDelayMs` | 1000 / 30000 | Throttling retry delays; each is 0–60000 ms and base cannot exceed max. |
-| `advancedRuntimeTuning.putObjectRetry.jitter` | `full` | Jitter mode for computed `PutObject` retry delays; `none` is also supported. |
+| `advancedRuntimeTuning.putObjectRetry.maxAttempts` | 6 | Maximum provider-owned `PutObject` or `CopyObject` attempts; valid range 1–10. |
+| `advancedRuntimeTuning.putObjectRetry.baseDelayMs` / `maxDelayMs` | 250 / 5000 | Non-throttling destination-write retry delays; each is 0–60000 ms and base cannot exceed max. |
+| `advancedRuntimeTuning.putObjectRetry.slowdownBaseDelayMs` / `slowdownMaxDelayMs` | 1000 / 30000 | Throttling destination-write retry delays; each is 0–60000 ms and base cannot exceed max. |
+| `advancedRuntimeTuning.putObjectRetry.jitter` | `full` | Jitter mode for computed destination-write retry delays; `none` is also supported. |
 
 Numeric tuning values must be safe integers. Synthesis validates resolved values and their cross-field memory relationships; unresolved CloudFormation tokens are validated by the Rust provider with checked conversions and arithmetic. Invalid zeroes, extremes, inverted delays, and budget overcommit fail explicitly rather than being clamped or replaced by defaults.
 
@@ -125,7 +125,7 @@ Verification deploy/destroy can run independent scenario chains concurrently wit
 | `default-retention-initial` / `default-retention-updated` | `scenarios/apps/retention/default-retention-initial-app.ts`, `scenarios/apps/retention/default-retention-updated-app.ts` | Ordered update chain proving that the default retains previous destination objects and current objects on Delete. |
 | `object-deletion-initial` / `object-deletion-updated` / `object-deletion-bucket-only` | `scenarios/apps/retention/object-deletion-initial-app.ts`, `scenarios/apps/retention/object-deletion-updated-app.ts`, `scenarios/apps/retention/object-deletion-bucket-only-app.ts` | Ordered update chain proving explicit previous-destination object deletion on Update, followed by current-destination object deletion on Delete. |
 | `replacement-safety-initial` / `replacement-safety-updated` | `scenarios/apps/retention/replacement-safety-initial-app.ts`, `scenarios/apps/retention/replacement-safety-updated-app.ts` | Ordered handler-memory replacement with destructive Delete cleanup enabled, proving the live destination survives replacement cleanup. |
-| `extract-false` | `scenarios/apps/basic/extract-false-app.ts` | Archive copy mode with `extract=false`. |
+| `extract-false` | `scenarios/apps/basic/extract-false-app.ts` | Direct archive copy mode with `extract=false`, provider-owned retry settings, destination guards, and opaque lost-response reconciliation metadata. |
 | `large-archive` | `scenarios/apps/scale/large-archive-app.ts` | Larger archive ranged-read path. |
 | `kms-destination` | `scenarios/apps/security/kms-destination-app.ts` | KMS-encrypted destination bucket. |
 | `kms-managed-destination` | `scenarios/apps/security/kms-managed-destination-app.ts` | AWS-managed S3 KMS destination for the stored-checksum path. |
@@ -322,7 +322,7 @@ For `extract=false`:
 3. Preflight final keys and known source sizes.
 4. List the destination prefix for comparison, retaining metadata only for manifest keys.
 5. On SSE-S3 destinations, skip copies whose destination `ETag` matches the source identity. On KMS/DSSE destinations, copy because encrypted destination `ETag`s do not provide that comparison.
-6. Run copies with `CopyObject`, `MetadataDirective=REPLACE`, and inferred `Content-Type`. No unused copy checksum is requested.
+6. Run copies with source and destination preconditions, `MetadataDirective=REPLACE`, inferred `Content-Type`, and an opaque reconciliation identity in user metadata. Every provider attempt disables SDK retries. No unused copy checksum is requested.
 7. When stale deletion is enabled and the comparison list found a stale candidate, perform the same post-transfer page-streamed destination scan and deletion.
 
 The comparison scan retains at most one destination metadata record per manifest key and one scalar indicating whether it saw an included non-manifest key. With `destinationLifecycle.onDeploy.deleteStaleObjects` enabled, that candidate flag gates a second scan after transfers; destinations without stale candidates avoid the scan. When needed, cleanup holds at most one S3 page of keys and removes included objects absent from the deployment plan with `DeleteObjects` in 1000-key chunks. Destination planning memory is therefore O(manifest keys + one page + transfer concurrency), independent of unrelated destination object count.
@@ -359,7 +359,7 @@ Marker entries use a compiled multi-pattern automaton with simultaneous, non-rec
 
 S3 requires exact `Content-Length` before `PutObject` starts. Marker entries therefore use one bounded planning pass. If an existing SSE-S3 object has the resulting MD5, deployment stops there. An object that needs upload uses a second bounded pass whose body can be reopened for application or SDK replay. KMS/DSSE marker entries necessarily use both passes because destination `ETag` is not a plaintext identity. The corrected stable-payload decision run in [benchmark](./benchmark.md#marker-replacement-performance-decision) accepted this conditional extra read: current provider time improved 81.9% to 90.9% and peak memory fell 42.4% to 46.5% versus whole-entry materialization while remaining 8.4x to 16.9x faster than upstream.
 
-`extract=false` copies use source and destination `ETag` comparison only on SSE-S3 destinations. Source object `ETag` comes from a source `HeadObject`; destination `ETag` comes from the single destination list. KMS/DSSE destinations copy without treating their destination `ETag` as plaintext identity.
+`extract=false` copies use source and destination `ETag` comparison only on SSE-S3 destinations. Source object `ETag` and exact content length come from a source `HeadObject`; destination `ETag` comes from the single destination list. Missing source identity fails before mutation. KMS/DSSE destinations copy without treating their destination `ETag` as plaintext identity.
 
 ## Authenticated Catalog Trust
 
@@ -405,7 +405,7 @@ The memory claim is intentionally scoped: Shin performs no whole-asset or whole-
 
 ## Write Safety
 
-Extracted uploads use destination preconditions derived from the destination listing. Missing destination keys are uploaded with `If-None-Match: *`; existing destination keys with a listed `ETag` are uploaded with `If-Match` for that `ETag`; existing keys without a usable `ETag` fall back to plain `PutObject`. Every application-level `PutObject` attempt disables SDK retries, so permanent 4xx responses and source CRC/archive validation failures cannot be replayed underneath the typed retry policy.
+Extracted uploads and direct copies use destination preconditions derived from the destination listing. Missing destination keys are written with `If-None-Match: *`; existing destination keys with a listed `ETag` use `If-Match` for that `ETag`; existing keys without a usable `ETag` fall back to an unguarded write. Every provider-owned `PutObject` and `CopyObject` attempt disables SDK retries, so permanent 4xx responses and source CRC/archive validation failures cannot be replayed underneath the typed retry policy. Transient transport, timeout, HTTP 408/429/5xx, S3 `InternalError`/request-timeout, and throttling failures use capped backoff and the shared throttle cooldown. A copy-specific 409 is retried after reconciliation finds no completed write; other conditional conflicts fail closed when reconciliation does not match.
 
 The construct selects reconciliation from the concrete destination bucket's synthesized encryption rule. Default or `AES256` encryption uses `sse-s3-etag`; `aws:kms` and `aws:kms:dsse` use `kms-sha256`. Selection is lazy so post-construction L1 or Aspect mutations are visible at synthesis. Imported buckets and tokenized, unknown, or multi-rule encryption are rejected because no public declaration or runtime guess can safely replace inspection. A configured `KMSMasterKeyID` must resolve to the same ARN as the bucket's L2 `encryptionKey`; a late L1-injected customer key without a matching grantable construct is rejected. Customer-managed KMS grants come from the bucket construct. AWS-managed S3 key access is granted separately for `kms:Decrypt` and `kms:GenerateDataKey`, constrained to the current account/Region key ARN, the `alias/aws/s3` resource alias, and requests made through regional S3. The runtime does not call `GetBucketEncryption`.
 
@@ -417,7 +417,7 @@ The source ZIP ranged-read path still uses source `If-Match` when the source obj
 
 Transfer scheduling is bounded by `maxParallelTransfers`, including comparison/hash work as well as upload or copy work. Completed joins are removed while new objects are admitted, so task-handle memory is O(configured concurrency), not O(object count). The first observed transfer error or panic closes admission, aborts and drains outstanding transfer tasks, cancels source schedulers, wakes source-block and capacity waiters, and leaves later stale deletion and CloudFront invalidation unreachable. Retryable ZIP bodies share an attempt counter across application and SDK clones but do not start a decompressor, activate a source reader, or add replay claims until the body is first polled.
 
-`extract=false` remains on the `CopyObject` path. SSE-S3 skip decisions use `ETag`; KMS/DSSE copies do not use encrypted destination `ETag`s as plaintext identity. Copy requests do not ask S3 to calculate a checksum that Shin never consumes.
+`extract=false` remains on the `CopyObject` path. SSE-S3 skip decisions use `ETag`; KMS/DSSE copies do not use encrypted destination `ETag`s as plaintext identity. Each copy atomically replaces metadata with the inferred content type plus an opaque `shin-copy-identity` SHA-256 token bound to the source bucket/key/ETag/length and destination bucket/key. A conditional conflict or final ambiguous response uses ordinary `HeadObject` and succeeds only when that exact token and length match. This proves the intended operation without downloading the source, relying on encryption-sensitive destination `ETag`s, or requesting a checksum that normal copies do not consume. A concurrent or unrelated destination value lacks the token and fails closed.
 
 CloudFront invalidations use a bounded caller reference hash derived from the CloudFormation request identity (`StackId`, `RequestId`, and logical resource id) plus the distribution id and invalidation paths. CloudFormation documents `StackId` plus `RequestId` as a way to uniquely identify a request on a custom resource, and CloudFront documents `CallerReference` as the idempotency value that prevents accidentally resubmitting an identical invalidation request. If Lambda retries the same custom-resource event after creating the invalidation but before sending the CloudFormation response, CloudFront returns the existing invalidation instead of creating a duplicate. The upstream CDK `BucketDeployment` provider currently uses a fresh `uuid4()` caller reference for each invocation; this provider intentionally uses the request-derived caller reference to make same-event retries idempotent at the CloudFront API boundary.
 
@@ -459,12 +459,12 @@ The current implementation:
 - retain destination comparison metadata only for manifest keys and page stale cleanup after transfers
 - use source-object `If-Match` guards for ranged archive reads
 - use destination `If-None-Match`/`If-Match` guards for extracted `PutObject` writes when listing data supports them
-- retry failed `PutObject` attempts with capped backoff and throttle-aware delays
+- own `PutObject` and `CopyObject` retries explicitly, with one SDK attempt per provider attempt, capped backoff, shared throttle-aware delays, destination guards, and exact lost-response reconciliation
 - drain a bounded transfer task set continuously and abort outstanding work on the first observed error or panic
 - create retryable ZIP body work only when a body instance is actually polled
 - replace markers with deterministic simultaneous semantics using bounded planning and retryable streaming passes
 - derive source GET concurrency, the half-memory global cap, and local source windows from actual Lambda memory unless valid lower tuning is configured
-- emit structured source scheduler and destination `PutObject` diagnostics as provider logs
+- emit structured source scheduler and destination `PutObject`/`CopyObject` diagnostics as provider logs
 
 The remaining catalog caveat is packaging compatibility. Cataloged directory assets are produced by this construct's `Source.asset` wrapper. If callers need CDK asset bundling or symlink-following behavior that the wrapper does not currently implement, they can pass `embeddedCatalog: false` and use the upstream CDK asset path without trusted catalog sparse skips.
 
@@ -479,7 +479,7 @@ Cataloged asset packaging limitations:
 
 ## Diagnostics
 
-Each extracted deployment logs the effective source schedule and a final source diagnostics record per source archive. These records include planned entries and blocks, planned and fetched source bytes, source amplification, ranged `GetObject` wire attempts and typed failures, block hits/misses/releases/refetches, split wait counters for in-flight fetches versus source-window capacity, consumed body attempts/replays, per-archive resident source-window high-water, true active ZIP entry reader high-water, and active source GET high-water. The aggregate `shin_deployment_summary` is schema version 3 and is emitted after the CloudFormation callback attempt so `durationMs` and callback telemetry include callback delivery time even when the callback fails. Its `deploymentStatus` reports whether deployment work succeeded before callback delivery; callback delivery has independent counters because a successful deployment can still have a failed callback. The summary adds the actual Lambda memory, invocation-global source budget/current/high-water values, destination metadata/page high-water, catalog trust and fallback work, inferred deletion outcomes, and callback attempts. It separates logical transfer objects and cancellations from source and destination SDK work; the upload path also logs destination `PutObject` retry settings, throttling, wait time, and failures grouped by error code. Its `markerReplacement` object names the strategy and semantics, declares the nominal two passes for an uploaded marker object, and reports actual planning and upload passes for the invocation.
+Each extracted deployment logs the effective source schedule and a final source diagnostics record per source archive. These records include planned entries and blocks, planned and fetched source bytes, source amplification, ranged `GetObject` wire attempts and typed failures, block hits/misses/releases/refetches, split wait counters for in-flight fetches versus source-window capacity, consumed body attempts/replays, per-archive resident source-window high-water, true active ZIP entry reader high-water, and active source GET high-water. The aggregate `shin_deployment_summary` is schema version 3 and is emitted after the CloudFormation callback attempt so `durationMs` and callback telemetry include callback delivery time even when the callback fails. Its `deploymentStatus` reports whether deployment work succeeded before callback delivery; callback delivery has independent counters because a successful deployment can still have a failed callback. The summary adds the actual Lambda memory, invocation-global source budget/current/high-water values, destination metadata/page high-water, catalog trust and fallback work, inferred deletion outcomes, and callback attempts. It separates logical transfer objects and cancellations from source and destination SDK work; extracted uploads log destination `PutObject` retry settings, throttling, wait time, and failures grouped by error code, while direct copies emit a parallel `CopyObject` diagnostics record. Its `markerReplacement` object names the strategy and semantics, declares the nominal two passes for an uploaded marker object, and reports actual planning and upload passes for the invocation.
 
 Diagnostics are emitted to CloudWatch Logs through structured `tracing` fields. They are not returned in the CloudFormation custom-resource response because that response has a small practical size limit and is already used for `objectKeys` and `deployedBucket` outputs.
 
@@ -584,6 +584,8 @@ Destination upload diagnostics field reference:
 | `throttleCooldownWaits` | Worker waits caused by shared throttle cooldown. | Diagnose throttle fan-out control. |
 | `throttleCooldownWaitMs` | Milliseconds spent in shared throttle cooldown waits. | Estimate throttle cooldown cost. |
 
+Direct-copy deployments emit a separate `destination CopyObject diagnostics` structured record with the same field names. `wireAttempts` counts provider-owned copy attempts with SDK retries disabled; the retry, throttling, and wait fields have the same meanings as above. `counts.copiedObjects` and `bytes.copied` remain the logical-success totals in the schema-v3 summary.
+
 CloudFormation callback diagnostics field reference:
 
 | Field | Meaning | Use when debugging |
@@ -616,7 +618,7 @@ CloudFormation callback diagnostics field reference:
 - Source ZIP archives and marker-expanded entries do not need to fit in Lambda memory or ephemeral storage; both stream in bounded chunks.
 - Each extracted ZIP entry must fit S3's single-request `PutObject` limit.
 - Final destination keys must fit S3's 1024-byte UTF-8 limit.
-- `maxParallelTransfers` is 1–256, explicit source GET concurrency is 1–64, and application PUT attempts are 1–10.
+- `maxParallelTransfers` is 1–256, explicit source GET concurrency is 1–64, and provider-owned destination write attempts are 1–10.
 - `advancedRuntimeTuning.sourceBlockBytes` must be at least 30 bytes so ZIP local file headers can fit in one source block. Block size, block size times source GET concurrency, and any explicit local window must fit the invocation-global source budget.
 - Retry delays are 0–60000 ms and each base delay must not exceed its corresponding maximum.
 - `advancedRuntimeTuning.sourceWindowMemoryBudgetMb` can only lower the default half-memory source cap. Very small Lambda memory settings can therefore make otherwise valid tuning combinations fail explicitly.

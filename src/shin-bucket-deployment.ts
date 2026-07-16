@@ -175,28 +175,29 @@ export interface ShinBucketDeploymentBundlingOptions {
 
 export interface ShinBucketDeploymentPutObjectRetryTuning {
   /**
-   * Maximum application-level PutObject attempts per object.
+   * Maximum provider-owned destination write attempts per object.
+   * Applies to both `PutObject` and `CopyObject`.
    * Must be in the inclusive range 1..10.
    * @default 6
    */
   readonly maxAttempts?: number;
 
   /**
-   * Base retry delay for non-throttling PutObject failures, in milliseconds.
+   * Base retry delay for non-throttling destination write failures, in milliseconds.
    * Must be in the inclusive range 0..60000 and no greater than `maxDelayMs`.
    * @default 250
    */
   readonly baseDelayMs?: number;
 
   /**
-   * Maximum retry delay for non-throttling PutObject failures, in milliseconds.
+   * Maximum retry delay for non-throttling destination write failures, in milliseconds.
    * Must be in the inclusive range 0..60000.
    * @default 5000
    */
   readonly maxDelayMs?: number;
 
   /**
-   * Base retry delay for throttling PutObject failures, in milliseconds.
+   * Base retry delay for throttling destination write failures, in milliseconds.
    * Must be in the inclusive range 0..60000 and no greater than
    * `slowdownMaxDelayMs`.
    * @default 1000
@@ -204,14 +205,14 @@ export interface ShinBucketDeploymentPutObjectRetryTuning {
   readonly slowdownBaseDelayMs?: number;
 
   /**
-   * Maximum retry delay for throttling PutObject failures, in milliseconds.
+   * Maximum retry delay for throttling destination write failures, in milliseconds.
    * Must be in the inclusive range 0..60000.
    * @default 30000
    */
   readonly slowdownMaxDelayMs?: number;
 
   /**
-   * Jitter mode applied to computed PutObject retry delays.
+   * Jitter mode applied to computed destination write retry delays.
    * @default "full"
    */
   readonly jitter?: PutObjectRetryJitter;
@@ -258,7 +259,10 @@ export interface ShinBucketDeploymentAdvancedRuntimeTuning {
   readonly sourceWindowMemoryBudgetMb?: number;
 
   /**
-   * Destination PutObject retry/backoff tuning.
+   * Destination `PutObject` and `CopyObject` retry/backoff tuning.
+   *
+   * The property name is retained for compatibility with the original
+   * extracted-upload-only tuning surface.
    * @default - provider defaults
    */
   readonly putObjectRetry?: ShinBucketDeploymentPutObjectRetryTuning;

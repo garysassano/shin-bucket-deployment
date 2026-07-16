@@ -19,7 +19,10 @@ use super::archive::{
     prepare_zip_directory_reader, validate_zip_entry_output, validate_zip_entry_size_not_exceeded,
     zip_entry_reader,
 };
-use super::destination::{DestinationObject, destination_etag_matches, normalize_etag};
+use super::destination::{
+    DestinationObject, DestinationWritePrecondition, destination_etag_matches,
+    destination_write_precondition, normalize_etag,
+};
 use super::{
     EMBEDDED_CATALOG_MAX_BYTES, EMBEDDED_CATALOG_PATH, EMBEDDED_CATALOG_VERSION,
     S3_OBJECT_KEY_MAX_BYTES, S3_SINGLE_COPY_LIMIT, S3_SINGLE_PUT_LIMIT,
@@ -32,9 +35,10 @@ const RESERVED_CATALOG_V2_PATH: &str = ".shin/catalog.v2.json";
 pub(super) struct CopyPlan {
     pub(super) source_bucket: String,
     pub(super) source_key: String,
-    pub(super) expected_etag: Option<String>,
+    pub(super) expected_etag: String,
     pub(super) destination_key: String,
-    pub(super) size: Option<u64>,
+    pub(super) destination_precondition: Option<DestinationWritePrecondition>,
+    pub(super) size: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -177,8 +181,11 @@ pub(super) async fn plan_deployment(
                 relative_key.clone(),
                 PlannedObject {
                     relative_key,
-                    expected_etag,
-                    action: PlannedAction::CopyObject { source_index, size },
+                    expected_etag: Some(expected_etag),
+                    action: PlannedAction::CopyObject {
+                        source_index,
+                        size: Some(size),
+                    },
                 },
             );
         }
@@ -208,11 +215,26 @@ pub(super) fn collect_copy_plans(
                     continue;
                 }
                 validate_copy_object_size(&planned.relative_key, size)?;
+                let expected_etag = planned.expected_etag.clone().ok_or_else(|| {
+                    anyhow!(
+                        "source metadata for `{}` did not contain a usable ETag",
+                        planned.relative_key
+                    )
+                })?;
+                let size = size.ok_or_else(|| {
+                    anyhow!(
+                        "source metadata for `{}` did not contain a valid content length",
+                        planned.relative_key
+                    )
+                })?;
                 plans.push(CopyPlan {
                     source_bucket: request.source_bucket_names[source_index].clone(),
                     source_key: request.source_object_keys[source_index].clone(),
-                    expected_etag: planned.expected_etag.clone(),
+                    expected_etag,
                     destination_key,
+                    destination_precondition: destination_write_precondition(
+                        destination_objects.get(&planned.relative_key),
+                    ),
                     size,
                 });
             }
@@ -271,7 +293,7 @@ async fn source_object_metadata(
     state: &AppState,
     bucket: &str,
     key: &str,
-) -> Result<(Option<String>, Option<u64>)> {
+) -> Result<(String, u64)> {
     let response = state
         .source_s3
         .head_object()
@@ -283,8 +305,13 @@ async fn source_object_metadata(
 
     let size = response
         .content_length()
-        .and_then(|size| u64::try_from(size).ok());
-    Ok((response.e_tag().and_then(normalize_etag), size))
+        .and_then(|size| u64::try_from(size).ok())
+        .ok_or_else(|| anyhow!("source object metadata did not contain a valid content length"))?;
+    let etag = response
+        .e_tag()
+        .and_then(normalize_etag)
+        .ok_or_else(|| anyhow!("source object metadata did not contain a usable ETag"))?;
+    Ok((etag, size))
 }
 
 async fn add_archive_entries_to_manifest(
@@ -779,9 +806,9 @@ fn checked_archive_totals(
 }
 
 fn validate_copy_object_size(path: &str, size: Option<u64>) -> Result<()> {
-    let Some(size) = size else {
-        return Ok(());
-    };
+    let size = size.ok_or_else(|| {
+        anyhow!("source object `{path}` metadata did not contain a valid content length")
+    })?;
     if size > S3_SINGLE_COPY_LIMIT {
         return Err(anyhow!(
             "source object `{path}` is {size} bytes, larger than the S3 single CopyObject limit"
@@ -812,7 +839,7 @@ mod tests {
         validate_deployment_preflight,
     };
     use crate::request::compile_filters;
-    use crate::s3::destination::DestinationObject;
+    use crate::s3::destination::{DestinationObject, DestinationWritePrecondition};
     use crate::types::{
         DeploymentManifest, DeploymentRequest, DestinationChecksumStrategy, MarkerConfig,
         PlannedAction, PlannedObject, PutObjectRetryJitter, PutObjectRetryOptions, RuntimeOptions,
@@ -888,8 +915,13 @@ mod tests {
         let plans = collect_copy_plans(&manifest, &request, &HashMap::new()).expect("valid copy");
 
         assert_eq!(plans.len(), 1);
-        assert_eq!(plans[0].expected_etag.as_deref(), Some("abc123"));
+        assert_eq!(plans[0].expected_etag, "abc123");
         assert_eq!(plans[0].destination_key, "site/archive.zip");
+        assert_eq!(
+            plans[0].destination_precondition,
+            Some(DestinationWritePrecondition::IfNoneMatch)
+        );
+        assert_eq!(plans[0].size, 1024);
     }
 
     #[test]
@@ -921,6 +953,36 @@ mod tests {
         kms_request.destination_checksum_strategy = DestinationChecksumStrategy::KmsSha256;
         let kms = collect_copy_plans(&manifest, &kms_request, &destination).unwrap();
         assert_eq!(kms.len(), 1, "KMS destination ETags are not plaintext MD5");
+        assert_eq!(
+            kms[0].destination_precondition,
+            Some(DestinationWritePrecondition::IfMatch(
+                "\"abc123\"".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn copy_plans_require_exact_source_metadata_for_guards_and_reconciliation() {
+        for (expected_etag, size, expected_message) in [
+            (None, Some(1), "usable ETag"),
+            (Some("abc123".to_string()), None, "valid content length"),
+        ] {
+            let manifest = DeploymentManifest::from([(
+                "archive.zip".to_string(),
+                PlannedObject {
+                    relative_key: "archive.zip".to_string(),
+                    expected_etag,
+                    action: PlannedAction::CopyObject {
+                        source_index: 0,
+                        size,
+                    },
+                },
+            )]);
+
+            let error = collect_copy_plans(&manifest, &copy_request(), &HashMap::new())
+                .expect_err("incomplete source metadata must fail closed");
+            assert!(error.to_string().contains(expected_message));
+        }
     }
 
     #[test]

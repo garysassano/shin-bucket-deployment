@@ -189,9 +189,8 @@ pub(crate) async fn deploy(
             planner::collect_copy_plans(&deployment_manifest, request, &destination_plan.objects)?;
         transfer::execute_copy_plans(
             state,
-            &request.dest_bucket_name,
+            request,
             copy_plans,
-            request.runtime.max_parallel_transfers,
             transfer::TransferExecution {
                 stats: Arc::clone(&stats),
                 deadlines,

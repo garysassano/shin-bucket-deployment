@@ -17,6 +17,8 @@ The `kms-destination`, `kms-managed-destination`, and `dsse-managed-destination`
 
 The `handler-isolation` scenario deploys two constructs through the default shared provider and two through deployment-scoped providers. Synthesis proves three distinct Lambda/role policy boundaries, while AWS assertions prove all four namespaces are written through their intended boundary.
 
+The `extract-false` scenario exercises direct `CopyObject`. Targeted AWS verification additionally checks the opaque reconciliation metadata and an existing-destination repair through the destination `If-Match` guard.
+
 The `marker-replacement` scenario exercises plain, JSON-escaped, JSON, YAML, and repeated-token replacement. The Rust property and stream tests additionally cover simultaneous leftmost-longest overlap semantics, replacement non-recursion, decompression-chunk boundaries, UTF-8, empty and large values, CRC failures, retry bodies, and exact output limits.
 
 The `replacement-safety-initial` / `replacement-safety-updated` chain changes provider memory while destructive Delete cleanup is enabled. It verifies that generation-specific ownership prevents the old handler from removing the newly deployed object.

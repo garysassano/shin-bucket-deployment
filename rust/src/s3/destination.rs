@@ -21,6 +21,12 @@ pub(super) struct DestinationObject {
     pub(super) size: Option<u64>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum DestinationWritePrecondition {
+    IfMatch(String),
+    IfNoneMatch,
+}
+
 struct DestinationRecordContext<'a> {
     strip_prefix: &'a str,
     protected_namespace: Option<&'a str>,
@@ -423,6 +429,18 @@ pub(super) fn destination_md5_and_size_match(
     expected_size: u64,
 ) -> bool {
     object.size == Some(expected_size) && object.etag.as_deref() == Some(expected_md5)
+}
+
+pub(super) fn destination_write_precondition(
+    object: Option<&DestinationObject>,
+) -> Option<DestinationWritePrecondition> {
+    match object {
+        None => Some(DestinationWritePrecondition::IfNoneMatch),
+        Some(object) => object
+            .etag
+            .as_deref()
+            .map(|etag| DestinationWritePrecondition::IfMatch(format!("\"{etag}\""))),
+    }
 }
 
 pub(super) fn normalize_etag(etag: &str) -> Option<String> {
