@@ -79,9 +79,9 @@ The official `BucketDeployment` is a good default for many stacks, but its provi
 ## Benchmark Snapshots
 
 > [!CAUTION]
-> These are historical exploratory snapshots with single-sample methodology. They are being revalidated and should not be treated as performance guarantees or used to choose production defaults.
+> The embedded charts are historical exploratory snapshots with single-sample methodology. They should not be treated as performance guarantees or used to choose production defaults.
 
-The methodology-v2 harness is ready locally, but its five-repetition AWS evidence has not yet been collected. Default benchmark reports exclude the historical methodology-v1 rows.
+The five-repetition methodology-v2 Rust module-refactor decision run is documented in [Benchmark](docs/benchmark.md#rust-module-refactor-performance-decision). Default benchmark reports exclude the historical methodology-v1 snapshot rows and focused decision rows unless they are selected explicitly.
 
 <img src="https://raw.githubusercontent.com/garysassano/shin-bucket-deployment/main/benchmarks/snapshots/tiny-many-1024mib-32.svg" alt="ShinBucketDeployment tiny-many 1024 MiB parallel 32 benchmark" width="100%">
 
