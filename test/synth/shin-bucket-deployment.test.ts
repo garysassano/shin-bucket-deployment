@@ -10,6 +10,7 @@ import { Bucket, BucketEncryption, BucketNamespace, CfnBucket } from "aws-cdk-li
 import type { IConstruct } from "constructs";
 import { expect, test } from "vitest";
 import { ShinBucketDeployment, Source } from "../../src";
+import { stableStringify } from "../../src/stable-json";
 import { testBundling } from "../support/bundling";
 import { ensurePrebuiltBootstrapAssets } from "../support/prebuilt-assets";
 
@@ -163,12 +164,51 @@ test("reuses a shared prebuilt handler for compatible deployments", () => {
     const second = new ShinBucketDeployment(stack, "SecondDeploy", {
       sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
       destinationBucket: secondBucket,
+      shareHandler: true,
     });
 
     expect(first.handlerFunction).toBe(second.handlerFunction);
 
     const lambdaFunctions = Template.fromStack(stack).findResources("AWS::Lambda::Function");
     expect(Object.keys(lambdaFunctions)).toHaveLength(1);
+  } finally {
+    cleanup();
+  }
+});
+
+test("binds shared prebuilt handler identity to the package version and archive bytes", () => {
+  const cleanup = ensurePrebuiltBootstrapAssets();
+  try {
+    const stack = new Stack();
+    const destinationBucket = new Bucket(stack, "Dest");
+    const deployment = new ShinBucketDeployment(stack, "Deploy", {
+      sources: [Source.data("index.html", "ok")],
+      destinationBucket,
+    });
+    const manifest = JSON.parse(
+      readFileSync(join(__dirname, "..", "..", "package.json"), "utf8"),
+    ) as { version: string };
+    const bootstrapArchive = readFileSync(
+      join(__dirname, "..", "..", "assets", "bootstrap-arm64", "bootstrap.zip"),
+    );
+    const handlerHash = createHash("sha256")
+      .update(
+        stableStringify({
+          architecture: "arm64",
+          handlerSource: {
+            kind: "prebuilt",
+            packageVersion: manifest.version,
+            architecture: "arm64",
+            bootstrapArchiveSha256: createHash("sha256").update(bootstrapArchive).digest("hex"),
+          },
+          memoryLimit: 1024,
+          stack: stack.node.addr,
+        }),
+      )
+      .digest("hex")
+      .slice(0, 16);
+
+    expect(deployment.handlerFunction.node.id).toBe(`ShinBucketDeploymentHandler${handlerHash}`);
   } finally {
     cleanup();
   }
@@ -238,6 +278,22 @@ test("reuses a shared handler for compatible deployments in the same stack", () 
   expect(Object.keys(lambdaFunctions)).toHaveLength(1);
 });
 
+test("keeps omitted and explicit shared-handler templates identical", () => {
+  function synth(shareHandler: true | undefined): Record<string, unknown> {
+    const stack = new Stack();
+    const destinationBucket = new Bucket(stack, "Dest");
+    new ShinBucketDeployment(stack, "Deploy", {
+      sources: [Source.data("index.html", "ok")],
+      destinationBucket,
+      ...(shareHandler === undefined ? {} : { shareHandler }),
+      bundling: testBundling(),
+    });
+    return Template.fromStack(stack).toJSON();
+  }
+
+  expect(synth(true)).toEqual(synth(undefined));
+});
+
 test("creates separate handlers when the provider configuration differs", () => {
   const stack = new Stack();
   const firstBucket = new Bucket(stack, "FirstDest");
@@ -260,6 +316,88 @@ test("creates separate handlers when the provider configuration differs", () => 
 
   const lambdaFunctions = Template.fromStack(stack).findResources("AWS::Lambda::Function");
   expect(Object.keys(lambdaFunctions)).toHaveLength(2);
+});
+
+test("isolates functions, generated roles, and destination policies per deployment", () => {
+  const stack = new Stack();
+  const sharedFirstBucket = new Bucket(stack, "SharedFirstDest");
+  const sharedSecondBucket = new Bucket(stack, "SharedSecondDest");
+  const isolatedFirstBucket = new Bucket(stack, "IsolatedFirstDest");
+  const isolatedSecondBucket = new Bucket(stack, "IsolatedSecondDest");
+
+  const sharedFirst = new ShinBucketDeployment(stack, "SharedFirstDeploy", {
+    sources: [Source.data("index.html", "shared-first")],
+    destinationBucket: sharedFirstBucket,
+    bundling: testBundling(),
+  });
+  const sharedSecond = new ShinBucketDeployment(stack, "SharedSecondDeploy", {
+    sources: [Source.data("index.html", "shared-second")],
+    destinationBucket: sharedSecondBucket,
+    shareHandler: true,
+    bundling: testBundling(),
+  });
+  const isolatedFirst = new ShinBucketDeployment(stack, "IsolatedFirstDeploy", {
+    sources: [Source.data("index.html", "isolated-first")],
+    destinationBucket: isolatedFirstBucket,
+    shareHandler: false,
+    bundling: testBundling(),
+  });
+  const isolatedSecond = new ShinBucketDeployment(stack, "IsolatedSecondDeploy", {
+    sources: [Source.data("index.html", "isolated-second")],
+    destinationBucket: isolatedSecondBucket,
+    shareHandler: false,
+    bundling: testBundling(),
+  });
+
+  expect(sharedFirst.handlerFunction).toBe(sharedSecond.handlerFunction);
+  expect(sharedFirst.handlerRole).toBe(sharedSecond.handlerRole);
+  expect(isolatedFirst.handlerFunction).not.toBe(sharedFirst.handlerFunction);
+  expect(isolatedSecond.handlerFunction).not.toBe(sharedFirst.handlerFunction);
+  expect(isolatedFirst.handlerFunction).not.toBe(isolatedSecond.handlerFunction);
+  expect(isolatedFirst.handlerRole).not.toBe(sharedFirst.handlerRole);
+  expect(isolatedSecond.handlerRole).not.toBe(sharedFirst.handlerRole);
+  expect(isolatedFirst.handlerRole).not.toBe(isolatedSecond.handlerRole);
+
+  const template = Template.fromStack(stack);
+  expect(Object.keys(template.findResources("AWS::Lambda::Function"))).toHaveLength(3);
+  expect(Object.keys(template.findResources("AWS::IAM::Role"))).toHaveLength(3);
+
+  const policies = Object.values(template.findResources("AWS::IAM::Policy")).map((policy) =>
+    JSON.stringify(policy),
+  );
+  const sharedPolicy = policies.find((policy) => policy.includes("SharedFirstDest"));
+  const isolatedFirstPolicy = policies.find((policy) => policy.includes("IsolatedFirstDest"));
+  const isolatedSecondPolicy = policies.find((policy) => policy.includes("IsolatedSecondDest"));
+
+  expect(sharedPolicy).toContain("SharedSecondDest");
+  expect(sharedPolicy).not.toContain("IsolatedFirstDest");
+  expect(sharedPolicy).not.toContain("IsolatedSecondDest");
+  expect(isolatedFirstPolicy).not.toContain("SharedFirstDest");
+  expect(isolatedFirstPolicy).not.toContain("SharedSecondDest");
+  expect(isolatedFirstPolicy).not.toContain("IsolatedSecondDest");
+  expect(isolatedSecondPolicy).not.toContain("SharedFirstDest");
+  expect(isolatedSecondPolicy).not.toContain("SharedSecondDest");
+  expect(isolatedSecondPolicy).not.toContain("IsolatedFirstDest");
+});
+
+test("keeps shared handlers scoped to their CDK stack", () => {
+  const app = new App();
+  const firstStack = new Stack(app, "FirstStack");
+  const secondStack = new Stack(app, "SecondStack");
+  const first = new ShinBucketDeployment(firstStack, "Deploy", {
+    sources: [Source.data("index.html", "first")],
+    destinationBucket: new Bucket(firstStack, "Dest"),
+    bundling: testBundling(),
+  });
+  const second = new ShinBucketDeployment(secondStack, "Deploy", {
+    sources: [Source.data("index.html", "second")],
+    destinationBucket: new Bucket(secondStack, "Dest"),
+    bundling: testBundling(),
+  });
+
+  expect(first.handlerFunction).not.toBe(second.handlerFunction);
+  expect(first.handlerFunction.node.scope).toBe(firstStack);
+  expect(second.handlerFunction.node.scope).toBe(secondStack);
 });
 
 test("gives each handler replacement a distinct destination owner", () => {
@@ -298,6 +436,53 @@ test("gives each handler replacement a distinct destination owner", () => {
   );
   expect(replacement.properties.ServiceToken).not.toEqual(initial.properties.ServiceToken);
   expect(replacement.properties.DeleteCurrentObjectsOnDelete).toBe(true);
+});
+
+test("keeps an isolated handler and service token stable across configuration updates", () => {
+  function synthPhase(memoryLimit: number) {
+    const app = new App();
+    const stack = new Stack(app, "IsolatedUpdateStack");
+    const destinationBucket = new Bucket(stack, "Dest");
+    const deployment = new ShinBucketDeployment(stack, "Deploy", {
+      sources: [Source.data("index.html", `memory=${memoryLimit}`)],
+      destinationBucket,
+      shareHandler: false,
+      memoryLimit,
+      bundling: testBundling(),
+    });
+    const resources = Template.fromStack(stack).toJSON().Resources as Record<
+      string,
+      { Type: string; Properties: Record<string, unknown> }
+    >;
+    const customResource = Object.entries(resources).find(
+      ([, resource]) => resource.Type === "AWS::CloudFormation::CustomResource",
+    );
+    if (!customResource) throw new Error("Shin custom resource not found");
+    const handler = Object.entries(resources).find(
+      ([, resource]) =>
+        resource.Type === "AWS::Lambda::Function" && resource.Properties.Handler === "bootstrap",
+    );
+    if (!handler) throw new Error("Shin handler not found");
+    return {
+      customResourceLogicalId: customResource[0],
+      customResourceProperties: customResource[1].Properties,
+      handlerLogicalId: handler[0],
+      handlerNodeId: deployment.handlerFunction.node.id,
+    };
+  }
+
+  const initial = synthPhase(1024);
+  const updated = synthPhase(2048);
+
+  expect(updated.handlerNodeId).toBe("ShinBucketDeploymentHandler");
+  expect(updated.handlerLogicalId).toBe(initial.handlerLogicalId);
+  expect(updated.customResourceLogicalId).toBe(initial.customResourceLogicalId);
+  expect(updated.customResourceProperties.ServiceToken).toEqual(
+    initial.customResourceProperties.ServiceToken,
+  );
+  expect(updated.customResourceProperties.DestinationOwnerId).toBe(
+    initial.customResourceProperties.DestinationOwnerId,
+  );
 });
 
 test("scopes destination object permissions to the destination prefix", () => {

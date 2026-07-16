@@ -25,6 +25,21 @@ function customResourceProperties(stack: Stack) {
 }
 
 describe("ShinBucketDeployment validation and option coverage", () => {
+  test("rejects a non-boolean shareHandler value", () => {
+    const stack = new Stack();
+    const destinationBucket = new Bucket(stack, "Dest");
+
+    expect(
+      () =>
+        new ShinBucketDeployment(stack, "Deploy", {
+          sources: [Source.data("index.html", "ok")],
+          destinationBucket,
+          shareHandler: "false" as never,
+          bundling: testBundling(),
+        }),
+    ).toThrow(/shareHandler must be a boolean/);
+  });
+
   test("renders destination ownership without authorizing previous cleanup by default", () => {
     const stack = new Stack();
     const destinationBucket = new Bucket(stack, "Dest");

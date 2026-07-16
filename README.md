@@ -99,7 +99,7 @@ The construct follows the upstream `BucketDeployment` API where the behavior map
 | Deployment mode      | `extract`                                                                                                                                      |
 | Lifecycle            | `destinationLifecycle`                                                                                                                         |
 | CloudFront           | `distribution`, `distributionPaths`, `waitForDistributionInvalidation`                                                                         |
-| Provider Lambda      | `architecture`, `logGroup`, `memoryLimit`, `role`, `securityGroups`, `vpc`, `vpcSubnets`                                                       |
+| Provider Lambda      | `architecture`, `logGroup`, `memoryLimit`, `role`, `securityGroups`, `shareHandler`, `vpc`, `vpcSubnets`                                       |
 | Provider build       | `rustProjectPath`, `bundling`                                                                                                                  |
 | Runtime tuning       | `maxParallelTransfers`, `advancedRuntimeTuning`                                                                                                |
 | Outputs and response | `deployedBucket`, `objectKeys`, `outputObjectKeys`, `handlerRole`, `handlerFunction`                                                           |
@@ -181,7 +181,11 @@ Before destination mutation, the provider validates the complete final key again
 
 This construct targets static asset deployment to S3. It is not a general-purpose sync engine and does not provide byte-range diffing, persistent manifests, or non-S3 backend behavior.
 
-Deployments in the same CDK stack with the same handler identity reuse one provider Lambda, IAM role, and log group, and permissions from those deployments accumulate on that role. Handler settings such as `memoryLimit` are part of the identity, so a different value selects a distinct shared handler rather than mutating an existing one. `advancedRuntimeTuning` is carried in each custom-resource request and can differ between deployments that share a handler.
+Deployments in the same CDK stack share one provider Lambda by default when their handler settings match. The shared role accumulates permissions from every source, destination, KMS key, lifecycle transition, and CloudFront distribution used by those deployments. Handler settings such as `memoryLimit`, the package version, and the exact prebuilt provider archive participate in the identity, so incompatible package/provider copies cannot silently reuse whichever handler was synthesized first. `advancedRuntimeTuning` is carried in each custom-resource request and can differ between deployments that share a handler.
+
+Set `shareHandler: false` to create the provider beneath one deployment construct. With construct-generated resources, that deployment receives its own function, role, and log destination, preventing permission accumulation and reducing the mutation blast radius. Isolation creates more CloudFormation resources and gives each function an independent cold-start lifecycle; operational cost follows their separate invocations, logs, and any caller-configured provisioned concurrency. A caller-supplied `role` or `logGroup` remains caller-owned and can intentionally reintroduce sharing.
+
+Package or provider identity changes replace the shared handler by design. During that handoff, the destination bucket receives the new custom-resource generation's ownership tag before CloudFormation deletes the old generation, so the old handler retains the overlapping live namespace even when `onDelete.deleteObjects` is enabled. The release introducing package-aware identity performs this handoff once for each legacy shared handler.
 
 ## Development
 

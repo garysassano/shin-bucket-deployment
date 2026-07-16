@@ -28,6 +28,9 @@ describe("scenario planner", () => {
     const crossBucketGroup = plan.groups.find(
       ({ runs }) => runs[0]?.name === "cross-bucket-change-initial",
     );
+    const handlerIsolationGroup = plan.groups.find(
+      ({ runs }) => runs[0]?.name === "handler-isolation",
+    );
 
     expect(plan.concurrency).toBe(3);
     expect(cleanupGroup?.runs.map(({ name }) => name)).toEqual([
@@ -65,6 +68,7 @@ describe("scenario planner", () => {
       "cross-bucket-change-initial",
       "cross-bucket-change-updated",
     ]);
+    expect(handlerIsolationGroup?.runs.map(({ name }) => name)).toEqual(["handler-isolation"]);
   });
 
   it("uses final update phases in the default destroy order", () => {
@@ -86,6 +90,7 @@ describe("scenario planner", () => {
     expect(names).not.toContain("child-parent-cleanup-initial");
     expect(names).toContain("cross-bucket-change-updated");
     expect(names).not.toContain("cross-bucket-change-initial");
+    expect(names).toContain("handler-isolation");
   });
 
   it("normalizes verification and benchmark application paths centrally", () => {

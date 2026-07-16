@@ -370,12 +370,27 @@ export interface ShinBucketDeploymentProps
   readonly destinationBucket: Bucket;
 
   /**
-   * Memory allocated to the shared provider Lambda, in MiB.
+   * Whether deployments with the same provider configuration share one Lambda.
+   *
+   * Set this to `false` to create a deployment-scoped function and generated
+   * role, preventing permissions from other deployments from accumulating on
+   * them. Explicit `role` and `logGroup` values remain caller-owned and can
+   * still be shared intentionally.
+   *
+   * Isolation creates more Lambda, role, and log resources and gives each
+   * deployment an independent cold-start lifecycle.
+   *
+   * @default true
+   */
+  readonly shareHandler?: boolean;
+
+  /**
+   * Memory allocated to the provider Lambda, in MiB.
    *
    * The provider derives its invocation-global source-block budget from the
    * actual Lambda memory and caps it at 50%. Memory is part of the handler
-   * identity, so deployments using a different value select a distinct shared
-   * provider rather than changing an existing one.
+   * identity, so sharing deployments using a different value select a distinct
+   * provider. A deployment-scoped provider updates this setting in place.
    *
    * @default 1024
    */
@@ -384,16 +399,17 @@ export interface ShinBucketDeploymentProps
   /**
    * Existing execution role for the provider Lambda.
    *
-   * Deployments with the same provider configuration in one stack share a
-   * handler and role. Source, destination, KMS, and CloudFront permissions from
-   * every sharing deployment accumulate on that role.
+   * Deployments with the same provider configuration share a handler and role
+   * by default. Source, destination, KMS, and CloudFront permissions from every
+   * sharing deployment accumulate on that role. A caller-supplied role remains
+   * caller-owned even when `shareHandler` is `false`.
    *
-   * @default - a role is created for the shared provider
+   * @default - a role is created for the provider
    */
   readonly role?: BucketDeploymentProps["role"];
 
   /**
-   * Log group used by the shared provider Lambda.
+   * Log group used by the provider Lambda.
    *
    * @default - a default log group created by Lambda
    */
@@ -476,11 +492,13 @@ export interface ShinBucketDeploymentProps
  * shipped with the package, so consumers do not need a Rust toolchain. Passing
  * `bundling` or `rustProjectPath` opts into compiling the provider locally.
  *
- * Deployments with the same handler identity settings in one stack reuse a
- * single Lambda function. Its role accumulates permissions for every source,
- * destination, KMS key, and CloudFront distribution used by those deployments.
- * Handler settings such as memory participate in that identity; request-level
- * `advancedRuntimeTuning` does not and can differ between sharing deployments.
+ * By default, deployments with the same handler identity settings in one stack
+ * reuse a single Lambda function. Its role accumulates permissions for every
+ * source, destination, KMS key, and CloudFront distribution used by those
+ * deployments. Set `shareHandler:false` for a deployment-scoped function and
+ * generated role. Handler settings and the package/provider identity
+ * participate in shared identity; request-level `advancedRuntimeTuning` does
+ * not and can differ between sharing deployments.
  */
 export class ShinBucketDeployment extends Construct {
   private readonly cr: CustomResource;
@@ -490,14 +508,19 @@ export class ShinBucketDeployment extends Construct {
   private requestDestinationArn = false;
 
   /**
-   * Execution role of the shared custom-resource Lambda function.
+   * Execution role of the custom-resource Lambda function.
    *
-   * Permissions from every deployment sharing the handler accumulate here.
+   * With the default shared handler, permissions from every sharing deployment
+   * accumulate here. An isolated deployment gets a generated role of its own
+   * unless `role` explicitly supplies a caller-owned role.
    */
   public readonly handlerRole: IRole;
 
   /**
-   * The shared backing Rust Lambda function.
+   * The backing Rust Lambda function.
+   *
+   * This is shared by default and deployment-scoped when `shareHandler` is
+   * `false`.
    */
   public readonly handlerFunction: LambdaFunction;
 
