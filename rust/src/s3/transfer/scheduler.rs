@@ -1,7 +1,6 @@
 use std::future::Future;
 use std::panic::AssertUnwindSafe;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, anyhow};
 use futures_util::FutureExt;
@@ -15,9 +14,14 @@ pub(super) struct TransferScheduler {
     tasks: JoinSet<TransferTaskCompletion>,
     max_in_flight: usize,
     in_flight: usize,
-    failed: Arc<AtomicBool>,
+    admission_gate: Arc<TransferAdmissionGate>,
     stats: Arc<DeploymentStats>,
     deadlines: InvocationDeadlines,
+}
+
+#[derive(Default)]
+struct TransferAdmissionGate {
+    failed: Mutex<bool>,
 }
 
 struct TransferTaskCompletion {
@@ -35,7 +39,7 @@ impl TransferScheduler {
             tasks: JoinSet::new(),
             max_in_flight: max_in_flight.max(1),
             in_flight: 0,
-            failed: Arc::new(AtomicBool::new(false)),
+            admission_gate: Arc::new(TransferAdmissionGate::default()),
             stats,
             deadlines,
         }
@@ -50,34 +54,40 @@ impl TransferScheduler {
             self.join_one().await?;
             self.drain_ready().await?;
         }
-        if self.failed.load(Ordering::Acquire) {
-            self.join_one().await?;
-        }
 
-        let failed = Arc::clone(&self.failed);
-        self.in_flight += 1;
-        self.stats.add_transfer_scheduled_object(self.in_flight);
-        self.tasks.spawn(async move {
-            match AssertUnwindSafe(task).catch_unwind().await {
-                Ok(result) => {
-                    if result.is_err() {
-                        failed.store(true, Ordering::Release);
+        // Failure publication and task admission share this lock, which gives them one
+        // ordering and closes the check-then-spawn race.
+        let admission_gate = Arc::clone(&self.admission_gate);
+        let task_admission_gate = Arc::clone(&admission_gate);
+        let admitted = admission_gate.try_admit(|| {
+            self.in_flight += 1;
+            self.stats.add_transfer_scheduled_object(self.in_flight);
+            self.tasks.spawn(async move {
+                match AssertUnwindSafe(task).catch_unwind().await {
+                    Ok(result) => {
+                        if result.is_err() {
+                            task_admission_gate.mark_failed();
+                        }
+                        TransferTaskCompletion {
+                            result,
+                            panicked: false,
+                        }
                     }
-                    TransferTaskCompletion {
-                        result,
-                        panicked: false,
+                    Err(_) => {
+                        task_admission_gate.mark_failed();
+                        TransferTaskCompletion {
+                            result: Err(anyhow!("transfer task panicked")),
+                            panicked: true,
+                        }
                     }
                 }
-                Err(_) => {
-                    failed.store(true, Ordering::Release);
-                    TransferTaskCompletion {
-                        result: Err(anyhow!("transfer task panicked")),
-                        panicked: true,
-                    }
-                }
-            }
+            });
         });
-        Ok(())
+        if admitted {
+            Ok(())
+        } else {
+            self.surface_recorded_failure().await
+        }
     }
 
     pub(super) async fn finish(mut self) -> Result<()> {
@@ -107,6 +117,15 @@ impl TransferScheduler {
             }
         };
         self.handle_join_or_abort(joined).await
+    }
+
+    async fn surface_recorded_failure(&mut self) -> Result<()> {
+        while self.in_flight > 0 {
+            self.join_one().await?;
+        }
+        Err(anyhow!(
+            "transfer admission closed without a retained failed task result"
+        ))
     }
 
     async fn handle_join_or_abort(
@@ -153,7 +172,7 @@ impl TransferScheduler {
     }
 
     async fn abort_and_drain(&mut self) -> Result<()> {
-        self.failed.store(true, Ordering::Release);
+        self.admission_gate.mark_failed();
         self.tasks.abort_all();
         timeout_at(self.deadlines.bounded_drain(), async {
             while let Some(joined) = self.tasks.join_next().await {
@@ -179,6 +198,27 @@ impl TransferScheduler {
     }
 }
 
+impl TransferAdmissionGate {
+    fn try_admit(&self, admit: impl FnOnce()) -> bool {
+        let failed = self
+            .failed
+            .lock()
+            .expect("transfer admission gate mutex should not be poisoned");
+        if *failed {
+            return false;
+        }
+        admit();
+        true
+    }
+
+    fn mark_failed(&self) {
+        *self
+            .failed
+            .lock()
+            .expect("transfer admission gate mutex should not be poisoned") = true;
+    }
+}
+
 fn transfer_deadline_error() -> anyhow::Error {
     anyhow!("S3 transfer work exceeded the deployment work deadline")
 }
@@ -191,12 +231,13 @@ mod tests {
     use std::time::Duration;
 
     use anyhow::anyhow;
+    use futures_util::poll;
     use tokio::time::Instant as TokioInstant;
 
     use crate::deadline::InvocationDeadlines;
     use crate::types::DeploymentStats;
 
-    use super::TransferScheduler;
+    use super::{TransferScheduler, TransferTaskCompletion};
 
     struct DropSignal(Arc<AtomicBool>);
 
@@ -252,6 +293,62 @@ mod tests {
                 Ok(())
             })
             .await;
+
+        assert!(result.is_err());
+        assert_eq!(later_writes.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn successful_completion_cannot_mask_an_already_recorded_failure() {
+        let success_release = Arc::new(tokio::sync::Notify::new());
+        let success_ready = Arc::new(tokio::sync::Notify::new());
+        let failure_release = Arc::new(tokio::sync::Notify::new());
+        let later_writes = Arc::new(AtomicU64::new(0));
+        let stats = Arc::new(DeploymentStats::default());
+        let mut scheduler = TransferScheduler::new(
+            3,
+            stats,
+            InvocationDeadlines::from_remaining_at(TokioInstant::now(), Duration::from_secs(120)),
+        );
+
+        let success_release_for_task = Arc::clone(&success_release);
+        let success_ready_for_task = Arc::clone(&success_ready);
+        scheduler.tasks.spawn(async move {
+            success_release_for_task.notified().await;
+            success_ready_for_task.notify_one();
+            TransferTaskCompletion {
+                result: Ok(()),
+                panicked: false,
+            }
+        });
+        let failure_release_for_task = Arc::clone(&failure_release);
+        scheduler.tasks.spawn(async move {
+            failure_release_for_task.notified().await;
+            TransferTaskCompletion {
+                result: Err(anyhow!("injected recorded failure")),
+                panicked: false,
+            }
+        });
+        scheduler.in_flight = 2;
+        scheduler.admission_gate.mark_failed();
+
+        let later_writes_for_task = Arc::clone(&later_writes);
+        let spawn = scheduler.spawn(async move {
+            later_writes_for_task.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        });
+        tokio::pin!(spawn);
+        assert!(poll!(&mut spawn).is_pending());
+
+        success_release.notify_one();
+        success_ready.notified().await;
+        assert!(
+            poll!(&mut spawn).is_pending(),
+            "joining an unrelated success must not reopen admission"
+        );
+
+        failure_release.notify_one();
+        let result = spawn.await;
 
         assert!(result.is_err());
         assert_eq!(later_writes.load(Ordering::Relaxed), 0);
