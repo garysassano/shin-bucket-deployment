@@ -14,11 +14,11 @@ function customResourceProperties(stack: Stack) {
   };
 
   const resource = Object.values(template.Resources).find(
-    (candidate) => candidate.Type === "Custom::ShinBucketDeployment",
+    (candidate) => candidate.Type === "AWS::CloudFormation::CustomResource",
   );
 
   if (!resource) {
-    throw new Error("Custom::ShinBucketDeployment resource not found");
+    throw new Error("Shin custom resource not found");
   }
 
   return resource.Properties;
@@ -347,7 +347,7 @@ describe("ShinBucketDeployment validation and option coverage", () => {
 
     const template = Template.fromStack(stack);
 
-    template.hasResourceProperties("Custom::ShinBucketDeployment", {
+    template.hasResourceProperties("AWS::CloudFormation::CustomResource", {
       DistributionId: {
         Ref: Match.anyValue(),
       },

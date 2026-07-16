@@ -118,6 +118,7 @@ Verification deploy/destroy can run independent scenario chains concurrently wit
 | `stale-object-retention-initial` / `stale-object-retention-updated` | `scenarios/apps/updates/stale-object-retention-initial-app.ts`, `scenarios/apps/updates/stale-object-retention-updated-app.ts` | Ordered update chain with stale-object deletion disabled, preserving destination objects absent from the updated source plan. |
 | `default-retention-initial` / `default-retention-updated` | `scenarios/apps/retention/default-retention-initial-app.ts`, `scenarios/apps/retention/default-retention-updated-app.ts` | Ordered update chain proving that the default retains previous destination objects and current objects on Delete. |
 | `object-deletion-initial` / `object-deletion-updated` / `object-deletion-bucket-only` | `scenarios/apps/retention/object-deletion-initial-app.ts`, `scenarios/apps/retention/object-deletion-updated-app.ts`, `scenarios/apps/retention/object-deletion-bucket-only-app.ts` | Ordered update chain proving explicit previous-destination object deletion on Update, followed by current-destination object deletion on Delete. |
+| `replacement-safety-initial` / `replacement-safety-updated` | `scenarios/apps/retention/replacement-safety-initial-app.ts`, `scenarios/apps/retention/replacement-safety-updated-app.ts` | Ordered handler-memory replacement with destructive Delete cleanup enabled, proving the live destination survives replacement cleanup. |
 | `extract-false` | `scenarios/apps/basic/extract-false-app.ts` | Archive copy mode with `extract=false`. |
 | `large-archive` | `scenarios/apps/scale/large-archive-app.ts` | Larger archive ranged-read path. |
 | `kms-destination` | `scenarios/apps/security/kms-destination-app.ts` | KMS-encrypted destination bucket. |
@@ -134,8 +135,8 @@ flowchart TD
   A["CloudFormation custom resource event"] --> B["Validate envelope and ResourceType"]
   B --> Y["Parse properties; pre-serialize SUCCESS; preflight response and invalidation limits"]
   Y --> C{"Request type"}
-  C -->|Create| D["Generate physical resource id"]
-  C -->|Update| E["Reuse physical resource id"]
+  C -->|Create| D["Derive physical id from owner, bucket, and prefix"]
+  C -->|Update| E["Derive physical id from owner, bucket, and prefix"]
   C -->|Delete| F["Reuse physical resource id"]
   D --> G["Build DeploymentRequest"]
   E --> G
@@ -167,6 +168,8 @@ flowchart TD
   P -. "S3 error" .-> X
   R -. "CloudFront error" .-> X
 ```
+
+The construct uses the modeled `AWS::CloudFormation::CustomResource` type and includes the handler identity in the custom resource's logical identity. A changed Lambda service token therefore creates a replacement instead of attempting the unsupported in-place token update. Create and Update use the same deterministic destination identity. Retried Creates and handler replacements for an unchanged destination therefore return the same physical resource ID, while a genuine owner, bucket, or prefix change returns a different ID and preserves CloudFormation replacement cleanup semantics. The provider accepts the former custom-named resource type on Delete during migration.
 
 ## Changing a destination safely
 

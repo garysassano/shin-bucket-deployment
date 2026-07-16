@@ -26,10 +26,10 @@ function customResourceProperties(stack: Stack): Record<string, unknown> {
     Resources: Record<string, { Type: string; Properties?: Record<string, unknown> }>;
   };
   const resource = Object.values(template.Resources).find(
-    (candidate) => candidate.Type === "Custom::ShinBucketDeployment",
+    (candidate) => candidate.Type === "AWS::CloudFormation::CustomResource",
   );
   if (!resource?.Properties) {
-    throw new Error("Custom::ShinBucketDeployment resource not found");
+    throw new Error("Shin custom resource not found");
   }
   return resource.Properties;
 }
@@ -54,7 +54,7 @@ test("renders a Rust-backed custom resource", () => {
     Timeout: 900,
   });
 
-  template.hasResourceProperties("Custom::ShinBucketDeployment", {
+  template.hasResourceProperties("AWS::CloudFormation::CustomResource", {
     ServiceTimeout: "900",
     DestinationBucketName: {
       Ref: Match.anyValue(),
@@ -260,6 +260,44 @@ test("creates separate handlers when the provider configuration differs", () => 
 
   const lambdaFunctions = Template.fromStack(stack).findResources("AWS::Lambda::Function");
   expect(Object.keys(lambdaFunctions)).toHaveLength(2);
+});
+
+test("keeps destination identity stable across a handler replacement", () => {
+  function synthPhase(memoryLimit: number) {
+    const app = new App();
+    const stack = new Stack(app, "ReplacementStack");
+    const destinationBucket = new Bucket(stack, "Dest");
+    new ShinBucketDeployment(stack, "Deploy", {
+      sources: [Source.data("index.html", `memory=${memoryLimit}`)],
+      destinationBucket,
+      destinationLifecycle: { onDelete: { deleteObjects: true } },
+      memoryLimit,
+      bundling: testBundling(),
+    });
+
+    const resources = Template.fromStack(stack).toJSON().Resources as Record<
+      string,
+      { Type: string; Properties: Record<string, unknown> }
+    >;
+    const entry = Object.entries(resources).find(
+      ([, resource]) => resource.Type === "AWS::CloudFormation::CustomResource",
+    );
+    if (!entry) {
+      throw new Error("Shin custom resource not found");
+    }
+    return { logicalId: entry[0], properties: entry[1].Properties };
+  }
+
+  const initial = synthPhase(1024);
+  const replacement = synthPhase(2048);
+
+  expect(replacement.logicalId).not.toBe(initial.logicalId);
+  expect(replacement.properties.DestinationOwnerId).toBe(initial.properties.DestinationOwnerId);
+  expect(replacement.properties.DestinationBucketName).toEqual(
+    initial.properties.DestinationBucketName,
+  );
+  expect(replacement.properties.ServiceToken).not.toEqual(initial.properties.ServiceToken);
+  expect(replacement.properties.DeleteCurrentObjectsOnDelete).toBe(true);
 });
 
 test("scopes destination object permissions to the destination prefix", () => {
@@ -551,7 +589,7 @@ test("supports account-regional destination buckets", () => {
   });
 
   const deploymentResource = Object.values(template.Resources).find(
-    (resource) => resource.Type === "Custom::ShinBucketDeployment",
+    (resource) => resource.Type === "AWS::CloudFormation::CustomResource",
   );
   expect(deploymentResource?.Properties).toMatchObject({
     DestinationBucketName: {
