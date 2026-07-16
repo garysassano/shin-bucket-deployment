@@ -7,7 +7,7 @@ use futures_util::FutureExt;
 use tokio::task::JoinSet;
 use tokio::time::timeout_at;
 
-use crate::deadline::InvocationDeadlines;
+use crate::deadline::{InvocationDeadlines, TaskDrainBudget};
 use crate::types::DeploymentStats;
 
 pub(super) struct TransferScheduler {
@@ -17,6 +17,7 @@ pub(super) struct TransferScheduler {
     admission_gate: Arc<TransferAdmissionGate>,
     stats: Arc<DeploymentStats>,
     deadlines: InvocationDeadlines,
+    drain_budget: TaskDrainBudget,
 }
 
 #[derive(Default)]
@@ -35,6 +36,7 @@ impl TransferScheduler {
         stats: Arc<DeploymentStats>,
         deadlines: InvocationDeadlines,
     ) -> Self {
+        let drain_budget = deadlines.task_drain_budget();
         Self {
             tasks: JoinSet::new(),
             max_in_flight: max_in_flight.max(1),
@@ -42,7 +44,12 @@ impl TransferScheduler {
             admission_gate: Arc::new(TransferAdmissionGate::default()),
             stats,
             deadlines,
+            drain_budget,
         }
+    }
+
+    pub(super) fn task_drain_budget(&self) -> TaskDrainBudget {
+        self.drain_budget.clone()
     }
 
     pub(super) async fn spawn(
@@ -174,7 +181,7 @@ impl TransferScheduler {
     async fn abort_and_drain(&mut self) -> Result<()> {
         self.admission_gate.mark_failed();
         self.tasks.abort_all();
-        timeout_at(self.deadlines.bounded_drain(), async {
+        timeout_at(self.drain_budget.deadline(), async {
             while let Some(joined) = self.tasks.join_next().await {
                 self.in_flight = self.in_flight.saturating_sub(1);
                 match joined {

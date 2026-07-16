@@ -1,3 +1,4 @@
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime};
 
 use tokio::time::Instant;
@@ -14,6 +15,12 @@ pub(crate) struct InvocationDeadlines {
     work: Instant,
     drain: Instant,
     callback: Instant,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct TaskDrainBudget {
+    final_deadline: Instant,
+    started_deadline: Arc<OnceLock<Instant>>,
 }
 
 impl InvocationDeadlines {
@@ -42,12 +49,11 @@ impl InvocationDeadlines {
         self.callback
     }
 
-    /// Bounds an early failure drain without consuming the callback reserve.
-    pub(crate) fn bounded_drain(self) -> Instant {
-        Instant::now()
-            .checked_add(TASK_DRAIN_TIMEOUT)
-            .unwrap_or(self.drain)
-            .min(self.drain)
+    pub(crate) fn task_drain_budget(self) -> TaskDrainBudget {
+        TaskDrainBudget {
+            final_deadline: self.drain,
+            started_deadline: Arc::new(OnceLock::new()),
+        }
     }
 
     pub(crate) fn from_remaining_at(now: Instant, remaining: Duration) -> Self {
@@ -66,6 +72,19 @@ impl InvocationDeadlines {
             drain,
             callback,
         }
+    }
+}
+
+impl TaskDrainBudget {
+    /// Starts the task-drain window once and shares the same absolute deadline
+    /// across every cleanup phase.
+    pub(crate) fn deadline(&self) -> Instant {
+        *self.started_deadline.get_or_init(|| {
+            Instant::now()
+                .checked_add(TASK_DRAIN_TIMEOUT)
+                .unwrap_or(self.final_deadline)
+                .min(self.final_deadline)
+        })
     }
 }
 
@@ -108,6 +127,37 @@ mod tests {
         assert_eq!(
             deadlines.callback().duration_since(now),
             Duration::from_secs(10)
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn task_drain_budget_is_shared_across_cleanup_phases() {
+        let now = Instant::now();
+        let deadlines = InvocationDeadlines::from_remaining_at(now, Duration::from_secs(120));
+        let first_phase = deadlines.task_drain_budget();
+        let later_phase = first_phase.clone();
+
+        let drain_deadline = first_phase.deadline();
+        assert_eq!(drain_deadline.duration_since(now), TASK_DRAIN_TIMEOUT);
+
+        tokio::time::advance(Duration::from_secs(3)).await;
+
+        assert_eq!(later_phase.deadline(), drain_deadline);
+        assert_eq!(
+            drain_deadline.duration_since(Instant::now()),
+            Duration::from_secs(2)
+        );
+    }
+
+    #[test]
+    fn task_drain_budget_never_consumes_the_callback_reserve() {
+        let now = Instant::now();
+        let deadlines = InvocationDeadlines::from_remaining_at(now, Duration::from_secs(48));
+        let drain_budget = deadlines.task_drain_budget();
+
+        assert_eq!(
+            drain_budget.deadline().duration_since(now),
+            Duration::from_secs(3)
         );
     }
 }

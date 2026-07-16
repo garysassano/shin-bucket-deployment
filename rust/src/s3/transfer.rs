@@ -25,7 +25,7 @@ use sha2::Sha256;
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::time::{Instant, sleep_until};
 
-use crate::deadline::InvocationDeadlines;
+use crate::deadline::{InvocationDeadlines, TaskDrainBudget};
 use crate::replace::MarkerReplacements;
 use crate::types::{
     AppState, DeploymentRequest, DeploymentStats, DestinationChecksumStrategy, MarkerConfig,
@@ -218,7 +218,6 @@ pub(super) async fn execute_copy_plans(
         Arc::clone(&stats),
         deadlines,
     );
-
     let copy_result = async {
         for plan in copy_plans {
             let state = state.clone();
@@ -276,6 +275,7 @@ pub(super) async fn upload_zip_entries(
         Arc::clone(&stats),
         deadlines,
     );
+    let task_drain_budget = scheduler.task_drain_budget();
     tracing::info!(
         source_global_budget_bytes = source_budget.limit_bytes(),
         "configured invocation-global source byte budget"
@@ -390,7 +390,7 @@ pub(super) async fn upload_zip_entries(
             store.cancel(format!("transfer scheduling cancelled: {error}"));
         }
     }
-    let body_drain_result = abort_and_drain_body_tasks(&block_stores, deadlines).await;
+    let body_drain_result = abort_and_drain_body_tasks(&block_stores, &task_drain_budget).await;
     for (archive_index, source) in archive_diagnostics_sources {
         log_source_diagnostics(archive_index, &source, &stats);
     }
@@ -1109,12 +1109,12 @@ fn lower_hex(bytes: &[u8]) -> String {
 
 async fn abort_and_drain_body_tasks(
     stores: &[Arc<SourceBlockStore>],
-    deadlines: InvocationDeadlines,
+    drain_budget: &TaskDrainBudget,
 ) -> Result<()> {
     let mut first_error = None;
     for store in stores {
         if let Err(error) = store
-            .abort_and_drain_body_tasks(deadlines.bounded_drain())
+            .abort_and_drain_body_tasks(drain_budget.deadline())
             .await
             && first_error.is_none()
         {
