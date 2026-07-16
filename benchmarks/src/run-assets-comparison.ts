@@ -200,24 +200,28 @@ async function runBenchmarkStack(args: {
       console.log(`${label}: ${phase.name}`);
       const phaseStartedAt = Date.now();
       const deployLog = join(scratch, `${phase.name}.deploy.log`);
-      await runCommand({
-        command: "pnpm",
-        args: [
-          "exec",
-          "cdk",
-          "deploy",
-          "--app",
-          `node ${JSON.stringify(resolve("dist", "benchmarks", "apps", "assets-app.js"))}`,
-          "--output",
-          cdkOutput,
-          "--require-approval",
-          "never",
-          ...benchmarkStackTags(options.runId, run.sampleId),
-        ],
-        env: benchmarkEnv({ options, phase, run, stackSuffix }),
-        logFile: deployLog,
-        quiet: true,
-        signal,
+      await runWithFailedDeployEvidence({
+        deploy: async () => {
+          await runCommand({
+            command: "pnpm",
+            args: benchmarkDeployArgs(cdkOutput, options.runId, run.sampleId),
+            env: benchmarkEnv({ options, phase, run, stackSuffix }),
+            logFile: deployLog,
+            quiet: true,
+            signal,
+          });
+        },
+        capture: async () => {
+          await captureFailedDeployTelemetry({
+            implementation: run.implementation,
+            region: options.region,
+            stackName,
+            scratch,
+            phaseName: phase.name,
+            startTimeMs: phaseStartedAt,
+            signal,
+          });
+        },
       });
 
       const reportFile = join(scratch, `${phase.name}.report.json`);
@@ -390,6 +394,108 @@ async function runBenchmarkStack(args: {
     throw cleanupError;
   }
   return evidence;
+}
+
+export function benchmarkDeployArgs(cdkOutput: string, runId: string, sampleId: string): string[] {
+  return [
+    "exec",
+    "cdk",
+    "deploy",
+    "--app",
+    `node ${JSON.stringify(resolve("dist", "benchmarks", "apps", "assets-app.js"))}`,
+    "--output",
+    cdkOutput,
+    // Keep failed create resources available for telemetry capture; owned-stack cleanup follows.
+    "--no-rollback",
+    "--require-approval",
+    "never",
+    ...benchmarkStackTags(runId, sampleId),
+  ];
+}
+
+export async function runWithFailedDeployEvidence(args: {
+  readonly deploy: () => Promise<void>;
+  readonly capture: () => Promise<void>;
+}): Promise<void> {
+  try {
+    await args.deploy();
+  } catch (deployError) {
+    try {
+      await args.capture();
+    } catch (captureError) {
+      throw new Error(
+        `${errorText(deployError)}; failed benchmark telemetry capture also failed: ${errorText(captureError)}`,
+        { cause: deployError },
+      );
+    }
+    throw deployError;
+  }
+}
+
+export function failedPhaseEvidencePaths(scratch: string, phaseName: string) {
+  const prefix = join(scratch, `${phaseName}.failed`);
+  return {
+    resources: `${prefix}.resources.json`,
+    function: `${prefix}.function.json`,
+    report: `${prefix}.report.json`,
+    summary: `${prefix}.summary.json`,
+  } as const;
+}
+
+async function captureFailedDeployTelemetry(args: {
+  readonly implementation: BenchmarkImplementation;
+  readonly region: string;
+  readonly stackName: string;
+  readonly scratch: string;
+  readonly phaseName: string;
+  readonly startTimeMs: number;
+  readonly signal: AbortSignal;
+}): Promise<void> {
+  const paths = failedPhaseEvidencePaths(args.scratch, args.phaseName);
+  const handler = await benchmarkHandlerName({
+    implementation: args.implementation,
+    region: args.region,
+    stackName: args.stackName,
+    scratchFile: paths.resources,
+    signal: args.signal,
+  });
+  const metadata = await providerRuntimeMetadata({
+    functionName: handler,
+    outputFile: paths.function,
+    region: args.region,
+    signal: args.signal,
+  });
+  const captures = [
+    writeLogEvents({
+      filterPattern: "REPORT",
+      outputFile: paths.report,
+      region: args.region,
+      logGroup: metadata.logGroup,
+      requireEvents: true,
+      startTimeMs: args.startTimeMs,
+      signal: args.signal,
+    }),
+  ];
+  if (args.implementation === "shin") {
+    captures.push(
+      writeLogEvents({
+        filterPattern: "shin_deployment_summary",
+        outputFile: paths.summary,
+        region: args.region,
+        logGroup: metadata.logGroup,
+        requireEvents: true,
+        startTimeMs: args.startTimeMs,
+        signal: args.signal,
+      }),
+    );
+  }
+  const results = await Promise.allSettled(captures);
+  const errors = results.flatMap((result) =>
+    result.status === "rejected" ? [errorText(result.reason)] : [],
+  );
+  if (errors.length > 0) {
+    throw new Error(errors.join("; "));
+  }
 }
 
 export function benchmarkStackTags(runId: string, sampleId: string): string[] {
