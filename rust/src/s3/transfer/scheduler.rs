@@ -260,7 +260,7 @@ mod tests {
         let stats = Arc::new(DeploymentStats::default());
         let deadlines = InvocationDeadlines::from_remaining_at(
             TokioInstant::now(),
-            Duration::from_secs(50) + Duration::from_millis(10),
+            Duration::from_secs(51) + Duration::from_millis(10),
         );
         let mut scheduler = TransferScheduler::new(1, Arc::clone(&stats), deadlines);
         let task_dropped = Arc::clone(&dropped);
