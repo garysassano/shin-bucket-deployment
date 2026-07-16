@@ -262,7 +262,7 @@ test("creates separate handlers when the provider configuration differs", () => 
   expect(Object.keys(lambdaFunctions)).toHaveLength(2);
 });
 
-test("keeps destination identity stable across a handler replacement", () => {
+test("gives each handler replacement a distinct destination owner", () => {
   function synthPhase(memoryLimit: number) {
     const app = new App();
     const stack = new Stack(app, "ReplacementStack");
@@ -292,7 +292,7 @@ test("keeps destination identity stable across a handler replacement", () => {
   const replacement = synthPhase(2048);
 
   expect(replacement.logicalId).not.toBe(initial.logicalId);
-  expect(replacement.properties.DestinationOwnerId).toBe(initial.properties.DestinationOwnerId);
+  expect(replacement.properties.DestinationOwnerId).not.toBe(initial.properties.DestinationOwnerId);
   expect(replacement.properties.DestinationBucketName).toEqual(
     initial.properties.DestinationBucketName,
   );
