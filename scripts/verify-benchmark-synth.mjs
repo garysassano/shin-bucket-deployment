@@ -12,7 +12,9 @@ for (const path of templates) {
   const template = JSON.parse(readFileSync(path, "utf8"));
   const implementation = path.includes("AwsBucketDeployment") ? "aws" : "shin";
   const resourceType =
-    implementation === "aws" ? "Custom::CDKBucketDeployment" : "Custom::ShinBucketDeployment";
+    implementation === "aws"
+      ? "Custom::CDKBucketDeployment"
+      : "AWS::CloudFormation::CustomResource";
   const customResources = Object.values(template.Resources ?? {}).filter(
     (resource) => resource?.Type === resourceType,
   );
