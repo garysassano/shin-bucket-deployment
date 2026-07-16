@@ -277,7 +277,8 @@ export interface ShinBucketDeploymentDestinationLifecycle {
   readonly onDeploy?: {
     /**
      * Delete objects in the current destination namespace that are absent from
-     * the deployment plan.
+     * the deployment plan. An overlapping namespace owned by another Shin
+     * deployment retains stale objects rather than risking co-tenant deletion.
      *
      * @default true
      */
@@ -293,6 +294,8 @@ export interface ShinBucketDeploymentDestinationLifecycle {
      * Delete objects from the old destination namespace.
      *
      * CloudFormation supplies the old prefix through `OldResourceProperties`.
+     * For a child-to-parent move, cleanup preserves old-child keys that remain
+     * in the current deployment plan.
      *
      * @default false
      */

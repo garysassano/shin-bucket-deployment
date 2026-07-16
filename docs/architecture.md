@@ -115,6 +115,9 @@ Verification deploy/destroy can run independent scenario chains concurrently wit
 | `filters` | `scenarios/apps/content/filters-app.ts` | Include/exclude filter behavior. |
 | `source-overwrite-order` | `scenarios/apps/content/source-overwrite-order-app.ts` | Duplicate source keys where later sources win. |
 | `external-zips` | `scenarios/apps/content/external-zips-app.ts` | External Info-ZIP and Python forced-ZIP64 archives deployed through `Source.bucket`. |
+| `co-tenant-protection-initial` / `co-tenant-protection-updated` | `scenarios/apps/lifecycle/co-tenant-protection-initial-app.ts`, `scenarios/apps/lifecycle/co-tenant-protection-updated-app.ts` | Ordered root-prefix update proving that default stale cleanup retains a child namespace owned by another deployment. |
+| `child-parent-retention-initial` / `child-parent-retention-updated` | `scenarios/apps/lifecycle/child-parent-retention-initial-app.ts`, `scenarios/apps/lifecycle/child-parent-retention-updated-app.ts` | Ordered child-to-parent move proving that omitted `onChange.deleteObjects` retains the previous child namespace even though current stale deletion defaults on. |
+| `child-parent-cleanup-initial` / `child-parent-cleanup-updated` | `scenarios/apps/lifecycle/child-parent-cleanup-initial-app.ts`, `scenarios/apps/lifecycle/child-parent-cleanup-updated-app.ts` | Ordered child-to-parent move proving that explicit `onChange.deleteObjects` removes obsolete child objects while preserving keys in the current manifest, independently of current stale deletion. |
 | `stale-object-cleanup-initial` / `stale-object-cleanup-updated` | `scenarios/apps/updates/stale-object-cleanup-initial-app.ts`, `scenarios/apps/updates/stale-object-cleanup-updated-app.ts` | Ordered update chain that removes destination objects absent from the updated source plan. |
 | `stale-object-retention-initial` / `stale-object-retention-updated` | `scenarios/apps/updates/stale-object-retention-initial-app.ts`, `scenarios/apps/updates/stale-object-retention-updated-app.ts` | Ordered update chain with stale-object deletion disabled, preserving destination objects absent from the updated source plan. |
 | `default-retention-initial` / `default-retention-updated` | `scenarios/apps/retention/default-retention-initial-app.ts`, `scenarios/apps/retention/default-retention-updated-app.ts` | Ordered update chain proving that the default retains previous destination objects and current objects on Delete. |
@@ -236,13 +239,13 @@ destinationLifecycle: {
 }
 ```
 
-None of these actions deletes the bucket or CloudFront distribution resource. `deleteStaleObjects` removes only objects in the current namespace that are absent from the deployment plan and match the active include/exclude filters.
+None of these actions deletes the bucket or CloudFront distribution resource. `deleteStaleObjects` removes only objects in the current namespace that are absent from the deployment plan and match the active include/exclude filters. Before that deletion pass, the provider reads the bucket's Shin ownership tags. An overlapping owner from another deployment retains the stale objects rather than risking co-tenant deletion; this can conservatively retain unrelated stale keys in the same pass.
 
 For old-object deletion, omitting `fromBucket` reuses `destinationBucket`; an explicit `fromBucket` authorizes a changed old bucket. An unchanged current distribution is invalidated automatically. A changed old distribution must be passed to `invalidateDistribution` so CDK can grant distribution-specific invalidation permissions and synthesize its dependency.
 
 The provider deploys the current content before considering previous cleanup. It derives the old prefix from `OldResourceProperties`, verifies that the old bucket matches the resource authorized by the new template, and applies the owner and namespace-overlap checks. A missing or mismatched bucket authorization retains the previous destination and logs the reason; it does not undo the successful deployment of current content.
 
-Parent/child prefix changes are segment-aware. If the previous prefix contains the current prefix, cleanup excludes the complete current namespace. If the current prefix contains the previous prefix, no separate cleanup is necessary. Neighboring prefixes such as `site` and `site2` are treated as disjoint.
+Parent/child prefix changes are segment-aware, and slash runs are exact key bytes rather than aliases. If the previous prefix contains the current prefix, authorized cleanup excludes the complete current namespace. If the current prefix contains the previous prefix, the normal stale pass first protects the complete previous child namespace. Omitting `onChange.deleteObjects` therefore retains that child. When deletion is explicitly authorized, a separate manifest-aware pass removes obsolete keys from the old child after successful transfers while preserving every old-child key still present in the current manifest. Neighboring prefixes such as `site` and `site2` are treated as disjoint.
 
 ### Synthesis and permission boundary
 

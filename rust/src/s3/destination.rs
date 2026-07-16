@@ -23,9 +23,20 @@ pub(super) struct DestinationObject {
 
 struct DestinationRecordContext<'a> {
     strip_prefix: &'a str,
+    protected_namespace: Option<&'a str>,
     filters: &'a Filters,
     manifest: &'a DeploymentManifest,
     detect_stale_candidates: bool,
+}
+
+struct UnplannedDeletionContext<'a> {
+    bucket: &'a str,
+    list_prefix: Option<&'a str>,
+    strip_prefix: &'a str,
+    protected_namespace: Option<&'a str>,
+    filters: Option<&'a Filters>,
+    manifest: &'a DeploymentManifest,
+    stats: &'a DeploymentStats,
 }
 
 pub(crate) async fn delete_prefix(
@@ -142,12 +153,14 @@ pub(crate) async fn bucket_has_competing_owner(
 pub(super) async fn plan_destination(
     state: &AppState,
     request: &DeploymentRequest,
+    protected_prefix: Option<&str>,
     filters: &Filters,
     manifest: &DeploymentManifest,
     stats: &DeploymentStats,
 ) -> Result<DestinationPlan> {
     let list_prefix = namespace_list_prefix(&request.dest_bucket_prefix);
     let strip_prefix = list_prefix.as_deref().unwrap_or("");
+    let protected_namespace = protected_prefix.and_then(namespace_list_prefix);
     let mut start_after = None;
     let mut objects = HashMap::new();
     let mut listed_objects = 0_u64;
@@ -173,6 +186,7 @@ pub(super) async fn plan_destination(
                 object.size().and_then(|size| u64::try_from(size).ok()),
                 DestinationRecordContext {
                     strip_prefix,
+                    protected_namespace: protected_namespace.as_deref(),
                     filters,
                     manifest,
                     detect_stale_candidates: request.delete_stale_objects_on_deployment
@@ -207,30 +221,88 @@ pub(super) async fn plan_destination(
 pub(super) async fn delete_stale_objects(
     state: &AppState,
     request: &DeploymentRequest,
+    protected_prefix: Option<&str>,
     filters: &Filters,
     manifest: &DeploymentManifest,
     stats: &DeploymentStats,
 ) -> Result<()> {
     let list_prefix = namespace_list_prefix(&request.dest_bucket_prefix);
     let strip_prefix = list_prefix.as_deref().unwrap_or("");
+    let protected_namespace = protected_prefix.and_then(namespace_list_prefix);
+    delete_unplanned_objects(
+        state,
+        UnplannedDeletionContext {
+            bucket: &request.dest_bucket_name,
+            list_prefix: list_prefix.as_deref(),
+            strip_prefix,
+            protected_namespace: protected_namespace.as_deref(),
+            filters: Some(filters),
+            manifest,
+            stats,
+        },
+    )
+    .await?;
+    Ok(())
+}
+
+pub(super) async fn delete_unplanned_objects_in_namespace(
+    state: &AppState,
+    request: &DeploymentRequest,
+    prefix: &str,
+    manifest: &DeploymentManifest,
+    stats: &DeploymentStats,
+) -> Result<()> {
+    let current_list_prefix = namespace_list_prefix(&request.dest_bucket_prefix);
+    let previous_list_prefix = namespace_list_prefix(prefix);
+    delete_unplanned_objects(
+        state,
+        UnplannedDeletionContext {
+            bucket: &request.dest_bucket_name,
+            list_prefix: previous_list_prefix.as_deref(),
+            strip_prefix: current_list_prefix.as_deref().unwrap_or(""),
+            protected_namespace: None,
+            filters: None,
+            manifest,
+            stats,
+        },
+    )
+    .await?;
+    Ok(())
+}
+
+async fn delete_unplanned_objects(
+    state: &AppState,
+    context: UnplannedDeletionContext<'_>,
+) -> Result<u64> {
     let mut start_after = None;
+    let mut deleted = 0_u64;
 
     loop {
         let response = state
             .destination_s3
             .list_objects_v2()
-            .bucket(&request.dest_bucket_name)
-            .set_prefix(list_prefix.clone())
+            .bucket(context.bucket)
+            .set_prefix(context.list_prefix.map(ToOwned::to_owned))
             .set_start_after(start_after.clone())
             .send()
             .await?;
-        stats.record_destination_page_objects(response.contents().len() as u64);
+        context
+            .stats
+            .record_destination_page_objects(response.contents().len() as u64);
 
         let keys_to_delete = response
             .contents()
             .iter()
             .filter_map(|object| object.key())
-            .filter(|key| stale_destination_key(key, strip_prefix, filters, manifest))
+            .filter(|key| {
+                unplanned_destination_key(
+                    key,
+                    context.strip_prefix,
+                    context.protected_namespace,
+                    context.filters,
+                    context.manifest,
+                )
+            })
             .map(ToOwned::to_owned)
             .collect::<Vec<_>>();
         let last_key = response
@@ -240,13 +312,10 @@ pub(super) async fn delete_stale_objects(
             .next_back()
             .map(ToOwned::to_owned);
 
-        delete_keys_optional_stats(
-            state,
-            &request.dest_bucket_name,
-            &keys_to_delete,
-            Some(stats),
-        )
-        .await?;
+        deleted = deleted.saturating_add(
+            delete_keys_optional_stats(state, context.bucket, &keys_to_delete, Some(context.stats))
+                .await?,
+        );
 
         if !response.is_truncated().unwrap_or(false) || last_key.is_none() {
             break;
@@ -254,7 +323,7 @@ pub(super) async fn delete_stale_objects(
         start_after = last_key;
     }
 
-    Ok(())
+    Ok(deleted)
 }
 
 async fn delete_keys_optional_stats(
@@ -456,7 +525,9 @@ fn record_destination_object(
         return false;
     }
     if !context.manifest.contains_key(&relative_key) {
-        return context.detect_stale_candidates && context.filters.should_include(&relative_key);
+        return context.detect_stale_candidates
+            && !key_is_excluded(key, context.protected_namespace)
+            && context.filters.should_include(&relative_key);
     }
 
     objects.insert(
@@ -469,16 +540,28 @@ fn record_destination_object(
     false
 }
 
+#[cfg(test)]
 fn stale_destination_key(
     key: &str,
     strip_prefix: &str,
     filters: &Filters,
     manifest: &DeploymentManifest,
 ) -> bool {
+    unplanned_destination_key(key, strip_prefix, None, Some(filters), manifest)
+}
+
+fn unplanned_destination_key(
+    key: &str,
+    strip_prefix: &str,
+    protected_namespace: Option<&str>,
+    filters: Option<&Filters>,
+    manifest: &DeploymentManifest,
+) -> bool {
     let relative_key = strip_destination_prefix(strip_prefix, key);
     !relative_key.is_empty()
-        && filters.should_include(&relative_key)
+        && !key_is_excluded(key, protected_namespace)
         && !manifest.contains_key(&relative_key)
+        && filters.is_none_or(|filters| filters.should_include(&relative_key))
 }
 
 #[cfg(test)]
@@ -488,7 +571,7 @@ mod tests {
     use super::{
         DestinationObject, DestinationRecordContext, inferred_delete_counts, key_is_excluded,
         namespace_list_prefix, normalize_etag, owner_tag_overlaps_cleanup, parse_owner_tag,
-        record_destination_object, stale_destination_key,
+        record_destination_object, stale_destination_key, unplanned_destination_key,
     };
     use crate::request::compile_filters;
     use crate::types::{DeploymentManifest, PlannedAction, PlannedObject};
@@ -532,6 +615,7 @@ mod tests {
             Some(10),
             DestinationRecordContext {
                 strip_prefix: "site/",
+                protected_namespace: None,
                 filters: &filters,
                 manifest: &manifest,
                 detect_stale_candidates: true,
@@ -546,6 +630,86 @@ mod tests {
             "site/",
             &filters,
             &manifest
+        ));
+    }
+
+    #[test]
+    fn slash_run_aliases_cannot_satisfy_manifest_entries() {
+        let filters = compile_filters(&[], &[]).unwrap();
+        let mut manifest = DeploymentManifest::new();
+        manifest.insert(
+            "index.html".to_string(),
+            PlannedObject {
+                relative_key: "index.html".to_string(),
+                expected_etag: None,
+                action: PlannedAction::CopyObject {
+                    source_index: 0,
+                    size: None,
+                },
+            },
+        );
+        let mut objects = HashMap::<String, DestinationObject>::new();
+
+        let has_stale_candidate = record_destination_object(
+            "site//index.html",
+            Some("\"alias-etag\""),
+            Some(10),
+            DestinationRecordContext {
+                strip_prefix: "site/",
+                protected_namespace: None,
+                filters: &filters,
+                manifest: &manifest,
+                detect_stale_candidates: true,
+            },
+            &mut objects,
+        );
+
+        assert!(has_stale_candidate);
+        assert!(objects.is_empty());
+        assert!(stale_destination_key(
+            "site//index.html",
+            "site/",
+            &filters,
+            &manifest
+        ));
+    }
+
+    #[test]
+    fn child_to_parent_cleanup_protects_then_explicitly_cleans_the_old_namespace() {
+        let filters = compile_filters(&[], &[]).unwrap();
+        let mut manifest = DeploymentManifest::new();
+        manifest.insert(
+            "initial/current.txt".to_string(),
+            PlannedObject {
+                relative_key: "initial/current.txt".to_string(),
+                expected_etag: None,
+                action: PlannedAction::CopyObject {
+                    source_index: 0,
+                    size: None,
+                },
+            },
+        );
+
+        assert!(!unplanned_destination_key(
+            "site/initial/old.txt",
+            "site/",
+            Some("site/initial/"),
+            Some(&filters),
+            &manifest,
+        ));
+        assert!(unplanned_destination_key(
+            "site/initial/old.txt",
+            "site/",
+            None,
+            None,
+            &manifest,
+        ));
+        assert!(!unplanned_destination_key(
+            "site/initial/current.txt",
+            "site/",
+            None,
+            None,
+            &manifest,
         ));
     }
 
@@ -572,6 +736,7 @@ mod tests {
             Some(1),
             DestinationRecordContext {
                 strip_prefix: "site/",
+                protected_namespace: None,
                 filters: &filters,
                 manifest: &manifest,
                 detect_stale_candidates: true,
@@ -584,6 +749,7 @@ mod tests {
             Some(1),
             DestinationRecordContext {
                 strip_prefix: "site/",
+                protected_namespace: None,
                 filters: &filters,
                 manifest: &manifest,
                 detect_stale_candidates: true,
@@ -621,6 +787,7 @@ mod tests {
             None,
             DestinationRecordContext {
                 strip_prefix: "site/",
+                protected_namespace: None,
                 filters: &filters,
                 manifest: &manifest,
                 detect_stale_candidates: true,
@@ -644,6 +811,7 @@ mod tests {
             Some(1),
             DestinationRecordContext {
                 strip_prefix: "site/",
+                protected_namespace: None,
                 filters: &filters,
                 manifest: &manifest,
                 detect_stale_candidates: false,

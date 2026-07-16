@@ -516,8 +516,7 @@ pub(crate) fn strip_destination_prefix(prefix: &str, key: &str) -> String {
         return key.to_string();
     }
 
-    let stripped = key.strip_prefix(prefix).unwrap_or(key);
-    stripped.trim_start_matches('/').to_string()
+    key.strip_prefix(prefix).unwrap_or(key).to_string()
 }
 
 fn default_distribution_path(dest_bucket_prefix: &str) -> String {
@@ -763,6 +762,23 @@ mod tests {
             request.runtime.put_object_retry.jitter,
             PutObjectRetryJitter::Full
         );
+    }
+
+    #[test]
+    fn destination_prefix_stripping_preserves_unmatched_slashes() {
+        assert_eq!(
+            strip_destination_prefix("site/", "site/index.html"),
+            "index.html"
+        );
+        assert_eq!(
+            strip_destination_prefix("site/", "site//index.html"),
+            "/index.html"
+        );
+        assert_eq!(
+            strip_destination_prefix("site//", "site//index.html"),
+            "index.html"
+        );
+        assert_eq!(strip_destination_prefix("", "//index.html"), "//index.html");
     }
 
     #[test]
