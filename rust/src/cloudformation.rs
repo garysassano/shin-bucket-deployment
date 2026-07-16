@@ -27,6 +27,7 @@ mod callback;
 use callback::{
     physical_resource_id, response_target, send_response, serialize_failure_response,
     serialize_response, truncate_failure_reason, validate_response_body_size,
+    validate_response_url,
 };
 
 const RESOURCE_TYPE: &str = "AWS::CloudFormation::CustomResource";
@@ -39,6 +40,30 @@ struct RequestIdentity<'a> {
     stack_id: &'a str,
     request_id: &'a str,
     logical_resource_id: &'a str,
+}
+
+struct EnvelopeResponseTarget {
+    response_url: String,
+    stack_id: String,
+    request_id: String,
+    logical_resource_id: String,
+    physical_resource_id: Option<String>,
+}
+
+impl EnvelopeResponseTarget {
+    fn from_payload(payload: &Value) -> Option<Self> {
+        let payload = payload.as_object()?;
+        Some(Self {
+            response_url: payload.get("ResponseURL")?.as_str()?.to_owned(),
+            stack_id: payload.get("StackId")?.as_str()?.to_owned(),
+            request_id: payload.get("RequestId")?.as_str()?.to_owned(),
+            logical_resource_id: payload.get("LogicalResourceId")?.as_str()?.to_owned(),
+            physical_resource_id: payload
+                .get("PhysicalResourceId")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
+        })
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -68,12 +93,26 @@ pub(crate) async fn handle_event(
 ) -> Result<Value, Error> {
     let (payload, context) = event.into_parts();
     let deadlines = InvocationDeadlines::from_lambda_deadline(context.deadline());
-    let request = decode_request_envelope(payload)?;
+    let envelope_response_target = EnvelopeResponseTarget::from_payload(&payload);
+    let request = match decode_request_envelope(payload) {
+        Ok(request) => request,
+        Err(error) => {
+            return report_envelope_failure(&state, envelope_response_target, error, deadlines)
+                .await;
+        }
+    };
 
     let Some((response_url, stack_id, request_id, logical_resource_id)) = response_target(&request)
     else {
-        return Err(anyhow!("unsupported CloudFormation custom resource request type").into());
+        return report_envelope_failure(
+            &state,
+            envelope_response_target,
+            anyhow!("unsupported CloudFormation custom resource request type"),
+            deadlines,
+        )
+        .await;
     };
+    let response_url = validate_response_url(response_url)?;
 
     let processed = timeout_at(
         deadlines.drain(),
@@ -93,7 +132,7 @@ pub(crate) async fn handle_event(
             let callback_result = match processed.result {
                 Ok(success_body) => send_response(
                     &state.http,
-                    response_url,
+                    &response_url,
                     &success_body,
                     deadlines.callback(),
                     Some(&processed.stats),
@@ -119,7 +158,7 @@ pub(crate) async fn handle_event(
                     )?;
                     send_response(
                         &state.http,
-                        response_url,
+                        &response_url,
                         &failure_body,
                         deadlines.callback(),
                         Some(&processed.stats),
@@ -152,7 +191,7 @@ pub(crate) async fn handle_event(
 
             send_response(
                 &state.http,
-                response_url,
+                &response_url,
                 &failure_body,
                 deadlines.callback(),
                 None,
@@ -162,6 +201,43 @@ pub(crate) async fn handle_event(
         }
     }
 
+    Ok(json!({}))
+}
+
+async fn report_envelope_failure(
+    state: &AppState,
+    target: Option<EnvelopeResponseTarget>,
+    error: anyhow::Error,
+    deadlines: InvocationDeadlines,
+) -> Result<Value, Error> {
+    let Some(target) = target else {
+        return Err(error.into());
+    };
+    let response_url = validate_response_url(&target.response_url)?;
+    let full_reason = format!("{error:#}");
+    error!(error = %full_reason, "request envelope failed");
+    let failure = ResponsePayload {
+        physical_resource_id: target
+            .physical_resource_id
+            .unwrap_or_else(|| target.request_id.clone()),
+        reason: Some(truncate_failure_reason(&full_reason)),
+        data: Map::new(),
+    };
+    let body = serialize_failure_response(
+        &target.stack_id,
+        &target.request_id,
+        &target.logical_resource_id,
+        &failure,
+    )?;
+    send_response(
+        &state.http,
+        &response_url,
+        &body,
+        deadlines.callback(),
+        None,
+    )
+    .await
+    .context("failed to send request-envelope failure response")?;
     Ok(json!({}))
 }
 
@@ -714,10 +790,10 @@ mod tests {
     use crate::request::{RawDeploymentRequest, parse_request};
 
     use super::{
-        LEGACY_RESOURCE_TYPE, RESOURCE_TYPE, RequestIdentity, cloudfront_caller_reference,
-        decode_deployment_request, decode_request_envelope, decode_resource_properties,
-        destination_physical_resource_id, merge_distribution_paths,
-        preflight_invalidation_requests, validate_resource_type,
+        EnvelopeResponseTarget, LEGACY_RESOURCE_TYPE, RESOURCE_TYPE, RequestIdentity,
+        cloudfront_caller_reference, decode_deployment_request, decode_request_envelope,
+        decode_resource_properties, destination_physical_resource_id, merge_distribution_paths,
+        preflight_invalidation_requests, response_target, validate_resource_type,
     };
 
     fn deployment_request_with_paths(paths: Vec<String>) -> crate::types::DeploymentRequest {
@@ -1046,5 +1122,39 @@ mod tests {
         assert!(
             decode_resource_properties(&create.resource_properties, "ResourceProperties").is_err()
         );
+    }
+
+    #[test]
+    fn malformed_and_unknown_envelopes_retain_a_failure_callback_target() {
+        let malformed = json!({
+            "RequestType": "Create",
+            "RequestId": "request-malformed",
+            "ResponseURL": "https://example.com/response?signature=secret",
+            "StackId": "stack-123",
+            "ResourceType": 42,
+            "LogicalResourceId": "Deploy",
+            "ResourceProperties": {}
+        });
+        let target = EnvelopeResponseTarget::from_payload(&malformed)
+            .expect("malformed envelope callback target");
+
+        assert_eq!(target.request_id, "request-malformed");
+        assert!(decode_request_envelope(malformed).is_err());
+
+        let unknown = json!({
+            "RequestType": "Unexpected",
+            "RequestId": "request-unknown",
+            "ResponseURL": "https://example.com/response?signature=secret",
+            "StackId": "stack-123",
+            "ResourceType": RESOURCE_TYPE,
+            "LogicalResourceId": "Deploy",
+            "ResourceProperties": {}
+        });
+        let target = EnvelopeResponseTarget::from_payload(&unknown)
+            .expect("unknown envelope callback target");
+        assert_eq!(target.logical_resource_id, "Deploy");
+        if let Ok(request) = decode_request_envelope(unknown) {
+            assert!(response_target(&request).is_none());
+        }
     }
 }

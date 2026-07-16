@@ -77,24 +77,20 @@ pub(super) fn physical_resource_id(request: &RequestEnvelope) -> Option<&str> {
 
 pub(super) async fn send_response(
     http: &reqwest::Client,
-    response_url: &str,
+    response_url: &reqwest::Url,
     body: &[u8],
     deadline: TokioInstant,
     stats: Option<&DeploymentStats>,
 ) -> Result<()> {
     let started = Instant::now();
-    let result = async {
-        validate_response_url(response_url)?;
-        send_response_with_policy(
-            http,
-            response_url,
-            body,
-            deadline,
-            CallbackRetryPolicy::production(),
-            stats,
-        )
-        .await
-    }
+    let result = send_response_with_policy(
+        http,
+        response_url,
+        body,
+        deadline,
+        CallbackRetryPolicy::production(),
+        stats,
+    )
     .await;
     if let Some(stats) = stats {
         stats.add_callback_millis(duration_ms(started.elapsed()));
@@ -116,7 +112,6 @@ pub(super) fn serialize_response(
         "StackId": stack_id,
         "RequestId": request_id,
         "LogicalResourceId": logical_resource_id,
-        "NoEcho": false,
         "Data": payload.data,
     }))
     .context("failed to serialize CloudFormation response")
@@ -191,7 +186,7 @@ impl CallbackRetryPolicy {
 
 async fn send_response_with_policy(
     http: &reqwest::Client,
-    response_url: &str,
+    response_url: &reqwest::Url,
     body: &[u8],
     deadline: TokioInstant,
     retry: CallbackRetryPolicy,
@@ -213,7 +208,7 @@ async fn send_response_with_policy(
         }
         let response = timeout_at(
             deadline,
-            http.put(response_url)
+            http.put(response_url.clone())
                 .header("content-type", "")
                 .header("content-length", body.len())
                 .body(body.to_vec())
@@ -241,29 +236,26 @@ async fn send_response_with_policy(
                 }
                 return Ok(());
             }
-            Ok(response) if response.status().is_server_error() => {
-                if let Some(stats) = stats {
-                    stats.record_callback_failure();
-                }
-                anyhow!(
-                    "CloudFormation callback attempt {attempt} returned retryable status {}",
-                    response.status()
-                )
-            }
             Ok(response) => {
                 if let Some(stats) = stats {
                     stats.record_callback_failure();
                 }
-                return Err(anyhow!(
-                    "CloudFormation callback attempt {attempt} returned non-retryable status {}",
-                    response.status()
-                ));
+                let status = response.status();
+                if callback_status_is_retryable(status) {
+                    anyhow!(
+                        "CloudFormation callback attempt {attempt} returned retryable status {status}"
+                    )
+                } else {
+                    return Err(anyhow!(
+                        "CloudFormation callback attempt {attempt} returned non-retryable status {status}"
+                    ));
+                }
             }
             Err(error) if error.is_connect() || error.is_timeout() => {
                 if let Some(stats) = stats {
                     stats.record_callback_failure();
                 }
-                anyhow!(error).context(format!(
+                anyhow!(error.without_url()).context(format!(
                     "CloudFormation callback attempt {attempt} failed with a retryable transport error"
                 ))
             }
@@ -271,7 +263,7 @@ async fn send_response_with_policy(
                 if let Some(stats) = stats {
                     stats.record_callback_failure();
                 }
-                return Err(error).context(format!(
+                return Err(error.without_url()).context(format!(
                     "CloudFormation callback attempt {attempt} failed with a non-retryable transport error"
                 ));
             }
@@ -298,6 +290,13 @@ async fn send_response_with_policy(
     unreachable!("positive callback attempt count checked above")
 }
 
+fn callback_status_is_retryable(status: reqwest::StatusCode) -> bool {
+    status.is_server_error()
+        || status.is_redirection()
+        || status == reqwest::StatusCode::REQUEST_TIMEOUT
+        || status == reqwest::StatusCode::TOO_MANY_REQUESTS
+}
+
 fn callback_retry_delay(attempt: usize, retry: CallbackRetryPolicy) -> Duration {
     let exponent = u32::try_from(attempt.saturating_sub(1)).unwrap_or(u32::MAX);
     let multiplier = 2_u32.checked_pow(exponent).unwrap_or(u32::MAX);
@@ -318,23 +317,30 @@ fn callback_retry_delay(attempt: usize, retry: CallbackRetryPolicy) -> Duration 
 ///
 /// The URL comes from the CloudFormation event envelope, not
 /// `ResourceProperties`, so this is defense-in-depth. Validate only scheme and
-/// host: response URL hosts vary by AWS partition, and a false rejection would
-/// prevent the provider from reporting failure. HTTPS keeps the response body,
-/// including any `Data`, off plaintext transport.
-fn validate_response_url(response_url: &str) -> Result<()> {
-    let parsed =
-        reqwest::Url::parse(response_url).context("CloudFormation response URL is invalid")?;
+/// host shape: response URL hosts vary by AWS partition, and a false rejection
+/// would prevent the provider from reporting failure. HTTPS keeps the response
+/// body, including any `Data`, off plaintext transport.
+pub(super) fn validate_response_url(response_url: &str) -> Result<reqwest::Url> {
+    let parsed = reqwest::Url::parse(response_url)
+        .map_err(|_| anyhow!("CloudFormation response URL is invalid"))?;
     if parsed.scheme() != "https" {
-        return Err(anyhow!(
-            "CloudFormation response URL must use https, got {}",
-            parsed.scheme()
-        ));
+        return Err(anyhow!("CloudFormation response URL must use https"));
     }
     if parsed.host_str().is_none() {
         return Err(anyhow!("CloudFormation response URL must include a host"));
     }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err(anyhow!(
+            "CloudFormation response URL must not include user information"
+        ));
+    }
+    if parsed.port().is_some() {
+        return Err(anyhow!(
+            "CloudFormation response URL must not include a non-default port"
+        ));
+    }
 
-    Ok(())
+    Ok(parsed)
 }
 
 #[cfg(test)]
@@ -346,7 +352,7 @@ mod tests {
     use std::thread::{self, JoinHandle};
     use std::time::Duration;
 
-    use reqwest::Client;
+    use reqwest::{Client, StatusCode, Url};
     use serde_json::{Map, Value};
     use tokio::time::Instant as TokioInstant;
 
@@ -355,9 +361,9 @@ mod tests {
 
     use super::{
         CallbackRetryPolicy, MAX_CLOUDFORMATION_RESPONSE_BYTES, MAX_FAILURE_REASON_BYTES,
-        callback_retry_delay, send_response_with_policy, serialize_failure_response,
-        serialize_response, truncate_failure_reason, validate_response_body_size,
-        validate_response_url,
+        callback_retry_delay, callback_status_is_retryable, send_response_with_policy,
+        serialize_failure_response, serialize_response, truncate_failure_reason,
+        validate_response_body_size, validate_response_url,
     };
 
     enum MockCallback {
@@ -366,7 +372,7 @@ mod tests {
     }
 
     struct MockCallbackServer {
-        url: String,
+        url: Url,
         requests: Arc<AtomicUsize>,
         thread: Option<JoinHandle<()>>,
     }
@@ -406,7 +412,7 @@ mod tests {
             });
 
             Self {
-                url: format!("http://{address}/response"),
+                url: Url::parse(&format!("http://{address}/response")).expect("mock callback URL"),
                 requests,
                 thread: Some(thread),
             }
@@ -534,7 +540,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn callback_never_retries_a_4xx_response() {
+    async fn callback_never_retries_an_other_4xx_response() {
         let server = MockCallbackServer::start(vec![MockCallback::Status(400)]);
         let result = send_response_with_policy(
             &callback_client(Duration::from_secs(1)),
@@ -554,6 +560,34 @@ mod tests {
                 .contains("non-retryable status 400")
         );
         assert_eq!(requests, 1);
+    }
+
+    #[tokio::test]
+    async fn callback_retries_redirect_timeout_and_throttle_statuses() {
+        let server = MockCallbackServer::start(vec![
+            MockCallback::Status(302),
+            MockCallback::Status(408),
+            MockCallback::Status(429),
+            MockCallback::Status(200),
+        ]);
+        let result = send_response_with_policy(
+            &callback_client(Duration::from_secs(1)),
+            &server.url,
+            b"{}",
+            TokioInstant::now() + Duration::from_secs(1),
+            test_retry_policy(4),
+            None,
+        )
+        .await;
+        let requests = server.finish();
+
+        assert!(result.is_ok());
+        assert_eq!(requests, 4);
+        for status in 300..400 {
+            assert!(callback_status_is_retryable(
+                StatusCode::from_u16(status).expect("3xx status")
+            ));
+        }
     }
 
     #[tokio::test]
@@ -608,14 +642,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn callback_timeout_error_chains_hide_the_response_url() {
+        let server =
+            MockCallbackServer::start(vec![MockCallback::Timeout(Duration::from_millis(100))]);
+        let mut response_url = server.url.clone();
+        response_url.set_query(Some("X-Amz-Signature=timeout-secret"));
+        let error = send_response_with_policy(
+            &callback_client(Duration::from_millis(20)),
+            &response_url,
+            b"{}",
+            TokioInstant::now() + Duration::from_secs(1),
+            test_retry_policy(1),
+            None,
+        )
+        .await
+        .expect_err("timeout must exhaust the single attempt");
+        assert_eq!(server.finish(), 1);
+
+        for rendered in [
+            error.to_string(),
+            format!("{error:#}"),
+            format!("{error:?}"),
+        ] {
+            assert!(!rendered.contains("timeout-secret"));
+            assert!(!rendered.contains("X-Amz-Signature"));
+        }
+    }
+
+    #[tokio::test]
     async fn callback_retries_connection_failures_to_the_attempt_bound() {
         let listener = TcpListener::bind("127.0.0.1:0").expect("reserve unused callback port");
         let address = listener.local_addr().expect("unused callback address");
         drop(listener);
 
+        let response_url = Url::parse(&format!(
+            "http://{address}/response?X-Amz-Signature=callback-secret"
+        ))
+        .expect("callback URL");
         let error = send_response_with_policy(
             &callback_client(Duration::from_secs(1)),
-            &format!("http://{address}/response"),
+            &response_url,
             b"{}",
             TokioInstant::now() + Duration::from_secs(1),
             test_retry_policy(3),
@@ -625,6 +691,14 @@ mod tests {
         .expect_err("connection failures must exhaust the attempt bound");
 
         assert!(format!("{error:#}").contains("failed after 3 attempts"));
+        for rendered in [
+            error.to_string(),
+            format!("{error:#}"),
+            format!("{error:?}"),
+        ] {
+            assert!(!rendered.contains("callback-secret"));
+            assert!(!rendered.contains("X-Amz-Signature"));
+        }
     }
 
     #[tokio::test]
@@ -695,6 +769,8 @@ mod tests {
 
         assert_eq!(boundary.len(), MAX_CLOUDFORMATION_RESPONSE_BYTES);
         assert!(validate_response_body_size(&boundary, true).is_ok());
+        let response: Value = serde_json::from_slice(&boundary).expect("success response JSON");
+        assert!(response.get("NoEcho").is_none());
         assert_eq!(oversized.len(), MAX_CLOUDFORMATION_RESPONSE_BYTES + 1);
         assert!(
             validate_response_body_size(&oversized, true)
@@ -718,6 +794,7 @@ mod tests {
         assert!(body.len() <= MAX_CLOUDFORMATION_RESPONSE_BYTES);
         let response: Value = serde_json::from_slice(&body).expect("failure response JSON");
         assert_eq!(response["Status"], "FAILED");
+        assert!(response.get("NoEcho").is_none());
     }
 
     #[test]
@@ -744,7 +821,7 @@ mod tests {
     }
 
     #[test]
-    fn response_url_must_be_https() {
+    fn response_url_shape_is_validated_without_echoing_input() {
         assert!(
             validate_response_url(
                 "https://cloudformation-custom-resource-response-useast1.s3.us-east-1.amazonaws.com/abc?signature=x"
@@ -752,9 +829,22 @@ mod tests {
             .is_ok()
         );
         assert!(validate_response_url("https://example.com/response").is_ok());
-        assert!(validate_response_url("http://example.com/response").is_err());
-        assert!(validate_response_url("not a url").is_err());
-        assert!(validate_response_url("file:///etc/passwd").is_err());
-        assert!(validate_response_url("data:text/plain,hello").is_err());
+        for invalid in [
+            "https://user:sentinel-secret@example.com/response",
+            "https://example.com:8443/response?signature=sentinel-secret",
+            "http://example.com/response?signature=sentinel-secret",
+            "sentinel-secret is not a URL",
+            "file:///sentinel-secret",
+            "data:text/plain,sentinel-secret",
+        ] {
+            let error = validate_response_url(invalid).expect_err("URL shape must be rejected");
+            for rendered in [
+                error.to_string(),
+                format!("{error:#}"),
+                format!("{error:?}"),
+            ] {
+                assert!(!rendered.contains("sentinel-secret"));
+            }
+        }
     }
 }
