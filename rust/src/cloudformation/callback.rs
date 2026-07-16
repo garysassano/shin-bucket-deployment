@@ -77,24 +77,20 @@ pub(super) fn physical_resource_id(request: &RequestEnvelope) -> Option<&str> {
 
 pub(super) async fn send_response(
     http: &reqwest::Client,
-    response_url: &str,
+    response_url: &reqwest::Url,
     body: &[u8],
     deadline: TokioInstant,
     stats: Option<&DeploymentStats>,
 ) -> Result<()> {
     let started = Instant::now();
-    let result = async {
-        let response_url = validate_response_url(response_url)?;
-        send_response_with_policy(
-            http,
-            &response_url,
-            body,
-            deadline,
-            CallbackRetryPolicy::production(),
-            stats,
-        )
-        .await
-    }
+    let result = send_response_with_policy(
+        http,
+        response_url,
+        body,
+        deadline,
+        CallbackRetryPolicy::production(),
+        stats,
+    )
     .await;
     if let Some(stats) = stats {
         stats.add_callback_millis(duration_ms(started.elapsed()));
@@ -324,9 +320,9 @@ fn callback_retry_delay(attempt: usize, retry: CallbackRetryPolicy) -> Duration 
 /// host shape: response URL hosts vary by AWS partition, and a false rejection
 /// would prevent the provider from reporting failure. HTTPS keeps the response
 /// body, including any `Data`, off plaintext transport.
-fn validate_response_url(response_url: &str) -> Result<reqwest::Url> {
-    let parsed =
-        reqwest::Url::parse(response_url).context("CloudFormation response URL is invalid")?;
+pub(super) fn validate_response_url(response_url: &str) -> Result<reqwest::Url> {
+    let parsed = reqwest::Url::parse(response_url)
+        .map_err(|_| anyhow!("CloudFormation response URL is invalid"))?;
     if parsed.scheme() != "https" {
         return Err(anyhow!("CloudFormation response URL must use https"));
     }
@@ -825,7 +821,7 @@ mod tests {
     }
 
     #[test]
-    fn response_url_must_be_https() {
+    fn response_url_shape_is_validated_without_echoing_input() {
         assert!(
             validate_response_url(
                 "https://cloudformation-custom-resource-response-useast1.s3.us-east-1.amazonaws.com/abc?signature=x"
@@ -833,11 +829,22 @@ mod tests {
             .is_ok()
         );
         assert!(validate_response_url("https://example.com/response").is_ok());
-        assert!(validate_response_url("https://user@example.com/response").is_err());
-        assert!(validate_response_url("https://example.com:8443/response").is_err());
-        assert!(validate_response_url("http://example.com/response").is_err());
-        assert!(validate_response_url("not a url").is_err());
-        assert!(validate_response_url("file:///etc/passwd").is_err());
-        assert!(validate_response_url("data:text/plain,hello").is_err());
+        for invalid in [
+            "https://user:sentinel-secret@example.com/response",
+            "https://example.com:8443/response?signature=sentinel-secret",
+            "http://example.com/response?signature=sentinel-secret",
+            "sentinel-secret is not a URL",
+            "file:///sentinel-secret",
+            "data:text/plain,sentinel-secret",
+        ] {
+            let error = validate_response_url(invalid).expect_err("URL shape must be rejected");
+            for rendered in [
+                error.to_string(),
+                format!("{error:#}"),
+                format!("{error:?}"),
+            ] {
+                assert!(!rendered.contains("sentinel-secret"));
+            }
+        }
     }
 }

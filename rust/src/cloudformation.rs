@@ -27,6 +27,7 @@ mod callback;
 use callback::{
     physical_resource_id, response_target, send_response, serialize_failure_response,
     serialize_response, truncate_failure_reason, validate_response_body_size,
+    validate_response_url,
 };
 
 const RESOURCE_TYPE: &str = "AWS::CloudFormation::CustomResource";
@@ -111,6 +112,7 @@ pub(crate) async fn handle_event(
         )
         .await;
     };
+    let response_url = validate_response_url(response_url)?;
 
     let processed = timeout_at(
         deadlines.drain(),
@@ -130,7 +132,7 @@ pub(crate) async fn handle_event(
             let callback_result = match processed.result {
                 Ok(success_body) => send_response(
                     &state.http,
-                    response_url,
+                    &response_url,
                     &success_body,
                     deadlines.callback(),
                     Some(&processed.stats),
@@ -156,7 +158,7 @@ pub(crate) async fn handle_event(
                     )?;
                     send_response(
                         &state.http,
-                        response_url,
+                        &response_url,
                         &failure_body,
                         deadlines.callback(),
                         Some(&processed.stats),
@@ -189,7 +191,7 @@ pub(crate) async fn handle_event(
 
             send_response(
                 &state.http,
-                response_url,
+                &response_url,
                 &failure_body,
                 deadlines.callback(),
                 None,
@@ -211,6 +213,7 @@ async fn report_envelope_failure(
     let Some(target) = target else {
         return Err(error.into());
     };
+    let response_url = validate_response_url(&target.response_url)?;
     let full_reason = format!("{error:#}");
     error!(error = %full_reason, "request envelope failed");
     let failure = ResponsePayload {
@@ -228,7 +231,7 @@ async fn report_envelope_failure(
     )?;
     send_response(
         &state.http,
-        &target.response_url,
+        &response_url,
         &body,
         deadlines.callback(),
         None,
