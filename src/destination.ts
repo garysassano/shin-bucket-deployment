@@ -21,27 +21,37 @@ export function destinationChecksumStrategy(
   bucket: Bucket,
   bucketResource: CfnBucket,
 ): "sse-s3-etag" | "kms-sha256" {
-  const resolved = Stack.of(scope).resolve(bucketResource.bucketEncryption) as unknown;
+  const stack = Stack.of(scope);
+  const rendered = stack.resolve(bucketResource._toCloudFormation()) as unknown;
+  if (!isRecord(rendered) || !isRecord(rendered.Resources)) {
+    throw unsupportedDestinationEncryption(scope);
+  }
+  const resource = Object.values(rendered.Resources)[0];
+  if (!isRecord(resource) || resource.Type !== "AWS::S3::Bucket") {
+    throw unsupportedDestinationEncryption(scope);
+  }
+  const properties = resource.Properties;
+  const resolved = isRecord(properties) ? properties.BucketEncryption : undefined;
   if (resolved === undefined) {
     return "sse-s3-etag";
   }
   if (!isRecord(resolved)) {
     throw unsupportedDestinationEncryption(scope);
   }
-  const rules = resolved.serverSideEncryptionConfiguration;
+  const rules = resolved.ServerSideEncryptionConfiguration;
   if (!Array.isArray(rules) || rules.length !== 1 || !isRecord(rules[0])) {
     throw unsupportedDestinationEncryption(scope);
   }
-  const encryption = rules[0].serverSideEncryptionByDefault;
-  if (!isRecord(encryption) || typeof encryption.sseAlgorithm !== "string") {
+  const encryption = rules[0].ServerSideEncryptionByDefault;
+  if (!isRecord(encryption) || typeof encryption.SSEAlgorithm !== "string") {
     throw unsupportedDestinationEncryption(scope);
   }
-  switch (encryption.sseAlgorithm) {
+  switch (encryption.SSEAlgorithm) {
     case "AES256":
       return "sse-s3-etag";
     case "aws:kms":
     case "aws:kms:dsse":
-      validateDestinationKmsKey(scope, bucket, encryption.kmsMasterKeyId);
+      validateDestinationKmsKey(scope, bucket, encryption.KMSMasterKeyID);
       return "kms-sha256";
     default:
       throw unsupportedDestinationEncryption(scope);

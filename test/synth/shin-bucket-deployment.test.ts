@@ -625,6 +625,28 @@ test("resolves destination encryption lazily after L1 mutation", () => {
   expect(customResourceProperties(stack).DestinationChecksumStrategy).toBe("kms-sha256");
 });
 
+test("resolves destination encryption after a late property override", () => {
+  const stack = new Stack();
+  const destinationBucket = new Bucket(stack, "Dest");
+  new ShinBucketDeployment(stack, "Deploy", {
+    sources: [Source.data("index.html", "ok")],
+    destinationBucket,
+    bundling: testBundling(),
+  });
+
+  const resource = destinationBucket.node.defaultChild;
+  if (!CfnBucket.isCfnBucket(resource)) {
+    throw new Error("expected destination CfnBucket");
+  }
+  resource.addPropertyOverride("BucketEncryption", {
+    ServerSideEncryptionConfiguration: [
+      { ServerSideEncryptionByDefault: { SSEAlgorithm: "aws:kms" } },
+    ],
+  });
+
+  expect(customResourceProperties(stack).DestinationChecksumStrategy).toBe("kms-sha256");
+});
+
 test("resolves destination encryption after an Aspect mutation", () => {
   const stack = new Stack();
   const destinationBucket = new Bucket(stack, "Dest");
