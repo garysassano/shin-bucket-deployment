@@ -35,8 +35,16 @@ describe("ShinBucketDeployment validation and option coverage", () => {
       bundling: testBundling(),
     });
 
-    expect(customResourceProperties(stack)).toMatchObject({
-      DestinationOwnerId: expect.stringMatching(/^[a-f0-9]{8}$/),
+    const properties = customResourceProperties(stack);
+    const destinationOwnerId = properties.DestinationOwnerId;
+    expect(destinationOwnerId).toEqual(expect.stringMatching(/^[a-f0-9]{8}$/));
+    Template.fromStack(stack).hasResourceProperties("AWS::S3::Bucket", {
+      Tags: Match.arrayWith([
+        {
+          Key: `aws-cdk:cr-owned:${destinationOwnerId}`,
+          Value: "true",
+        },
+      ]),
     });
     expect(customResourceProperties(stack).DeletePreviousObjectsOnChange).toBeUndefined();
     expect(customResourceProperties(stack).InvalidatePreviousDistributionOnChange).toBeUndefined();

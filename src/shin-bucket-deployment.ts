@@ -565,6 +565,7 @@ export class ShinBucketDeployment extends Construct {
      * @see https://docs.aws.amazon.com/AWSCloudFormation/latest/TemplateReference/aws-resource-cloudformation-customresource.html#cfn-cloudformation-customresource-servicetimeout
      */
     const customResourceIdentity = new Construct(this, "CustomResource");
+    const destinationOwnerId = customResourceIdentity.node.addr.slice(-8);
     this.cr = new CustomResource(customResourceIdentity, this.handlerFunction.node.id, {
       serviceToken: this.handlerFunction.functionArn,
       serviceTimeout: PROVIDER_TIMEOUT,
@@ -596,9 +597,7 @@ export class ShinBucketDeployment extends Construct {
           produce: () =>
             destinationChecksumStrategy(this, this.destinationBucket, destinationBucketResource),
         }),
-        DestinationOwnerId: Lazy.string({
-          produce: () => customResourceIdentity.node.addr.slice(-8),
-        }),
+        DestinationOwnerId: destinationOwnerId,
         DeletePreviousObjectsOnChange: previousDestinationBucket
           ? {
               DestinationBucketName: previousDestinationBucket.bucketName,
@@ -635,7 +634,7 @@ export class ShinBucketDeployment extends Construct {
     });
 
     let prefix = props.destinationKeyPrefix ? `:${props.destinationKeyPrefix}` : "";
-    prefix += `:${this.cr.node.addr.slice(-8)}`;
+    prefix += `:${destinationOwnerId}`;
     const tagKey = CUSTOM_RESOURCE_OWNER_TAG + prefix;
 
     if (!Token.isUnresolved(tagKey) && tagKey.length > 128) {
