@@ -16,6 +16,15 @@ describe("scenario planner", () => {
     const replacementGroup = plan.groups.find(
       ({ runs }) => runs[0]?.name === "replacement-safety-initial",
     );
+    const coTenantGroup = plan.groups.find(
+      ({ runs }) => runs[0]?.name === "co-tenant-protection-initial",
+    );
+    const childParentRetentionGroup = plan.groups.find(
+      ({ runs }) => runs[0]?.name === "child-parent-retention-initial",
+    );
+    const childParentCleanupGroup = plan.groups.find(
+      ({ runs }) => runs[0]?.name === "child-parent-cleanup-initial",
+    );
 
     expect(plan.concurrency).toBe(3);
     expect(cleanupGroup?.runs.map(({ name }) => name)).toEqual([
@@ -37,6 +46,18 @@ describe("scenario planner", () => {
       "replacement-safety-updated",
     ]);
     expect(replacementGroup?.cleanupCommand).toBe("pnpm verify destroy replacement-safety-updated");
+    expect(coTenantGroup?.runs.map(({ name }) => name)).toEqual([
+      "co-tenant-protection-initial",
+      "co-tenant-protection-updated",
+    ]);
+    expect(childParentRetentionGroup?.runs.map(({ name }) => name)).toEqual([
+      "child-parent-retention-initial",
+      "child-parent-retention-updated",
+    ]);
+    expect(childParentCleanupGroup?.runs.map(({ name }) => name)).toEqual([
+      "child-parent-cleanup-initial",
+      "child-parent-cleanup-updated",
+    ]);
   });
 
   it("uses final update phases in the default destroy order", () => {
@@ -50,6 +71,12 @@ describe("scenario planner", () => {
     expect(names).not.toContain("object-deletion-updated");
     expect(names).toContain("replacement-safety-updated");
     expect(names).not.toContain("replacement-safety-initial");
+    expect(names).toContain("co-tenant-protection-updated");
+    expect(names).not.toContain("co-tenant-protection-initial");
+    expect(names).toContain("child-parent-retention-updated");
+    expect(names).not.toContain("child-parent-retention-initial");
+    expect(names).toContain("child-parent-cleanup-updated");
+    expect(names).not.toContain("child-parent-cleanup-initial");
   });
 
   it("normalizes verification and benchmark application paths centrally", () => {

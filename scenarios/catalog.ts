@@ -13,6 +13,30 @@ export const VERIFY_SCENARIOS = {
     "ShinBucketDeploymentSourceOverwriteOrderDemo",
   ),
   "external-zips": scenario("content/external-zips-app.js", "ShinBucketDeploymentExternalZipsDemo"),
+  "co-tenant-protection-initial": scenario(
+    "lifecycle/co-tenant-protection-initial-app.js",
+    "ShinBucketDeploymentCoTenantSafetyDemo",
+  ),
+  "co-tenant-protection-updated": scenario(
+    "lifecycle/co-tenant-protection-updated-app.js",
+    "ShinBucketDeploymentCoTenantSafetyDemo",
+  ),
+  "child-parent-retention-initial": scenario(
+    "lifecycle/child-parent-retention-initial-app.js",
+    "ShinBucketDeploymentChildParentRetentionDemo",
+  ),
+  "child-parent-retention-updated": scenario(
+    "lifecycle/child-parent-retention-updated-app.js",
+    "ShinBucketDeploymentChildParentRetentionDemo",
+  ),
+  "child-parent-cleanup-initial": scenario(
+    "lifecycle/child-parent-cleanup-initial-app.js",
+    "ShinBucketDeploymentChildParentCleanupDemo",
+  ),
+  "child-parent-cleanup-updated": scenario(
+    "lifecycle/child-parent-cleanup-updated-app.js",
+    "ShinBucketDeploymentChildParentCleanupDemo",
+  ),
   "stale-object-cleanup-initial": scenario(
     "updates/stale-object-cleanup-initial-app.js",
     "ShinBucketDeploymentStaleObjectCleanupDemo",
@@ -98,6 +122,9 @@ export const VERIFY_DEFAULT_GROUPS = [
   ["filters"],
   ["source-overwrite-order"],
   ["external-zips"],
+  ["co-tenant-protection-initial", "co-tenant-protection-updated"],
+  ["child-parent-retention-initial", "child-parent-retention-updated"],
+  ["child-parent-cleanup-initial", "child-parent-cleanup-updated"],
   ["stale-object-cleanup-initial", "stale-object-cleanup-updated"],
   ["stale-object-retention-initial", "stale-object-retention-updated"],
   ["default-retention-initial", "default-retention-updated"],
@@ -117,6 +144,9 @@ export const VERIFY_DESTROY_ORDER = [
   "root-prefix",
   "marker-replacement",
   "filters",
+  "co-tenant-protection-updated",
+  "child-parent-retention-updated",
+  "child-parent-cleanup-updated",
   "stale-object-cleanup-updated",
   "stale-object-retention-updated",
   "default-retention-updated",

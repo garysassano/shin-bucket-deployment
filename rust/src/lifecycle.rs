@@ -10,13 +10,18 @@ pub(crate) enum RetainReason {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum NoCleanupReason {
     SameDestination,
-    CurrentContainsPrevious,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum PreviousCleanupStrategy {
+    DeleteNamespace { excluded_prefix: Option<String> },
+    DeleteStaleWithinCurrent,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct DeletePreviousDestination {
     pub(crate) previous: PreviousDestination,
-    pub(crate) excluded_prefix: Option<String>,
+    pub(crate) strategy: PreviousCleanupStrategy,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -45,16 +50,8 @@ pub(crate) fn plan_destination_change_cleanup(
         NamespaceRelation::Disjoint
     };
 
-    match relation {
-        NamespaceRelation::Same => {
-            return DestinationChangeCleanupDecision::NotNeeded(NoCleanupReason::SameDestination);
-        }
-        NamespaceRelation::CurrentContainsPrevious => {
-            return DestinationChangeCleanupDecision::NotNeeded(
-                NoCleanupReason::CurrentContainsPrevious,
-            );
-        }
-        NamespaceRelation::PreviousContainsCurrent | NamespaceRelation::Disjoint => {}
+    if relation == NamespaceRelation::Same {
+        return DestinationChangeCleanupDecision::NotNeeded(NoCleanupReason::SameDestination);
     }
 
     if current.delete_previous_objects_on_change.is_none() {
@@ -73,13 +70,32 @@ pub(crate) fn plan_destination_change_cleanup(
         return DestinationChangeCleanupDecision::Retain(RetainReason::OwnerMismatch);
     }
 
-    let excluded_prefix = (relation == NamespaceRelation::PreviousContainsCurrent)
-        .then(|| current.dest_bucket_prefix.clone());
+    let strategy = match relation {
+        NamespaceRelation::PreviousContainsCurrent => PreviousCleanupStrategy::DeleteNamespace {
+            excluded_prefix: Some(current.dest_bucket_prefix.clone()),
+        },
+        NamespaceRelation::CurrentContainsPrevious => {
+            PreviousCleanupStrategy::DeleteStaleWithinCurrent
+        }
+        NamespaceRelation::Disjoint => PreviousCleanupStrategy::DeleteNamespace {
+            excluded_prefix: None,
+        },
+        NamespaceRelation::Same => unreachable!("same destination returned above"),
+    };
 
     DestinationChangeCleanupDecision::Delete(DeletePreviousDestination {
         previous: previous.clone(),
-        excluded_prefix,
+        strategy,
     })
+}
+
+pub(crate) fn previous_namespace_is_within_current(
+    current: &DeploymentRequest,
+    previous: &PreviousDestination,
+) -> bool {
+    current.dest_bucket_name == previous.bucket_name
+        && namespace_relation(&previous.bucket_prefix, &current.dest_bucket_prefix)
+            == NamespaceRelation::CurrentContainsPrevious
 }
 
 pub(crate) fn destination_namespaces_overlap(
@@ -230,7 +246,9 @@ mod tests {
             plan_destination_change_cleanup(&request, &previous),
             DestinationChangeCleanupDecision::Delete(DeletePreviousDestination {
                 previous,
-                excluded_prefix: Some("site/updated".to_string()),
+                strategy: PreviousCleanupStrategy::DeleteNamespace {
+                    excluded_prefix: Some("site/updated".to_string()),
+                },
             })
         );
     }
@@ -246,15 +264,31 @@ mod tests {
         else {
             panic!("expected cleanup");
         };
-        assert_eq!(plan.excluded_prefix.as_deref(), Some("site"));
+        assert_eq!(
+            plan.strategy,
+            PreviousCleanupStrategy::DeleteNamespace {
+                excluded_prefix: Some("site".to_string()),
+            }
+        );
     }
 
     #[test]
-    fn current_parent_subsumes_the_previous_namespace() {
-        let request = current("bucket", "site");
+    fn child_to_parent_cleanup_requires_authorization_and_preserves_current_manifest() {
+        let mut request = current("bucket", "site");
+        let previous = previous("bucket", "site/initial");
         assert_eq!(
-            plan_destination_change_cleanup(&request, &previous("bucket", "site/initial")),
-            DestinationChangeCleanupDecision::NotNeeded(NoCleanupReason::CurrentContainsPrevious)
+            plan_destination_change_cleanup(&request, &previous),
+            DestinationChangeCleanupDecision::Retain(RetainReason::MissingAuthorization)
+        );
+        assert!(previous_namespace_is_within_current(&request, &previous));
+
+        authorize(&mut request, &previous);
+        assert_eq!(
+            plan_destination_change_cleanup(&request, &previous),
+            DestinationChangeCleanupDecision::Delete(DeletePreviousDestination {
+                previous,
+                strategy: PreviousCleanupStrategy::DeleteStaleWithinCurrent,
+            })
         );
     }
 
@@ -269,7 +303,12 @@ mod tests {
         else {
             panic!("expected cleanup");
         };
-        assert!(plan.excluded_prefix.is_none());
+        assert_eq!(
+            plan.strategy,
+            PreviousCleanupStrategy::DeleteNamespace {
+                excluded_prefix: None,
+            }
+        );
     }
 
     #[test]
@@ -300,7 +339,12 @@ mod tests {
         else {
             panic!("expected cleanup");
         };
-        assert_eq!(plan.excluded_prefix.as_deref(), Some("site//"));
+        assert_eq!(
+            plan.strategy,
+            PreviousCleanupStrategy::DeleteNamespace {
+                excluded_prefix: Some("site//".to_string()),
+            }
+        );
     }
 
     #[test]
@@ -320,7 +364,12 @@ mod tests {
             panic!("expected cleanup");
         };
         assert_eq!(plan.previous.bucket_name, "old");
-        assert!(plan.excluded_prefix.is_none());
+        assert_eq!(
+            plan.strategy,
+            PreviousCleanupStrategy::DeleteNamespace {
+                excluded_prefix: None,
+            }
+        );
     }
 
     #[test]

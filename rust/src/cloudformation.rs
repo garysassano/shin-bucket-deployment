@@ -15,11 +15,15 @@ use tracing::error;
 use crate::cloudfront::{invalidate as invalidate_cloudfront, validate_invalidation_paths};
 use crate::deadline::InvocationDeadlines;
 use crate::lifecycle::{
-    DestinationChangeCleanupDecision, destination_namespaces_overlap,
+    DestinationChangeCleanupDecision, PreviousCleanupStrategy, destination_namespaces_overlap,
     plan_destination_change_cleanup, previous_distribution_authorized,
+    previous_namespace_is_within_current,
 };
 use crate::request::{RawDeploymentRequest, parse_old_destination, parse_request};
-use crate::s3::{bucket_has_competing_owner, delete_prefix, delete_prefix_excluding, deploy};
+use crate::s3::{
+    OverlappingPreviousCleanup, bucket_has_competing_owner, delete_prefix, delete_prefix_excluding,
+    deploy,
+};
 use crate::types::{AppState, DeploymentStats, ResponsePayload, duration_ms};
 
 mod callback;
@@ -488,6 +492,28 @@ async fn process_request_inner(
     let deadlines = execution.deadlines;
     let mut deleted_current_destination = false;
     let mut cleaned_previous_destination = None;
+    let destination_change_cleanup = if request_type == "Update" {
+        previous_destination.map(|previous| plan_destination_change_cleanup(request, previous))
+    } else {
+        None
+    };
+    let overlapping_previous_cleanup = previous_destination
+        .filter(|previous| previous_namespace_is_within_current(request, previous))
+        .map(|previous| {
+            if matches!(
+                destination_change_cleanup.as_ref(),
+                Some(DestinationChangeCleanupDecision::Delete(plan))
+                    if plan.strategy == PreviousCleanupStrategy::DeleteStaleWithinCurrent
+            ) {
+                OverlappingPreviousCleanup::DeleteStale {
+                    prefix: previous.bucket_prefix.clone(),
+                }
+            } else {
+                OverlappingPreviousCleanup::Retain {
+                    prefix: previous.bucket_prefix.clone(),
+                }
+            }
+        });
 
     if request_type == "Delete" && request.delete_current_objects_on_delete {
         if run_work(
@@ -525,62 +551,70 @@ async fn process_request_inner(
     }
 
     if matches!(request_type, "Create" | "Update") {
-        deploy(state, request, Arc::clone(&stats), deadlines).await?;
+        deploy(
+            state,
+            request,
+            overlapping_previous_cleanup.as_ref(),
+            Arc::clone(&stats),
+            deadlines,
+        )
+        .await?;
     }
 
-    if request_type == "Update"
-        && let Some(previous) = previous_destination
-    {
-        match plan_destination_change_cleanup(request, previous) {
+    if let Some(destination_change_cleanup) = destination_change_cleanup {
+        match destination_change_cleanup {
             DestinationChangeCleanupDecision::Delete(plan) => {
-                let competing_owner = run_work(
-                    deadlines,
-                    "previous destination ownership check",
-                    bucket_has_competing_owner(
-                        state,
-                        &plan.previous.bucket_name,
-                        &plan.previous.bucket_prefix,
-                        plan.excluded_prefix.as_deref(),
-                        request.destination_owner_id.as_deref(),
-                    ),
-                )
-                .await?;
+                if let PreviousCleanupStrategy::DeleteNamespace { excluded_prefix } = &plan.strategy
+                {
+                    let competing_owner = run_work(
+                        deadlines,
+                        "previous destination ownership check",
+                        bucket_has_competing_owner(
+                            state,
+                            &plan.previous.bucket_name,
+                            &plan.previous.bucket_prefix,
+                            excluded_prefix.as_deref(),
+                            request.destination_owner_id.as_deref(),
+                        ),
+                    )
+                    .await?;
 
-                if competing_owner {
-                    tracing::warn!(
-                        "previous destination retained because another custom resource owns an overlapping namespace"
-                    );
-                } else {
-                    let started = Instant::now();
-                    let deleted = if let Some(excluded_prefix) = plan.excluded_prefix.as_deref() {
-                        run_work(
-                            deadlines,
-                            "overlapping previous destination cleanup",
-                            delete_prefix_excluding(
-                                state,
-                                &plan.previous.bucket_name,
-                                &plan.previous.bucket_prefix,
-                                excluded_prefix,
-                                Some(&stats),
-                            ),
-                        )
-                        .await?
+                    if competing_owner {
+                        tracing::warn!(
+                            "previous destination retained because another custom resource owns an overlapping namespace"
+                        );
                     } else {
-                        run_work(
-                            deadlines,
-                            "previous destination cleanup",
-                            delete_prefix(
-                                state,
-                                &plan.previous.bucket_name,
-                                &plan.previous.bucket_prefix,
-                                Some(&stats),
-                            ),
-                        )
-                        .await?
-                    };
-                    stats.add_old_prefix_delete_millis(duration_ms(started.elapsed()));
-                    if deleted > 0 {
-                        cleaned_previous_destination = Some(plan.previous);
+                        let started = Instant::now();
+                        let deleted = if let Some(excluded_prefix) = excluded_prefix.as_deref() {
+                            run_work(
+                                deadlines,
+                                "overlapping previous destination cleanup",
+                                delete_prefix_excluding(
+                                    state,
+                                    &plan.previous.bucket_name,
+                                    &plan.previous.bucket_prefix,
+                                    excluded_prefix,
+                                    Some(&stats),
+                                ),
+                            )
+                            .await?
+                        } else {
+                            run_work(
+                                deadlines,
+                                "previous destination cleanup",
+                                delete_prefix(
+                                    state,
+                                    &plan.previous.bucket_name,
+                                    &plan.previous.bucket_prefix,
+                                    Some(&stats),
+                                ),
+                            )
+                            .await?
+                        };
+                        stats.add_old_prefix_delete_millis(duration_ms(started.elapsed()));
+                        if deleted > 0 {
+                            cleaned_previous_destination = Some(plan.previous);
+                        }
                     }
                 }
             }
