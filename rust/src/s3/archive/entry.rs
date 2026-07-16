@@ -17,6 +17,7 @@ use md5::{Digest as Md5Digest, Md5};
 use sha2::Sha256;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, ReadBuf};
 use tokio::sync::mpsc;
+use tokio::task::AbortHandle;
 
 use crate::replace::{MarkerReplacements, ReplacementOptions, ReplacementResult};
 use crate::types::{DeploymentStats, DestinationChecksumStrategy};
@@ -26,7 +27,7 @@ use super::super::{
     S3_SINGLE_PUT_LIMIT, ZIP_ENTRY_BODY_CHUNK_BYTES, ZIP_ENTRY_BODY_PIPE_CHUNKS,
     ZIP_ENTRY_READ_CHUNK_BYTES,
 };
-use super::SourceBlockStore;
+use super::{EntryAttemptClaim, SourceBlockStore};
 
 const LOCAL_FILE_HEADER_SIGNATURE: u32 = 0x0403_4b50;
 pub(super) const LOCAL_FILE_HEADER_LEN: usize = 30;
@@ -75,6 +76,7 @@ impl UploadBodyState {
 pub(crate) struct ZipEntryAsyncReader {
     store: Arc<SourceBlockStore>,
     plan: ZipEntryPlan,
+    attempt_claim: Option<EntryAttemptClaim>,
     reader: Option<EntryDataReader>,
     init: Option<Pin<Box<dyn Future<Output = io::Result<EntryDataReader>> + Send>>>,
 }
@@ -93,6 +95,7 @@ pub(super) struct EntryDataReader {
 struct ReceiverBody {
     init: Option<ReceiverBodyInit>,
     receiver: Option<mpsc::Receiver<std::result::Result<Bytes, BodyError>>>,
+    producer: Option<AbortHandle>,
     content_length: u64,
 }
 
@@ -123,6 +126,21 @@ impl ZipEntryAsyncReader {
         Self {
             store,
             plan,
+            attempt_claim: None,
+            reader: None,
+            init: None,
+        }
+    }
+
+    fn with_attempt_claim(
+        store: Arc<SourceBlockStore>,
+        plan: ZipEntryPlan,
+        attempt_claim: EntryAttemptClaim,
+    ) -> Self {
+        Self {
+            store,
+            plan,
+            attempt_claim: Some(attempt_claim),
             reader: None,
             init: None,
         }
@@ -139,8 +157,14 @@ impl AsyncRead for ZipEntryAsyncReader {
             if self.init.is_none() {
                 let store = self.store.clone();
                 let plan = self.plan.clone();
+                let attempt_claim = self.attempt_claim.take();
                 self.init = Some(Box::pin(async move {
-                    open_entry_data_reader(store, plan).await
+                    match attempt_claim {
+                        Some(attempt_claim) => {
+                            open_entry_data_reader_with_claim(store, plan, attempt_claim).await
+                        }
+                        None => open_entry_data_reader(store, plan).await,
+                    }
                 }));
             }
 
@@ -164,6 +188,15 @@ impl AsyncRead for ZipEntryAsyncReader {
 pub(super) async fn open_entry_data_reader(
     store: Arc<SourceBlockStore>,
     plan: ZipEntryPlan,
+) -> io::Result<EntryDataReader> {
+    let attempt_claim = store.claim_zip_entry_attempt(&plan);
+    open_entry_data_reader_with_claim(store, plan, attempt_claim).await
+}
+
+async fn open_entry_data_reader_with_claim(
+    store: Arc<SourceBlockStore>,
+    plan: ZipEntryPlan,
+    attempt_claim: EntryAttemptClaim,
 ) -> io::Result<EntryDataReader> {
     let header_end = plan
         .source_offset
@@ -250,24 +283,17 @@ pub(super) async fn open_entry_data_reader(
         ));
     }
 
-    EntryDataReader::new(
-        store,
-        plan.source_offset,
-        plan.source_span_end,
-        data_offset,
-        data_end,
-    )
+    EntryDataReader::new(store, attempt_claim, data_offset, data_end)
 }
 
 impl EntryDataReader {
     fn new(
         store: Arc<SourceBlockStore>,
-        claim_start: u64,
-        claim_end: u64,
+        attempt_claim: EntryAttemptClaim,
         start: u64,
         end: u64,
     ) -> io::Result<Self> {
-        let remaining_blocks = store.activate_reader(claim_start, claim_end)?;
+        let remaining_blocks = attempt_claim.activate()?;
         Ok(Self {
             store,
             position: start,
@@ -470,6 +496,7 @@ fn zip_entry_sdk_body(init: ReceiverBodyInit, content_length: u64) -> SdkBody {
     SdkBody::from_body_1_x(ReceiverBody {
         init: Some(init),
         receiver: None,
+        producer: None,
         content_length,
     })
 }
@@ -484,6 +511,7 @@ pub(crate) async fn plan_marker_zip_entry(
     replace_marker_zip_entry(
         store,
         plan,
+        None,
         marker_replacements,
         &mut output,
         checksum_strategy == DestinationChecksumStrategy::SseS3Etag,
@@ -495,12 +523,13 @@ pub(crate) async fn plan_marker_zip_entry(
 async fn replace_marker_zip_entry<W: AsyncWrite + Unpin>(
     store: Arc<SourceBlockStore>,
     plan: ZipEntryPlan,
+    attempt_claim: Option<EntryAttemptClaim>,
     marker_replacements: &MarkerReplacements,
     output: &mut W,
     hash_md5: bool,
     hash_sha256: bool,
 ) -> io::Result<ReplacementResult> {
-    let mut reader = zip_entry_reader(store, plan.clone())?;
+    let mut reader = zip_entry_reader_inner(store, plan.clone(), attempt_claim)?;
     let mut validator = ZipEntryInputValidator::new(&plan);
     let result = marker_replacements
         .replace_stream(
@@ -522,7 +551,20 @@ pub(crate) fn zip_entry_reader(
     store: Arc<SourceBlockStore>,
     plan: ZipEntryPlan,
 ) -> io::Result<Pin<Box<dyn AsyncRead + Send>>> {
-    let reader = ZipEntryAsyncReader::new(store, plan.clone());
+    zip_entry_reader_inner(store, plan, None)
+}
+
+fn zip_entry_reader_inner(
+    store: Arc<SourceBlockStore>,
+    plan: ZipEntryPlan,
+    attempt_claim: Option<EntryAttemptClaim>,
+) -> io::Result<Pin<Box<dyn AsyncRead + Send>>> {
+    let reader = match attempt_claim {
+        Some(attempt_claim) => {
+            ZipEntryAsyncReader::with_attempt_claim(store, plan.clone(), attempt_claim)
+        }
+        None => ZipEntryAsyncReader::new(store, plan.clone()),
+    };
     match plan.compression_code {
         0 => Ok(Box::pin(reader)),
         8 => Ok(Box::pin(
@@ -537,6 +579,7 @@ pub(crate) fn zip_entry_reader(
     }
 }
 
+#[cfg(test)]
 pub(super) async fn send_zip_entry_chunks(
     store: Arc<SourceBlockStore>,
     plan: ZipEntryPlan,
@@ -544,7 +587,19 @@ pub(super) async fn send_zip_entry_chunks(
     body_state: Arc<UploadBodyState>,
     checksum_strategy: DestinationChecksumStrategy,
 ) -> std::result::Result<(), BodyError> {
-    let mut reader = zip_entry_reader(store, plan.clone()).map_err(boxed_body_error)?;
+    send_zip_entry_chunks_inner(store, plan, None, sender, body_state, checksum_strategy).await
+}
+
+async fn send_zip_entry_chunks_inner(
+    store: Arc<SourceBlockStore>,
+    plan: ZipEntryPlan,
+    attempt_claim: Option<EntryAttemptClaim>,
+    sender: mpsc::Sender<std::result::Result<Bytes, BodyError>>,
+    body_state: Arc<UploadBodyState>,
+    checksum_strategy: DestinationChecksumStrategy,
+) -> std::result::Result<(), BodyError> {
+    let mut reader =
+        zip_entry_reader_inner(store, plan.clone(), attempt_claim).map_err(boxed_body_error)?;
     let mut md5 = (checksum_strategy == DestinationChecksumStrategy::SseS3Etag
         || plan.trusted_integrity.is_some())
     .then(Md5::new);
@@ -609,9 +664,34 @@ pub(super) async fn send_zip_entry_chunks(
     Ok(())
 }
 
+#[cfg(test)]
 pub(super) async fn send_marker_zip_entry_chunks(
     store: Arc<SourceBlockStore>,
     plan: ZipEntryPlan,
+    content_length: u64,
+    marker_replacements: Arc<MarkerReplacements>,
+    sender: mpsc::Sender<std::result::Result<Bytes, BodyError>>,
+    body_state: Arc<UploadBodyState>,
+    checksum_strategy: DestinationChecksumStrategy,
+) -> std::result::Result<(), BodyError> {
+    send_marker_zip_entry_chunks_inner(
+        store,
+        plan,
+        None,
+        content_length,
+        marker_replacements,
+        sender,
+        body_state,
+        checksum_strategy,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn send_marker_zip_entry_chunks_inner(
+    store: Arc<SourceBlockStore>,
+    plan: ZipEntryPlan,
+    attempt_claim: Option<EntryAttemptClaim>,
     content_length: u64,
     marker_replacements: Arc<MarkerReplacements>,
     sender: mpsc::Sender<std::result::Result<Bytes, BodyError>>,
@@ -626,6 +706,7 @@ pub(super) async fn send_marker_zip_entry_chunks(
         let result = replace_marker_zip_entry(
             store,
             plan.clone(),
+            attempt_claim,
             &marker_replacements,
             &mut output_writer,
             checksum_strategy == DestinationChecksumStrategy::SseS3Etag,
@@ -818,14 +899,16 @@ impl Body for ReceiverBody {
                 marker.stats.add_marker_upload_pass();
             }
 
+            let attempt_claim = init.store.claim_zip_entry_attempt(&init.plan);
             let (sender, receiver) = mpsc::channel(ZIP_ENTRY_BODY_PIPE_CHUNKS);
             let body_store = Arc::clone(&init.store);
             let content_length = self.content_length;
-            init.store.spawn_body_task(async move {
+            self.producer = Some(init.store.spawn_body_task(async move {
                 let outcome = if let Some(marker) = init.marker {
-                    AssertUnwindSafe(send_marker_zip_entry_chunks(
+                    AssertUnwindSafe(send_marker_zip_entry_chunks_inner(
                         body_store,
                         init.plan,
+                        Some(attempt_claim),
                         content_length,
                         marker.replacements,
                         sender.clone(),
@@ -835,9 +918,10 @@ impl Body for ReceiverBody {
                     .catch_unwind()
                     .await
                 } else {
-                    AssertUnwindSafe(send_zip_entry_chunks(
+                    AssertUnwindSafe(send_zip_entry_chunks_inner(
                         body_store,
                         init.plan,
+                        Some(attempt_claim),
                         sender.clone(),
                         Arc::clone(&init.body_state),
                         init.checksum_strategy,
@@ -859,24 +943,37 @@ impl Body for ReceiverBody {
                     }
                     let _ = sender.send(Err(error)).await;
                 }
-            });
+            }));
             self.receiver = Some(receiver);
         }
 
-        let receiver = self
+        let frame = self
             .receiver
             .as_mut()
-            .expect("source body receiver starts on first poll");
-        match receiver.poll_recv(cx) {
+            .expect("source body receiver starts on first poll")
+            .poll_recv(cx);
+        match frame {
             Poll::Ready(Some(Ok(bytes))) => Poll::Ready(Some(Ok(Frame::data(bytes)))),
             Poll::Ready(Some(Err(error))) => Poll::Ready(Some(Err(error))),
-            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Ready(None) => {
+                self.producer.take();
+                Poll::Ready(None)
+            }
             Poll::Pending => Poll::Pending,
         }
     }
 
     fn size_hint(&self) -> SizeHint {
         SizeHint::with_exact(self.content_length)
+    }
+}
+
+impl Drop for ReceiverBody {
+    fn drop(&mut self) {
+        self.receiver.take();
+        if let Some(producer) = self.producer.take() {
+            producer.abort();
+        }
     }
 }
 

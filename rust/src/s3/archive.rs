@@ -18,7 +18,7 @@ use futures_util::stream::{FuturesUnordered, StreamExt};
 use tokio::io::{AsyncBufRead, AsyncRead, AsyncSeek, ReadBuf, SeekFrom};
 use tokio::sync::futures::OwnedNotified;
 use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore};
-use tokio::task::JoinSet;
+use tokio::task::{AbortHandle, JoinSet};
 use tokio::time::{Instant, timeout_at};
 
 use crate::types::{AppState, DeploymentStats};
@@ -134,6 +134,20 @@ pub(crate) struct SourceDiagnosticsSnapshot {
 
 struct ActiveSourceGetGuard {
     diagnostics: Arc<SourceDiagnostics>,
+}
+
+pub(super) struct EntryAttemptClaim {
+    store: Arc<SourceBlockStore>,
+    indices: Vec<usize>,
+    armed: bool,
+}
+
+struct SourceFetchReservation {
+    store: Arc<SourceBlockStore>,
+    index: usize,
+    block: SourceBlockRange,
+    restore_replay_priority: bool,
+    armed: bool,
 }
 
 #[derive(Debug)]
@@ -656,6 +670,47 @@ impl Drop for ActiveSourceGetGuard {
     }
 }
 
+impl EntryAttemptClaim {
+    pub(super) fn activate(mut self) -> io::Result<VecDeque<usize>> {
+        self.store.activate_reader(&self.indices)?;
+        self.armed = false;
+        Ok(std::mem::take(&mut self.indices).into())
+    }
+}
+
+impl Drop for EntryAttemptClaim {
+    fn drop(&mut self) {
+        if self.armed {
+            self.store.release_entry_attempt(&self.indices);
+        }
+    }
+}
+
+impl SourceFetchReservation {
+    async fn fetch(mut self) {
+        let result = match self.store.fetch_semaphore.acquire().await {
+            Ok(_permit) => {
+                self.store
+                    .source
+                    .get_range(self.block.start, self.block.end)
+                    .await
+            }
+            Err(_) => Err(io::Error::other("source fetch semaphore is closed")),
+        };
+        self.store.finish_fetch(self.index, self.block, result);
+        self.armed = false;
+    }
+}
+
+impl Drop for SourceFetchReservation {
+    fn drop(&mut self) {
+        if self.armed {
+            self.store
+                .rollback_fetch(self.index, self.block, self.restore_replay_priority);
+        }
+    }
+}
+
 impl SourceByteBudget {
     pub(crate) fn new(limit_bytes: usize, stats: Arc<DeploymentStats>) -> Arc<Self> {
         assert!(limit_bytes > 0, "source byte budget must be positive");
@@ -860,7 +915,7 @@ impl SourceBlockStore {
 
     pub(crate) fn start_scheduler(self: &Arc<Self>) {
         let store = Arc::clone(self);
-        self.spawn_body_task(async move {
+        let _ = self.spawn_body_task(async move {
             let outcome = AssertUnwindSafe(Arc::clone(&store).run_scheduler())
                 .catch_unwind()
                 .await;
@@ -880,13 +935,13 @@ impl SourceBlockStore {
             while tasks.len() < self.source_get_concurrency && next_index < self.blocks.len() {
                 let index = next_index;
                 next_index += 1;
-                let Some(block) = self.reserve_fetch(index, SourceFetchMode::Prefetch).await?
+                let Some(reservation) =
+                    self.reserve_fetch(index, SourceFetchMode::Prefetch).await?
                 else {
                     continue;
                 };
-                let store = Arc::clone(&self);
                 tasks.push(async move {
-                    store.fetch_reserved_block(index, block).await;
+                    reservation.fetch().await;
                 });
             }
 
@@ -947,7 +1002,7 @@ impl SourceBlockStore {
         .context("source body tasks did not drain before the deployment drain deadline")?
     }
 
-    fn spawn_body_task(&self, task: impl Future<Output = ()> + Send + 'static) {
+    fn spawn_body_task(&self, task: impl Future<Output = ()> + Send + 'static) -> AbortHandle {
         let mut tasks = self
             .body_tasks
             .lock()
@@ -959,18 +1014,18 @@ impl SourceBlockStore {
                 tracing::error!(error = %error, "source body task panicked");
             }
         }
-        tasks.spawn(task);
+        tasks.spawn(task)
     }
 
     async fn reserve_fetch(
-        &self,
+        self: &Arc<Self>,
         index: usize,
         mode: SourceFetchMode,
-    ) -> io::Result<Option<SourceBlockRange>> {
+    ) -> io::Result<Option<SourceFetchReservation>> {
         if self.blocks.get(index).is_none() {
             return Ok(None);
         }
-        let (block, cancel_wait) = loop {
+        let (block, cancel_wait, restore_replay_priority) = loop {
             let wait = {
                 let mut state = self
                     .state
@@ -1005,14 +1060,27 @@ impl SourceBlockStore {
                 {
                     state.window_committed_bytes =
                         state.window_committed_bytes.saturating_add(block_len);
+                    let restore_replay_priority = state.slots[index].replay_priority;
                     state.slots[index].replay_priority = false;
                     state.slots[index].status = SourceBlockStatus::Reserving;
-                    break (block, enabled_notification(&self.cancel_notify));
+                    break (
+                        block,
+                        enabled_notification(&self.cancel_notify),
+                        restore_replay_priority,
+                    );
                 }
 
                 enabled_notification(&self.capacity_notify)
             };
             wait.await;
+        };
+
+        let mut reservation = SourceFetchReservation {
+            store: Arc::clone(self),
+            index,
+            block,
+            restore_replay_priority,
+            armed: true,
         };
 
         let permit = match Arc::clone(&self.budget)
@@ -1030,6 +1098,7 @@ impl SourceBlockStore {
                         state.window_committed_bytes.saturating_sub(block.len());
                     state.slots[index].status = SourceBlockStatus::Failed(error.to_string());
                 }
+                reservation.armed = false;
                 drop(state);
                 self.notify.notify_waiters();
                 self.capacity_notify.notify_waiters();
@@ -1042,6 +1111,7 @@ impl SourceBlockStore {
             .lock()
             .expect("source block state mutex should not be poisoned");
         if let Some(error) = &state.failure {
+            reservation.armed = false;
             return Err(io::Error::other(error.clone()));
         }
         if state.slots[index].remaining_claims == 0
@@ -1052,6 +1122,7 @@ impl SourceBlockStore {
                     state.window_committed_bytes.saturating_sub(block.len());
                 state.slots[index].status = SourceBlockStatus::Released;
             }
+            reservation.armed = false;
             drop(state);
             self.capacity_notify.notify_waiters();
             return Ok(None);
@@ -1064,15 +1135,34 @@ impl SourceBlockStore {
         state.slots[index].status = SourceBlockStatus::Fetching;
         drop(state);
         self.notify.notify_waiters();
-        Ok(Some(block))
+        Ok(Some(reservation))
     }
 
-    async fn fetch_reserved_block(&self, index: usize, block: SourceBlockRange) {
-        let result = match self.fetch_semaphore.acquire().await {
-            Ok(_permit) => self.source.get_range(block.start, block.end).await,
-            Err(_) => Err(io::Error::other("source fetch semaphore is closed")),
-        };
-        self.finish_fetch(index, block, result);
+    fn rollback_fetch(&self, index: usize, block: SourceBlockRange, restore_replay_priority: bool) {
+        let mut rolled_back = false;
+        {
+            let mut state = self
+                .state
+                .lock()
+                .expect("source block state mutex should not be poisoned");
+            let reserving = matches!(state.slots[index].status, SourceBlockStatus::Reserving);
+            let fetching = matches!(state.slots[index].status, SourceBlockStatus::Fetching);
+            if reserving || fetching {
+                state.window_committed_bytes =
+                    state.window_committed_bytes.saturating_sub(block.len());
+                if fetching {
+                    state.resident_bytes = state.resident_bytes.saturating_sub(block.len());
+                    state.slots[index].budget_permit.take();
+                }
+                state.slots[index].replay_priority |= restore_replay_priority;
+                state.slots[index].status = SourceBlockStatus::Pending;
+                rolled_back = true;
+            }
+        }
+        if rolled_back {
+            self.notify.notify_waiters();
+            self.capacity_notify.notify_waiters();
+        }
     }
 
     fn finish_fetch(&self, index: usize, block: SourceBlockRange, result: io::Result<Bytes>) {
@@ -1130,8 +1220,7 @@ impl SourceBlockStore {
         }
     }
 
-    fn activate_reader(&self, start: u64, end_exclusive: u64) -> io::Result<VecDeque<usize>> {
-        let indices = self.block_indices_for_span(start, end_exclusive);
+    fn activate_reader(&self, indices: &[usize]) -> io::Result<()> {
         let mut state = self
             .state
             .lock()
@@ -1139,7 +1228,7 @@ impl SourceBlockStore {
         if let Some(error) = &state.failure {
             return Err(io::Error::other(error.clone()));
         }
-        for &index in &indices {
+        for &index in indices {
             let Some(slot) = state.slots.get(index) else {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
@@ -1157,11 +1246,67 @@ impl SourceBlockStore {
                 ));
             }
         }
-        for &index in &indices {
+        for &index in indices {
             state.slots[index].live_claims = state.slots[index].live_claims.saturating_add(1);
         }
         self.source.diagnostics.record_reader_started();
-        Ok(indices.into())
+        Ok(())
+    }
+
+    pub(super) fn claim_zip_entry_attempt(
+        self: &Arc<Self>,
+        plan: &ZipEntryPlan,
+    ) -> EntryAttemptClaim {
+        EntryAttemptClaim {
+            store: Arc::clone(self),
+            indices: self.block_indices_for_span(plan.source_offset, plan.source_span_end),
+            armed: true,
+        }
+    }
+
+    fn release_entry_attempt(&self, indices: &[usize]) {
+        let mut notify_capacity = false;
+        {
+            let mut state = self
+                .state
+                .lock()
+                .expect("source block state mutex should not be poisoned");
+            for &index in indices {
+                let Some(slot) = state.slots.get(index) else {
+                    continue;
+                };
+                if slot.remaining_claims == 0 {
+                    continue;
+                }
+                state.slots[index].remaining_claims -= 1;
+                if state.slots[index].remaining_claims != 0 || state.slots[index].live_claims != 0 {
+                    continue;
+                }
+                if matches!(state.slots[index].status, SourceBlockStatus::Ready(_)) {
+                    state.slots[index].budget_permit.take();
+                    state.slots[index].status = SourceBlockStatus::Released;
+                    self.source
+                        .diagnostics
+                        .block_releases
+                        .fetch_add(1, Ordering::Relaxed);
+                    let block_len = self.blocks[index].len();
+                    state.resident_bytes = state.resident_bytes.saturating_sub(block_len);
+                    state.window_committed_bytes =
+                        state.window_committed_bytes.saturating_sub(block_len);
+                    notify_capacity = true;
+                } else if matches!(
+                    state.slots[index].status,
+                    SourceBlockStatus::Pending
+                        | SourceBlockStatus::Reserving
+                        | SourceBlockStatus::Fetching
+                ) {
+                    state.slots[index].replay_priority = true;
+                }
+            }
+        }
+        if notify_capacity {
+            self.capacity_notify.notify_waiters();
+        }
     }
 
     pub(crate) fn retain_zip_entry_for_replay(&self, plan: &ZipEntryPlan) {
@@ -1183,6 +1328,7 @@ impl SourceBlockStore {
                 continue;
             };
             slot.remaining_claims = slot.remaining_claims.saturating_add(1);
+            slot.replay_priority = true;
             if matches!(
                 slot.status,
                 SourceBlockStatus::Released | SourceBlockStatus::Failed(_)
@@ -1192,14 +1338,17 @@ impl SourceBlockStore {
                 } else {
                     self.source.diagnostics.record_replay_claim_after_failure();
                 }
-                slot.replay_priority = true;
                 slot.status = SourceBlockStatus::Pending;
             }
         }
         self.notify.notify_waiters();
     }
 
-    async fn slice_from(&self, position: u64, end_exclusive: u64) -> io::Result<BlockSlice> {
+    async fn slice_from(
+        self: &Arc<Self>,
+        position: u64,
+        end_exclusive: u64,
+    ) -> io::Result<BlockSlice> {
         let index = self.block_index_at(position).ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::UnexpectedEof,
@@ -1278,8 +1427,10 @@ impl SourceBlockStore {
 
             match action {
                 SourceBlockAction::Reserve => {
-                    if let Some(block) = self.reserve_fetch(index, SourceFetchMode::Demand).await? {
-                        self.fetch_reserved_block(index, block).await;
+                    if let Some(reservation) =
+                        self.reserve_fetch(index, SourceFetchMode::Demand).await?
+                    {
+                        reservation.fetch().await;
                     }
                 }
                 SourceBlockAction::Wait(wait) => {
@@ -1323,6 +1474,16 @@ impl SourceBlockStore {
             }
             slot.live_claims -= 1;
             slot.remaining_claims = slot.remaining_claims.saturating_sub(1);
+            if slot.remaining_claims == 0
+                && matches!(
+                    slot.status,
+                    SourceBlockStatus::Pending
+                        | SourceBlockStatus::Reserving
+                        | SourceBlockStatus::Fetching
+                )
+            {
+                slot.replay_priority = true;
+            }
             if slot.live_claims == 0
                 && slot.remaining_claims == 0
                 && matches!(slot.status, SourceBlockStatus::Ready(_))
@@ -1542,15 +1703,19 @@ mod tests {
     use std::collections::HashMap;
     use std::future::pending;
     use std::io::Write;
+    use std::pin::Pin;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::task::{Context, Poll};
     use std::time::Duration;
 
     use aws_sdk_s3::primitives::SdkBody;
     use aws_smithy_http_client::test_util::{ReplayEvent, StaticReplayClient};
     use base64::Engine as _;
     use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+    use futures_util::task::AtomicWaker;
     use http::{Request, Response};
+    use http_body::{Body as _, Frame, SizeHint};
     use proptest::prelude::*;
     use tokio::io::AsyncReadExt;
     use tokio::sync::Semaphore;
@@ -1580,6 +1745,65 @@ mod tests {
         include_str!("../../test-fixtures/external-zips/python-force-zip64.zip.b64");
 
     struct DropSignal(Arc<AtomicBool>);
+
+    struct PendingResponseBody {
+        started: Arc<AtomicBool>,
+        dropped: Arc<AtomicBool>,
+        content_length: u64,
+    }
+
+    struct GatedResponseBody {
+        started: Arc<AtomicBool>,
+        released: Arc<AtomicBool>,
+        waker: Arc<AtomicWaker>,
+        bytes: Option<bytes::Bytes>,
+    }
+
+    impl http_body::Body for PendingResponseBody {
+        type Data = bytes::Bytes;
+        type Error = std::io::Error;
+
+        fn poll_frame(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<Option<std::result::Result<Frame<Self::Data>, Self::Error>>> {
+            self.started.store(true, Ordering::Release);
+            Poll::Pending
+        }
+
+        fn size_hint(&self) -> SizeHint {
+            SizeHint::with_exact(self.content_length)
+        }
+    }
+
+    impl Drop for PendingResponseBody {
+        fn drop(&mut self) {
+            self.dropped.store(true, Ordering::Release);
+        }
+    }
+
+    impl http_body::Body for GatedResponseBody {
+        type Data = bytes::Bytes;
+        type Error = std::io::Error;
+
+        fn poll_frame(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+        ) -> Poll<Option<std::result::Result<Frame<Self::Data>, Self::Error>>> {
+            self.started.store(true, Ordering::Release);
+            if !self.released.load(Ordering::Acquire) {
+                self.waker.register(cx.waker());
+                if !self.released.load(Ordering::Acquire) {
+                    return Poll::Pending;
+                }
+            }
+            Poll::Ready(self.bytes.take().map(|bytes| Ok(Frame::data(bytes))))
+        }
+
+        fn size_hint(&self) -> SizeHint {
+            SizeHint::with_exact(self.bytes.as_ref().map_or(0, |bytes| bytes.len() as u64))
+        }
+    }
 
     #[tokio::test]
     async fn external_zip_local_extra_fields_stream_with_directory_bounds() {
@@ -1764,13 +1988,11 @@ mod tests {
         let first = pending_store_for_span(48, Arc::clone(&budget));
         let second = pending_store_for_span(48, budget);
 
-        assert!(
-            first
-                .reserve_fetch(0, SourceFetchMode::Prefetch)
-                .await
-                .unwrap()
-                .is_some()
-        );
+        let first_reservation = first
+            .reserve_fetch(0, SourceFetchMode::Prefetch)
+            .await
+            .unwrap()
+            .expect("first source reservation");
         assert_eq!(stats.source_global_memory_for_test(), (64, 48, 48));
 
         let waiting_store = Arc::clone(&second);
@@ -1783,18 +2005,17 @@ mod tests {
         assert!(!waiting.is_finished());
 
         first.cancel("injected first-source cancellation");
-        assert!(
-            tokio::time::timeout(Duration::from_secs(1), waiting)
-                .await
-                .expect("second source reservation should be unblocked")
-                .expect("second source reservation task")
-                .expect("second source reservation")
-                .is_some()
-        );
+        let second_reservation = tokio::time::timeout(Duration::from_secs(1), waiting)
+            .await
+            .expect("second source reservation should be unblocked")
+            .expect("second source reservation task")
+            .expect("second source reservation")
+            .expect("second source block");
         assert_eq!(stats.source_global_memory_for_test(), (64, 48, 48));
 
         second.cancel("test complete");
         assert_eq!(stats.source_global_memory_for_test(), (64, 0, 48));
+        drop((first_reservation, second_reservation));
     }
 
     #[tokio::test(start_paused = true)]
@@ -1831,7 +2052,13 @@ mod tests {
             .await
             .expect("later prefetch reservation")
             .expect("later block");
-        store.finish_fetch(1, later, Ok(bytes::Bytes::from(vec![0_u8; BLOCK_BYTES])));
+        let later_block = later.block;
+        std::mem::forget(later);
+        store.finish_fetch(
+            1,
+            later_block,
+            Ok(bytes::Bytes::from(vec![0_u8; BLOCK_BYTES])),
+        );
         assert!(
             tokio::time::timeout(
                 Duration::from_millis(1),
@@ -1857,7 +2084,7 @@ mod tests {
         .expect("replay reservation")
         .expect("replay block");
 
-        assert_eq!(replay.start, 0);
+        assert_eq!(replay.block.start, 0);
         assert_eq!(
             store
                 .state
@@ -2176,6 +2403,187 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn dropped_upload_body_cancels_global_capacity_wait_and_replays() {
+        let zip = zip_from_entry("capacity.txt", b"capacity replay");
+        let plan = zip_plan_from_archive(&zip, "capacity.txt");
+        let block_bytes = usize::try_from(plan.source_span_end - plan.source_offset).unwrap();
+        let response_bytes =
+            zip[plan.source_offset as usize..plan.source_span_end as usize].to_vec();
+        let replay = StaticReplayClient::new(vec![get_range_success_bytes(
+            response_bytes,
+            plan.source_offset,
+            zip.len() as u64,
+        )]);
+        let stats = Arc::new(DeploymentStats::default());
+        let budget = super::SourceByteBudget::new(block_bytes, Arc::clone(&stats));
+        let held_capacity = budget
+            .reserve_planning(block_bytes as u64)
+            .await
+            .expect("hold the complete source budget");
+        let store = pending_replay_store(
+            &zip,
+            &plan,
+            replay.clone(),
+            Arc::clone(&budget),
+            block_bytes,
+        );
+        let body = zip_entry_body(
+            Arc::clone(&store),
+            plan.clone(),
+            plan.size,
+            Arc::new(UploadBodyState::default()),
+            DestinationChecksumStrategy::SseS3Etag,
+            Arc::new(AtomicUsize::new(0)),
+        );
+        let mut first = body.into_inner();
+        let mut replay_body = first.try_clone().expect("retryable ZIP body");
+
+        poll_body_once(&mut first);
+        wait_for_test_condition(|| {
+            matches!(
+                store.state.lock().expect("source block state").slots[0].status,
+                SourceBlockStatus::Reserving
+            )
+        })
+        .await;
+        drop(first);
+        poll_body_once(&mut replay_body);
+        wait_for_test_condition(|| {
+            let state = store.state.lock().expect("source block state");
+            matches!(state.slots[0].status, SourceBlockStatus::Reserving)
+                && state.slots[0].remaining_claims == 1
+                && !state.slots[0].replay_priority
+        })
+        .await;
+        let diagnostics = store.source.diagnostics.snapshot();
+        assert_eq!(diagnostics.body_attempts, 2);
+        assert_eq!(diagnostics.body_replays, 1);
+        assert_eq!(stats.source_global_memory_for_test().1, block_bytes as u64);
+
+        drop(held_capacity);
+        let bytes = tokio::time::timeout(
+            Duration::from_secs(1),
+            aws_sdk_s3::primitives::ByteStream::new(replay_body).collect(),
+        )
+        .await
+        .expect("replayed body should not hang after capacity cancellation")
+        .expect("replayed body after capacity cancellation")
+        .into_bytes();
+
+        assert_eq!(bytes.as_ref(), b"capacity replay");
+        assert_eq!(replay.actual_requests().count(), 1);
+        assert_eq!(stats.source_global_memory_for_test().1, 0);
+        assert_replayed_body_released(&store);
+    }
+
+    #[tokio::test]
+    async fn dropped_upload_body_cancels_ranged_get_and_replays() {
+        const BLOCK_BYTES: usize = 64;
+        let expected = (0..512)
+            .map(|index| (index % 251) as u8)
+            .collect::<Vec<_>>();
+        let zip = stored_zip_from_entry("range.txt", &expected);
+        let plan = zip_plan_from_archive(&zip, "range.txt");
+        let blocks = plan_source_blocks(
+            zip.len() as u64,
+            std::slice::from_ref(&plan),
+            BLOCK_BYTES,
+            0,
+        );
+        assert!(blocks.len() > 2);
+        let get_started = Arc::new(AtomicBool::new(false));
+        let get_dropped = Arc::new(AtomicBool::new(false));
+        let replay_get_started = Arc::new(AtomicBool::new(false));
+        let replay_get_released = Arc::new(AtomicBool::new(false));
+        let replay_get_waker = Arc::new(AtomicWaker::new());
+        let mut events = vec![
+            get_block_success_event(&zip, blocks[0]),
+            get_pending_range_event(
+                usize::try_from(blocks[1].len()).unwrap(),
+                blocks[1].start,
+                zip.len() as u64,
+                Arc::clone(&get_started),
+                Arc::clone(&get_dropped),
+            ),
+            get_gated_range_event(
+                &zip,
+                blocks[0],
+                Arc::clone(&replay_get_started),
+                Arc::clone(&replay_get_released),
+                Arc::clone(&replay_get_waker),
+            ),
+        ];
+        events.extend(
+            blocks
+                .iter()
+                .skip(1)
+                .copied()
+                .map(|block| get_block_success_event(&zip, block)),
+        );
+        let expected_requests = events.len();
+        let replay = StaticReplayClient::new(events);
+        let stats = Arc::new(DeploymentStats::default());
+        let budget = super::SourceByteBudget::new(BLOCK_BYTES, Arc::clone(&stats));
+        let store = pending_replay_store(&zip, &plan, replay.clone(), budget, BLOCK_BYTES);
+        let body = zip_entry_body(
+            Arc::clone(&store),
+            plan.clone(),
+            plan.size,
+            Arc::new(UploadBodyState::default()),
+            DestinationChecksumStrategy::SseS3Etag,
+            Arc::new(AtomicUsize::new(0)),
+        );
+        let mut first = body.into_inner();
+        let mut replay_body = first.try_clone().expect("retryable ZIP body");
+
+        poll_body_once(&mut first);
+        wait_for_test_condition(|| {
+            get_started.load(Ordering::Acquire)
+                && matches!(
+                    store.state.lock().expect("source block state").slots[1].status,
+                    SourceBlockStatus::Fetching
+                )
+        })
+        .await;
+        assert_eq!(stats.source_global_memory_for_test().1, BLOCK_BYTES as u64);
+        drop(first);
+        poll_body_once(&mut replay_body);
+        wait_for_test_condition(|| {
+            get_dropped.load(Ordering::Acquire) && replay_get_started.load(Ordering::Acquire)
+        })
+        .await;
+        {
+            let state = store.state.lock().expect("source block state");
+            assert!(matches!(state.slots[0].status, SourceBlockStatus::Fetching));
+            assert_eq!(state.slots[0].remaining_claims, 1);
+            assert_eq!(state.slots[0].live_claims, 0);
+            for slot in &state.slots[1..] {
+                assert!(matches!(slot.status, SourceBlockStatus::Pending));
+                assert_eq!(slot.remaining_claims, 1);
+                assert_eq!(slot.live_claims, 0);
+                assert!(slot.replay_priority);
+            }
+        }
+        replay_get_released.store(true, Ordering::Release);
+        replay_get_waker.wake();
+
+        let bytes = tokio::time::timeout(
+            Duration::from_secs(1),
+            aws_sdk_s3::primitives::ByteStream::new(replay_body).collect(),
+        )
+        .await
+        .expect("replayed body should not hang after ranged GET cancellation")
+        .expect("replayed body after ranged GET cancellation")
+        .into_bytes();
+
+        assert_eq!(bytes.as_ref(), expected);
+        assert!(get_dropped.load(Ordering::Acquire));
+        assert_eq!(replay.actual_requests().count(), expected_requests);
+        assert_eq!(stats.source_global_memory_for_test().1, 0);
+        assert_replayed_body_released(&store);
+    }
+
+    #[tokio::test]
     async fn ranged_get_retries_transient_failures_with_one_sdk_attempt_each() {
         let replay = StaticReplayClient::new(vec![
             get_error_event(500, "InternalError"),
@@ -2263,7 +2671,7 @@ mod tests {
         let store = ready_store_for_plan(&zip, &plan);
         let dropped = Arc::new(AtomicBool::new(false));
         let task_dropped = Arc::clone(&dropped);
-        store.spawn_body_task(async move {
+        let _ = store.spawn_body_task(async move {
             let _signal = DropSignal(task_dropped);
             pending::<()>().await;
         });
@@ -2296,11 +2704,14 @@ mod tests {
         tokio::task::yield_now().await;
 
         store.cancel("injected scheduler failure");
-        let error = tokio::time::timeout(Duration::from_secs(1), waiter)
+        let result = tokio::time::timeout(Duration::from_secs(1), waiter)
             .await
             .expect("waiter should wake")
-            .expect("waiter task")
-            .expect_err("cancelled scheduler should fail the waiter");
+            .expect("waiter task");
+        let error = match result {
+            Ok(_) => panic!("cancelled scheduler should fail the waiter"),
+            Err(error) => error,
+        };
 
         assert!(error.to_string().contains("injected scheduler failure"));
     }
@@ -2434,6 +2845,55 @@ mod tests {
         )
     }
 
+    fn pending_replay_store(
+        zip: &[u8],
+        plan: &ZipEntryPlan,
+        replay: StaticReplayClient,
+        budget: Arc<super::SourceByteBudget>,
+        block_bytes: usize,
+    ) -> Arc<super::SourceBlockStore> {
+        super::SourceBlockStore::new(
+            replay_source_client(replay, zip.len() as u64),
+            std::slice::from_ref(plan),
+            SourceBlockOptions {
+                block_bytes,
+                merge_gap_bytes: 0,
+                get_concurrency: 1,
+                window_bytes: block_bytes,
+            },
+            budget,
+        )
+    }
+
+    fn poll_body_once(body: &mut SdkBody) {
+        let mut context = Context::from_waker(std::task::Waker::noop());
+        assert!(Pin::new(body).poll_frame(&mut context).is_pending());
+    }
+
+    async fn wait_for_test_condition(mut condition: impl FnMut() -> bool) {
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !condition() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("test condition should become true");
+    }
+
+    fn assert_replayed_body_released(store: &super::SourceBlockStore) {
+        let state = store.state.lock().expect("source block state");
+        for slot in &state.slots {
+            assert!(matches!(slot.status, SourceBlockStatus::Released));
+            assert_eq!(slot.remaining_claims, 0);
+            assert_eq!(slot.live_claims, 0);
+        }
+        assert_eq!(state.window_committed_bytes, 0);
+        assert_eq!(state.resident_bytes, 0);
+        let diagnostics = store.source.diagnostics.snapshot();
+        assert_eq!(diagnostics.body_attempts, 2);
+        assert_eq!(diagnostics.body_replays, 1);
+    }
+
     fn ready_store_for_plan(zip: &[u8], plan: &ZipEntryPlan) -> Arc<super::SourceBlockStore> {
         ready_store_for_plan_with_claims(zip, plan, 1)
     }
@@ -2489,13 +2949,18 @@ mod tests {
         let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
         let file = archive.by_name(name).unwrap();
         let data_start = file.data_start().unwrap();
+        let compression_code = match file.compression() {
+            zip::CompressionMethod::Stored => 0,
+            zip::CompressionMethod::Deflated => 8,
+            method => panic!("unsupported test compression method {method:?}"),
+        };
         ZipEntryPlan {
             source_index: 0,
             relative_key: name.to_string(),
             destination_key: name.to_string(),
             size: file.size(),
             compressed_size: file.compressed_size(),
-            compression_code: 8,
+            compression_code,
             crc32: file.crc32(),
             trusted_integrity: None,
             source_offset: file.header_start(),
@@ -2508,6 +2973,16 @@ mod tests {
         let mut writer = ZipWriter::new(cursor);
         let options =
             SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        writer.start_file(name, options).unwrap();
+        writer.write_all(bytes).unwrap();
+        writer.finish().unwrap().into_inner()
+    }
+
+    fn stored_zip_from_entry(name: &str, bytes: &[u8]) -> Vec<u8> {
+        let cursor = std::io::Cursor::new(Vec::new());
+        let mut writer = ZipWriter::new(cursor);
+        let options =
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
         writer.start_file(name, options).unwrap();
         writer.write_all(bytes).unwrap();
         writer.finish().unwrap().into_inner()
@@ -2605,6 +3080,12 @@ mod tests {
 
     fn get_success_bytes(bytes: Vec<u8>) -> ReplayEvent {
         let len = bytes.len();
+        get_range_success_bytes(bytes, 0, len as u64)
+    }
+
+    fn get_range_success_bytes(bytes: Vec<u8>, start: u64, source_len: u64) -> ReplayEvent {
+        let len = bytes.len();
+        let end = start + len as u64 - 1;
         ReplayEvent::new(
             Request::builder()
                 .uri("https://s3.test/expected")
@@ -2613,8 +3094,73 @@ mod tests {
             Response::builder()
                 .status(206)
                 .header("content-length", len)
-                .header("content-range", format!("bytes 0-{}/{len}", len - 1))
+                .header("content-range", format!("bytes {start}-{end}/{source_len}"))
                 .body(SdkBody::from(bytes))
+                .unwrap(),
+        )
+    }
+
+    fn get_block_success_event(source: &[u8], block: SourceBlockRange) -> ReplayEvent {
+        get_range_success_bytes(
+            source[block.start as usize..=block.end as usize].to_vec(),
+            block.start,
+            source.len() as u64,
+        )
+    }
+
+    fn get_pending_range_event(
+        len: usize,
+        start: u64,
+        source_len: u64,
+        started: Arc<AtomicBool>,
+        dropped: Arc<AtomicBool>,
+    ) -> ReplayEvent {
+        let end = start + len as u64 - 1;
+        ReplayEvent::new(
+            Request::builder()
+                .uri("https://s3.test/expected")
+                .body(SdkBody::empty())
+                .unwrap(),
+            Response::builder()
+                .status(206)
+                .header("content-length", len)
+                .header("content-range", format!("bytes {start}-{end}/{source_len}"))
+                .body(SdkBody::from_body_1_x(PendingResponseBody {
+                    started,
+                    dropped,
+                    content_length: len as u64,
+                }))
+                .unwrap(),
+        )
+    }
+
+    fn get_gated_range_event(
+        source: &[u8],
+        block: SourceBlockRange,
+        started: Arc<AtomicBool>,
+        released: Arc<AtomicBool>,
+        waker: Arc<AtomicWaker>,
+    ) -> ReplayEvent {
+        let bytes =
+            bytes::Bytes::copy_from_slice(&source[block.start as usize..=block.end as usize]);
+        ReplayEvent::new(
+            Request::builder()
+                .uri("https://s3.test/expected")
+                .body(SdkBody::empty())
+                .unwrap(),
+            Response::builder()
+                .status(206)
+                .header("content-length", bytes.len())
+                .header(
+                    "content-range",
+                    format!("bytes {}-{}/{}", block.start, block.end, source.len()),
+                )
+                .body(SdkBody::from_body_1_x(GatedResponseBody {
+                    started,
+                    released,
+                    waker,
+                    bytes: Some(bytes),
+                }))
                 .unwrap(),
         )
     }
