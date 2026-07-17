@@ -2403,6 +2403,82 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn completed_upload_body_reports_end_before_terminal_poll() {
+        let expected = b"complete body";
+        let zip = zip_from_entry("complete.txt", expected);
+        let plan = zip_plan_from_archive(&zip, "complete.txt");
+        let store = ready_store_for_plan(&zip, &plan);
+        let mut body = zip_entry_body(
+            Arc::clone(&store),
+            plan,
+            expected.len() as u64,
+            Arc::new(UploadBodyState::default()),
+            DestinationChecksumStrategy::SseS3Etag,
+            Arc::new(AtomicUsize::new(0)),
+        )
+        .into_inner();
+
+        assert!(!body.is_end_stream());
+        assert_eq!(body.size_hint().exact(), Some(expected.len() as u64));
+
+        let mut received = Vec::new();
+        while received.len() < expected.len() {
+            let frame = std::future::poll_fn(|cx| Pin::new(&mut body).poll_frame(cx))
+                .await
+                .expect("body frame before declared length")
+                .expect("valid body frame");
+            received.extend_from_slice(frame.data_ref().expect("data frame"));
+        }
+
+        assert_eq!(received, expected);
+        assert!(body.is_end_stream());
+        assert_eq!(body.size_hint().exact(), Some(0));
+        drop(body);
+
+        let state = store.state.lock().expect("source block state");
+        assert!(
+            state
+                .slots
+                .iter()
+                .all(|slot| matches!(slot.status, SourceBlockStatus::Released))
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_upload_body_completes_on_terminal_poll() {
+        let zip = zip_from_entry("empty.txt", b"");
+        let plan = zip_plan_from_archive(&zip, "empty.txt");
+        let store = ready_store_for_plan(&zip, &plan);
+        let mut body = zip_entry_body(
+            Arc::clone(&store),
+            plan,
+            0,
+            Arc::new(UploadBodyState::default()),
+            DestinationChecksumStrategy::SseS3Etag,
+            Arc::new(AtomicUsize::new(0)),
+        )
+        .into_inner();
+
+        assert!(!body.is_end_stream());
+        assert_eq!(body.size_hint().exact(), Some(0));
+        assert!(
+            std::future::poll_fn(|cx| Pin::new(&mut body).poll_frame(cx))
+                .await
+                .is_none()
+        );
+        assert!(body.is_end_stream());
+        drop(body);
+
+        let state = store.state.lock().expect("source block state");
+        assert!(
+            state
+                .slots
+                .iter()
+                .all(|slot| matches!(slot.status, SourceBlockStatus::Released))
+        );
+    }
+
+    #[tokio::test]
     async fn dropped_upload_body_cancels_global_capacity_wait_and_replays() {
         let zip = zip_from_entry("capacity.txt", b"capacity replay");
         let plan = zip_plan_from_archive(&zip, "capacity.txt");

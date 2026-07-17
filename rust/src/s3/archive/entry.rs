@@ -96,7 +96,8 @@ struct ReceiverBody {
     init: Option<ReceiverBodyInit>,
     receiver: Option<mpsc::Receiver<std::result::Result<Bytes, BodyError>>>,
     producer: Option<AbortHandle>,
-    content_length: u64,
+    remaining_bytes: u64,
+    complete: bool,
 }
 
 struct ReceiverBodyInit {
@@ -497,7 +498,8 @@ fn zip_entry_sdk_body(init: ReceiverBodyInit, content_length: u64) -> SdkBody {
         init: Some(init),
         receiver: None,
         producer: None,
-        content_length,
+        remaining_bytes: content_length,
+        complete: false,
     })
 }
 
@@ -889,6 +891,10 @@ impl Body for ReceiverBody {
         mut self: Pin<&mut Self>,
         cx: &mut TaskContext<'_>,
     ) -> Poll<Option<std::result::Result<Frame<Self::Data>, Self::Error>>> {
+        if self.complete {
+            return Poll::Ready(None);
+        }
+
         if let Some(init) = self.init.take() {
             let replay = init.attempts.fetch_add(1, Ordering::AcqRel) > 0;
             init.store.source.diagnostics.record_body_started(replay);
@@ -902,7 +908,7 @@ impl Body for ReceiverBody {
             let attempt_claim = init.store.claim_zip_entry_attempt(&init.plan);
             let (sender, receiver) = mpsc::channel(ZIP_ENTRY_BODY_PIPE_CHUNKS);
             let body_store = Arc::clone(&init.store);
-            let content_length = self.content_length;
+            let content_length = self.remaining_bytes;
             self.producer = Some(init.store.spawn_body_task(async move {
                 let outcome = if let Some(marker) = init.marker {
                     AssertUnwindSafe(send_marker_zip_entry_chunks_inner(
@@ -953,18 +959,45 @@ impl Body for ReceiverBody {
             .expect("source body receiver starts on first poll")
             .poll_recv(cx);
         match frame {
-            Poll::Ready(Some(Ok(bytes))) => Poll::Ready(Some(Ok(Frame::data(bytes)))),
+            Poll::Ready(Some(Ok(bytes))) => {
+                let frame_bytes = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+                if frame_bytes > self.remaining_bytes {
+                    return Poll::Ready(Some(Err(boxed_body_error(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "source body produced more bytes than its declared content length",
+                    )))));
+                }
+                self.remaining_bytes -= frame_bytes;
+                if self.remaining_bytes == 0 {
+                    self.receiver.take();
+                    self.producer.take();
+                    self.complete = true;
+                }
+                Poll::Ready(Some(Ok(Frame::data(bytes))))
+            }
             Poll::Ready(Some(Err(error))) => Poll::Ready(Some(Err(error))),
             Poll::Ready(None) => {
                 self.producer.take();
-                Poll::Ready(None)
+                self.complete = true;
+                if self.remaining_bytes == 0 {
+                    Poll::Ready(None)
+                } else {
+                    Poll::Ready(Some(Err(boxed_body_error(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "source body ended before its declared content length",
+                    )))))
+                }
             }
             Poll::Pending => Poll::Pending,
         }
     }
 
     fn size_hint(&self) -> SizeHint {
-        SizeHint::with_exact(self.content_length)
+        SizeHint::with_exact(self.remaining_bytes)
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.complete
     }
 }
 
