@@ -57,6 +57,7 @@ jobs:
         uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
         with:
           cache: true
+          working_directory: ${{ runner.temp }}
           mise_toml: |
             [tools]
             zig = "0.16.0"
