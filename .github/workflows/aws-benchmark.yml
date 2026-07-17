@@ -1,0 +1,224 @@
+name: AWS Benchmark
+run-name: AWS benchmark ${{ inputs.mode }} for ${{ inputs.source_ref }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Start repetition 1 or resume repetitions 2-5
+        required: true
+        default: smoke
+        type: choice
+        options:
+          - smoke
+          - continue
+      source_ref:
+        description: Exact 40-character commit to benchmark
+        required: true
+        type: string
+      snapshot_date:
+        description: Fixed UTC evidence date (YYYY-MM-DD)
+        required: true
+        type: string
+      run_id:
+        description: Opaque benchmark run UUID
+        required: true
+        type: string
+      decision_run_id:
+        description: Sanitized decision-run label
+        required: true
+        type: string
+      comparison_variant:
+        description: Sanitized variant label such as before or current
+        required: true
+        type: string
+      implementations:
+        description: Comma-separated implementations (shin or shin,aws)
+        required: true
+        default: shin,aws
+        type: string
+      max_wall_clock_minutes:
+        description: Approved wall-clock cap for this invocation
+        required: true
+        type: number
+      smoke_workflow_run_id:
+        description: Required for continue; workflow run ID containing smoke state
+        required: false
+        type: string
+
+concurrency:
+  group: aws-test-account
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  AWS_REGION: eu-central-1
+  AWS_DEFAULT_REGION: eu-central-1
+
+jobs:
+  benchmark:
+    name: Benchmark ${{ inputs.comparison_variant }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    environment: aws-tests
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    env:
+      MISE_DATA_DIR: ${{ github.workspace }}/.mise
+      MISE_RUSTUP_HOME: ${{ github.workspace }}/.mise/rustup
+      CARGO_TARGET_DIR: ${{ github.workspace }}/rust/target
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ inputs.source_ref }}
+          persist-credentials: false
+
+      - name: Validate inputs
+        env:
+          BENCHMARK_MODE: ${{ inputs.mode }}
+          IMPLEMENTATIONS: ${{ inputs.implementations }}
+          RUN_ID: ${{ inputs.run_id }}
+          SNAPSHOT_DATE: ${{ inputs.snapshot_date }}
+          SOURCE_REF: ${{ inputs.source_ref }}
+          SMOKE_WORKFLOW_RUN_ID: ${{ inputs.smoke_workflow_run_id }}
+        run: |
+          [[ "$SOURCE_REF" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$SOURCE_REF"
+          [[ "$RUN_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]]
+          [[ "$SNAPSHOT_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]
+          [[ "$IMPLEMENTATIONS" == "shin" || "$IMPLEMENTATIONS" == "shin,aws" ]]
+          if [[ "$BENCHMARK_MODE" == "continue" ]]; then
+            [[ "$SMOKE_WORKFLOW_RUN_ID" =~ ^[0-9]+$ ]]
+          else
+            test -z "$SMOKE_WORKFLOW_RUN_ID"
+          fi
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Install Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24.18.0
+          cache: pnpm
+
+      - name: Setup provider toolchain
+        uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
+        with:
+          cache: true
+          mise_toml: |
+            [tools]
+            zig = "0.16.0"
+            rust = { version = "1.96.0", targets = "aarch64-unknown-linux-gnu" }
+            cargo-binstall = "1.20.1"
+            "cargo:cargo-lambda" = "1.9.1"
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
+        with:
+          workspaces: rust -> target
+          cache-targets: true
+          cache-workspace-crates: true
+          cache-all-crates: false
+          cache-bin: false
+          key: aws-benchmark-arm64
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Prepare evidence paths
+        env:
+          RUN_ID: ${{ inputs.run_id }}
+        run: |
+          evidence_root="${GITHUB_WORKSPACE%/*}/shin-benchmark-evidence/$RUN_ID"
+          {
+            echo "EVIDENCE_ROOT=$evidence_root"
+            echo "RESULTS_FILE=$evidence_root/results.jsonl"
+            echo "SCRATCH_ROOT=$evidence_root/scratch"
+          } >>"$GITHUB_ENV"
+          mkdir -p "$evidence_root/scratch"
+
+      - name: Download smoke resume state
+        if: ${{ inputs.mode == 'continue' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: benchmark-resume-${{ inputs.run_id }}
+          path: ${{ runner.temp }}/benchmark-resume
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.smoke_workflow_run_id }}
+
+      - name: Restore smoke resume state
+        if: ${{ inputs.mode == 'continue' }}
+        run: |
+          cp "$RUNNER_TEMP/benchmark-resume/results.jsonl" "$RESULTS_FILE"
+          cp "$RUNNER_TEMP/benchmark-resume/benchmark-run-manifest.json" "$SCRATCH_ROOT/benchmark-run-manifest.json"
+          mkdir -p assets/bootstrap-arm64
+          cp "$RUNNER_TEMP/benchmark-resume/bootstrap.zip" assets/bootstrap-arm64/bootstrap.zip
+          cp "$RUNNER_TEMP/benchmark-resume/build-provenance.json" assets/bootstrap-arm64/build-provenance.json
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708 # v5.1.1
+        with:
+          role-to-assume: ${{ vars.AWS_TEST_ROLE_ARN }}
+          role-session-name: shin-benchmark-${{ github.run_id }}
+          role-duration-seconds: 21600
+          mask-aws-account-id: true
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Run approved benchmark range
+        env:
+          BENCHMARK_MODE: ${{ inputs.mode }}
+          COMPARISON_VARIANT: ${{ inputs.comparison_variant }}
+          DECISION_RUN_ID: ${{ inputs.decision_run_id }}
+          IMPLEMENTATIONS: ${{ inputs.implementations }}
+          MAX_WALL_CLOCK_MINUTES: ${{ inputs.max_wall_clock_minutes }}
+          RUN_ID: ${{ inputs.run_id }}
+          SNAPSHOT_DATE: ${{ inputs.snapshot_date }}
+        run: |
+          if [[ "$BENCHMARK_MODE" == "smoke" ]]; then
+            start_repetition=1
+            repetitions=1
+            approved_through=1
+          else
+            start_repetition=2
+            repetitions=4
+            approved_through=5
+          fi
+          pnpm benchmark:run-assets -- \
+            --config benchmarks/configs/methodology-v2-1024-32.json \
+            --run-id "$RUN_ID" \
+            --start-repetition "$start_repetition" \
+            --repetitions "$repetitions" \
+            --approved-through-repetition "$approved_through" \
+            --max-wall-clock-minutes "$MAX_WALL_CLOCK_MINUTES" \
+            --implementations "$IMPLEMENTATIONS" \
+            --output-file "$RESULTS_FILE" \
+            --scratch-root "$SCRATCH_ROOT" \
+            --snapshot-date "$SNAPSHOT_DATE" \
+            --decision-run-id "$DECISION_RUN_ID" \
+            --comparison-variant "$COMPARISON_VARIANT"
+
+      - name: Stage sanitized resume state
+        if: ${{ success() }}
+        run: |
+          resume="$RUNNER_TEMP/benchmark-resume-upload"
+          mkdir -p "$resume"
+          cp "$RESULTS_FILE" "$resume/results.jsonl"
+          cp "$SCRATCH_ROOT/benchmark-run-manifest.json" "$resume/benchmark-run-manifest.json"
+          cp assets/bootstrap-arm64/bootstrap.zip "$resume/bootstrap.zip"
+          cp assets/bootstrap-arm64/build-provenance.json "$resume/build-provenance.json"
+
+      - name: Upload sanitized benchmark state
+        if: ${{ success() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: benchmark-resume-${{ inputs.run_id }}
+          path: ${{ runner.temp }}/benchmark-resume-upload
+          if-no-files-found: error
+          retention-days: 14
