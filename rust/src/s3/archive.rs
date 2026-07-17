@@ -2433,15 +2433,17 @@ mod tests {
         assert_eq!(received, expected);
         assert!(body.is_end_stream());
         assert_eq!(body.size_hint().exact(), Some(0));
-        drop(body);
 
         let state = store.state.lock().expect("source block state");
-        assert!(
-            state
-                .slots
-                .iter()
-                .all(|slot| matches!(slot.status, SourceBlockStatus::Released))
-        );
+        for slot in &state.slots {
+            assert!(matches!(slot.status, SourceBlockStatus::Released));
+            assert_eq!(slot.remaining_claims, 0);
+            assert_eq!(slot.live_claims, 0);
+        }
+        assert_eq!(state.window_committed_bytes, 0);
+        assert_eq!(state.resident_bytes, 0);
+        drop(state);
+        drop(body);
     }
 
     #[tokio::test]

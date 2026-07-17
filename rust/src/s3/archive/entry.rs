@@ -94,10 +94,16 @@ pub(super) struct EntryDataReader {
 
 struct ReceiverBody {
     init: Option<ReceiverBodyInit>,
-    receiver: Option<mpsc::Receiver<std::result::Result<Bytes, BodyError>>>,
+    receiver: Option<mpsc::Receiver<std::result::Result<BodyFrame, BodyError>>>,
     producer: Option<AbortHandle>,
     remaining_bytes: u64,
     complete: bool,
+}
+
+pub(super) enum BodyFrame {
+    Data(Bytes),
+    Final(Bytes),
+    Complete,
 }
 
 struct ReceiverBodyInit {
@@ -585,7 +591,7 @@ fn zip_entry_reader_inner(
 pub(super) async fn send_zip_entry_chunks(
     store: Arc<SourceBlockStore>,
     plan: ZipEntryPlan,
-    sender: mpsc::Sender<std::result::Result<Bytes, BodyError>>,
+    sender: mpsc::Sender<std::result::Result<BodyFrame, BodyError>>,
     body_state: Arc<UploadBodyState>,
     checksum_strategy: DestinationChecksumStrategy,
 ) -> std::result::Result<(), BodyError> {
@@ -596,7 +602,7 @@ async fn send_zip_entry_chunks_inner(
     store: Arc<SourceBlockStore>,
     plan: ZipEntryPlan,
     attempt_claim: Option<EntryAttemptClaim>,
-    sender: mpsc::Sender<std::result::Result<Bytes, BodyError>>,
+    sender: mpsc::Sender<std::result::Result<BodyFrame, BodyError>>,
     body_state: Arc<UploadBodyState>,
     checksum_strategy: DestinationChecksumStrategy,
 ) -> std::result::Result<(), BodyError> {
@@ -649,19 +655,12 @@ async fn send_zip_entry_chunks_inner(
     if let Some(sha256) = sha256 {
         body_state.record_checksum_sha256(BASE64_STANDARD.encode(sha256.finalize()));
     }
-    if !pending.is_empty()
-        && !append_and_send_body_chunks(&mut body_chunk, &pending, &sender).await?
-    {
-        return Ok(());
-    }
-    if !body_chunk.is_empty()
-        && sender
-            .send(Ok(Bytes::copy_from_slice(body_chunk.as_slice())))
-            .await
-            .is_err()
-    {
-        return Ok(());
-    }
+
+    // The final frame is also the producer-completion handshake. Release the
+    // source reader and all of its entry claims before making that frame
+    // visible so a fixed-length HTTP consumer can safely stop polling after it.
+    drop(reader);
+    send_final_body_chunks(&mut body_chunk, &pending, &sender).await?;
 
     Ok(())
 }
@@ -672,7 +671,7 @@ pub(super) async fn send_marker_zip_entry_chunks(
     plan: ZipEntryPlan,
     content_length: u64,
     marker_replacements: Arc<MarkerReplacements>,
-    sender: mpsc::Sender<std::result::Result<Bytes, BodyError>>,
+    sender: mpsc::Sender<std::result::Result<BodyFrame, BodyError>>,
     body_state: Arc<UploadBodyState>,
     checksum_strategy: DestinationChecksumStrategy,
 ) -> std::result::Result<(), BodyError> {
@@ -696,7 +695,7 @@ async fn send_marker_zip_entry_chunks_inner(
     attempt_claim: Option<EntryAttemptClaim>,
     content_length: u64,
     marker_replacements: Arc<MarkerReplacements>,
-    sender: mpsc::Sender<std::result::Result<Bytes, BodyError>>,
+    sender: mpsc::Sender<std::result::Result<BodyFrame, BodyError>>,
     body_state: Arc<UploadBodyState>,
     checksum_strategy: DestinationChecksumStrategy,
 ) -> std::result::Result<(), BodyError> {
@@ -745,17 +744,20 @@ async fn send_marker_zip_entry_chunks_inner(
     if let Some(sha256) = result.sha256 {
         body_state.record_checksum_sha256(sha256);
     }
-    if let Some(final_chunk) = final_chunk
-        && sender.send(Ok(final_chunk)).await.is_err()
-    {
-        return Ok(());
+    match final_chunk {
+        Some(final_chunk) => {
+            let _ = sender.send(Ok(BodyFrame::Final(final_chunk))).await;
+        }
+        None => {
+            let _ = sender.send(Ok(BodyFrame::Complete)).await;
+        }
     }
     Ok(())
 }
 
 async fn forward_replaced_body_chunks(
     reader: &mut tokio::io::DuplexStream,
-    sender: &mpsc::Sender<std::result::Result<Bytes, BodyError>>,
+    sender: &mpsc::Sender<std::result::Result<BodyFrame, BodyError>>,
 ) -> std::result::Result<Option<Bytes>, BodyError> {
     // Keep one complete frame back so source CRC/size/catalog validation and
     // planning-pass identity checks can fail before S3 receives a complete body.
@@ -781,7 +783,7 @@ async fn forward_replaced_body_chunks(
                 let next = Bytes::copy_from_slice(&frame);
                 frame.clear();
                 if let Some(previous) = held_frame.replace(next)
-                    && sender.send(Ok(previous)).await.is_err()
+                    && sender.send(Ok(BodyFrame::Data(previous))).await.is_err()
                 {
                     // Fail this side of try_join so a producer blocked on the
                     // replacement pipe is cancelled when its body is dropped.
@@ -797,7 +799,7 @@ async fn forward_replaced_body_chunks(
     if !frame.is_empty() {
         let next = Bytes::copy_from_slice(&frame);
         if let Some(previous) = held_frame.replace(next)
-            && sender.send(Ok(previous)).await.is_err()
+            && sender.send(Ok(BodyFrame::Data(previous))).await.is_err()
         {
             return Err(boxed_body_error(io::Error::new(
                 io::ErrorKind::BrokenPipe,
@@ -859,7 +861,7 @@ fn finalize_md5(hasher: Md5) -> String {
 async fn append_and_send_body_chunks(
     body_chunk: &mut Vec<u8>,
     bytes: &[u8],
-    sender: &mpsc::Sender<std::result::Result<Bytes, BodyError>>,
+    sender: &mpsc::Sender<std::result::Result<BodyFrame, BodyError>>,
 ) -> std::result::Result<bool, BodyError> {
     let mut remaining = bytes;
     while !remaining.is_empty() {
@@ -870,7 +872,9 @@ async fn append_and_send_body_chunks(
 
         if body_chunk.len() == ZIP_ENTRY_BODY_CHUNK_BYTES {
             if sender
-                .send(Ok(Bytes::copy_from_slice(body_chunk.as_slice())))
+                .send(Ok(BodyFrame::Data(Bytes::copy_from_slice(
+                    body_chunk.as_slice(),
+                ))))
                 .await
                 .is_err()
             {
@@ -881,6 +885,42 @@ async fn append_and_send_body_chunks(
     }
 
     Ok(true)
+}
+
+async fn send_final_body_chunks(
+    body_chunk: &mut Vec<u8>,
+    bytes: &[u8],
+    sender: &mpsc::Sender<std::result::Result<BodyFrame, BodyError>>,
+) -> std::result::Result<(), BodyError> {
+    let mut remaining = bytes;
+    while !remaining.is_empty() {
+        let available = ZIP_ENTRY_BODY_CHUNK_BYTES - body_chunk.len();
+        let take = available.min(remaining.len());
+        body_chunk.extend_from_slice(&remaining[..take]);
+        remaining = &remaining[take..];
+
+        if body_chunk.len() == ZIP_ENTRY_BODY_CHUNK_BYTES {
+            let bytes = Bytes::copy_from_slice(body_chunk.as_slice());
+            body_chunk.clear();
+            let frame = if remaining.is_empty() {
+                BodyFrame::Final(bytes)
+            } else {
+                BodyFrame::Data(bytes)
+            };
+            if sender.send(Ok(frame)).await.is_err() {
+                return Ok(());
+            }
+        }
+    }
+
+    if !body_chunk.is_empty() {
+        let bytes = Bytes::copy_from_slice(body_chunk.as_slice());
+        body_chunk.clear();
+        let _ = sender.send(Ok(BodyFrame::Final(bytes))).await;
+    } else if bytes.is_empty() {
+        let _ = sender.send(Ok(BodyFrame::Complete)).await;
+    }
+    Ok(())
 }
 
 impl Body for ReceiverBody {
@@ -959,24 +999,33 @@ impl Body for ReceiverBody {
             .expect("source body receiver starts on first poll")
             .poll_recv(cx);
         match frame {
-            Poll::Ready(Some(Ok(bytes))) => {
+            Poll::Ready(Some(Ok(BodyFrame::Data(bytes)))) => {
                 let frame_bytes = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
-                if frame_bytes > self.remaining_bytes {
+                if frame_bytes >= self.remaining_bytes {
                     return Poll::Ready(Some(Err(boxed_body_error(io::Error::new(
                         io::ErrorKind::InvalidData,
-                        "source body produced more bytes than its declared content length",
+                        "source body reached its declared content length without producer completion",
                     )))));
                 }
                 self.remaining_bytes -= frame_bytes;
-                if self.remaining_bytes == 0 {
-                    self.receiver.take();
-                    self.producer.take();
-                    self.complete = true;
-                }
                 Poll::Ready(Some(Ok(Frame::data(bytes))))
             }
-            Poll::Ready(Some(Err(error))) => Poll::Ready(Some(Err(error))),
-            Poll::Ready(None) => {
+            Poll::Ready(Some(Ok(BodyFrame::Final(bytes)))) => {
+                let frame_bytes = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+                if frame_bytes != self.remaining_bytes || frame_bytes == 0 {
+                    return Poll::Ready(Some(Err(boxed_body_error(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "source body final frame did not match its declared content length",
+                    )))));
+                }
+                self.remaining_bytes = 0;
+                self.receiver.take();
+                self.producer.take();
+                self.complete = true;
+                Poll::Ready(Some(Ok(Frame::data(bytes))))
+            }
+            Poll::Ready(Some(Ok(BodyFrame::Complete))) => {
+                self.receiver.take();
                 self.producer.take();
                 self.complete = true;
                 if self.remaining_bytes == 0 {
@@ -984,9 +1033,18 @@ impl Body for ReceiverBody {
                 } else {
                     Poll::Ready(Some(Err(boxed_body_error(io::Error::new(
                         io::ErrorKind::UnexpectedEof,
-                        "source body ended before its declared content length",
+                        "source body completed before its declared content length",
                     )))))
                 }
+            }
+            Poll::Ready(Some(Err(error))) => Poll::Ready(Some(Err(error))),
+            Poll::Ready(None) => {
+                self.producer.take();
+                self.complete = true;
+                Poll::Ready(Some(Err(boxed_body_error(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "source body ended without producer completion",
+                )))))
             }
             Poll::Pending => Poll::Pending,
         }
