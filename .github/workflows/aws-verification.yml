@@ -57,13 +57,17 @@ jobs:
         uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
         with:
           cache: true
-          working_directory: ${{ runner.temp }}
           mise_toml: |
             [tools]
             zig = "0.16.0"
             rust = { version = "1.96.0", targets = "aarch64-unknown-linux-gnu" }
             cargo-binstall = "1.20.1"
             "cargo:cargo-lambda" = "1.9.1"
+
+      - name: Restore clean source configuration
+        run: |
+          git restore --source=HEAD -- mise.toml
+          test -z "$(git status --porcelain --untracked-files=all)"
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
