@@ -70,9 +70,9 @@ jobs:
       contents: read
       id-token: write
     env:
-      MISE_DATA_DIR: ${{ github.workspace }}/.mise
-      MISE_RUSTUP_HOME: ${{ github.workspace }}/.mise/rustup
-      CARGO_TARGET_DIR: ${{ github.workspace }}/rust/target
+      MISE_DATA_DIR: /tmp/shin-mise
+      MISE_RUSTUP_HOME: /tmp/shin-mise/rustup
+      CARGO_TARGET_DIR: /tmp/shin-cargo-target
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
