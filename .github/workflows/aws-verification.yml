@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       source_ref:
-        description: Commit or branch to verify
+        description: Exact 40-character commit to verify
         required: true
         default: main
         type: string
@@ -36,6 +36,13 @@ jobs:
         with:
           ref: ${{ inputs.source_ref }}
           persist-credentials: false
+
+      - name: Validate source commit
+        env:
+          SOURCE_REF: ${{ inputs.source_ref }}
+        run: |
+          [[ "$SOURCE_REF" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$SOURCE_REF"
 
       - name: Install pnpm
         uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
