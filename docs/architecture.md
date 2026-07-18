@@ -63,7 +63,7 @@ The default provider Lambda memory is 1024 MiB. The runtime reads `AWS_LAMBDA_FU
 | Adaptive local-window ZIP metadata reserve | 2 KiB per file |
 | Derived per-archive source window for a large ZIP | About 32 MiB minus the file reserve, still governed by the 512 MiB global cap |
 
-The explicit streaming buffers are small enough to fit inside the transfer worker reserve: each active marker-free upload stream uses about 64 KiB read buffer, 64 KiB held-back validation buffer, 256 KiB body assembly buffer, and up to 1 MiB of queued body frames. Marker uploads add a bounded replacement pipe, one held-back output frame, and at most `longest marker token - 1` bytes of input carry; they do not retain the complete entry or replacement output. At 32 active marker-free transfers, entry stream buffering is roughly 44 MiB. Each archive derives a local window from the shared budget and its file count, but local windows do not reserve independent memory. The local window bounds speculative scheduler prefetch and ordinary demand reads. When a body replay reactivates a released or failed earlier block, that specific demand fetch may borrow unused invocation-global permits instead of stalling behind later prefetched blocks that fill the local window. Pending fetches acquire fair 4 KiB-granularity permits from one invocation-wide semaphore; fetching and ready blocks retain those permits until all claims release them, so the invocation-global cap remains the hard aggregate bound. Failure and deadline cancellation drop permits and wake global and local waiters. For small archives, the source window is clamped down to the actual source ZIP size, so observed RSS is much lower than the worst-case budget.
+The explicit streaming buffers are small enough to fit inside the transfer worker reserve: each active marker-free upload stream uses about 64 KiB read buffer, 64 KiB held-back validation buffer, 256 KiB body assembly buffer, and up to 1 MiB of queued body frames. Marker uploads add a bounded replacement pipe, one held-back output frame, and at most `longest marker token - 1` bytes of input carry; they do not retain the complete entry or replacement output. At 32 active marker-free transfers, entry stream buffering is roughly 44 MiB. Planning is sequential and releases its source-budget permit before transfer block scheduling; authenticated-catalog planning also reserves enough headroom for its source block. Each archive derives a local window from the shared budget and its file count, but local windows do not reserve independent memory. The local window bounds speculative scheduler prefetch and ordinary demand reads. When a body replay reactivates a released or failed earlier block, that specific demand fetch may borrow unused invocation-global permits instead of stalling behind later prefetched blocks that fill the local window. Pending fetches acquire fair 4 KiB-granularity permits from one invocation-wide semaphore; fetching and ready blocks retain those permits until all claims release them, so the invocation-global cap remains the hard aggregate bound. Failure and deadline cancellation drop permits and wake global and local waiters. For small archives, the source window is clamped down to the actual source ZIP size, so observed RSS is much lower than the worst-case budget.
 
 Adaptive source window formula:
 
@@ -177,95 +177,11 @@ flowchart TD
 
 By default, compatible deployments create a stack-scoped handler whose construct ID hashes its Lambda settings and source identity. Prebuilt source identity includes the package version, architecture, and exact bootstrap archive SHA-256. Local compilation includes the package version and manifest path, while normalized bundling settings remain part of the complete handler identity. Distinct installed package/provider copies therefore cannot silently bind different request shapes to whichever shared handler was created first. Package or provider identity changes replace the shared handler by design; the release introducing this identity performs that handoff once for each legacy shared handler.
 
+Deployments sharing a handler also share its role, which accumulates permissions from every source, destination, KMS key, lifecycle transition, and CloudFront distribution used by those deployments. `advancedRuntimeTuning` remains request-scoped and can differ between deployments using the same compatible handler.
+
 `shareHandler:false` instead creates a stable handler child beneath that deployment construct. Construct-generated roles and log destinations are consequently deployment-scoped, and the provider policy receives only that deployment's source, destination, lifecycle, KMS, and CloudFront grants. Explicit `role` or `logGroup` values remain caller-owned and may intentionally be reused. Isolation trades more functions, roles, log resources, and independent cold starts for smaller permission and mutation blast radii; operational cost follows their separate invocations, logs, and any caller-configured provisioned concurrency.
 
 The construct uses the modeled `AWS::CloudFormation::CustomResource` type and includes the handler identity in the custom resource's logical identity. A changed shared Lambda service token therefore creates a replacement instead of attempting the unsupported in-place token update. Isolated handler settings update the stable deployment-scoped function in place. Each custom-resource generation receives a distinct destination-owner identity, while retries of the same generation return the same deterministic physical resource ID. During replacement, the destination bucket's ownership tag is updated before the old generation is deleted; the old handler sees the replacement as an overlapping owner and retains the live namespace. A genuine bucket or prefix change still receives a distinct physical ID and follows the configured cleanup semantics. The package-aware identity transition is therefore safe even when `onDelete.deleteObjects` is enabled. The provider accepts the former custom-named resource type on Delete during migration.
-
-## Changing a destination safely
-
-`destinationLifecycle` groups cleanup by lifecycle phase while each nested property names the action directly:
-
-- `onDeploy` applies whenever current sources are deployed on Create or Update. `deleteStaleObjects` defaults to `true`.
-- `onChange` applies only when the destination bucket, prefix, or distribution changed in a CloudFormation Update. Old-object deletion and old-distribution invalidation are both disabled by default.
-- `onDelete` applies when CloudFormation deletes the custom resource. `deleteObjects` defaults to `false`.
-
-When only the prefix changes, set `deleteObjects` to `true`. The current bucket remains the authorized bucket, and CloudFormation supplies the old prefix through `OldResourceProperties`:
-
-```ts
-new ShinBucketDeployment(this, "DeployWebsite", {
-  sources: [Source.asset("site")],
-  destinationBucket: websiteBucket,
-  destinationKeyPrefix: "site-v2",
-  distribution,
-  destinationLifecycle: {
-    onChange: {
-      deleteObjects: true,
-    },
-  },
-});
-```
-
-When the bucket changes, pass the previous `IBucket` directly. When the distribution changes, authorize its separate invalidation action explicitly:
-
-```ts
-new ShinBucketDeployment(this, "DeployWebsite", {
-  sources: [Source.asset("site")],
-  destinationBucket: newBucket,
-  destinationKeyPrefix: "site-v2",
-  distribution: newDistribution,
-  destinationLifecycle: {
-    onChange: {
-      deleteObjects: true,
-      fromBucket: oldBucket,
-      invalidateDistribution: oldDistribution,
-    },
-  },
-});
-```
-
-| Changed value | `destinationLifecycle.onChange` |
-| --- | --- |
-| Prefix only | `{ deleteObjects: true }` |
-| Bucket | `{ deleteObjects: true, fromBucket: oldBucket }` |
-| Distribution | `{ invalidateDistribution: oldDistribution }` |
-| Bucket and distribution | `{ deleteObjects: true, fromBucket: oldBucket, invalidateDistribution: oldDistribution }` |
-
-The actions are independent. Omitting `invalidateDistribution` does not block explicitly requested object deletion. If the previous distribution differs and its cached content changed, the provider skips that invalidation and logs that it was not explicitly authorized.
-
-To retain stale objects during normal deployments and delete current objects when CloudFormation deletes the custom resource:
-
-```ts
-destinationLifecycle: {
-  onDeploy: {
-    deleteStaleObjects: false,
-  },
-  onDelete: {
-    deleteObjects: true,
-  },
-}
-```
-
-None of these actions deletes the bucket or CloudFront distribution resource. `deleteStaleObjects` removes only objects in the current namespace that are absent from the deployment plan and match the active include/exclude filters. Before that deletion pass, the provider reads the bucket's Shin ownership tags. An overlapping owner from another deployment retains the stale objects rather than risking co-tenant deletion; this can conservatively retain unrelated stale keys in the same pass. Prefixes must be concrete and at most 102 characters so the complete ownership-tag key is validated before synthesis. `"/"` and an omitted prefix use the same canonical root owner, matching the provider's runtime normalization.
-
-For old-object deletion, omitting `fromBucket` reuses `destinationBucket`; an explicit `fromBucket` authorizes a changed old bucket. An unchanged current distribution is invalidated automatically. A changed old distribution must be passed to `invalidateDistribution` so CDK can grant distribution-specific invalidation permissions and synthesize its dependency.
-
-The provider deploys the current content before considering previous cleanup. It derives the old prefix from `OldResourceProperties`, verifies that the old bucket matches the resource authorized by the new template, and applies the owner and namespace-overlap checks. A missing or mismatched bucket authorization retains the previous destination and logs the reason; it does not undo the successful deployment of current content.
-
-Parent/child prefix changes are segment-aware, and slash runs are exact key bytes rather than aliases. If the previous prefix contains the current prefix, authorized cleanup excludes the complete current namespace. If the current prefix contains the previous prefix, the normal stale pass first protects the complete previous child namespace. Omitting `onChange.deleteObjects` therefore retains that child. When deletion is explicitly authorized, a separate manifest-aware pass removes obsolete keys from the old child after successful transfers while preserving every old-child key still present in the current manifest. Neighboring prefixes such as `site` and `site2` are treated as disjoint.
-
-### Synthesis and permission boundary
-
-`OldResourceProperties` exists only in the runtime Update event. CDK cannot use it during synthesis to add IAM permissions or construct dependencies. This creates different handling for prefixes and resources:
-
-- The provider can derive the old prefix at runtime.
-- CDK can reuse the current bucket and distribution permissions when those resources did not change.
-- A changed bucket or distribution needs an explicit old-resource reference in the new template.
-
-Because the old prefix is unknown during synthesis, enabling previous object deletion grants List/Delete and ownership-tag access across the selected bucket. The provider limits its operation to the old prefix from `OldResourceProperties`, but the execution role's S3 permission is broader for the duration that the option remains in the template. Remove `destinationLifecycle.onChange.deleteObjects` and `fromBucket` after the transition to remove that additional grant.
-
-Fully automatic cross-bucket cleanup would require wildcard permissions over buckets that are absent from the synthesized construct graph. That would weaken least privilege, omit useful CloudFormation dependencies, and give the provider authority unrelated to the declared migration. Shin instead requires an explicit old `IBucket` for cross-bucket moves and scopes the additional grant to that bucket. Changed CloudFront distributions likewise require an explicit `IDistribution` and receive distribution-specific invalidation permissions.
-
-There is intentionally no lifecycle protocol version, deprecated alias, or compatibility parser in this contract. PR #8 was merged with zero active users, so the clearer API directly replaces it; version negotiation would not protect an existing deployment.
 
 ## Upstream `BucketDeployment` lifecycle comparison
 
@@ -397,7 +313,7 @@ Cataloged `Source.asset` directories require CDK asset staging. The construct ch
 
 The materializer applies the configured CDK `IgnoreStrategy` once, including `completelyIgnores()` directory pruning for Git and Docker negation behavior. It normalizes backslashes as separators, detects normalized path collisions, and rejects included symlinks, sockets, devices, FIFOs, and reserved metadata paths. Each included regular file is hard-linked into one private temporary directory when possible. Cross-device and explicitly unsupported or forbidden link errors fall back to an exclusive copy; unrelated filesystem failures are propagated. File identity, mode, size, and modification time are checked around hashing and again after CDK staging to detect ordinary concurrent changes.
 
-Shin reads each materialized file through one reusable 64 KiB buffer and updates MD5 in that pass. It streams the compact catalog to disk while hashing the exact bytes, so it never retains a complete source file, compressed file, or ZIP archive in memory. CDK then stages the materialized directory as a normal `ZIP_DIRECTORY` file asset and owns ZIP creation, including ZIP64 support. Hash/publication fields such as custom or source hashing, readers, deploy-time lifetime, source KMS key, and display name are forwarded, while ignore and catalog-only fields are not applied a second time.
+Shin reads each materialized file through one reusable 64 KiB buffer and updates MD5 in that pass. It streams the compact catalog to disk while hashing the exact bytes, so it never retains a complete source file, compressed file, or ZIP archive in memory. CDK then stages the materialized directory as a normal `ZIP_DIRECTORY` file asset and owns ZIP creation, including ZIP64 support. Adding the catalog changes the staged ZIP bytes compared with upstream CDK packaging. Hash/publication fields such as custom or source hashing, readers, deploy-time lifetime, source KMS key, and display name are forwarded, while ignore and catalog-only fields are not applied a second time.
 
 The temporary materialization tree is removed after synchronous CDK staging on success and ordinary failure. Cleanup failures fail synthesis; when construction and cleanup both fail, an `AggregateError` preserves both errors. This guarantee does not cover process crashes or `SIGKILL`, and the construct does not delete scratch directories leaked by older runs.
 
@@ -420,6 +336,8 @@ Transfer scheduling is bounded by `maxParallelTransfers`, including comparison/h
 `extract=false` remains on the `CopyObject` path. SSE-S3 skip decisions use `ETag`; KMS/DSSE copies do not use encrypted destination `ETag`s as plaintext identity. Each copy atomically replaces metadata with the inferred content type plus an opaque `shin-copy-identity` SHA-256 token bound to the source bucket/key/ETag/length and destination bucket/key. A conditional conflict or final ambiguous response uses ordinary `HeadObject` and succeeds only when that exact token and length match. This proves the intended operation without downloading the source, relying on encryption-sensitive destination `ETag`s, or requesting a checksum that normal copies do not consume. A concurrent or unrelated destination value lacks the token and fails closed.
 
 CloudFront invalidations use a bounded caller reference hash derived from the CloudFormation request identity (`StackId`, `RequestId`, and logical resource id) plus the distribution id and invalidation paths. CloudFormation documents `StackId` plus `RequestId` as a way to uniquely identify a request on a custom resource, and CloudFront documents `CallerReference` as the idempotency value that prevents accidentally resubmitting an identical invalidation request. If Lambda retries the same custom-resource event after creating the invalidation but before sending the CloudFormation response, CloudFront returns the existing invalidation instead of creating a duplicate. The upstream CDK `BucketDeployment` provider currently uses a fresh `uuid4()` caller reference for each invocation; this provider intentionally uses the request-derived caller reference to make same-event retries idempotent at the CloudFront API boundary.
+
+When `distributionPaths` is omitted, the invalidation path defaults to the destination prefix plus `*`, for example `/site/*`.
 
 ## CloudFormation Deadline And Response Protocol
 
@@ -479,7 +397,7 @@ Cataloged asset packaging limitations:
 
 ## Diagnostics
 
-Each extracted deployment logs the effective source schedule and a final source diagnostics record per source archive. These records include planned entries and blocks, planned and fetched source bytes, source amplification, ranged `GetObject` wire attempts and typed failures, block hits/misses/releases/refetches, split wait counters for in-flight fetches versus source-window capacity, consumed body attempts/replays, per-archive resident source-window high-water, true active ZIP entry reader high-water, and active source GET high-water. The aggregate `shin_deployment_summary` is schema version 4 and is emitted after the CloudFormation callback attempt so `durationMs` and callback telemetry include callback delivery time even when the callback fails. Its `deploymentStatus` reports whether deployment work succeeded before callback delivery; callback delivery has independent counters because a successful deployment can still have a failed callback. The summary adds the actual Lambda memory, invocation-global source budget/current/high-water values, destination metadata/page high-water, catalog trust and fallback work, inferred deletion outcomes, callback attempts, and bounded correlated `PutObject` failure state. It separates logical transfer objects and cancellations from source and destination SDK work; extracted uploads log destination `PutObject` retry settings, throttling, wait time, and sanitized error classifications, while direct copies emit a parallel `CopyObject` diagnostics record. Its `markerReplacement` object names the strategy and semantics, declares the nominal two passes for an uploaded marker object, and reports actual planning and upload passes for the invocation. Benchmark collectors continue to validate historical schema-v3 summaries using their original strict shape; schema v4 adds fields only to `putObject`.
+The provider emits one sanitized `shin_deployment_summary` per custom-resource request after the CloudFormation callback attempt, plus structured source-scheduler and destination `PutObject` or `CopyObject` diagnostics when applicable. Each extracted deployment also logs the effective source schedule and a final source diagnostics record per source archive. These records include planned entries and blocks, planned and fetched source bytes, source amplification, ranged `GetObject` wire attempts and typed failures, block hits/misses/releases/refetches, split wait counters for in-flight fetches versus source-window capacity, consumed body attempts/replays, per-archive resident source-window high-water, true active ZIP entry reader high-water, and active source GET high-water. The aggregate `shin_deployment_summary` is schema version 4, so `durationMs` and callback telemetry include callback delivery time even when the callback fails. Its `deploymentStatus` reports whether deployment work succeeded before callback delivery; callback delivery has independent counters because a successful deployment can still have a failed callback. The summary adds the actual Lambda memory, invocation-global source budget/current/high-water values, destination metadata/page high-water, catalog trust and fallback work, inferred deletion outcomes, callback attempts, and bounded correlated `PutObject` failure state. It separates logical transfer objects and cancellations from source and destination SDK work; extracted uploads log destination `PutObject` retry settings, throttling, wait time, and sanitized error classifications, while direct copies emit a parallel `CopyObject` diagnostics record. Its `markerReplacement` object names the strategy and semantics, declares the nominal two passes for an uploaded marker object, and reports actual planning and upload passes for the invocation. The summary excludes bucket names, object keys, account IDs, distribution IDs, URLs, and ETags. Benchmark collectors continue to validate historical schema-v3 summaries using their original strict shape; schema v4 adds fields only to `putObject`.
 
 Detailed failure diagnostics are opt-in through `detailedFailureDiagnostics: true`; production defaults to `false`. Schema v4 exposes that choice as `detailedFailureDiagnosticsEnabled`. Basic aggregate wire, failure, retry, throttle, and wait counters remain enabled in both modes. When detailed mode is disabled, the SDK/service maps and failure-state array are empty and `failureStateOverflowAttempts` is zero, even if `failedAttempts` is nonzero. Disabled mode does not allocate per-attempt diagnostic state, track source-capacity waiters, start a per-attempt clock, capture source snapshots, or emit immediate failure events. Handler identity includes the setting, so enabled and disabled deployments cannot share a Lambda.
 
@@ -649,13 +567,15 @@ CloudFormation callback diagnostics field reference:
 - KMS/DSSE destinations do not use destination `ETag` as plaintext identity and can perform extra transfers; SSE-C is unsupported.
 - Imported buckets and tokenized, unknown, or multi-rule synthesized encryption configurations are rejected.
 - Source ZIP archives and marker-expanded entries do not need to fit in Lambda memory or ephemeral storage; both stream in bounded chunks.
-- Each extracted ZIP entry must fit S3's single-request `PutObject` limit.
+- Each extracted ZIP entry, including marker-expanded output, must be no larger than 5 GiB because uploads currently use single-request `PutObject`, not multipart upload.
 - Final destination keys must fit S3's 1024-byte UTF-8 limit.
+- `destinationKeyPrefix` must be a concrete string no longer than 102 characters. `"/"` and an omitted prefix both select the bucket root and share the same canonical ownership namespace.
 - `maxParallelTransfers` is 1–256, explicit source GET concurrency is 1–64, and provider-owned destination write attempts are 1–10.
 - `advancedRuntimeTuning.sourceBlockBytes` must be at least 30 bytes so ZIP local file headers can fit in one source block. Block size, block size times source GET concurrency, and any explicit local window must fit the invocation-global source budget.
 - Retry delays are 0–60000 ms and each base delay must not exceed its corresponding maximum.
 - `advancedRuntimeTuning.sourceWindowMemoryBudgetMb` can only lower the default half-memory source cap. Very small Lambda memory settings can therefore make otherwise valid tuning combinations fail explicitly.
 - Cataloged asset packaging requires CDK staging and rejects bundled directory assets, symlinks, and non-regular files.
+- Deployments are not transactional: valid object writes may finish before a later object fails, but stale deletion and CloudFront invalidation do not run after a transfer failure.
 - The provider is a static asset deployment engine, not a general-purpose sync engine with byte-range diffs or persistent manifests.
 
 ## Next Architecture Targets
