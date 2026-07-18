@@ -97,7 +97,7 @@ The construct follows the upstream `BucketDeployment` API where the behavior map
 | `prune` | `destinationLifecycle.onDeploy.deleteStaleObjects` |
 | `retainOnDelete` | `destinationLifecycle.onChange.deleteObjects` and `destinationLifecycle.onDelete.deleteObjects` |
 | `distribution`, `distributionPaths`, `waitForDistributionInvalidation` | `cloudfrontInvalidation.distribution`, `cloudfrontInvalidation.paths`, `cloudfrontInvalidation.waitForCompletion` |
-| `outputObjectKeys` | `objectKeys` |
+| `outputObjectKeys` | Remove it; access `deployment.objectKeys` only when the deployed key list is needed. |
 | `logRetention` | `logGroup` |
 | `serverSideEncryption`, `serverSideEncryptionAwsKmsKeyId` | Default encryption on `destinationBucket` |
 
