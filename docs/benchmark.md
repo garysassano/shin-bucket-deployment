@@ -28,7 +28,7 @@ The latest complete canonical methodology-v2 run was collected by GitHub Actions
 | `tiny-many` | `changed-update` | 5 | 0.657 / 26.665 | 40.586x | 36.015 / 68.314 | 36 / 212 |
 | `tiny-many` | `pruned-update` | 5 | 2.978 / 26.204 | 8.799x | 41.753 / 64.044 | 36 / 207 |
 
-The [complete generated report](../benchmarks/ci-report.md) includes quartiles, end-to-end timings, per-phase deltas, and a comparison chart. [Provider telemetry](../benchmarks/ci-telemetry.md) contains the sanitized Shin diagnostic tables.
+The [complete generated report](../benchmarks/ci-report.md) includes quartiles, end-to-end timings, and per-phase deltas. [Provider telemetry](../benchmarks/ci-telemetry.md) contains the sanitized Shin diagnostic tables.
 
 ![Latest tiny-many CI benchmark](../benchmarks/snapshots/ci-tiny-many-1024mib-32.svg)
 
@@ -87,9 +87,9 @@ The complete matrix therefore accepts the structural refactor as having no detec
 | --- | --- |
 | `benchmarks/README.md` | Human-viewable benchmark snapshots and links to committed SVG charts. |
 | `benchmarks/telemetry.md` | Historical methodology-v1 Markdown snapshot of Shin provider telemetry grouped by profile, memory, parallelism, and phase. |
-| `benchmarks/results.jsonl` | Structured sanitized benchmark result rows used by reports and charts. |
+| `benchmarks/results.jsonl` | Structured sanitized benchmark result rows used by reports and profile snapshots. |
 | `benchmarks/configs/` | Curated benchmark run matrices. |
-| `benchmarks/src/` | Benchmark runner, collector, table renderer, and report/chart renderers. |
+| `benchmarks/src/` | Benchmark runner, collector, table renderer, report renderer, and profile-snapshot renderer. |
 
 ## PR #12 Performance Decision Run
 
@@ -219,7 +219,7 @@ Regenerate the Shin telemetry Markdown tables from the JSONL source with:
 pnpm benchmark:telemetry-table -- --methodology-version 1
 ```
 
-Generate filtered comparison reports and SVG charts with:
+Generate filtered comparison reports with:
 
 ```bash
 pnpm benchmark:comparison-report -- --methodology-version 1 --asset-profile tiny-many --lambda-memory-mb 2048 --lambda-max-parallel-transfers 64

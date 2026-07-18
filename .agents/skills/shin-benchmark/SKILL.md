@@ -31,7 +31,7 @@ do not substitute verification evidence for benchmark evidence.
 ## Source Of Truth
 
 - `docs/benchmark.md` is the human benchmark page.
-- `benchmarks/results.jsonl` contains sanitized current benchmark result rows used by report/chart tooling.
+- `benchmarks/results.jsonl` contains sanitized current benchmark result rows used by report and profile-snapshot tooling.
 - `docs/verification.md` owns correctness verification and must not use benchmark rows as verification evidence.
 - Deployable benchmark apps live in `benchmarks/apps/**` and are run through `pnpm benchmark`.
 - Raw AWS logs, CloudWatch extracts, and scratch outputs must stay outside git.
@@ -183,7 +183,7 @@ Do not parse `summary=...` tracing lines by hand. If parsing fails, fix `benchma
 
 ## Benchmark Records
 
-Write one JSON object per measured phase to `benchmarks/results.jsonl`. This file is current-result data for reports and charts, not append-only history. Methodology-v2 rows are upserted by their methodology, run, sample, repetition, implementation, configuration, phase, and state identity. Rows without `methodologyVersion` are preserved and interpreted as methodology-v1 historical evidence; default reports exclude them.
+Write one JSON object per measured phase to `benchmarks/results.jsonl`. This file is current-result data for reports and profile snapshots, not append-only history. Methodology-v2 rows are upserted by their methodology, run, sample, repetition, implementation, configuration, phase, and state identity. Rows without `methodologyVersion` are preserved and interpreted as methodology-v1 historical evidence; default reports exclude them.
 
 Required fields:
 
@@ -258,7 +258,7 @@ The human page should include:
 - metadata table
 - detailed Shin vs AWS comparison table for every comparable metric when the current result set has paired implementations
 - parameter-sweep comparison tables when the current result set is Shin-only, including the swept value, baseline-relative speedup, memory, end-to-end timings, and telemetry counters
-- generated charts from committed JSONL data when applicable
+- current per-profile snapshots generated from committed JSONL data when applicable
 - provider summary highlights for Shin aggregate counters
 - short caveats and cleanup status
 

@@ -57,7 +57,7 @@ function renderDocsBlock(records: BenchmarkResultRecord[], runId: string): strin
     "",
     renderComparisonTable(records),
     "",
-    "The [complete generated report](../benchmarks/ci-report.md) includes quartiles, end-to-end timings, per-phase deltas, and a comparison chart. [Provider telemetry](../benchmarks/ci-telemetry.md) contains the sanitized Shin diagnostic tables.",
+    "The [complete generated report](../benchmarks/ci-report.md) includes quartiles, end-to-end timings, and per-phase deltas. [Provider telemetry](../benchmarks/ci-telemetry.md) contains the sanitized Shin diagnostic tables.",
     "",
     "![Latest tiny-many CI benchmark](../benchmarks/snapshots/ci-tiny-many-1024mib-32.svg)",
     "",

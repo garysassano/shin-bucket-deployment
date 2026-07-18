@@ -114,13 +114,6 @@
 | CDK deploy time | 25.12 s | 47.17 s | +22.05 s | 1.878x | +87.779% |
 | Max memory | 36 MiB | 207 MiB | +171 MiB | 5.75x | +475% |
 
-
-## Visual Summary
-
-Lower is better for both Lambda handler duration and max memory. The SVG chart uses the same paired medians as the tables above.
-
-![ShinBucketDeployment vs AWS BucketDeployment Lambda handler duration and max memory](ci-report-assets/shin-vs-aws-duration-memory.svg)
-
 ## Metric Tables
 
 ### Provider duration

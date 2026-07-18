@@ -66,7 +66,7 @@ env:
 jobs:
   benchmark:
     name: Benchmark ${{ inputs.comparison_variant }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 360
     environment: aws-tests
     permissions:
@@ -274,8 +274,6 @@ jobs:
                 --config benchmarks/configs/methodology-v2-1024-32.json \
                 --input-file "$RESULTS_FILE" \
                 --output-file "$REPORT_ROOT/report.md" \
-                --chart-output-file "$REPORT_ROOT/snapshots/comparison.svg" \
-                --chart-reference snapshots/comparison.svg \
                 --run-id "${{ inputs.run_id }}" \
                 --scratch-root "$SCRATCH_ROOT" \
                 --preview "$REPORT_PREVIEW"
@@ -302,6 +300,22 @@ jobs:
                 --scratch-root "$SCRATCH_ROOT" \
                 --preview "$REPORT_PREVIEW"
 
+      - name: Validate benchmark report contents
+        env:
+          IMPLEMENTATIONS: ${{ inputs.implementations }}
+        run: |
+          expected=(report.md results.jsonl summary.md telemetry.md)
+          if [[ "$IMPLEMENTATIONS" == "shin,aws" ]]; then
+            expected+=(
+              "snapshots/${SNAPSHOT_PREFIX}large-few-1024mib-32.svg"
+              "snapshots/${SNAPSHOT_PREFIX}tiny-many-1024mib-32.svg"
+            )
+          fi
+          diff -u \
+            <(printf '%s\n' "${expected[@]}" | sort) \
+            <(find "$REPORT_ROOT" -type f -printf '%P\n' | sort)
+          test -z "$(find "$REPORT_ROOT" -type f -empty -print -quit)"
+
       - name: Upload benchmark report
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -314,7 +328,7 @@ jobs:
     name: Publish complete benchmark
     if: ${{ inputs.mode == 'continue' && inputs.implementations == 'shin,aws' && inputs.publish_results }}
     needs: benchmark
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       actions: read
@@ -389,7 +403,6 @@ jobs:
                 --config benchmarks/configs/methodology-v2-1024-32.json \
                 --input-file "$RESULTS_FILE" \
                 --output-file benchmarks/ci-report.md \
-                --chart-output-file benchmarks/ci-report-assets/shin-vs-aws-duration-memory.svg \
                 --run-id "${{ inputs.run_id }}" \
                 --scratch-root "$SCRATCH_ROOT"
 
@@ -425,14 +438,12 @@ jobs:
       - name: Validate publication diff
         run: |
           test -s benchmarks/ci-report.md
-          test -s benchmarks/ci-report-assets/shin-vs-aws-duration-memory.svg
           test -s benchmarks/ci-telemetry.md
           test -s benchmarks/snapshots/ci-tiny-many-1024mib-32.svg
           test -s benchmarks/snapshots/ci-large-few-1024mib-32.svg
           git add \
             benchmarks/results.jsonl \
             benchmarks/ci-report.md \
-            benchmarks/ci-report-assets/shin-vs-aws-duration-memory.svg \
             benchmarks/ci-telemetry.md \
             benchmarks/snapshots/ci-tiny-many-1024mib-32.svg \
             benchmarks/snapshots/ci-large-few-1024mib-32.svg \
@@ -440,7 +451,7 @@ jobs:
             docs/benchmark.md
           git diff --cached --check
           git diff --check
-          unexpected="$(git status --porcelain --untracked-files=all | sed -E 's/^.. //;' | rg -v '^(benchmarks/results\.jsonl|benchmarks/ci-report\.md|benchmarks/ci-report-assets/shin-vs-aws-duration-memory\.svg|benchmarks/ci-telemetry\.md|benchmarks/snapshots/ci-(tiny-many|large-few)-1024mib-32\.svg|benchmarks/README\.md|docs/benchmark\.md)$' || true)"
+          unexpected="$(git status --porcelain --untracked-files=all | sed -E 's/^.. //;' | rg -v '^(benchmarks/results\.jsonl|benchmarks/ci-report\.md|benchmarks/ci-telemetry\.md|benchmarks/snapshots/ci-(tiny-many|large-few)-1024mib-32\.svg|benchmarks/README\.md|docs/benchmark\.md)$' || true)"
           test -z "$unexpected"
 
       - name: Commit and push benchmark publication
