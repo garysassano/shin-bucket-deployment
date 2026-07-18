@@ -107,13 +107,13 @@ jobs:
         uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
 
       - name: Install Node.js
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "lts/*"
           cache: pnpm
 
       - name: Setup provider toolchain
-        uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
+        uses: jdx/mise-action@dad1bfd3df957f44999b559dd69dc1671cb4e9ea # v4.2.1
         with:
           cache: true
           install_args: rust zig cargo:cargo-lambda
@@ -122,7 +122,7 @@ jobs:
         run: rustup target add aarch64-unknown-linux-gnu
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: rust -> target
           cache-targets: true
@@ -165,7 +165,7 @@ jobs:
           cp "$RUNNER_TEMP/benchmark-resume/build-provenance.json" assets/bootstrap-arm64/build-provenance.json
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708 # v5.1.1
+        uses: aws-actions/configure-aws-credentials@517a711dbcd0e402f90c77e7e2f81e849156e31d # v6.2.2
         with:
           role-to-assume: ${{ vars.AWS_TEST_ROLE_ARN }}
           role-session-name: shin-benchmark-${{ github.run_id }}
@@ -302,14 +302,6 @@ jobs:
                 --scratch-root "$SCRATCH_ROOT" \
                 --preview "$REPORT_PREVIEW"
 
-      - name: Package benchmark report
-        env:
-          RUN_ID: ${{ inputs.run_id }}
-        run: |
-          archive="$RUNNER_TEMP/benchmark-report-$RUN_ID.zip"
-          (cd "$REPORT_ROOT" && zip -q -r "$archive" .)
-          cp "$archive" "$REPORT_ROOT/benchmark-report.zip"
-
       - name: Upload benchmark report
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -350,7 +342,7 @@ jobs:
         uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
 
       - name: Install Node.js
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "lts/*"
           cache: pnpm
@@ -437,7 +429,6 @@ jobs:
           test -s benchmarks/ci-telemetry.md
           test -s benchmarks/snapshots/ci-tiny-many-1024mib-32.svg
           test -s benchmarks/snapshots/ci-large-few-1024mib-32.svg
-          git diff --check
           git add \
             benchmarks/results.jsonl \
             benchmarks/ci-report.md \
@@ -447,6 +438,8 @@ jobs:
             benchmarks/snapshots/ci-large-few-1024mib-32.svg \
             benchmarks/README.md \
             docs/benchmark.md
+          git diff --cached --check
+          git diff --check
           unexpected="$(git status --porcelain --untracked-files=all | sed -E 's/^.. //;' | rg -v '^(benchmarks/results\.jsonl|benchmarks/ci-report\.md|benchmarks/ci-report-assets/shin-vs-aws-duration-memory\.svg|benchmarks/ci-telemetry\.md|benchmarks/snapshots/ci-(tiny-many|large-few)-1024mib-32\.svg|benchmarks/README\.md|docs/benchmark\.md)$' || true)"
           test -z "$unexpected"
 

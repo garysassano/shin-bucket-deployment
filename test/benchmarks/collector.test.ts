@@ -584,6 +584,8 @@ describe("benchmark result collector", () => {
     });
 
     expect(readFileSync(outputFile, "utf8")).toEqual(report);
+    expect(report.endsWith("\n")).toBe(true);
+    expect(report.endsWith("\n\n")).toBe(false);
     expect(report).toContain("Benchmark Report: mixed");
     expect(report).toContain("- Source window bytes: adaptive, 134217728");
     expect(report).toContain(

@@ -362,4 +362,3 @@ tiny-many unchanged-update 1024/32/adaptive shin | ## 36 MiB
 tiny-many changed-update 1024/32/adaptive shin   | ## 36 MiB
 tiny-many pruned-update 1024/32/adaptive shin    | ## 36 MiB
 ```
-

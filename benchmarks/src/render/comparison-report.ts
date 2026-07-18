@@ -239,7 +239,9 @@ function renderReport(
       renderMetricSection(comparable, metric, options.preview ?? false),
     ),
     "",
-  ].join("\n");
+  ]
+    .join("\n")
+    .replace(/\n+$/, "\n");
 }
 
 function renderScope(records: BenchmarkRecord[], preview: boolean): string {
