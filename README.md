@@ -18,6 +18,8 @@ npm install shin-bucket-deployment
 
 ```ts
 import { Stack } from "aws-cdk-lib";
+import { Distribution } from "aws-cdk-lib/aws-cloudfront";
+import { S3BucketOrigin } from "aws-cdk-lib/aws-cloudfront-origins";
 import { Bucket } from "aws-cdk-lib/aws-s3";
 import { Construct } from "constructs";
 import { ShinBucketDeployment, Source } from "shin-bucket-deployment";
@@ -27,10 +29,17 @@ export class DemoStack extends Stack {
     super(scope, id);
 
     const bucket = new Bucket(this, "WebsiteBucket");
+    const distribution = new Distribution(this, "Distribution", {
+      defaultRootObject: "index.html",
+      defaultBehavior: {
+        origin: S3BucketOrigin.withOriginAccessControl(bucket),
+      },
+    });
 
     new ShinBucketDeployment(this, "DeployWebsite", {
       sources: [Source.asset("site")],
       destinationBucket: bucket,
+      cloudfrontInvalidation: { distribution },
     });
   }
 }
