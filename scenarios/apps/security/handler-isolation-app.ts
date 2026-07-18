@@ -30,7 +30,7 @@ class HandlerIsolationStack extends Stack {
         sources: [Source.data("value.txt", `${prefix}\n`)],
         destinationBucket,
         destinationKeyPrefix: prefix,
-        shareHandler: false,
+        providerScope: "deployment",
       });
     }
 

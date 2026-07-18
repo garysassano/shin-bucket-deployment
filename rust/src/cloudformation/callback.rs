@@ -154,7 +154,7 @@ pub(super) fn serialize_failure_response(
 pub(super) fn validate_response_body_size(body: &[u8], output_object_keys: bool) -> Result<()> {
     ensure!(
         body.len() <= MAX_CLOUDFORMATION_RESPONSE_BYTES,
-        "CloudFormation response body is {} bytes; the maximum is {MAX_CLOUDFORMATION_RESPONSE_BYTES} bytes. Set outputObjectKeys:false to omit SourceObjectKeys{}",
+        "CloudFormation response body is {} bytes; the maximum is {MAX_CLOUDFORMATION_RESPONSE_BYTES} bytes. Do not access ShinBucketDeployment.objectKeys to omit SourceObjectKeys{}",
         body.len(),
         if output_object_keys {
             " before retrying the deployment"
@@ -776,7 +776,7 @@ mod tests {
             validate_response_body_size(&oversized, true)
                 .expect_err("oversized response must fail")
                 .to_string()
-                .contains("outputObjectKeys:false")
+                .contains("ShinBucketDeployment.objectKeys")
         );
     }
 

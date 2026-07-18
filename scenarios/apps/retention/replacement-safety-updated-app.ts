@@ -17,7 +17,7 @@ class ReplacementSafetyShinBucketDeploymentStack extends Stack {
       destinationKeyPrefix: "replacement-safe",
       destinationLifecycle: {
         onDelete: {
-          deleteCurrentObjects: true,
+          deleteObjects: true,
         },
       },
       memoryLimit: 2048,

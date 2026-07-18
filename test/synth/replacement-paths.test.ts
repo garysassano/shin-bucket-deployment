@@ -4,7 +4,7 @@ import { Template } from "aws-cdk-lib/assertions";
 import { Bucket } from "aws-cdk-lib/aws-s3";
 import { expect, test } from "vitest";
 import { ShinBucketDeployment, Source } from "../../src";
-import { testBundling } from "../support/bundling";
+import { testLocalProviderBuild } from "../support/bundling";
 
 function customResourceProperties(stack: Stack) {
   const template = Template.fromStack(stack).toJSON() as {
@@ -42,7 +42,7 @@ test("renders plain markers for Source.data", () => {
       ),
     ],
     destinationBucket,
-    bundling: testBundling(),
+    localProviderBuild: testLocalProviderBuild(),
   });
 
   const properties = customResourceProperties(stack);
@@ -65,7 +65,7 @@ test("renders plain markers for Source.yamlData", () => {
       }),
     ],
     destinationBucket,
-    bundling: testBundling(),
+    localProviderBuild: testLocalProviderBuild(),
   });
 
   const properties = customResourceProperties(stack);
@@ -87,7 +87,7 @@ test("renders jsonEscape config for Source.data markers", () => {
       }),
     ],
     destinationBucket,
-    bundling: testBundling(),
+    localProviderBuild: testLocalProviderBuild(),
   });
 
   const properties = customResourceProperties(stack);
@@ -112,7 +112,7 @@ test("renders source markers for jsonData sources with escape enabled", () => {
       ),
     ],
     destinationBucket,
-    bundling: testBundling(),
+    localProviderBuild: testLocalProviderBuild(),
   });
 
   const properties = customResourceProperties(stack);
@@ -136,7 +136,7 @@ test("keeps jsonData without escape on the plain replacement path", () => {
       ),
     ],
     destinationBucket,
-    bundling: testBundling(),
+    localProviderBuild: testLocalProviderBuild(),
   });
 
   const properties = customResourceProperties(stack);
@@ -174,7 +174,7 @@ test("keeps source marker config aligned across mixed source types", () => {
       }),
     ],
     destinationBucket,
-    bundling: testBundling(),
+    localProviderBuild: testLocalProviderBuild(),
   });
 
   const properties = customResourceProperties(stack);
