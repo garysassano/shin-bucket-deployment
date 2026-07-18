@@ -1,11 +1,12 @@
 import { Token } from "aws-cdk-lib";
 import type { BucketDeploymentProps } from "aws-cdk-lib/aws-s3-deployment";
 import type { Construct } from "constructs";
+import { DestinationWriteRetryJitter, FailureDiagnostics, ProviderScope } from "./enums";
 import { ValidationError } from "./errors";
 import type {
   ShinBucketDeploymentAdvancedRuntimeTuning,
+  ShinBucketDeploymentDestinationWriteRetryTuning,
   ShinBucketDeploymentProps,
-  ShinBucketDeploymentPutObjectRetryTuning,
 } from "./shin-bucket-deployment";
 
 const DEFAULT_MEMORY_LIMIT_MB = 1024;
@@ -13,13 +14,13 @@ const MIN_SOURCE_BLOCK_BYTES = 30;
 const DEFAULT_SOURCE_BLOCK_BYTES = 8 * 1024 * 1024;
 const MAX_PARALLEL_TRANSFERS = 256;
 const MAX_SOURCE_GET_CONCURRENCY = 64;
-const MAX_PUT_OBJECT_ATTEMPTS = 10;
+const MAX_DESTINATION_WRITE_ATTEMPTS = 10;
 const MAX_RETRY_DELAY_MS = 60_000;
 const MIB = 1024 * 1024;
-const DEFAULT_PUT_OBJECT_RETRY_BASE_DELAY_MS = 250;
-const DEFAULT_PUT_OBJECT_RETRY_MAX_DELAY_MS = 5_000;
-const DEFAULT_PUT_OBJECT_SLOWDOWN_RETRY_BASE_DELAY_MS = 1_000;
-const DEFAULT_PUT_OBJECT_SLOWDOWN_RETRY_MAX_DELAY_MS = 30_000;
+const DEFAULT_DESTINATION_WRITE_RETRY_BASE_DELAY_MS = 250;
+const DEFAULT_DESTINATION_WRITE_RETRY_MAX_DELAY_MS = 5_000;
+const DEFAULT_DESTINATION_WRITE_SLOWDOWN_RETRY_BASE_DELAY_MS = 1_000;
+const DEFAULT_DESTINATION_WRITE_SLOWDOWN_RETRY_MAX_DELAY_MS = 30_000;
 const MAX_DESTINATION_KEY_PREFIX_LENGTH = 102;
 
 export function destinationOwnerPrefix(prefix: string | undefined): string {
@@ -28,36 +29,52 @@ export function destinationOwnerPrefix(prefix: string | undefined): string {
 
 export function validateDeploymentProps(scope: Construct, props: ShinBucketDeploymentProps): void {
   const maybeUnsupported = props as BucketDeploymentProps;
-  const maybeLegacyLifecycle = props.destinationLifecycle as
+  const maybeRemovedProps = props as ShinBucketDeploymentProps & {
+    readonly bundling?: unknown;
+    readonly detailedFailureDiagnostics?: unknown;
+    readonly outputObjectKeys?: unknown;
+    readonly rustProjectPath?: unknown;
+    readonly shareHandler?: unknown;
+  };
+  const maybeRemovedLifecycle = props.destinationLifecycle as
     | {
         readonly deleteDestinationObjectsOnDelete?: unknown;
         readonly deletePreviousDestinationObjectsOnUpdate?: unknown;
         readonly onDeployment?: unknown;
         readonly onChange?: {
-          readonly deleteObjects?: unknown;
-          readonly fromBucket?: unknown;
-          readonly invalidateDistribution?: unknown;
+          readonly deletePreviousObjects?: unknown;
+          readonly previousBucket?: unknown;
+          readonly invalidatePreviousDistribution?: unknown;
         };
         readonly onDelete?: {
-          readonly deleteObjects?: unknown;
+          readonly deleteCurrentObjects?: unknown;
         };
       }
     | undefined;
+  const maybeLegacyRuntimeTuning = props.advancedRuntimeTuning as
+    | (ShinBucketDeploymentAdvancedRuntimeTuning & {
+        readonly putObjectRetry?: unknown;
+        readonly sourceWindowMemoryBudgetMb?: unknown;
+      })
+    | undefined;
 
-  if (props.shareHandler !== undefined && typeof props.shareHandler !== "boolean") {
+  if (
+    props.providerScope !== undefined &&
+    !Object.values(ProviderScope).includes(props.providerScope)
+  ) {
     throw new ValidationError(
-      "ShinBucketDeploymentInvalidShareHandler",
-      "shareHandler must be a boolean.",
+      "ShinBucketDeploymentInvalidProviderScope",
+      "providerScope must be ProviderScope.STACK or ProviderScope.DEPLOYMENT.",
       scope,
     );
   }
   if (
-    props.detailedFailureDiagnostics !== undefined &&
-    typeof props.detailedFailureDiagnostics !== "boolean"
+    props.failureDiagnostics !== undefined &&
+    !Object.values(FailureDiagnostics).includes(props.failureDiagnostics)
   ) {
     throw new ValidationError(
-      "ShinBucketDeploymentInvalidDetailedFailureDiagnostics",
-      "detailedFailureDiagnostics must be a boolean.",
+      "ShinBucketDeploymentInvalidFailureDiagnostics",
+      "failureDiagnostics must be FailureDiagnostics.STANDARD or FailureDiagnostics.DETAILED.",
       scope,
     );
   }
@@ -73,53 +90,102 @@ export function validateDeploymentProps(scope: Construct, props: ShinBucketDeplo
   if (maybeUnsupported.retainOnDelete !== undefined) {
     throw new ValidationError(
       "ShinBucketDeploymentRetainOnDeleteUnsupported",
-      "ShinBucketDeployment replaces retainOnDelete with destinationLifecycle.onChange.deletePreviousObjects and destinationLifecycle.onDelete.deleteCurrentObjects.",
+      "ShinBucketDeployment replaces retainOnDelete with destinationLifecycle.onChange.deleteObjects and destinationLifecycle.onDelete.deleteObjects.",
       scope,
     );
   }
   if (
-    maybeLegacyLifecycle?.deleteDestinationObjectsOnDelete !== undefined ||
-    maybeLegacyLifecycle?.deletePreviousDestinationObjectsOnUpdate !== undefined ||
-    maybeLegacyLifecycle?.onDeployment !== undefined ||
-    maybeLegacyLifecycle?.onChange?.deleteObjects !== undefined ||
-    maybeLegacyLifecycle?.onChange?.fromBucket !== undefined ||
-    maybeLegacyLifecycle?.onChange?.invalidateDistribution !== undefined ||
-    maybeLegacyLifecycle?.onDelete?.deleteObjects !== undefined
+    maybeUnsupported.distribution !== undefined ||
+    maybeUnsupported.distributionPaths !== undefined ||
+    maybeUnsupported.waitForDistributionInvalidation !== undefined
+  ) {
+    throw new ValidationError(
+      "ShinBucketDeploymentCloudFrontPropertiesReplaced",
+      "ShinBucketDeployment replaces distribution, distributionPaths, and waitForDistributionInvalidation with cloudfrontInvalidation.",
+      scope,
+    );
+  }
+  if (maybeUnsupported.outputObjectKeys !== undefined) {
+    throw new ValidationError(
+      "ShinBucketDeploymentOutputObjectKeysRemoved",
+      "Remove outputObjectKeys; Shin returns object keys only when the objectKeys property is accessed.",
+      scope,
+    );
+  }
+  if (maybeRemovedProps.shareHandler !== undefined) {
+    throw new ValidationError(
+      "ShinBucketDeploymentShareHandlerReplaced",
+      "ShinBucketDeployment replaces shareHandler with providerScope using ProviderScope.STACK or ProviderScope.DEPLOYMENT.",
+      scope,
+    );
+  }
+  if (maybeRemovedProps.detailedFailureDiagnostics !== undefined) {
+    throw new ValidationError(
+      "ShinBucketDeploymentDetailedFailureDiagnosticsReplaced",
+      "ShinBucketDeployment replaces detailedFailureDiagnostics with failureDiagnostics using FailureDiagnostics.STANDARD or FailureDiagnostics.DETAILED.",
+      scope,
+    );
+  }
+  if (maybeRemovedProps.rustProjectPath !== undefined || maybeRemovedProps.bundling !== undefined) {
+    throw new ValidationError(
+      "ShinBucketDeploymentLocalProviderBuildReplaced",
+      "ShinBucketDeployment replaces rustProjectPath and bundling with localProviderBuild.",
+      scope,
+    );
+  }
+  if (
+    maybeLegacyRuntimeTuning?.putObjectRetry !== undefined ||
+    maybeLegacyRuntimeTuning?.sourceWindowMemoryBudgetMb !== undefined
+  ) {
+    throw new ValidationError(
+      "ShinBucketDeploymentAdvancedRuntimeTuningPropertiesReplaced",
+      "Use advancedRuntimeTuning.destinationWriteRetry and sourceWindowMemoryBudgetMiB.",
+      scope,
+    );
+  }
+  if (
+    maybeRemovedLifecycle?.deleteDestinationObjectsOnDelete !== undefined ||
+    maybeRemovedLifecycle?.deletePreviousDestinationObjectsOnUpdate !== undefined ||
+    maybeRemovedLifecycle?.onDeployment !== undefined ||
+    maybeRemovedLifecycle?.onChange?.deletePreviousObjects !== undefined ||
+    maybeRemovedLifecycle?.onChange?.previousBucket !== undefined ||
+    maybeRemovedLifecycle?.onChange?.invalidatePreviousDistribution !== undefined ||
+    maybeRemovedLifecycle?.onDelete?.deleteCurrentObjects !== undefined
   ) {
     throw new ValidationError(
       "ShinBucketDeploymentDestinationLifecycleShapeUnsupported",
-      "ShinBucketDeployment destinationLifecycle uses onDeploy.deleteStaleObjects, onChange.deletePreviousObjects/previousBucket/invalidatePreviousDistribution, and onDelete.deleteCurrentObjects.",
+      "ShinBucketDeployment destinationLifecycle uses onDeploy.deleteStaleObjects, onChange.deleteObjects/fromBucket/invalidateDistribution, and onDelete.deleteObjects.",
       scope,
     );
   }
   if (
-    props.destinationLifecycle?.onChange?.previousBucket &&
-    props.destinationLifecycle.onChange.deletePreviousObjects !== true
+    props.destinationLifecycle?.onChange?.fromBucket &&
+    props.destinationLifecycle.onChange.deleteObjects !== true
   ) {
     throw new ValidationError(
-      "ShinBucketDeploymentPreviousBucketRequiresDeletePreviousObjects",
-      "destinationLifecycle.onChange.previousBucket requires deletePreviousObjects=true.",
+      "ShinBucketDeploymentFromBucketRequiresDeleteObjects",
+      "destinationLifecycle.onChange.fromBucket requires deleteObjects=true.",
       scope,
     );
   }
-  if (props.distributionPaths) {
-    if (!props.distribution) {
+  if (props.cloudfrontInvalidation) {
+    if (!props.cloudfrontInvalidation.distribution) {
       throw new ValidationError(
-        "DistributionSpecifiedDistributionPathsSpecified",
-        "Set distribution when distributionPaths is provided.",
+        "ShinBucketDeploymentCloudFrontDistributionRequired",
+        "cloudfrontInvalidation.distribution is required.",
         scope,
       );
     }
     if (
-      !Token.isUnresolved(props.distributionPaths) &&
-      !props.distributionPaths.every(
-        (distributionPath) =>
-          Token.isUnresolved(distributionPath) || distributionPath.startsWith("/"),
+      props.cloudfrontInvalidation.paths !== undefined &&
+      !Token.isUnresolved(props.cloudfrontInvalidation.paths) &&
+      !props.cloudfrontInvalidation.paths.every(
+        (path) => Token.isUnresolved(path) || path.startsWith("/"),
       )
     ) {
       throw new ValidationError(
-        "DistributionPathsStart",
-        'Every distributionPaths entry must start with "/".',
+        "ShinBucketDeploymentCloudFrontPathsStart",
+        'Every cloudfrontInvalidation.paths entry must start with "/".',
         scope,
       );
     }
@@ -185,7 +251,7 @@ export function validateDeploymentProps(scope: Construct, props: ShinBucketDeplo
   }
 
   const advancedRuntimeTuning = props.advancedRuntimeTuning ?? {};
-  const putObjectRetryTuning = advancedRuntimeTuning.putObjectRetry ?? {};
+  const destinationWriteRetryTuning = advancedRuntimeTuning.destinationWriteRetry ?? {};
   validateIntegerProps(
     scope,
     { maxParallelTransfers: props.maxParallelTransfers },
@@ -197,7 +263,7 @@ export function validateDeploymentProps(scope: Construct, props: ShinBucketDeplo
   validateIntegerProps(
     scope,
     advancedRuntimeTuning,
-    ["sourceWindowBytes", "sourceWindowMemoryBudgetMb"],
+    ["sourceWindowBytes", "sourceWindowMemoryBudgetMiB"],
     1,
     "advancedRuntimeTuning.",
   );
@@ -218,11 +284,11 @@ export function validateDeploymentProps(scope: Construct, props: ShinBucketDeplo
   );
   validateIntegerProps(
     scope,
-    putObjectRetryTuning,
+    destinationWriteRetryTuning,
     ["maxAttempts"],
     1,
-    "advancedRuntimeTuning.putObjectRetry.",
-    MAX_PUT_OBJECT_ATTEMPTS,
+    "advancedRuntimeTuning.destinationWriteRetry.",
+    MAX_DESTINATION_WRITE_ATTEMPTS,
   );
   validateIntegerProps(
     scope,
@@ -233,13 +299,13 @@ export function validateDeploymentProps(scope: Construct, props: ShinBucketDeplo
   );
   validateIntegerProps(
     scope,
-    putObjectRetryTuning,
+    destinationWriteRetryTuning,
     ["baseDelayMs", "maxDelayMs", "slowdownBaseDelayMs", "slowdownMaxDelayMs"],
     0,
-    "advancedRuntimeTuning.putObjectRetry.",
+    "advancedRuntimeTuning.destinationWriteRetry.",
     MAX_RETRY_DELAY_MS,
   );
-  validatePutObjectRetryProps(scope, putObjectRetryTuning);
+  validateDestinationWriteRetryProps(scope, destinationWriteRetryTuning);
   validateSourceMemoryProps(scope, props.memoryLimit, advancedRuntimeTuning);
 }
 
@@ -289,42 +355,45 @@ function validateIntegerProps(
   }
 }
 
-function validatePutObjectRetryProps(
+function validateDestinationWriteRetryProps(
   scope: Construct,
-  props: ShinBucketDeploymentPutObjectRetryTuning,
+  props: ShinBucketDeploymentDestinationWriteRetryTuning,
 ): void {
-  const retryBaseDelayMs = props.baseDelayMs ?? DEFAULT_PUT_OBJECT_RETRY_BASE_DELAY_MS;
-  const retryMaxDelayMs = props.maxDelayMs ?? DEFAULT_PUT_OBJECT_RETRY_MAX_DELAY_MS;
+  const retryBaseDelayMs = props.baseDelayMs ?? DEFAULT_DESTINATION_WRITE_RETRY_BASE_DELAY_MS;
+  const retryMaxDelayMs = props.maxDelayMs ?? DEFAULT_DESTINATION_WRITE_RETRY_MAX_DELAY_MS;
   if (
     !Token.isUnresolved(retryMaxDelayMs) &&
     !Token.isUnresolved(retryBaseDelayMs) &&
     retryMaxDelayMs < retryBaseDelayMs
   ) {
     throw new ValidationError(
-      "ShinBucketDeploymentInvalidPutObjectRetryMaxDelayMs",
-      "advancedRuntimeTuning.putObjectRetry.maxDelayMs must be greater than or equal to advancedRuntimeTuning.putObjectRetry.baseDelayMs.",
+      "ShinBucketDeploymentInvalidDestinationWriteRetryMaxDelayMs",
+      "advancedRuntimeTuning.destinationWriteRetry.maxDelayMs must be greater than or equal to advancedRuntimeTuning.destinationWriteRetry.baseDelayMs.",
       scope,
     );
   }
   const slowdownRetryBaseDelayMs =
-    props.slowdownBaseDelayMs ?? DEFAULT_PUT_OBJECT_SLOWDOWN_RETRY_BASE_DELAY_MS;
+    props.slowdownBaseDelayMs ?? DEFAULT_DESTINATION_WRITE_SLOWDOWN_RETRY_BASE_DELAY_MS;
   const slowdownRetryMaxDelayMs =
-    props.slowdownMaxDelayMs ?? DEFAULT_PUT_OBJECT_SLOWDOWN_RETRY_MAX_DELAY_MS;
+    props.slowdownMaxDelayMs ?? DEFAULT_DESTINATION_WRITE_SLOWDOWN_RETRY_MAX_DELAY_MS;
   if (
     !Token.isUnresolved(slowdownRetryMaxDelayMs) &&
     !Token.isUnresolved(slowdownRetryBaseDelayMs) &&
     slowdownRetryMaxDelayMs < slowdownRetryBaseDelayMs
   ) {
     throw new ValidationError(
-      "ShinBucketDeploymentInvalidPutObjectSlowdownRetryMaxDelayMs",
-      "advancedRuntimeTuning.putObjectRetry.slowdownMaxDelayMs must be greater than or equal to advancedRuntimeTuning.putObjectRetry.slowdownBaseDelayMs.",
+      "ShinBucketDeploymentInvalidDestinationWriteSlowdownRetryMaxDelayMs",
+      "advancedRuntimeTuning.destinationWriteRetry.slowdownMaxDelayMs must be greater than or equal to advancedRuntimeTuning.destinationWriteRetry.slowdownBaseDelayMs.",
       scope,
     );
   }
-  if (props.jitter !== undefined && props.jitter !== "full" && props.jitter !== "none") {
+  if (
+    props.jitter !== undefined &&
+    !Object.values(DestinationWriteRetryJitter).includes(props.jitter)
+  ) {
     throw new ValidationError(
-      "ShinBucketDeploymentInvalidPutObjectRetryJitter",
-      'advancedRuntimeTuning.putObjectRetry.jitter must be either "full" or "none".',
+      "ShinBucketDeploymentInvalidDestinationWriteRetryJitter",
+      "advancedRuntimeTuning.destinationWriteRetry.jitter must be DestinationWriteRetryJitter.FULL or DestinationWriteRetryJitter.NONE.",
       scope,
     );
   }
@@ -335,11 +404,11 @@ function validateSourceMemoryProps(
   memoryLimit: number | undefined,
   tuning: ShinBucketDeploymentAdvancedRuntimeTuning,
 ): void {
-  const lambdaMemoryMb = resolvedNumber(memoryLimit ?? DEFAULT_MEMORY_LIMIT_MB);
-  const configuredBudgetMb = resolvedNumber(tuning.sourceWindowMemoryBudgetMb);
-  const memoryCapBytes = lambdaMemoryMb === undefined ? undefined : (lambdaMemoryMb * MIB) / 2;
+  const lambdaMemoryMiB = resolvedNumber(memoryLimit ?? DEFAULT_MEMORY_LIMIT_MB);
+  const configuredBudgetMiB = resolvedNumber(tuning.sourceWindowMemoryBudgetMiB);
+  const memoryCapBytes = lambdaMemoryMiB === undefined ? undefined : (lambdaMemoryMiB * MIB) / 2;
   const configuredBudgetBytes =
-    configuredBudgetMb === undefined ? undefined : configuredBudgetMb * MIB;
+    configuredBudgetMiB === undefined ? undefined : configuredBudgetMiB * MIB;
   if (
     memoryCapBytes !== undefined &&
     (!Number.isSafeInteger(memoryCapBytes) || memoryCapBytes <= 0)
@@ -352,8 +421,8 @@ function validateSourceMemoryProps(
   }
   if (configuredBudgetBytes !== undefined && !Number.isSafeInteger(configuredBudgetBytes)) {
     throw new ValidationError(
-      "ShinBucketDeploymentInvalidSourceWindowMemoryBudgetMb",
-      "advancedRuntimeTuning.sourceWindowMemoryBudgetMb must produce a safe-integer byte budget.",
+      "ShinBucketDeploymentInvalidSourceWindowMemoryBudgetMiB",
+      "advancedRuntimeTuning.sourceWindowMemoryBudgetMiB must produce a safe-integer byte budget.",
       scope,
     );
   }
@@ -364,7 +433,7 @@ function validateSourceMemoryProps(
   ) {
     throw new ValidationError(
       "ShinBucketDeploymentSourceMemoryBudgetExceedsCap",
-      "advancedRuntimeTuning.sourceWindowMemoryBudgetMb must not exceed 50% of memoryLimit.",
+      "advancedRuntimeTuning.sourceWindowMemoryBudgetMiB must not exceed 50% of memoryLimit.",
       scope,
     );
   }
@@ -376,9 +445,9 @@ function validateSourceMemoryProps(
       : resolvedNumber(tuning.sourceBlockBytes);
   const sourceGetConcurrency =
     tuning.sourceGetConcurrency === undefined
-      ? lambdaMemoryMb === undefined
+      ? lambdaMemoryMiB === undefined
         ? undefined
-        : Math.min(8, Math.max(1, Math.floor(lambdaMemoryMb / 256)))
+        : Math.min(8, Math.max(1, Math.floor(lambdaMemoryMiB / 256)))
       : resolvedNumber(tuning.sourceGetConcurrency);
   const windowBytes = resolvedNumber(tuning.sourceWindowBytes);
   if (blockBytes !== undefined && blockBytes > budgetBytes) {

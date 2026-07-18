@@ -16,7 +16,7 @@ import {
   Source as AwsSource,
 } from "aws-cdk-lib/aws-s3-deployment";
 import type { Construct } from "constructs";
-import { ShinBucketDeployment, Source as ShinSource } from "../../src";
+import { FailureDiagnostics, ShinBucketDeployment, Source as ShinSource } from "../../src";
 import { ensureBenchmarkAssets } from "../src/assets";
 import {
   MARKER_BENCHMARK_VALUE_A,
@@ -84,14 +84,15 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
       destinationKeyPrefix: destinationPrefix,
       memoryLimit: memoryLimitMb,
       logGroup: providerLogGroup,
-      waitForDistributionInvalidation: process.env.SHIN_BENCH_WAIT_FOR_CLOUDFRONT === "true",
     };
 
     let deployment: Construct;
     if (implementation === "shin") {
       deployment = new ShinBucketDeployment(this, "DeployBenchmarkAssets", {
         ...deploymentProps,
-        detailedFailureDiagnostics,
+        failureDiagnostics: detailedFailureDiagnostics
+          ? FailureDiagnostics.DETAILED
+          : FailureDiagnostics.STANDARD,
         destinationLifecycle: {
           onDeploy: {
             deleteStaleObjects,
@@ -100,7 +101,7 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
             ? {}
             : {
                 onDelete: {
-                  deleteCurrentObjects: deleteCurrentObjectsOnDelete,
+                  deleteObjects: deleteCurrentObjectsOnDelete,
                 },
               }),
         },
@@ -118,6 +119,7 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
     } else {
       deployment = new AwsBucketDeployment(this, "DeployBenchmarkAssets", {
         ...deploymentProps,
+        waitForDistributionInvalidation: process.env.SHIN_BENCH_WAIT_FOR_CLOUDFRONT === "true",
         prune: deleteStaleObjects,
         ...(deleteCurrentObjectsOnDelete === undefined
           ? {}

@@ -32,7 +32,7 @@ import type { AssetOptions } from "aws-cdk-lib/aws-s3-assets";
 import { afterEach, describe, expect, test } from "vitest";
 import { type CatalogedAssetOptions, ShinBucketDeployment, Source } from "../../src";
 import { overrideCatalogedSourceFileSystemForTesting } from "../../src/cataloged-source";
-import { testBundling } from "../support/bundling";
+import { testLocalProviderBuild } from "../support/bundling";
 
 const SCRATCH_PREFIX = "shin-bucket-deployment-catalog-";
 
@@ -122,7 +122,7 @@ function synthesizeCatalog(
   new ShinBucketDeployment(stack, "Deploy", {
     sources: [Source.asset(sourceDirectory, options)],
     destinationBucket,
-    bundling: testBundling(),
+    localProviderBuild: testLocalProviderBuild(),
     ...deploymentProps,
   });
   const assembly = app.synth();
@@ -414,7 +414,7 @@ describe("cataloged directory assets", () => {
         new ShinBucketDeployment(stack, "Deploy", {
           sources: [Source.asset(source)],
           destinationBucket,
-          bundling: testBundling(),
+          localProviderBuild: testLocalProviderBuild(),
         }),
     ).toThrow(/requires CDK asset staging/);
     expect(scratchDirectories()).toEqual(before);
@@ -427,7 +427,7 @@ describe("cataloged directory assets", () => {
       return new ShinBucketDeployment(stack, "Deploy", {
         sources: [Source.asset(source, sourceOptions)],
         destinationBucket: new Bucket(stack, "Destination"),
-        bundling: testBundling(),
+        localProviderBuild: testLocalProviderBuild(),
       });
     };
 
@@ -450,7 +450,7 @@ describe("cataloged directory assets", () => {
     const deployment = new ShinBucketDeployment(stack, "Deploy", {
       sources: [Source.bucket(sourceBucket, "plain.zip"), Source.asset(trustedSource)],
       destinationBucket,
-      bundling: testBundling(),
+      localProviderBuild: testLocalProviderBuild(),
     });
     deployment.addSource(Source.data("generated.txt", "generated"));
 
@@ -469,7 +469,7 @@ describe("cataloged directory assets", () => {
     new ShinBucketDeployment(untrustedStack, "Deploy", {
       sources: [Source.bucket(new Bucket(untrustedStack, "Source"), "plain.zip")],
       destinationBucket: new Bucket(untrustedStack, "Destination"),
-      bundling: testBundling(),
+      localProviderBuild: testLocalProviderBuild(),
     });
     expect(customResourceProperties(untrustedStack).SourceCatalogs).toBeUndefined();
 
@@ -478,7 +478,7 @@ describe("cataloged directory assets", () => {
       sources: [Source.asset(trustedSource)],
       destinationBucket: new Bucket(copyStack, "Destination"),
       extract: false,
-      bundling: testBundling(),
+      localProviderBuild: testLocalProviderBuild(),
     });
     expect(customResourceProperties(copyStack).SourceCatalogs).toBeUndefined();
   });
@@ -490,7 +490,7 @@ describe("cataloged directory assets", () => {
     const deployment = new ShinBucketDeployment(stack, "Deploy", {
       sources: [Source.asset(first, { assetHash: "shared", assetHashType: AssetHashType.CUSTOM })],
       destinationBucket: new Bucket(stack, "Destination"),
-      bundling: testBundling(),
+      localProviderBuild: testLocalProviderBuild(),
     });
     deployment.addSource(
       Source.asset(second, { assetHash: "shared", assetHashType: AssetHashType.CUSTOM }),
@@ -509,7 +509,7 @@ describe("cataloged directory assets", () => {
     new ShinBucketDeployment(stack, "Deploy", {
       sources: [Source.asset(source, { embeddedCatalog: false })],
       destinationBucket: new Bucket(stack, "Destination"),
-      bundling: testBundling(),
+      localProviderBuild: testLocalProviderBuild(),
     });
 
     expect(customResourceProperties(stack).SourceCatalogs).toBeUndefined();
@@ -537,7 +537,7 @@ describe("cataloged directory assets", () => {
         }),
       ],
       destinationBucket: new Bucket(stack, "Destination"),
-      bundling: testBundling(),
+      localProviderBuild: testLocalProviderBuild(),
     });
     app.synth();
 

@@ -16,7 +16,6 @@ class ExtractFalseShinBucketDeploymentStack extends Stack {
       destinationBucket: websiteBucket,
       destinationKeyPrefix: "archive",
       extract: false,
-      waitForDistributionInvalidation: process.env.SHIN_EXTRACT_FALSE_WAIT !== "false",
     });
 
     new CfnOutput(this, "BucketName", {

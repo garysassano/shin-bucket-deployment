@@ -9,6 +9,7 @@ import {
   Runtime,
 } from "aws-cdk-lib/aws-lambda";
 import type { Construct } from "constructs";
+import { FailureDiagnostics, ProviderScope } from "./enums";
 import { ValidationError } from "./errors";
 import type { ShinBucketDeploymentProps } from "./shin-bucket-deployment";
 import { normalizeSingletonValue, stableStringify } from "./stable-json";
@@ -42,24 +43,24 @@ export function getOrCreateHandler(
 ): LambdaFunction {
   const stack = Stack.of(scope);
 
-  // A developer is iterating on the handler when they point at a Rust project or
-  // pass bundling options; otherwise prefer a prebuilt binary so consumers do not
-  // need a Rust toolchain. When neither a prebuilt binary nor an explicit compile
-  // request is available (e.g. a local checkout before prebuild), fall back to the
-  // local cargo-lambda compile path.
-  const wantsCompile = props.rustProjectPath !== undefined || props.bundling !== undefined;
+  // A developer opts into local compilation through localProviderBuild;
+  // otherwise prefer a prebuilt binary so consumers do not need a Rust
+  // toolchain. When neither a prebuilt binary nor an explicit compile request is
+  // available (e.g. a local checkout before prebuild), fall back to the local
+  // cargo-lambda compile path.
+  const wantsCompile = props.localProviderBuild !== undefined;
   const prebuiltBootstrapArchive = wantsCompile
     ? undefined
     : resolvePrebuiltBootstrapArchive(architecture);
   const useCompilePath = wantsCompile || prebuiltBootstrapArchive === undefined;
 
   const rustProjectPath = useCompilePath
-    ? (props.rustProjectPath ?? resolveDefaultRustProjectPath(scope))
+    ? (props.localProviderBuild?.projectPath ?? resolveDefaultRustProjectPath(scope))
     : undefined;
   const manifestPath =
     rustProjectPath !== undefined ? join(rustProjectPath, "Cargo.toml") : undefined;
-  const shareHandler = props.shareHandler ?? true;
-  const handlerId = shareHandler
+  const stackScoped = (props.providerScope ?? ProviderScope.STACK) === ProviderScope.STACK;
+  const handlerId = stackScoped
     ? `${SHARED_HANDLER_ID_PREFIX}${renderHandlerConfigHash(
         stack,
         props,
@@ -67,7 +68,7 @@ export function getOrCreateHandler(
         sharedHandlerSourceIdentity(scope, architecture, manifestPath, prebuiltBootstrapArchive),
       )}`
     : ISOLATED_HANDLER_ID;
-  const handlerScope = shareHandler ? stack : scope;
+  const handlerScope = stackScoped ? stack : scope;
 
   const existing = handlerScope.node.tryFindChild(handlerId);
   if (existing) {
@@ -92,7 +93,7 @@ export function getOrCreateHandler(
       props.securityGroups && props.securityGroups.length > 0 ? props.securityGroups : undefined,
     environment: {
       RUST_BACKTRACE: "1",
-      ...(props.detailedFailureDiagnostics === true
+      ...(props.failureDiagnostics === FailureDiagnostics.DETAILED
         ? { SHIN_DETAILED_FAILURE_DIAGNOSTICS: "true" }
         : {}),
     },
@@ -197,8 +198,8 @@ function resolveDefaultRustProjectPath(scope: Construct): string {
     }
   }
   throw new ValidationError(
-    "ShinBucketDeploymentRustProjectPath",
-    "Unable to locate rust/Cargo.toml. Pass rustProjectPath explicitly.",
+    "ShinBucketDeploymentLocalProviderBuildProjectPath",
+    "Unable to locate rust/Cargo.toml. Pass localProviderBuild.projectPath explicitly.",
     scope,
   );
 }
@@ -256,7 +257,7 @@ function createCompiledHandler(
     architecture: options.architecture,
     binaryName: HANDLER_BINARY_NAME,
     manifestPath,
-    bundling: props.bundling,
+    bundling: props.localProviderBuild?.bundling,
     timeout: options.timeout,
     memorySize: options.memorySize,
     role: options.role,
@@ -275,7 +276,7 @@ function loadCargoLambdaCdk(scope: Construct): typeof import("cargo-lambda-cdk")
     throw new ValidationError(
       "ShinBucketDeploymentCargoLambdaMissing",
       "The local Rust compile path requires the optional 'cargo-lambda-cdk' dependency. " +
-        "Install it as a devDependency, or omit 'bundling'/'rustProjectPath' to use the " +
+        "Install it as a devDependency, or omit 'localProviderBuild' to use the " +
         `prebuilt provider binary. Underlying error: ${(error as Error).message}`,
       scope,
     );
@@ -290,8 +291,8 @@ function renderHandlerConfigHash(
 ): string {
   const config = {
     architecture: architecture.name,
-    bundling: normalizeSingletonValue(props.bundling),
-    detailedFailureDiagnostics: props.detailedFailureDiagnostics ?? false,
+    bundling: normalizeSingletonValue(props.localProviderBuild?.bundling),
+    failureDiagnostics: props.failureDiagnostics ?? FailureDiagnostics.STANDARD,
     handlerSource,
     logGroup: normalizeSingletonValue(props.logGroup),
     memoryLimit: normalizeSingletonValue(props.memoryLimit ?? DEFAULT_MEMORY_LIMIT_MB),

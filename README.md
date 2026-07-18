@@ -84,18 +84,34 @@ The construct follows the upstream `BucketDeployment` API where the behavior map
 | Filtering            | `include`, `exclude`                                                                                                                           |
 | Deployment mode      | `extract`                                                                                                                                      |
 | Lifecycle            | `destinationLifecycle`                                                                                                                         |
-| CloudFront           | `distribution`, `distributionPaths`, `waitForDistributionInvalidation`                                                                         |
-| Provider Lambda      | `architecture`, `logGroup`, `memoryLimit`, `role`, `securityGroups`, `shareHandler`, `vpc`, `vpcSubnets`                                       |
-| Provider build       | `rustProjectPath`, `bundling`                                                                                                                  |
-| Runtime tuning       | `maxParallelTransfers`, `advancedRuntimeTuning`                                                                                                |
-| Outputs and response | `deployedBucket`, `objectKeys`, `outputObjectKeys`, `handlerRole`, `handlerFunction`                                                           |
+| CloudFront           | `cloudfrontInvalidation`                                                                                                                       |
+| Provider Lambda      | `architecture`, `failureDiagnostics`, `logGroup`, `memoryLimit`, `providerScope`, `role`, `securityGroups`, `vpc`, `vpcSubnets`              |
+| Provider build       | `localProviderBuild`                                                                                                                           |
+| Runtime tuning       | `maxParallelTransfers`, experimental `advancedRuntimeTuning`                                                                                   |
+| Outputs and response | `deployedBucket`, `objectKeys`, `handlerRole`, `handlerFunction`                                                                               |
+
+Closed mode selections use the `ProviderScope`, `FailureDiagnostics`, and `DestinationWriteRetryJitter` enums exported from the package root.
+
+Configure `cloudfrontInvalidation` only when a successful deployment should invalidate a CloudFront distribution:
+
+```ts
+cloudfrontInvalidation: {
+  distribution,
+  paths: ["/site/*"], // optional; defaults to the deployed prefix
+  waitForCompletion: false, // optional; defaults to true
+},
+```
+
+The provider is stack-scoped by default. Set `providerScope: ProviderScope.DEPLOYMENT` only when a deployment needs its own Lambda and generated role. Set `failureDiagnostics: FailureDiagnostics.DETAILED` only while investigating destination-write failures. Access `objectKeys` only when the deployed key list is needed; otherwise Shin omits it from the custom-resource response automatically.
 
 ### Replaced Properties
 
 | Upstream prop | Use instead |
 | --- | --- |
 | `prune` | `destinationLifecycle.onDeploy.deleteStaleObjects` |
-| `retainOnDelete` | `destinationLifecycle.onChange.deletePreviousObjects` and `destinationLifecycle.onDelete.deleteCurrentObjects` |
+| `retainOnDelete` | `destinationLifecycle.onChange.deleteObjects` and `destinationLifecycle.onDelete.deleteObjects` |
+| `distribution`, `distributionPaths`, `waitForDistributionInvalidation` | `cloudfrontInvalidation.distribution`, `cloudfrontInvalidation.paths`, `cloudfrontInvalidation.waitForCompletion` |
+| `outputObjectKeys` | `objectKeys` |
 | `logRetention` | `logGroup` |
 | `serverSideEncryption`, `serverSideEncryptionAwsKmsKeyId` | Default encryption on `destinationBucket` |
 
@@ -123,7 +139,7 @@ Most deployments should omit `destinationLifecycle`. By default, Shin removes st
 
 ### Destination Change
 
-`onChange` applies only when an update changes `destinationKeyPrefix`, `destinationBucket`, or `distribution` and you want to act on the previous location. Use the relevant table for each action and combine the settings when both are needed.
+`onChange` applies only when an update changes `destinationKeyPrefix`, `destinationBucket`, or `cloudfrontInvalidation.distribution` and you want to act on the previous location. Use the relevant table for each action and combine the settings when both are needed.
 
 #### Object Cleanup
 
@@ -132,23 +148,23 @@ Previous objects are retained by default. To delete them:
 | `destinationBucket` | `destinationKeyPrefix` | Object-cleanup configuration |
 | --- | --- | --- |
 | Unchanged | Unchanged | None; there is no previous object location. |
-| Unchanged | Changed | Set `deletePreviousObjects: true`. Omit `previousBucket`; Shin uses the current bucket. |
-| Changed | Unchanged | Set `deletePreviousObjects: true` and provide `previousBucket`. |
-| Changed | Changed | Set `deletePreviousObjects: true` and provide `previousBucket`. |
+| Unchanged | Changed | Set `deleteObjects: true`. Omit `fromBucket`; Shin uses the current bucket. |
+| Changed | Unchanged | Set `deleteObjects: true` and provide `fromBucket`. |
+| Changed | Changed | Set `deleteObjects: true` and provide `fromBucket`. |
 
 #### CloudFront Invalidation
 
-| `distribution` | Invalidation configuration |
+| `cloudfrontInvalidation.distribution` | Invalidation configuration |
 | --- | --- |
-| Unchanged | Omit `invalidatePreviousDistribution`; any configured current distribution is invalidated normally. |
-| Changed | Provide `invalidatePreviousDistribution: previousDistribution` only if the previous distribution should also be invalidated. |
+| Unchanged | Omit `invalidateDistribution`; any configured current distribution is invalidated normally. |
+| Changed | Provide `invalidateDistribution: previousDistribution` only if the previous distribution should also be invalidated. |
 
 > [!IMPORTANT]
 > After a one-time destination move succeeds, remove previous-resource references and any `onChange` actions that are no longer needed to drop access to the previous bucket or distribution.
 
 ### Resource Deletion
 
-Set `destinationLifecycle.onDelete.deleteCurrentObjects` to `true` only when current destination objects should be removed with the stack or custom resource. Otherwise, omit it.
+Set `destinationLifecycle.onDelete.deleteObjects` to `true` only when current destination objects should be removed with the stack or custom resource. Otherwise, omit it.
 
 ## How It Works
 

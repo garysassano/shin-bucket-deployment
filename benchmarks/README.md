@@ -4,7 +4,7 @@ This folder contains committed benchmark support assets, sanitized current resul
 
 Deployable benchmark CDK apps live in `benchmarks/apps/**`. Curated benchmark matrices live in `benchmarks/configs/**`, shared JSON Schemas live in `benchmarks/schemas/**`, and benchmark configs are run through `pnpm benchmark:run-assets -- --config <path>`.
 
-Every Shin benchmark enables `detailedFailureDiagnostics`; upstream AWS CDK samples record the setting as not applicable. Benchmark measurements therefore exercise the conservative, fully observable Shin mode, including detailed failed-attempt bookkeeping. Normal production deployments default this option to disabled and retain only the basic aggregate retry, wire, and failure counters.
+Every Shin benchmark sets `failureDiagnostics: FailureDiagnostics.DETAILED`; upstream AWS CDK samples record the corresponding evidence field as not applicable. Benchmark measurements therefore exercise the conservative, fully observable Shin mode, including detailed failed-attempt bookkeeping. Normal production deployments use `FailureDiagnostics.STANDARD` and retain only the basic aggregate retry, wire, and failure counters.
 
 An intentional methodology-v1 overhead control may pass `--detailed-failure-diagnostics false`. The runner records this as part of benchmark configuration identity, omits the Lambda diagnostics environment variable, verifies the deployed runtime state, and records `detailedFailureDiagnostics: false`. Methodology v2 rejects this override and remains diagnostics-on.
 

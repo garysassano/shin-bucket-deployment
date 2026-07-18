@@ -9,9 +9,9 @@ import { Architecture } from "aws-cdk-lib/aws-lambda";
 import { Bucket, BucketEncryption, BucketNamespace, CfnBucket } from "aws-cdk-lib/aws-s3";
 import type { IConstruct } from "constructs";
 import { expect, test } from "vitest";
-import { ShinBucketDeployment, Source } from "../../src";
+import { FailureDiagnostics, ProviderScope, ShinBucketDeployment, Source } from "../../src";
 import { stableStringify } from "../../src/stable-json";
-import { testBundling } from "../support/bundling";
+import { testLocalProviderBuild } from "../support/bundling";
 import { ensurePrebuiltBootstrapAssets } from "../support/prebuilt-assets";
 
 interface FileAssetManifestEntry {
@@ -42,7 +42,7 @@ test("renders a Rust-backed custom resource", () => {
   new ShinBucketDeployment(stack, "Deploy", {
     sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
     destinationBucket,
-    bundling: testBundling(),
+    localProviderBuild: testLocalProviderBuild(),
   });
 
   const template = Template.fromStack(stack);
@@ -164,7 +164,7 @@ test("reuses a shared prebuilt handler for compatible deployments", () => {
     const second = new ShinBucketDeployment(stack, "SecondDeploy", {
       sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
       destinationBucket: secondBucket,
-      shareHandler: true,
+      providerScope: ProviderScope.STACK,
     });
 
     expect(first.handlerFunction).toBe(second.handlerFunction);
@@ -195,7 +195,7 @@ test("binds shared prebuilt handler identity to the package version and archive 
       .update(
         stableStringify({
           architecture: "arm64",
-          detailedFailureDiagnostics: false,
+          failureDiagnostics: FailureDiagnostics.STANDARD,
           handlerSource: {
             kind: "prebuilt",
             packageVersion: manifest.version,
@@ -220,13 +220,13 @@ test("detailed failure diagnostics are opt-in and select a distinct shared handl
   const defaultDeployment = new ShinBucketDeployment(stack, "DefaultDeploy", {
     sources: [Source.data("default.txt", "default")],
     destinationBucket: new Bucket(stack, "DefaultDest"),
-    bundling: testBundling(),
+    localProviderBuild: testLocalProviderBuild(),
   });
   const diagnosticDeployment = new ShinBucketDeployment(stack, "DiagnosticDeploy", {
     sources: [Source.data("diagnostic.txt", "diagnostic")],
     destinationBucket: new Bucket(stack, "DiagnosticDest"),
-    detailedFailureDiagnostics: true,
-    bundling: testBundling(),
+    failureDiagnostics: FailureDiagnostics.DETAILED,
+    localProviderBuild: testLocalProviderBuild(),
   });
 
   expect(defaultDeployment.handlerFunction).not.toBe(diagnosticDeployment.handlerFunction);
@@ -257,7 +257,7 @@ test("Source.asset emits an embedded catalog for directory assets", () => {
     new ShinBucketDeployment(stack, "Deploy", {
       sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
       destinationBucket,
-      bundling: testBundling(),
+      localProviderBuild: testLocalProviderBuild(),
     });
 
     const assembly = app.synth();
@@ -296,13 +296,13 @@ test("reuses a shared handler for compatible deployments in the same stack", () 
   const first = new ShinBucketDeployment(stack, "FirstDeploy", {
     sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
     destinationBucket: firstBucket,
-    bundling: testBundling(),
+    localProviderBuild: testLocalProviderBuild(),
   });
 
   const second = new ShinBucketDeployment(stack, "SecondDeploy", {
     sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
     destinationBucket: secondBucket,
-    bundling: testBundling(),
+    localProviderBuild: testLocalProviderBuild(),
   });
 
   expect(first.handlerFunction).toBe(second.handlerFunction);
@@ -311,20 +311,20 @@ test("reuses a shared handler for compatible deployments in the same stack", () 
   expect(Object.keys(lambdaFunctions)).toHaveLength(1);
 });
 
-test("keeps omitted and explicit shared-handler templates identical", () => {
-  function synth(shareHandler: true | undefined): Record<string, unknown> {
+test("keeps omitted and explicit stack-scoped provider templates identical", () => {
+  function synth(providerScope: ProviderScope.STACK | undefined): Record<string, unknown> {
     const stack = new Stack();
     const destinationBucket = new Bucket(stack, "Dest");
     new ShinBucketDeployment(stack, "Deploy", {
       sources: [Source.data("index.html", "ok")],
       destinationBucket,
-      ...(shareHandler === undefined ? {} : { shareHandler }),
-      bundling: testBundling(),
+      ...(providerScope === undefined ? {} : { providerScope }),
+      localProviderBuild: testLocalProviderBuild(),
     });
     return Template.fromStack(stack).toJSON();
   }
 
-  expect(synth(true)).toEqual(synth(undefined));
+  expect(synth(ProviderScope.STACK)).toEqual(synth(undefined));
 });
 
 test("creates separate handlers when the provider configuration differs", () => {
@@ -335,14 +335,14 @@ test("creates separate handlers when the provider configuration differs", () => 
   const first = new ShinBucketDeployment(stack, "FirstDeploy", {
     sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
     destinationBucket: firstBucket,
-    bundling: testBundling(),
+    localProviderBuild: testLocalProviderBuild(),
   });
 
   const second = new ShinBucketDeployment(stack, "SecondDeploy", {
     sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
     destinationBucket: secondBucket,
     memoryLimit: 2048,
-    bundling: testBundling(),
+    localProviderBuild: testLocalProviderBuild(),
   });
 
   expect(first.handlerFunction).not.toBe(second.handlerFunction);
@@ -361,25 +361,25 @@ test("isolates functions, generated roles, and destination policies per deployme
   const sharedFirst = new ShinBucketDeployment(stack, "SharedFirstDeploy", {
     sources: [Source.data("index.html", "shared-first")],
     destinationBucket: sharedFirstBucket,
-    bundling: testBundling(),
+    localProviderBuild: testLocalProviderBuild(),
   });
   const sharedSecond = new ShinBucketDeployment(stack, "SharedSecondDeploy", {
     sources: [Source.data("index.html", "shared-second")],
     destinationBucket: sharedSecondBucket,
-    shareHandler: true,
-    bundling: testBundling(),
+    providerScope: ProviderScope.STACK,
+    localProviderBuild: testLocalProviderBuild(),
   });
   const isolatedFirst = new ShinBucketDeployment(stack, "IsolatedFirstDeploy", {
     sources: [Source.data("index.html", "isolated-first")],
     destinationBucket: isolatedFirstBucket,
-    shareHandler: false,
-    bundling: testBundling(),
+    providerScope: ProviderScope.DEPLOYMENT,
+    localProviderBuild: testLocalProviderBuild(),
   });
   const isolatedSecond = new ShinBucketDeployment(stack, "IsolatedSecondDeploy", {
     sources: [Source.data("index.html", "isolated-second")],
     destinationBucket: isolatedSecondBucket,
-    shareHandler: false,
-    bundling: testBundling(),
+    providerScope: ProviderScope.DEPLOYMENT,
+    localProviderBuild: testLocalProviderBuild(),
   });
 
   expect(sharedFirst.handlerFunction).toBe(sharedSecond.handlerFunction);
@@ -420,12 +420,12 @@ test("keeps shared handlers scoped to their CDK stack", () => {
   const first = new ShinBucketDeployment(firstStack, "Deploy", {
     sources: [Source.data("index.html", "first")],
     destinationBucket: new Bucket(firstStack, "Dest"),
-    bundling: testBundling(),
+    localProviderBuild: testLocalProviderBuild(),
   });
   const second = new ShinBucketDeployment(secondStack, "Deploy", {
     sources: [Source.data("index.html", "second")],
     destinationBucket: new Bucket(secondStack, "Dest"),
-    bundling: testBundling(),
+    localProviderBuild: testLocalProviderBuild(),
   });
 
   expect(first.handlerFunction).not.toBe(second.handlerFunction);
@@ -441,9 +441,9 @@ test("gives each handler replacement a distinct destination owner", () => {
     new ShinBucketDeployment(stack, "Deploy", {
       sources: [Source.data("index.html", `memory=${memoryLimit}`)],
       destinationBucket,
-      destinationLifecycle: { onDelete: { deleteCurrentObjects: true } },
+      destinationLifecycle: { onDelete: { deleteObjects: true } },
       memoryLimit,
-      bundling: testBundling(),
+      localProviderBuild: testLocalProviderBuild(),
     });
 
     const resources = Template.fromStack(stack).toJSON().Resources as Record<
@@ -479,9 +479,9 @@ test("keeps an isolated handler and service token stable across configuration up
     const deployment = new ShinBucketDeployment(stack, "Deploy", {
       sources: [Source.data("index.html", `memory=${memoryLimit}`)],
       destinationBucket,
-      shareHandler: false,
+      providerScope: ProviderScope.DEPLOYMENT,
       memoryLimit,
-      bundling: testBundling(),
+      localProviderBuild: testLocalProviderBuild(),
     });
     const resources = Template.fromStack(stack).toJSON().Resources as Record<
       string,
@@ -526,7 +526,7 @@ test("scopes destination object permissions to the destination prefix", () => {
     sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
     destinationBucket,
     destinationKeyPrefix: "site",
-    bundling: testBundling(),
+    localProviderBuild: testLocalProviderBuild(),
   });
 
   const template = Template.fromStack(stack);
@@ -598,7 +598,7 @@ test.each([
   new ShinBucketDeployment(stack, "Deploy", {
     sources: [Source.data("index.html", "ok")],
     destinationBucket,
-    bundling: testBundling(),
+    localProviderBuild: testLocalProviderBuild(),
   });
 
   expect(customResourceProperties(stack).DestinationChecksumStrategy).toBe(expected);
@@ -612,7 +612,7 @@ test("grants checksum-mode access to the AWS-managed S3 KMS key", () => {
   new ShinBucketDeployment(stack, "Deploy", {
     sources: [Source.data("index.html", "ok")],
     destinationBucket,
-    bundling: testBundling(),
+    localProviderBuild: testLocalProviderBuild(),
   });
 
   Template.fromStack(stack).hasResourceProperties("AWS::IAM::Policy", {
@@ -642,7 +642,7 @@ test("resolves destination encryption lazily after L1 mutation", () => {
   new ShinBucketDeployment(stack, "Deploy", {
     sources: [Source.data("index.html", "ok")],
     destinationBucket,
-    bundling: testBundling(),
+    localProviderBuild: testLocalProviderBuild(),
   });
 
   const resource = destinationBucket.node.defaultChild;
@@ -664,7 +664,7 @@ test("resolves destination encryption after a late property override", () => {
   new ShinBucketDeployment(stack, "Deploy", {
     sources: [Source.data("index.html", "ok")],
     destinationBucket,
-    bundling: testBundling(),
+    localProviderBuild: testLocalProviderBuild(),
   });
 
   const resource = destinationBucket.node.defaultChild;
@@ -686,7 +686,7 @@ test("resolves destination encryption after an Aspect mutation", () => {
   new ShinBucketDeployment(stack, "Deploy", {
     sources: [Source.data("index.html", "ok")],
     destinationBucket,
-    bundling: testBundling(),
+    localProviderBuild: testLocalProviderBuild(),
   });
 
   const resource = destinationBucket.node.defaultChild;
@@ -714,7 +714,7 @@ test("rejects unknown and uninspectable destination encryption", () => {
   new ShinBucketDeployment(unknownStack, "Deploy", {
     sources: [Source.data("index.html", "ok")],
     destinationBucket: unknownBucket,
-    bundling: testBundling(),
+    localProviderBuild: testLocalProviderBuild(),
   });
   const resource = unknownBucket.node.defaultChild;
   if (!CfnBucket.isCfnBucket(resource)) {
@@ -734,7 +734,7 @@ test("rejects unknown and uninspectable destination encryption", () => {
       new ShinBucketDeployment(importedStack, "Deploy", {
         sources: [Source.data("index.html", "ok")],
         destinationBucket: imported as Bucket,
-        bundling: testBundling(),
+        localProviderBuild: testLocalProviderBuild(),
       }),
   ).toThrow(/CDK-created Bucket/);
 });
@@ -748,7 +748,7 @@ test.each([
   new ShinBucketDeployment(stack, "Deploy", {
     sources: [Source.data("index.html", "ok")],
     destinationBucket,
-    bundling: testBundling(),
+    localProviderBuild: testLocalProviderBuild(),
   });
   const resource = destinationBucket.node.defaultChild;
   if (!CfnBucket.isCfnBucket(resource)) {
@@ -779,7 +779,7 @@ test("rejects an L1-injected customer KMS key without a matching L2 grant", () =
   new ShinBucketDeployment(stack, "Deploy", {
     sources: [Source.data("index.html", "ok")],
     destinationBucket,
-    bundling: testBundling(),
+    localProviderBuild: testLocalProviderBuild(),
   });
   const resource = destinationBucket.node.defaultChild;
   if (!CfnBucket.isCfnBucket(resource)) {
@@ -809,7 +809,7 @@ test("supports account-regional destination buckets", () => {
   new ShinBucketDeployment(stack, "Deploy", {
     sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
     destinationBucket,
-    bundling: testBundling(),
+    localProviderBuild: testLocalProviderBuild(),
   });
 
   const template = Template.fromStack(stack).toJSON() as {
@@ -853,10 +853,10 @@ test("keeps delete and list permissions scoped when current object deletion is e
     destinationKeyPrefix: "site",
     destinationLifecycle: {
       onDelete: {
-        deleteCurrentObjects: true,
+        deleteObjects: true,
       },
     },
-    bundling: testBundling(),
+    localProviderBuild: testLocalProviderBuild(),
   });
 
   const template = Template.fromStack(stack);
@@ -901,7 +901,7 @@ test("grants destination KMS permissions when the destination bucket is encrypte
     sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
     destinationBucket,
     destinationKeyPrefix: "site",
-    bundling: testBundling(),
+    localProviderBuild: testLocalProviderBuild(),
   });
 
   const template = Template.fromStack(stack);
@@ -936,7 +936,7 @@ test("omits delete and ownership-read permissions when all deletion is disabled"
     destinationLifecycle: {
       onDeploy: { deleteStaleObjects: false },
     },
-    bundling: testBundling(),
+    localProviderBuild: testLocalProviderBuild(),
   });
 
   const rendered = JSON.stringify(Template.fromStack(stack).findResources("AWS::IAM::Policy"));
@@ -954,9 +954,9 @@ test("keeps explicit same-bucket previous cleanup broad and deliberate", () => {
     destinationKeyPrefix: "site/current",
     destinationLifecycle: {
       onDeploy: { deleteStaleObjects: false },
-      onChange: { deletePreviousObjects: true },
+      onChange: { deleteObjects: true },
     },
-    bundling: testBundling(),
+    localProviderBuild: testLocalProviderBuild(),
   });
 
   Template.fromStack(stack).hasResourceProperties("AWS::IAM::Policy", {
@@ -999,11 +999,11 @@ test("limits cross-bucket cleanup authority to the explicitly authorized previou
     destinationLifecycle: {
       onDeploy: { deleteStaleObjects: false },
       onChange: {
-        deletePreviousObjects: true,
-        previousBucket,
+        deleteObjects: true,
+        fromBucket: previousBucket,
       },
     },
-    bundling: testBundling(),
+    localProviderBuild: testLocalProviderBuild(),
   });
 
   const policies = Template.fromStack(stack).findResources("AWS::IAM::Policy") as Record<

@@ -11,13 +11,14 @@ import {
   Tags,
   Token,
 } from "aws-cdk-lib";
-import type { IDistribution } from "aws-cdk-lib/aws-cloudfront";
+import type { IDistributionRef } from "aws-cdk-lib/aws-cloudfront";
 import type { IRole } from "aws-cdk-lib/aws-iam";
 import { Architecture, type Function as LambdaFunction } from "aws-cdk-lib/aws-lambda";
 import { Bucket, type IBucket } from "aws-cdk-lib/aws-s3";
 import type { BucketDeploymentProps, ISource, SourceConfig } from "aws-cdk-lib/aws-s3-deployment";
 import { Construct } from "constructs";
 import { destinationChecksumStrategy, inspectableDestinationBucketResource } from "./destination";
+import type { DestinationWriteRetryJitter, FailureDiagnostics, ProviderScope } from "./enums";
 import { ValidationError } from "./errors";
 import { grantDestinationPermissions } from "./iam";
 import { PROVIDER_TIMEOUT, getOrCreateHandler } from "./provider";
@@ -30,8 +31,6 @@ import {
 import { destinationOwnerPrefix, validateDeploymentProps } from "./validation";
 
 const CUSTOM_RESOURCE_OWNER_TAG = "aws-cdk:cr-owned";
-
-export type PutObjectRetryJitter = "full" | "none";
 
 export interface ShinBucketDeploymentBundlingCommandHooks {
   /**
@@ -156,12 +155,6 @@ export interface ShinBucketDeploymentBundlingOptions {
   readonly commandHooks?: ShinBucketDeploymentBundlingCommandHooks;
 
   /**
-   * The system architecture of the Lambda function.
-   * @default Architecture.X86_64
-   */
-  readonly architecture?: Architecture;
-
-  /**
    * Additional flags to pass to `cargo lambda build`.
    */
   readonly cargoLambdaFlags?: string[];
@@ -173,7 +166,32 @@ export interface ShinBucketDeploymentBundlingOptions {
   readonly profile?: string;
 }
 
-export interface ShinBucketDeploymentPutObjectRetryTuning {
+/**
+ * Local compilation settings for the Rust provider.
+ *
+ * Providing this object opts out of the prebuilt provider shipped with the
+ * package. Most consumers should leave it unset.
+ */
+export interface ShinBucketDeploymentLocalProviderBuild {
+  /**
+   * Rust provider project directory.
+   *
+   * @default - the repository's `rust` directory when available
+   */
+  readonly projectPath?: string;
+
+  /**
+   * Options passed to the local provider compile path.
+   *
+   * The provider uses the top-level `architecture` property as the single
+   * architecture setting.
+   *
+   * @default - local compile helper defaults
+   */
+  readonly bundling?: ShinBucketDeploymentBundlingOptions;
+}
+
+export interface ShinBucketDeploymentDestinationWriteRetryTuning {
   /**
    * Maximum provider-owned destination write attempts per object.
    * Applies to both `PutObject` and `CopyObject`.
@@ -213,11 +231,18 @@ export interface ShinBucketDeploymentPutObjectRetryTuning {
 
   /**
    * Jitter mode applied to computed destination write retry delays.
-   * @default "full"
+   * @default DestinationWriteRetryJitter.FULL
    */
-  readonly jitter?: PutObjectRetryJitter;
+  readonly jitter?: DestinationWriteRetryJitter;
 }
 
+/**
+ * Low-level provider controls intended for diagnostics and measured tuning.
+ *
+ * @experimental These settings may change as the provider's adaptive defaults
+ * evolve. Most deployments should use `memoryLimit` and
+ * `maxParallelTransfers` instead.
+ */
 export interface ShinBucketDeploymentAdvancedRuntimeTuning {
   /**
    * Source ranged-read block size in bytes.
@@ -256,16 +281,37 @@ export interface ShinBucketDeploymentAdvancedRuntimeTuning {
    * memory.
    * @default - 50% of the provider Lambda memory size
    */
-  readonly sourceWindowMemoryBudgetMb?: number;
+  readonly sourceWindowMemoryBudgetMiB?: number;
 
   /**
    * Destination `PutObject` and `CopyObject` retry/backoff tuning.
-   *
-   * The property name is retained for compatibility with the original
-   * extracted-upload-only tuning surface.
    * @default - provider defaults
    */
-  readonly putObjectRetry?: ShinBucketDeploymentPutObjectRetryTuning;
+  readonly destinationWriteRetry?: ShinBucketDeploymentDestinationWriteRetryTuning;
+}
+
+/**
+ * CloudFront invalidation performed after a successful deployment.
+ */
+export interface ShinBucketDeploymentCloudFrontInvalidation {
+  /**
+   * CloudFront distribution whose cached content should be invalidated.
+   */
+  readonly distribution: IDistributionRef;
+
+  /**
+   * Distribution paths to invalidate.
+   *
+   * @default - the destination prefix followed by `*`
+   */
+  readonly paths?: string[];
+
+  /**
+   * Wait for the invalidation to complete before finishing the deployment.
+   *
+   * @default true
+   */
+  readonly waitForCompletion?: boolean;
 }
 
 /**
@@ -304,18 +350,18 @@ export interface ShinBucketDeploymentDestinationLifecycle {
      *
      * @default false
      */
-    readonly deletePreviousObjects?: boolean;
+    readonly deleteObjects?: boolean;
 
     /**
      * Previous destination bucket containing the objects to delete when the
      * destination bucket changes.
      *
      * Omit this for same-bucket prefix changes. Requires
-     * `deletePreviousObjects=true`.
+     * `deleteObjects=true`.
      *
      * @default - the current destination bucket
      */
-    readonly previousBucket?: IBucket;
+    readonly fromBucket?: IBucket;
 
     /**
      * Invalidate the previous CloudFront distribution after its cached content
@@ -326,7 +372,7 @@ export interface ShinBucketDeploymentDestinationLifecycle {
      *
      * @default - no separate previous distribution
      */
-    readonly invalidatePreviousDistribution?: IDistribution;
+    readonly invalidateDistribution?: IDistributionRef;
   };
 
   /**
@@ -338,22 +384,14 @@ export interface ShinBucketDeploymentDestinationLifecycle {
      *
      * @default false
      */
-    readonly deleteCurrentObjects?: boolean;
+    readonly deleteObjects?: boolean;
   };
 }
 
 export interface ShinBucketDeploymentProps
   extends Pick<
     BucketDeploymentProps,
-    | "extract"
-    | "exclude"
-    | "include"
-    | "distribution"
-    | "distributionPaths"
-    | "waitForDistributionInvalidation"
-    | "vpc"
-    | "vpcSubnets"
-    | "securityGroups"
+    "extract" | "exclude" | "include" | "vpc" | "vpcSubnets" | "securityGroups"
   > {
   /**
    * Sources deployed in array order. Later sources replace earlier sources
@@ -385,36 +423,36 @@ export interface ShinBucketDeploymentProps
   readonly destinationKeyPrefix?: string;
 
   /**
-   * Whether deployments with the same provider configuration share one Lambda.
+   * Scope of the provider Lambda.
    *
-   * Set this to `false` to create a deployment-scoped function and generated
-   * role, preventing permissions from other deployments from accumulating on
-   * them. Explicit `role` and `logGroup` values remain caller-owned and can
-   * still be shared intentionally.
+   * `ProviderScope.STACK` reuses one Lambda for deployments with the same
+   * provider configuration. `ProviderScope.DEPLOYMENT` creates a
+   * deployment-scoped function and generated role, preventing permissions from
+   * other deployments from accumulating on them. Explicit `role` and
+   * `logGroup` values remain caller-owned and can still be shared intentionally.
    *
    * Isolation creates more Lambda, role, and log resources and gives each
    * deployment an independent cold-start lifecycle.
    *
-   * @default true
+   * @default ProviderScope.STACK
    */
-  readonly shareHandler?: boolean;
+  readonly providerScope?: ProviderScope;
 
   /**
-   * Collect detailed correlated state for failed destination `PutObject`
-   * attempts.
+   * Failure diagnostics mode for destination `PutObject` attempts.
    *
-   * When enabled, the provider records body progress and instantaneous source
-   * pressure, emits an immediate sanitized failure event, and includes bounded
-   * failure groups in the final deployment summary. This adds bookkeeping to
-   * streamed uploads and is intended for diagnostics rather than normal
-   * production operation.
+   * `FailureDiagnostics.DETAILED` records body progress and instantaneous
+   * source pressure, emits an immediate sanitized failure event, and includes
+   * bounded failure groups in the final deployment summary. This adds
+   * bookkeeping to streamed uploads and is intended for diagnostics rather
+   * than normal production operation.
    *
    * This setting is part of the shared-handler identity, so deployments using
    * different values do not share a Lambda function.
    *
-   * @default false
+   * @default FailureDiagnostics.STANDARD
    */
-  readonly detailedFailureDiagnostics?: boolean;
+  readonly failureDiagnostics?: FailureDiagnostics;
 
   /**
    * Memory allocated to the provider Lambda, in MiB.
@@ -434,7 +472,7 @@ export interface ShinBucketDeploymentProps
    * Deployments with the same provider configuration share a handler and role
    * by default. Source, destination, KMS, and CloudFront permissions from every
    * sharing deployment accumulate on that role. A caller-supplied role remains
-   * caller-owned even when `shareHandler` is `false`.
+   * caller-owned even when `providerScope` is `ProviderScope.DEPLOYMENT`.
    *
    * @default - a role is created for the provider
    */
@@ -448,45 +486,24 @@ export interface ShinBucketDeploymentProps
   readonly logGroup?: BucketDeploymentProps["logGroup"];
 
   /**
-   * Return deployed object keys through the custom-resource response.
-   *
-   * CloudFormation limits the complete response to 4096 bytes. Set this to
-   * `false` for deployments whose object-key list would exceed that boundary;
-   * `objectKeys` then resolves to an empty list.
-   *
-   * @default true
-   */
-  readonly outputObjectKeys?: BucketDeploymentProps["outputObjectKeys"];
-
-  /**
    * Lambda architecture for the Rust provider.
    * @default Architecture.ARM_64
    */
   readonly architecture?: Architecture;
 
   /**
-   * Optional override for the Rust provider project directory.
-   *
-   * Setting this opts into compiling the Rust provider locally instead of using
-   * the prebuilt binary shipped with the package. This requires a Rust toolchain
-   * plus the optional local compile dependency and is mainly useful while
-   * iterating on the handler itself.
-   *
-   * @default - the prebuilt provider binary shipped with the package, or
-   * `<projectRoot>/rust` when no prebuilt binary is available
-   */
-  readonly rustProjectPath?: string;
-
-  /**
-   * Bundling options passed through to the local provider compile path.
-   *
-   * Setting this opts into compiling the Rust provider locally instead of using
-   * the prebuilt binary shipped with the package, and requires the optional local
-   * compile dependency plus a Rust toolchain.
+   * Local Rust provider compilation.
    *
    * @default - the prebuilt provider binary shipped with the package
    */
-  readonly bundling?: ShinBucketDeploymentBundlingOptions;
+  readonly localProviderBuild?: ShinBucketDeploymentLocalProviderBuild;
+
+  /**
+   * CloudFront invalidation performed after a successful deployment.
+   *
+   * @default - do not invalidate a distribution
+   */
+  readonly cloudfrontInvalidation?: ShinBucketDeploymentCloudFrontInvalidation;
 
   /**
    * Maximum concurrent object transfers run by the provider.
@@ -499,6 +516,7 @@ export interface ShinBucketDeploymentProps
    * Advanced provider runtime tuning. Most deployments should leave this unset
    * and use memoryLimit plus maxParallelTransfers as the public controls.
    *
+   * @experimental These settings may change as adaptive defaults evolve.
    * @default - provider defaults derived from memoryLimit
    */
   readonly advancedRuntimeTuning?: ShinBucketDeploymentAdvancedRuntimeTuning;
@@ -522,15 +540,16 @@ export interface ShinBucketDeploymentProps
  *
  * By default the provider runs a prebuilt Rust `bootstrap` from an archive
  * shipped with the package, so consumers do not need a Rust toolchain. Passing
- * `bundling` or `rustProjectPath` opts into compiling the provider locally.
+ * `localProviderBuild` opts into compiling the provider locally.
  *
  * By default, deployments with the same handler identity settings in one stack
  * reuse a single Lambda function. Its role accumulates permissions for every
  * source, destination, KMS key, and CloudFront distribution used by those
- * deployments. Set `shareHandler:false` for a deployment-scoped function and
- * generated role. Handler settings and the package/provider identity
- * participate in shared identity; request-level `advancedRuntimeTuning` does
- * not and can differ between sharing deployments.
+ * deployments. Handler settings and the package/provider identity participate
+ * in shared identity; request-level `advancedRuntimeTuning` does not and can
+ * differ between sharing deployments. Set
+ * `providerScope: ProviderScope.DEPLOYMENT` for a deployment-scoped function
+ * and generated role.
  */
 export class ShinBucketDeployment extends Construct {
   private readonly cr: CustomResource;
@@ -538,6 +557,7 @@ export class ShinBucketDeployment extends Construct {
   private readonly sources: SourceConfig[];
   private _deployedBucket?: IBucket;
   private requestDestinationArn = false;
+  private requestObjectKeys = false;
 
   /**
    * Execution role of the custom-resource Lambda function.
@@ -551,8 +571,8 @@ export class ShinBucketDeployment extends Construct {
   /**
    * The backing Rust Lambda function.
    *
-   * This is shared by default and deployment-scoped when `shareHandler` is
-   * `false`.
+   * This is shared by default and deployment-scoped when `providerScope` is
+   * `ProviderScope.DEPLOYMENT`.
    */
   public readonly handlerFunction: LambdaFunction;
 
@@ -560,7 +580,7 @@ export class ShinBucketDeployment extends Construct {
     super(scope, id);
     validateDeploymentProps(this, props);
     const advancedRuntimeTuning = props.advancedRuntimeTuning ?? {};
-    const putObjectRetryTuning = advancedRuntimeTuning.putObjectRetry ?? {};
+    const destinationWriteRetryTuning = advancedRuntimeTuning.destinationWriteRetry ?? {};
 
     this.destinationBucket = props.destinationBucket;
     const destinationBucketResource = inspectableDestinationBucketResource(
@@ -568,14 +588,13 @@ export class ShinBucketDeployment extends Construct {
       this.destinationBucket,
     );
     const deletePreviousObjectsOnChange =
-      props.destinationLifecycle?.onChange?.deletePreviousObjects === true;
+      props.destinationLifecycle?.onChange?.deleteObjects === true;
     const previousBucket = deletePreviousObjectsOnChange
-      ? (props.destinationLifecycle?.onChange?.previousBucket ?? this.destinationBucket)
+      ? (props.destinationLifecycle?.onChange?.fromBucket ?? this.destinationBucket)
       : undefined;
-    const previousDistribution =
-      props.destinationLifecycle?.onChange?.invalidatePreviousDistribution;
+    const previousDistribution = props.destinationLifecycle?.onChange?.invalidateDistribution;
     const deleteCurrentObjectsOnDelete =
-      props.destinationLifecycle?.onDelete?.deleteCurrentObjects === true;
+      props.destinationLifecycle?.onDelete?.deleteObjects === true;
     const deleteStaleObjectsOnDeploy =
       props.destinationLifecycle?.onDeploy?.deleteStaleObjects ?? true;
 
@@ -605,7 +624,7 @@ export class ShinBucketDeployment extends Construct {
       destinationKeyPrefix: props.destinationKeyPrefix,
       deleteCurrentObjects: deleteStaleObjectsOnDeploy || deleteCurrentObjectsOnDelete,
       previousBucket,
-      distribution: props.distribution,
+      distribution: props.cloudfrontInvalidation?.distribution,
       previousDistribution,
     });
 
@@ -668,15 +687,17 @@ export class ShinBucketDeployment extends Construct {
           : undefined,
         InvalidatePreviousDistributionOnChange:
           previousDistribution?.distributionRef.distributionId,
-        WaitForDistributionInvalidation: props.waitForDistributionInvalidation ?? true,
+        WaitForDistributionInvalidation: props.cloudfrontInvalidation?.waitForCompletion ?? true,
         DeleteCurrentObjectsOnDelete: deleteCurrentObjectsOnDelete,
         Extract: props.extract ?? true,
         DeleteStaleObjectsOnDeployment: deleteStaleObjectsOnDeploy,
         Exclude: props.exclude,
         Include: props.include,
-        DistributionId: props.distribution?.distributionRef.distributionId,
-        DistributionPaths: props.distributionPaths,
-        OutputObjectKeys: props.outputObjectKeys ?? true,
+        DistributionId: props.cloudfrontInvalidation?.distribution.distributionRef.distributionId,
+        DistributionPaths: props.cloudfrontInvalidation?.paths,
+        OutputObjectKeys: Lazy.any({
+          produce: () => this.requestObjectKeys,
+        }),
         DestinationBucketArn: Lazy.string({
           produce: () =>
             this.requestDestinationArn ? this.destinationBucket.bucketArn : undefined,
@@ -686,13 +707,13 @@ export class ShinBucketDeployment extends Construct {
         SourceBlockMergeGapBytes: advancedRuntimeTuning.sourceBlockMergeGapBytes,
         SourceGetConcurrency: advancedRuntimeTuning.sourceGetConcurrency,
         SourceWindowBytes: advancedRuntimeTuning.sourceWindowBytes,
-        SourceWindowMemoryBudgetMb: advancedRuntimeTuning.sourceWindowMemoryBudgetMb,
-        PutObjectMaxAttempts: putObjectRetryTuning.maxAttempts,
-        PutObjectRetryBaseDelayMs: putObjectRetryTuning.baseDelayMs,
-        PutObjectRetryMaxDelayMs: putObjectRetryTuning.maxDelayMs,
-        PutObjectSlowdownRetryBaseDelayMs: putObjectRetryTuning.slowdownBaseDelayMs,
-        PutObjectSlowdownRetryMaxDelayMs: putObjectRetryTuning.slowdownMaxDelayMs,
-        PutObjectRetryJitter: putObjectRetryTuning.jitter,
+        SourceWindowMemoryBudgetMb: advancedRuntimeTuning.sourceWindowMemoryBudgetMiB,
+        PutObjectMaxAttempts: destinationWriteRetryTuning.maxAttempts,
+        PutObjectRetryBaseDelayMs: destinationWriteRetryTuning.baseDelayMs,
+        PutObjectRetryMaxDelayMs: destinationWriteRetryTuning.maxDelayMs,
+        PutObjectSlowdownRetryBaseDelayMs: destinationWriteRetryTuning.slowdownBaseDelayMs,
+        PutObjectSlowdownRetryMaxDelayMs: destinationWriteRetryTuning.slowdownMaxDelayMs,
+        PutObjectRetryJitter: destinationWriteRetryTuning.jitter,
       },
     });
 
@@ -723,13 +744,14 @@ export class ShinBucketDeployment extends Construct {
   }
 
   /**
-   * Object keys returned by the provider when `outputObjectKeys` is enabled.
+   * Object keys returned by the provider.
    *
-   * Large deployments should set `outputObjectKeys:false` to stay within the
-   * complete 4096-byte CloudFormation response limit; this property then
-   * resolves to an empty list.
+   * Accessing this property asks the provider to include object keys in the
+   * custom-resource response. Leave it unread when the complete key list could
+   * exceed CloudFormation's response limit.
    */
   public get objectKeys(): string[] {
+    this.requestObjectKeys = true;
     return Token.asList(this.cr.getAtt("SourceObjectKeys"));
   }
 

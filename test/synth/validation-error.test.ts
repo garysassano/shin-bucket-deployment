@@ -13,7 +13,7 @@ describe("ValidationError", () => {
       new ShinBucketDeployment(stack, "Deploy", {
         sources: [Source.data("index.txt", "ok")],
         destinationBucket,
-        distributionPaths: ["/*"],
+        cloudfrontInvalidation: { paths: ["/*"] } as never,
       });
     } catch (error) {
       failure = error;
@@ -22,7 +22,7 @@ describe("ValidationError", () => {
     expect(failure).toBeInstanceOf(ValidationError);
     expect(failure).toMatchObject({
       name: "ValidationError",
-      code: "DistributionSpecifiedDistributionPathsSpecified",
+      code: "ShinBucketDeploymentCloudFrontDistributionRequired",
       constructPath: "ValidationStack/Deploy",
     });
   });
