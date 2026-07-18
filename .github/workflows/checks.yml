@@ -6,9 +6,6 @@ on:
 permissions:
   contents: read
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 jobs:
   node:
     name: Node (build, typecheck, lint, test)
@@ -25,7 +22,7 @@ jobs:
       - name: Install Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: 24
+          node-version: "lts/*"
           cache: pnpm
 
       - name: Install dependencies
@@ -63,9 +60,10 @@ jobs:
         uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
         with:
           cache: true
-          mise_toml: |
-            [tools]
-            rust = { version = "stable", components = "rustfmt,clippy" }
+          install_args: rust
+
+      - name: Install Rust components
+        run: rustup component add rustfmt clippy
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
@@ -103,19 +101,14 @@ jobs:
       - name: Install Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: 24
+          node-version: "lts/*"
           cache: pnpm
 
       - name: Setup Rust supply-chain tools
         uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
         with:
           cache: true
-          mise_toml: |
-            [tools]
-            rust = "stable"
-            cargo-binstall = "1.20.1"
-            "cargo:cargo-audit" = "0.22.2"
-            "cargo:cargo-deny" = "0.19.9"
+          install_args: rust cargo:cargo-audit cargo:cargo-deny
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -140,11 +133,16 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Install Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "lts/*"
+
       - name: Setup workflow tools
         uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
         with:
           cache: true
-          install_args: actionlint node ripgrep taplo
+          install_args: actionlint ripgrep taplo
 
       - name: Lint GitHub Actions workflows
         run: node scripts/actionlint-parallel.mjs
@@ -179,16 +177,19 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Install Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "lts/*"
+
       - name: Setup Rust toolchain and tools
         uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
         with:
           cache: true
-          mise_toml: |
-            [tools]
-            zig = "0.16.0"
-            rust = { version = "stable", targets = "${{ matrix.target }}" }
-            cargo-binstall = "1.20.1"
-            "cargo:cargo-lambda" = "1.9.1"
+          install_args: rust zig cargo:cargo-lambda
+
+      - name: Install Rust target
+        run: rustup target add ${{ matrix.target }}
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
@@ -266,7 +267,7 @@ jobs:
       - name: Install Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: 24
+          node-version: "lts/*"
           cache: pnpm
 
       - name: Install dependencies
@@ -308,7 +309,7 @@ jobs:
       - name: Install Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: 24
+          node-version: "lts/*"
           cache: pnpm
 
       - name: Install dependencies

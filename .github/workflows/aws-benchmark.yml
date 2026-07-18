@@ -60,7 +60,6 @@ permissions:
   contents: read
 
 env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   AWS_REGION: eu-central-1
   AWS_DEFAULT_REGION: eu-central-1
 
@@ -110,24 +109,17 @@ jobs:
       - name: Install Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: 24.18.0
+          node-version: "lts/*"
           cache: pnpm
 
       - name: Setup provider toolchain
         uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
         with:
           cache: true
-          mise_toml: |
-            [tools]
-            zig = "0.16.0"
-            rust = { version = "1.96.0", targets = "aarch64-unknown-linux-gnu" }
-            cargo-binstall = "1.20.1"
-            "cargo:cargo-lambda" = "1.9.1"
+          install_args: rust zig cargo:cargo-lambda
 
-      - name: Restore clean source configuration
-        run: |
-          git restore --source=HEAD -- mise.toml
-          test -z "$(git status --porcelain --untracked-files=all)"
+      - name: Install Rust target
+        run: rustup target add aarch64-unknown-linux-gnu
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
@@ -360,7 +352,7 @@ jobs:
       - name: Install Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: 24.18.0
+          node-version: "lts/*"
           cache: pnpm
 
       - name: Install dependencies

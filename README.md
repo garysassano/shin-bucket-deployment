@@ -10,8 +10,6 @@ The published package ships prebuilt Rust provider binaries for both Lambda arch
 
 Install the package in your CDK v2 project. It includes prebuilt provider binaries, so your app does not need a Rust toolchain or a provider build step.
 
-The published construct supports Node.js 22 or newer and AWS CDK 2.257.0 or newer.
-
 ```sh
 npm install shin-bucket-deployment
 ```
@@ -26,8 +24,6 @@ The operational props map closely to the upstream construct, so a deployment tha
 ```
 
 See [What It Supports](#what-it-supports) for the intentionally narrow public surface.
-
-Shin accepts upstream CDK `ISource` values. Its exported `Source.asset()` adds an authenticated catalog for sparse marker-free SSE-S3 comparisons; use `embeddedCatalog: false` when CDK bundling or symlink-following behavior is required. Cataloged packaging rejects symlinks and non-regular files, and the embedded catalog changes the staged ZIP bytes and asset hash compared with upstream packaging.
 
 ### Example
 
