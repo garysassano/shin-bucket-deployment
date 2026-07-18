@@ -1,0 +1,27 @@
+{
+  "$schema": "../schemas/asset-benchmark-config.schema.json",
+  "methodologyVersion": 1,
+  "repetitions": 1,
+  "region": "eu-central-1",
+  "concurrency": 1,
+  "assetProfiles": ["large-few"],
+  "implementations": ["shin"],
+  "lambdaConfigs": [
+    {
+      "memoryMb": 1024,
+      "parallel": 32,
+      "sourceWindowBytes": null
+    },
+    {
+      "memoryMb": 1024,
+      "parallel": 32,
+      "sourceWindowBytes": 134217728
+    }
+  ],
+  "phases": [
+    {
+      "name": "cold-create",
+      "assetState": "baseline"
+    }
+  ]
+}

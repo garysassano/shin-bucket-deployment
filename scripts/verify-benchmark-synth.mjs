@@ -45,6 +45,14 @@ for (const path of templates) {
   ) {
     throw new Error(`Benchmark provider runtime contract is invalid in ${path}.`);
   }
+  const detailedDiagnostics =
+    handler.Properties?.Environment?.Variables?.SHIN_DETAILED_FAILURE_DIAGNOSTICS;
+  if (
+    (implementation === "shin" && detailedDiagnostics !== "true") ||
+    (implementation === "aws" && detailedDiagnostics !== undefined)
+  ) {
+    throw new Error(`Benchmark provider detailed diagnostics contract is invalid in ${path}.`);
+  }
   if (
     implementation === "shin" &&
     JSON.stringify(handler.Properties?.Architectures) !== JSON.stringify(["arm64"])

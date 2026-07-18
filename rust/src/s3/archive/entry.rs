@@ -2,8 +2,8 @@ use std::collections::VecDeque;
 use std::io;
 use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::task::{Context as TaskContext, Poll};
 
 use aws_sdk_s3::primitives::{ByteStream, SdkBody};
@@ -17,6 +17,7 @@ use md5::{Digest as Md5Digest, Md5};
 use sha2::Sha256;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, ReadBuf};
 use tokio::sync::mpsc;
+use tokio::task::AbortHandle;
 
 use crate::replace::{MarkerReplacements, ReplacementOptions, ReplacementResult};
 use crate::types::{DeploymentStats, DestinationChecksumStrategy};
@@ -26,7 +27,7 @@ use super::super::{
     S3_SINGLE_PUT_LIMIT, ZIP_ENTRY_BODY_CHUNK_BYTES, ZIP_ENTRY_BODY_PIPE_CHUNKS,
     ZIP_ENTRY_READ_CHUNK_BYTES,
 };
-use super::SourceBlockStore;
+use super::{EntryAttemptClaim, SourceAttemptSnapshot, SourceBlockStore};
 
 const LOCAL_FILE_HEADER_SIGNATURE: u32 = 0x0403_4b50;
 pub(super) const LOCAL_FILE_HEADER_LEN: usize = 30;
@@ -44,9 +45,59 @@ pub(crate) struct UploadBodyState {
     etag_md5: OnceLock<String>,
     checksum_sha256: OnceLock<String>,
     validation_error: OnceLock<String>,
+    detailed_attempt: Option<Box<UploadBodyAttemptState>>,
 }
 
+#[derive(Debug, Default)]
+struct UploadBodyAttemptState {
+    attempt_state: AtomicU64,
+    attempt_snapshot: Mutex<Option<UploadBodyAttemptSnapshot>>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct UploadBodyAttemptSnapshot {
+    pub(crate) attempt_number: u64,
+    pub(crate) replay: bool,
+    pub(crate) bytes_emitted: u64,
+    pub(crate) remaining_bytes: u64,
+    pub(crate) final_frame_delivered: bool,
+    pub(crate) producer_completed: bool,
+    pub(crate) producer_stage: &'static str,
+    pub(crate) body_error_observed: bool,
+    pub(crate) receiver_dropped: bool,
+    pub(crate) receiver_drop_aborted_producer: bool,
+    pub(crate) source_at_receiver_drop: Option<SourceAttemptSnapshot>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[repr(u8)]
+enum UploadProducerStage {
+    #[default]
+    AwaitingFirstPoll,
+    ReadingSource,
+    FinalFrameReady,
+    Complete,
+    ReceiverClosed,
+    BodyError,
+}
+
+const UPLOAD_PRODUCER_STAGE_BITS: u32 = 3;
+const UPLOAD_PRODUCER_STAGE_MASK: u64 = (1 << UPLOAD_PRODUCER_STAGE_BITS) - 1;
+const MAX_UPLOAD_ATTEMPT_NUMBER: u64 = u64::MAX >> UPLOAD_PRODUCER_STAGE_BITS;
+
 impl UploadBodyState {
+    pub(crate) fn new(detailed_failure_diagnostics: bool) -> Self {
+        Self {
+            detailed_attempt: detailed_failure_diagnostics
+                .then(|| Box::new(UploadBodyAttemptState::default())),
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn detailed_failure_diagnostics_enabled(&self) -> bool {
+        self.detailed_attempt.is_some()
+    }
+
     pub(crate) fn etag_md5(&self) -> Option<&str> {
         self.etag_md5.get().map(String::as_str)
     }
@@ -70,11 +121,123 @@ impl UploadBodyState {
     fn record_validation_error(&self, error: &str) {
         let _ = self.validation_error.set(error.to_string());
     }
+
+    fn begin_attempt(&self, attempt_number: u64) {
+        let Some(detailed) = &self.detailed_attempt else {
+            return;
+        };
+        detailed.attempt_state.store(
+            UploadProducerStage::ReadingSource.encode(attempt_number),
+            Ordering::Release,
+        );
+    }
+
+    pub(crate) fn reset_attempt_diagnostics(&self) {
+        if let Some(detailed) = &self.detailed_attempt {
+            detailed.attempt_state.store(0, Ordering::Release);
+        }
+    }
+
+    fn record_producer_stage(&self, attempt_number: Option<u64>, stage: UploadProducerStage) {
+        let Some(attempt_number) = attempt_number else {
+            return;
+        };
+        let Some(detailed) = &self.detailed_attempt else {
+            return;
+        };
+        let mut current = detailed.attempt_state.load(Ordering::Acquire);
+        loop {
+            if UploadProducerStage::decode(current).0 != attempt_number {
+                return;
+            }
+            match detailed.attempt_state.compare_exchange_weak(
+                current,
+                stage.encode(attempt_number),
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return,
+                Err(updated) => current = updated,
+            }
+        }
+    }
+
+    fn publish_attempt(&self, mut snapshot: UploadBodyAttemptSnapshot) {
+        let Some(detailed) = &self.detailed_attempt else {
+            return;
+        };
+        let mut published = detailed
+            .attempt_snapshot
+            .lock()
+            .expect("upload body snapshot mutex should not be poisoned");
+        let (attempt_number, producer_stage) =
+            UploadProducerStage::decode(detailed.attempt_state.load(Ordering::Acquire));
+        if attempt_number != snapshot.attempt_number {
+            return;
+        }
+        snapshot.apply_producer_stage(producer_stage);
+        *published = Some(snapshot);
+    }
+
+    pub(crate) fn attempt_snapshot(&self) -> Option<UploadBodyAttemptSnapshot> {
+        let detailed = self.detailed_attempt.as_ref()?;
+        let published = detailed
+            .attempt_snapshot
+            .lock()
+            .expect("upload body snapshot mutex should not be poisoned");
+        let mut snapshot = published.clone()?;
+        let (attempt_number, producer_stage) =
+            UploadProducerStage::decode(detailed.attempt_state.load(Ordering::Acquire));
+        if attempt_number != snapshot.attempt_number {
+            return None;
+        }
+        snapshot.apply_producer_stage(producer_stage);
+        Some(snapshot)
+    }
+}
+
+impl UploadProducerStage {
+    fn encode(self, attempt_number: u64) -> u64 {
+        (attempt_number.min(MAX_UPLOAD_ATTEMPT_NUMBER) << UPLOAD_PRODUCER_STAGE_BITS) | self as u64
+    }
+
+    fn decode(state: u64) -> (u64, Self) {
+        let stage = match state & UPLOAD_PRODUCER_STAGE_MASK {
+            0 => Self::AwaitingFirstPoll,
+            1 => Self::ReadingSource,
+            2 => Self::FinalFrameReady,
+            3 => Self::Complete,
+            4 => Self::ReceiverClosed,
+            5 => Self::BodyError,
+            _ => unreachable!("invalid upload producer stage"),
+        };
+        (state >> UPLOAD_PRODUCER_STAGE_BITS, stage)
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::AwaitingFirstPoll => "awaiting-first-poll",
+            Self::ReadingSource => "reading-source",
+            Self::FinalFrameReady => "final-frame-ready",
+            Self::Complete => "complete",
+            Self::ReceiverClosed => "receiver-closed",
+            Self::BodyError => "body-error",
+        }
+    }
+}
+
+impl UploadBodyAttemptSnapshot {
+    fn apply_producer_stage(&mut self, producer_stage: UploadProducerStage) {
+        self.producer_stage = producer_stage.name();
+        self.producer_completed = producer_stage == UploadProducerStage::Complete;
+        self.body_error_observed |= producer_stage == UploadProducerStage::BodyError;
+    }
 }
 
 pub(crate) struct ZipEntryAsyncReader {
     store: Arc<SourceBlockStore>,
     plan: ZipEntryPlan,
+    attempt_claim: Option<EntryAttemptClaim>,
     reader: Option<EntryDataReader>,
     init: Option<Pin<Box<dyn Future<Output = io::Result<EntryDataReader>> + Send>>>,
 }
@@ -92,8 +255,28 @@ pub(super) struct EntryDataReader {
 
 struct ReceiverBody {
     init: Option<ReceiverBodyInit>,
-    receiver: Option<mpsc::Receiver<std::result::Result<Bytes, BodyError>>>,
-    content_length: u64,
+    receiver: Option<mpsc::Receiver<std::result::Result<BodyFrame, BodyError>>>,
+    producer: Option<AbortHandle>,
+    remaining_bytes: u64,
+    complete: bool,
+    diagnostics: Option<Box<ReceiverBodyDiagnostics>>,
+}
+
+struct ReceiverBodyDiagnostics {
+    store: Arc<SourceBlockStore>,
+    body_state: Arc<UploadBodyState>,
+    attempt_number: Option<u64>,
+    replay: bool,
+    declared_bytes: u64,
+    final_frame_delivered: bool,
+    body_error_observed: bool,
+    snapshot_published: bool,
+}
+
+pub(super) enum BodyFrame {
+    Data(Bytes),
+    Final(Bytes),
+    Complete,
 }
 
 struct ReceiverBodyInit {
@@ -123,6 +306,21 @@ impl ZipEntryAsyncReader {
         Self {
             store,
             plan,
+            attempt_claim: None,
+            reader: None,
+            init: None,
+        }
+    }
+
+    fn with_attempt_claim(
+        store: Arc<SourceBlockStore>,
+        plan: ZipEntryPlan,
+        attempt_claim: EntryAttemptClaim,
+    ) -> Self {
+        Self {
+            store,
+            plan,
+            attempt_claim: Some(attempt_claim),
             reader: None,
             init: None,
         }
@@ -139,8 +337,14 @@ impl AsyncRead for ZipEntryAsyncReader {
             if self.init.is_none() {
                 let store = self.store.clone();
                 let plan = self.plan.clone();
+                let attempt_claim = self.attempt_claim.take();
                 self.init = Some(Box::pin(async move {
-                    open_entry_data_reader(store, plan).await
+                    match attempt_claim {
+                        Some(attempt_claim) => {
+                            open_entry_data_reader_with_claim(store, plan, attempt_claim).await
+                        }
+                        None => open_entry_data_reader(store, plan).await,
+                    }
                 }));
             }
 
@@ -164,6 +368,15 @@ impl AsyncRead for ZipEntryAsyncReader {
 pub(super) async fn open_entry_data_reader(
     store: Arc<SourceBlockStore>,
     plan: ZipEntryPlan,
+) -> io::Result<EntryDataReader> {
+    let attempt_claim = store.claim_zip_entry_attempt(&plan);
+    open_entry_data_reader_with_claim(store, plan, attempt_claim).await
+}
+
+async fn open_entry_data_reader_with_claim(
+    store: Arc<SourceBlockStore>,
+    plan: ZipEntryPlan,
+    attempt_claim: EntryAttemptClaim,
 ) -> io::Result<EntryDataReader> {
     let header_end = plan
         .source_offset
@@ -250,24 +463,17 @@ pub(super) async fn open_entry_data_reader(
         ));
     }
 
-    EntryDataReader::new(
-        store,
-        plan.source_offset,
-        plan.source_span_end,
-        data_offset,
-        data_end,
-    )
+    EntryDataReader::new(store, attempt_claim, data_offset, data_end)
 }
 
 impl EntryDataReader {
     fn new(
         store: Arc<SourceBlockStore>,
-        claim_start: u64,
-        claim_end: u64,
+        attempt_claim: EntryAttemptClaim,
         start: u64,
         end: u64,
     ) -> io::Result<Self> {
-        let remaining_blocks = store.activate_reader(claim_start, claim_end)?;
+        let remaining_blocks = attempt_claim.activate()?;
         Ok(Self {
             store,
             position: start,
@@ -467,10 +673,28 @@ fn zip_entry_body_inner(
 }
 
 fn zip_entry_sdk_body(init: ReceiverBodyInit, content_length: u64) -> SdkBody {
+    let diagnostics = init
+        .body_state
+        .detailed_failure_diagnostics_enabled()
+        .then(|| {
+            Box::new(ReceiverBodyDiagnostics {
+                store: Arc::clone(&init.store),
+                body_state: Arc::clone(&init.body_state),
+                attempt_number: None,
+                replay: false,
+                declared_bytes: content_length,
+                final_frame_delivered: false,
+                body_error_observed: false,
+                snapshot_published: false,
+            })
+        });
     SdkBody::from_body_1_x(ReceiverBody {
         init: Some(init),
         receiver: None,
-        content_length,
+        producer: None,
+        remaining_bytes: content_length,
+        complete: false,
+        diagnostics,
     })
 }
 
@@ -484,6 +708,7 @@ pub(crate) async fn plan_marker_zip_entry(
     replace_marker_zip_entry(
         store,
         plan,
+        None,
         marker_replacements,
         &mut output,
         checksum_strategy == DestinationChecksumStrategy::SseS3Etag,
@@ -495,12 +720,13 @@ pub(crate) async fn plan_marker_zip_entry(
 async fn replace_marker_zip_entry<W: AsyncWrite + Unpin>(
     store: Arc<SourceBlockStore>,
     plan: ZipEntryPlan,
+    attempt_claim: Option<EntryAttemptClaim>,
     marker_replacements: &MarkerReplacements,
     output: &mut W,
     hash_md5: bool,
     hash_sha256: bool,
 ) -> io::Result<ReplacementResult> {
-    let mut reader = zip_entry_reader(store, plan.clone())?;
+    let mut reader = zip_entry_reader_inner(store, plan.clone(), attempt_claim)?;
     let mut validator = ZipEntryInputValidator::new(&plan);
     let result = marker_replacements
         .replace_stream(
@@ -522,7 +748,20 @@ pub(crate) fn zip_entry_reader(
     store: Arc<SourceBlockStore>,
     plan: ZipEntryPlan,
 ) -> io::Result<Pin<Box<dyn AsyncRead + Send>>> {
-    let reader = ZipEntryAsyncReader::new(store, plan.clone());
+    zip_entry_reader_inner(store, plan, None)
+}
+
+fn zip_entry_reader_inner(
+    store: Arc<SourceBlockStore>,
+    plan: ZipEntryPlan,
+    attempt_claim: Option<EntryAttemptClaim>,
+) -> io::Result<Pin<Box<dyn AsyncRead + Send>>> {
+    let reader = match attempt_claim {
+        Some(attempt_claim) => {
+            ZipEntryAsyncReader::with_attempt_claim(store, plan.clone(), attempt_claim)
+        }
+        None => ZipEntryAsyncReader::new(store, plan.clone()),
+    };
     match plan.compression_code {
         0 => Ok(Box::pin(reader)),
         8 => Ok(Box::pin(
@@ -537,14 +776,37 @@ pub(crate) fn zip_entry_reader(
     }
 }
 
+#[cfg(test)]
 pub(super) async fn send_zip_entry_chunks(
     store: Arc<SourceBlockStore>,
     plan: ZipEntryPlan,
-    sender: mpsc::Sender<std::result::Result<Bytes, BodyError>>,
+    sender: mpsc::Sender<std::result::Result<BodyFrame, BodyError>>,
     body_state: Arc<UploadBodyState>,
     checksum_strategy: DestinationChecksumStrategy,
 ) -> std::result::Result<(), BodyError> {
-    let mut reader = zip_entry_reader(store, plan.clone()).map_err(boxed_body_error)?;
+    send_zip_entry_chunks_inner(
+        store,
+        plan,
+        None,
+        sender,
+        body_state,
+        checksum_strategy,
+        None,
+    )
+    .await
+}
+
+async fn send_zip_entry_chunks_inner(
+    store: Arc<SourceBlockStore>,
+    plan: ZipEntryPlan,
+    attempt_claim: Option<EntryAttemptClaim>,
+    sender: mpsc::Sender<std::result::Result<BodyFrame, BodyError>>,
+    body_state: Arc<UploadBodyState>,
+    checksum_strategy: DestinationChecksumStrategy,
+    attempt_number: Option<u64>,
+) -> std::result::Result<(), BodyError> {
+    let mut reader =
+        zip_entry_reader_inner(store, plan.clone(), attempt_claim).map_err(boxed_body_error)?;
     let mut md5 = (checksum_strategy == DestinationChecksumStrategy::SseS3Etag
         || plan.trusted_integrity.is_some())
     .then(Md5::new);
@@ -564,6 +826,7 @@ pub(super) async fn send_zip_entry_chunks(
         if !pending.is_empty()
             && !append_and_send_body_chunks(&mut body_chunk, &pending, &sender).await?
         {
+            body_state.record_producer_stage(attempt_number, UploadProducerStage::ReceiverClosed);
             return Ok(());
         }
         let next_bytes = bytes.saturating_add(bytes_read as u64);
@@ -592,31 +855,53 @@ pub(super) async fn send_zip_entry_chunks(
     if let Some(sha256) = sha256 {
         body_state.record_checksum_sha256(BASE64_STANDARD.encode(sha256.finalize()));
     }
-    if !pending.is_empty()
-        && !append_and_send_body_chunks(&mut body_chunk, &pending, &sender).await?
-    {
-        return Ok(());
-    }
-    if !body_chunk.is_empty()
-        && sender
-            .send(Ok(Bytes::copy_from_slice(body_chunk.as_slice())))
-            .await
-            .is_err()
-    {
-        return Ok(());
-    }
+
+    // The final frame is also the producer-completion handshake. Release the
+    // source reader and all of its entry claims before making that frame
+    // visible so a fixed-length HTTP consumer can safely stop polling after it.
+    drop(reader);
+    body_state.record_producer_stage(attempt_number, UploadProducerStage::FinalFrameReady);
+    send_final_body_chunks(&mut body_chunk, &pending, &sender).await?;
+    body_state.record_producer_stage(attempt_number, UploadProducerStage::Complete);
 
     Ok(())
 }
 
+#[cfg(test)]
 pub(super) async fn send_marker_zip_entry_chunks(
     store: Arc<SourceBlockStore>,
     plan: ZipEntryPlan,
     content_length: u64,
     marker_replacements: Arc<MarkerReplacements>,
-    sender: mpsc::Sender<std::result::Result<Bytes, BodyError>>,
+    sender: mpsc::Sender<std::result::Result<BodyFrame, BodyError>>,
     body_state: Arc<UploadBodyState>,
     checksum_strategy: DestinationChecksumStrategy,
+) -> std::result::Result<(), BodyError> {
+    send_marker_zip_entry_chunks_inner(
+        store,
+        plan,
+        None,
+        content_length,
+        marker_replacements,
+        sender,
+        body_state,
+        checksum_strategy,
+        None,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn send_marker_zip_entry_chunks_inner(
+    store: Arc<SourceBlockStore>,
+    plan: ZipEntryPlan,
+    attempt_claim: Option<EntryAttemptClaim>,
+    content_length: u64,
+    marker_replacements: Arc<MarkerReplacements>,
+    sender: mpsc::Sender<std::result::Result<BodyFrame, BodyError>>,
+    body_state: Arc<UploadBodyState>,
+    checksum_strategy: DestinationChecksumStrategy,
+    attempt_number: Option<u64>,
 ) -> std::result::Result<(), BodyError> {
     let pipe_capacity = ZIP_ENTRY_BODY_CHUNK_BYTES
         .checked_mul(2)
@@ -626,6 +911,7 @@ pub(super) async fn send_marker_zip_entry_chunks(
         let result = replace_marker_zip_entry(
             store,
             plan.clone(),
+            attempt_claim,
             &marker_replacements,
             &mut output_writer,
             checksum_strategy == DestinationChecksumStrategy::SseS3Etag,
@@ -662,17 +948,22 @@ pub(super) async fn send_marker_zip_entry_chunks(
     if let Some(sha256) = result.sha256 {
         body_state.record_checksum_sha256(sha256);
     }
-    if let Some(final_chunk) = final_chunk
-        && sender.send(Ok(final_chunk)).await.is_err()
-    {
-        return Ok(());
+    body_state.record_producer_stage(attempt_number, UploadProducerStage::FinalFrameReady);
+    match final_chunk {
+        Some(final_chunk) => {
+            let _ = sender.send(Ok(BodyFrame::Final(final_chunk))).await;
+        }
+        None => {
+            let _ = sender.send(Ok(BodyFrame::Complete)).await;
+        }
     }
+    body_state.record_producer_stage(attempt_number, UploadProducerStage::Complete);
     Ok(())
 }
 
 async fn forward_replaced_body_chunks(
     reader: &mut tokio::io::DuplexStream,
-    sender: &mpsc::Sender<std::result::Result<Bytes, BodyError>>,
+    sender: &mpsc::Sender<std::result::Result<BodyFrame, BodyError>>,
 ) -> std::result::Result<Option<Bytes>, BodyError> {
     // Keep one complete frame back so source CRC/size/catalog validation and
     // planning-pass identity checks can fail before S3 receives a complete body.
@@ -698,7 +989,7 @@ async fn forward_replaced_body_chunks(
                 let next = Bytes::copy_from_slice(&frame);
                 frame.clear();
                 if let Some(previous) = held_frame.replace(next)
-                    && sender.send(Ok(previous)).await.is_err()
+                    && sender.send(Ok(BodyFrame::Data(previous))).await.is_err()
                 {
                     // Fail this side of try_join so a producer blocked on the
                     // replacement pipe is cancelled when its body is dropped.
@@ -714,7 +1005,7 @@ async fn forward_replaced_body_chunks(
     if !frame.is_empty() {
         let next = Bytes::copy_from_slice(&frame);
         if let Some(previous) = held_frame.replace(next)
-            && sender.send(Ok(previous)).await.is_err()
+            && sender.send(Ok(BodyFrame::Data(previous))).await.is_err()
         {
             return Err(boxed_body_error(io::Error::new(
                 io::ErrorKind::BrokenPipe,
@@ -776,7 +1067,7 @@ fn finalize_md5(hasher: Md5) -> String {
 async fn append_and_send_body_chunks(
     body_chunk: &mut Vec<u8>,
     bytes: &[u8],
-    sender: &mpsc::Sender<std::result::Result<Bytes, BodyError>>,
+    sender: &mpsc::Sender<std::result::Result<BodyFrame, BodyError>>,
 ) -> std::result::Result<bool, BodyError> {
     let mut remaining = bytes;
     while !remaining.is_empty() {
@@ -787,7 +1078,9 @@ async fn append_and_send_body_chunks(
 
         if body_chunk.len() == ZIP_ENTRY_BODY_CHUNK_BYTES {
             if sender
-                .send(Ok(Bytes::copy_from_slice(body_chunk.as_slice())))
+                .send(Ok(BodyFrame::Data(Bytes::copy_from_slice(
+                    body_chunk.as_slice(),
+                ))))
                 .await
                 .is_err()
             {
@@ -800,6 +1093,42 @@ async fn append_and_send_body_chunks(
     Ok(true)
 }
 
+async fn send_final_body_chunks(
+    body_chunk: &mut Vec<u8>,
+    bytes: &[u8],
+    sender: &mpsc::Sender<std::result::Result<BodyFrame, BodyError>>,
+) -> std::result::Result<(), BodyError> {
+    let mut remaining = bytes;
+    while !remaining.is_empty() {
+        let available = ZIP_ENTRY_BODY_CHUNK_BYTES - body_chunk.len();
+        let take = available.min(remaining.len());
+        body_chunk.extend_from_slice(&remaining[..take]);
+        remaining = &remaining[take..];
+
+        if body_chunk.len() == ZIP_ENTRY_BODY_CHUNK_BYTES {
+            let bytes = Bytes::copy_from_slice(body_chunk.as_slice());
+            body_chunk.clear();
+            let frame = if remaining.is_empty() {
+                BodyFrame::Final(bytes)
+            } else {
+                BodyFrame::Data(bytes)
+            };
+            if sender.send(Ok(frame)).await.is_err() {
+                return Ok(());
+            }
+        }
+    }
+
+    if !body_chunk.is_empty() {
+        let bytes = Bytes::copy_from_slice(body_chunk.as_slice());
+        body_chunk.clear();
+        let _ = sender.send(Ok(BodyFrame::Final(bytes))).await;
+    } else if bytes.is_empty() {
+        let _ = sender.send(Ok(BodyFrame::Complete)).await;
+    }
+    Ok(())
+}
+
 impl Body for ReceiverBody {
     type Data = Bytes;
     type Error = BodyError;
@@ -808,8 +1137,23 @@ impl Body for ReceiverBody {
         mut self: Pin<&mut Self>,
         cx: &mut TaskContext<'_>,
     ) -> Poll<Option<std::result::Result<Frame<Self::Data>, Self::Error>>> {
+        if self.complete {
+            return Poll::Ready(None);
+        }
+
         if let Some(init) = self.init.take() {
-            let replay = init.attempts.fetch_add(1, Ordering::AcqRel) > 0;
+            let prior_attempts = init.attempts.fetch_add(1, Ordering::AcqRel);
+            let replay = prior_attempts > 0;
+            let attempt_number = self.diagnostics.as_mut().map(|diagnostics| {
+                let attempt_number = u64::try_from(prior_attempts)
+                    .unwrap_or(MAX_UPLOAD_ATTEMPT_NUMBER)
+                    .saturating_add(1)
+                    .min(MAX_UPLOAD_ATTEMPT_NUMBER);
+                diagnostics.body_state.begin_attempt(attempt_number);
+                diagnostics.attempt_number = Some(attempt_number);
+                diagnostics.replay = replay;
+                attempt_number
+            });
             init.store.source.diagnostics.record_body_started(replay);
             if replay {
                 init.store.retain_zip_entry_for_replay(&init.plan);
@@ -818,29 +1162,34 @@ impl Body for ReceiverBody {
                 marker.stats.add_marker_upload_pass();
             }
 
+            let attempt_claim = init.store.claim_zip_entry_attempt(&init.plan);
             let (sender, receiver) = mpsc::channel(ZIP_ENTRY_BODY_PIPE_CHUNKS);
             let body_store = Arc::clone(&init.store);
-            let content_length = self.content_length;
-            init.store.spawn_body_task(async move {
+            let content_length = self.remaining_bytes;
+            self.producer = Some(init.store.spawn_body_task(async move {
                 let outcome = if let Some(marker) = init.marker {
-                    AssertUnwindSafe(send_marker_zip_entry_chunks(
+                    AssertUnwindSafe(send_marker_zip_entry_chunks_inner(
                         body_store,
                         init.plan,
+                        Some(attempt_claim),
                         content_length,
                         marker.replacements,
                         sender.clone(),
                         Arc::clone(&init.body_state),
                         init.checksum_strategy,
+                        attempt_number,
                     ))
                     .catch_unwind()
                     .await
                 } else {
-                    AssertUnwindSafe(send_zip_entry_chunks(
+                    AssertUnwindSafe(send_zip_entry_chunks_inner(
                         body_store,
                         init.plan,
+                        Some(attempt_claim),
                         sender.clone(),
                         Arc::clone(&init.body_state),
                         init.checksum_strategy,
+                        attempt_number,
                     ))
                     .catch_unwind()
                     .await
@@ -851,6 +1200,8 @@ impl Body for ReceiverBody {
                     Err(_) => boxed_body_error(io::Error::other("source body task panicked")),
                 };
                 {
+                    init.body_state
+                        .record_producer_stage(attempt_number, UploadProducerStage::BodyError);
                     if error
                         .downcast_ref::<io::Error>()
                         .is_some_and(|error| error.kind() == io::ErrorKind::InvalidData)
@@ -859,24 +1210,161 @@ impl Body for ReceiverBody {
                     }
                     let _ = sender.send(Err(error)).await;
                 }
-            });
+            }));
             self.receiver = Some(receiver);
         }
 
-        let receiver = self
+        let frame = self
             .receiver
             .as_mut()
-            .expect("source body receiver starts on first poll");
-        match receiver.poll_recv(cx) {
-            Poll::Ready(Some(Ok(bytes))) => Poll::Ready(Some(Ok(Frame::data(bytes)))),
-            Poll::Ready(Some(Err(error))) => Poll::Ready(Some(Err(error))),
-            Poll::Ready(None) => Poll::Ready(None),
+            .expect("source body receiver starts on first poll")
+            .poll_recv(cx);
+        match frame {
+            Poll::Ready(Some(Ok(BodyFrame::Data(bytes)))) => {
+                let frame_bytes = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+                if frame_bytes >= self.remaining_bytes {
+                    self.record_body_error();
+                    self.publish_attempt(false, false, None);
+                    return Poll::Ready(Some(Err(boxed_body_error(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "source body reached its declared content length without producer completion",
+                    )))));
+                }
+                self.remaining_bytes -= frame_bytes;
+                Poll::Ready(Some(Ok(Frame::data(bytes))))
+            }
+            Poll::Ready(Some(Ok(BodyFrame::Final(bytes)))) => {
+                let frame_bytes = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+                if frame_bytes != self.remaining_bytes || frame_bytes == 0 {
+                    self.record_body_error();
+                    self.publish_attempt(false, false, None);
+                    return Poll::Ready(Some(Err(boxed_body_error(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "source body final frame did not match its declared content length",
+                    )))));
+                }
+                self.remaining_bytes = 0;
+                if let Some(diagnostics) = self.diagnostics.as_mut() {
+                    diagnostics.final_frame_delivered = true;
+                }
+                self.receiver.take();
+                self.producer.take();
+                self.complete = true;
+                self.publish_attempt(false, false, None);
+                Poll::Ready(Some(Ok(Frame::data(bytes))))
+            }
+            Poll::Ready(Some(Ok(BodyFrame::Complete))) => {
+                self.receiver.take();
+                self.producer.take();
+                self.complete = true;
+                if self.remaining_bytes == 0 {
+                    self.publish_attempt(false, false, None);
+                    Poll::Ready(None)
+                } else {
+                    self.record_body_error();
+                    self.publish_attempt(false, false, None);
+                    Poll::Ready(Some(Err(boxed_body_error(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "source body completed before its declared content length",
+                    )))))
+                }
+            }
+            Poll::Ready(Some(Err(error))) => {
+                self.record_body_error();
+                self.publish_attempt(false, false, None);
+                Poll::Ready(Some(Err(error)))
+            }
+            Poll::Ready(None) => {
+                self.producer.take();
+                self.complete = true;
+                self.record_body_error();
+                self.publish_attempt(false, false, None);
+                Poll::Ready(Some(Err(boxed_body_error(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "source body ended without producer completion",
+                )))))
+            }
             Poll::Pending => Poll::Pending,
         }
     }
 
     fn size_hint(&self) -> SizeHint {
-        SizeHint::with_exact(self.content_length)
+        SizeHint::with_exact(self.remaining_bytes)
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.complete
+    }
+}
+
+impl Drop for ReceiverBody {
+    fn drop(&mut self) {
+        let producer = self.producer.take();
+        let aborted_producer = producer
+            .as_ref()
+            .is_some_and(|producer| !producer.is_finished());
+        if !self.complete
+            && self
+                .diagnostics
+                .as_ref()
+                .is_some_and(|diagnostics| diagnostics.attempt_number.is_some())
+        {
+            // Capture source state while the receiver and producer are still live.
+            let source = self
+                .diagnostics
+                .as_ref()
+                .expect("observed attempt has receiver diagnostics")
+                .store
+                .attempt_snapshot();
+            self.publish_attempt(true, aborted_producer, Some(source));
+        }
+        self.receiver.take();
+        if let Some(producer) = producer {
+            producer.abort();
+        }
+    }
+}
+
+impl ReceiverBody {
+    fn record_body_error(&mut self) {
+        if let Some(diagnostics) = self.diagnostics.as_mut() {
+            diagnostics.body_error_observed = true;
+        }
+    }
+
+    fn publish_attempt(
+        &mut self,
+        receiver_dropped: bool,
+        receiver_drop_aborted_producer: bool,
+        source_at_receiver_drop: Option<SourceAttemptSnapshot>,
+    ) {
+        let Some(diagnostics) = self.diagnostics.as_mut() else {
+            return;
+        };
+        let Some(attempt_number) = diagnostics.attempt_number else {
+            return;
+        };
+        if diagnostics.snapshot_published && !receiver_dropped {
+            return;
+        }
+        diagnostics
+            .body_state
+            .publish_attempt(UploadBodyAttemptSnapshot {
+                attempt_number,
+                replay: diagnostics.replay,
+                bytes_emitted: diagnostics
+                    .declared_bytes
+                    .saturating_sub(self.remaining_bytes),
+                remaining_bytes: self.remaining_bytes,
+                final_frame_delivered: diagnostics.final_frame_delivered,
+                producer_completed: false,
+                producer_stage: UploadProducerStage::AwaitingFirstPoll.name(),
+                body_error_observed: diagnostics.body_error_observed,
+                receiver_dropped,
+                receiver_drop_aborted_producer,
+                source_at_receiver_drop,
+            });
+        diagnostics.snapshot_published = true;
     }
 }
 

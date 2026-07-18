@@ -92,6 +92,9 @@ export function getOrCreateHandler(
       props.securityGroups && props.securityGroups.length > 0 ? props.securityGroups : undefined,
     environment: {
       RUST_BACKTRACE: "1",
+      ...(props.detailedFailureDiagnostics === true
+        ? { SHIN_DETAILED_FAILURE_DIAGNOSTICS: "true" }
+        : {}),
     },
     logGroup: props.logGroup,
   };
@@ -288,6 +291,7 @@ function renderHandlerConfigHash(
   const config = {
     architecture: architecture.name,
     bundling: normalizeSingletonValue(props.bundling),
+    detailedFailureDiagnostics: props.detailedFailureDiagnostics ?? false,
     handlerSource,
     logGroup: normalizeSingletonValue(props.logGroup),
     memoryLimit: normalizeSingletonValue(props.memoryLimit ?? DEFAULT_MEMORY_LIMIT_MB),

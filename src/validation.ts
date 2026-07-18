@@ -50,6 +50,16 @@ export function validateDeploymentProps(scope: Construct, props: ShinBucketDeplo
       scope,
     );
   }
+  if (
+    props.detailedFailureDiagnostics !== undefined &&
+    typeof props.detailedFailureDiagnostics !== "boolean"
+  ) {
+    throw new ValidationError(
+      "ShinBucketDeploymentInvalidDetailedFailureDiagnostics",
+      "detailedFailureDiagnostics must be a boolean.",
+      scope,
+    );
+  }
   validateDestinationKeyPrefix(scope, props.destinationKeyPrefix);
 
   if (maybeUnsupported.prune !== undefined) {

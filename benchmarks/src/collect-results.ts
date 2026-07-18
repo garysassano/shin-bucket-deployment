@@ -7,7 +7,7 @@ import {
   benchmarkEvidenceSanitizationErrors,
   methodologyV2RecordErrors,
   normalizeImplementation,
-  providerSummaryV3Errors,
+  providerSummaryErrors,
   sanitizeProviderSummary,
 } from "./model";
 import { upsertBenchmarkRecord } from "./persistence";
@@ -64,6 +64,8 @@ export type CollectBenchmarkOptions = {
   readonly outputFile: string;
   readonly persist?: boolean;
   readonly parallel?: number | null;
+  readonly sourceWindowBytes?: number | null;
+  readonly detailedFailureDiagnostics?: boolean | null;
   readonly phase: string;
   readonly region?: string;
   readonly repetition?: number;
@@ -138,6 +140,7 @@ const CLI_OPTIONS = [
   "implementation",
   "lambda-max-parallel-transfers",
   "lambda-memory-mb",
+  "source-window-bytes",
   "log-file",
   "notes",
   "output-file",
@@ -183,7 +186,7 @@ export function collectBenchmarkResult(options: CollectBenchmarkOptions): Benchm
     assertCorrelatedTelemetry(report, summaryEvidence);
   }
   if (strictEvidence && summaryEvidence !== undefined) {
-    const summaryErrors = providerSummaryV3Errors(summaryEvidence.summary);
+    const summaryErrors = providerSummaryErrors(summaryEvidence.summary);
     if (summaryErrors.length > 0) {
       throw new Error(`Invalid methodology-v2 provider summary: ${summaryErrors.join("; ")}`);
     }
@@ -260,6 +263,14 @@ export function collectBenchmarkResult(options: CollectBenchmarkOptions): Benchm
         : options.parallel === undefined
           ? outputNumber(logText, "BenchmarkMaxParallelTransfers")
           : options.parallel,
+    sourceWindowBytes:
+      options.sourceWindowBytes === undefined
+        ? outputSourceWindowBytes(logText)
+        : options.sourceWindowBytes,
+    detailedFailureDiagnostics:
+      options.detailedFailureDiagnostics === undefined
+        ? outputDetailedFailureDiagnostics(logText)
+        : options.detailedFailureDiagnostics,
     phase: options.phase,
     state: options.state ?? outputString(logText, "BenchmarkState"),
     fileCount: options.fileCount ?? outputNumber(logText, "BenchmarkFileCount"),
@@ -341,6 +352,7 @@ function parseArgs(args: string[]): CollectBenchmarkOptions {
     notes: values.get("notes"),
     outputFile,
     parallel: optionalNumber(values, "lambda-max-parallel-transfers"),
+    sourceWindowBytes: optionalNullablePositiveInteger(values.get("source-window-bytes")),
     phase,
     region: values.get("region"),
     repetition: optionalPositiveInteger(values, "repetition"),
@@ -530,6 +542,11 @@ function summaryFromMessage(message: string): ProviderSummary | undefined {
 function isDeploymentSummary(value: unknown): value is ProviderSummary {
   if (!isRecord(value) || value.event !== "shin_deployment_summary") return false;
   sanitizeProviderSummary(value);
+  if (value.schemaVersion === 4) {
+    const errors = providerSummaryErrors(value);
+    if (errors.length > 0)
+      throw new Error(`Invalid schema-v4 provider summary: ${errors.join("; ")}`);
+  }
   return true;
 }
 
@@ -605,6 +622,11 @@ function assertObservedOutputs(
   ];
   if (implementation === "shin") {
     checks.push(["BenchmarkMaxParallelTransfers", options.parallel]);
+    const expectedSourceWindow = options.sourceWindowBytes ?? "adaptive";
+    checks.push(["BenchmarkSourceWindowBytes", expectedSourceWindow]);
+    checks.push(["BenchmarkDetailedFailureDiagnostics", "true"]);
+  } else {
+    checks.push(["BenchmarkDetailedFailureDiagnostics", "not-applicable"]);
   }
   for (const [name, expected] of checks) {
     if (expected === undefined || expected === null) {
@@ -626,6 +648,28 @@ function outputNumber(logText: string, outputName: string): number | null {
   }
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function outputSourceWindowBytes(logText: string): number | null {
+  const value = outputString(logText, "BenchmarkSourceWindowBytes");
+  if (value === null || value === "adaptive") return null;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function outputDetailedFailureDiagnostics(logText: string): boolean | null {
+  const value = outputString(logText, "BenchmarkDetailedFailureDiagnostics");
+  if (value === "true") return true;
+  if (value === "not-applicable") return null;
+  return null;
+}
+
+function optionalNullablePositiveInteger(value: string | undefined): number | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === "adaptive" || value === "null") return null;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1) usage();
+  return parsed;
 }
 
 function parseSeconds(logText: string, pattern: RegExp): number | null {

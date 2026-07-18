@@ -15,7 +15,11 @@ import {
   isBenchmarkImplementation,
 } from "./model";
 
-export type LambdaConfig = { readonly memoryMb: number; readonly parallel: number };
+export type LambdaConfig = {
+  readonly memoryMb: number;
+  readonly parallel: number;
+  readonly sourceWindowBytes?: number | null;
+};
 export type PhaseConfig = {
   readonly assetState: BenchmarkAssetState;
   readonly cloudfrontWait: boolean;
@@ -30,6 +34,8 @@ export type BenchmarkRunOptions = {
   readonly startRepetition: number;
   readonly maxWallClockMinutes?: number;
   readonly approvedThroughRepetition: number;
+  readonly preserveOnFailure: boolean;
+  readonly detailedFailureDiagnostics: boolean;
   readonly assetProfiles: BenchmarkAssetProfile[];
   readonly lambdaConfigs: LambdaConfig[];
   readonly implementations: BenchmarkImplementation[];
@@ -65,6 +71,8 @@ export const benchmarkConfigSchema = z
     repetitions: positiveIntegerSchema.optional(),
     startRepetition: positiveIntegerSchema.optional(),
     maxWallClockMinutes: z.number().positive().optional(),
+    preserveOnFailure: z.boolean().optional(),
+    detailedFailureDiagnostics: z.boolean().optional(),
     runToken: nonEmptyStringSchema.optional(),
     snapshotDate: snapshotDateSchema.optional(),
     region: nonEmptyStringSchema.optional(),
@@ -74,7 +82,15 @@ export const benchmarkConfigSchema = z
     destinationPrefix: nonEmptyStringSchema.optional(),
     assetProfiles: z.array(z.enum(BENCHMARK_ASSET_PROFILES)).nonempty().optional(),
     lambdaConfigs: z
-      .array(z.object({ memoryMb: positiveIntegerSchema, parallel: positiveIntegerSchema }))
+      .array(
+        z
+          .object({
+            memoryMb: positiveIntegerSchema,
+            parallel: positiveIntegerSchema,
+            sourceWindowBytes: positiveIntegerSchema.nullable().optional(),
+          })
+          .strict(),
+      )
       .nonempty()
       .optional(),
     implementations: z.array(z.enum(BENCHMARK_IMPLEMENTATIONS)).nonempty().optional(),
@@ -94,6 +110,8 @@ const CLI_OPTIONS = [
   "start-repetition",
   "max-wall-clock-minutes",
   "approved-through-repetition",
+  "preserve-on-failure",
+  "detailed-failure-diagnostics",
   "asset-profiles",
   "lambda-configs",
   "implementations",
@@ -163,6 +181,19 @@ export function parseBenchmarkRunOptions(args: string[]): BenchmarkRunOptions {
     values.get("approved-through-repetition") ?? "1",
     "approved-through-repetition",
   );
+  const preserveOnFailure = booleanValue(
+    values.get("preserve-on-failure") ?? config.preserveOnFailure ?? false,
+    "preserve-on-failure",
+  );
+  const detailedFailureDiagnostics = booleanValue(
+    values.get("detailed-failure-diagnostics") ?? config.detailedFailureDiagnostics ?? true,
+    "detailed-failure-diagnostics",
+  );
+  if (methodologyVersion === 2 && !detailedFailureDiagnostics) {
+    throw new Error(
+      "Methodology-v2 benchmarks require detailed failure diagnostics; use methodology v1 for an explicit production-default overhead diagnostic.",
+    );
+  }
   const scratchRoot = resolve(
     values.get("scratch-root") ??
       config.scratchRoot ??
@@ -197,6 +228,8 @@ export function parseBenchmarkRunOptions(args: string[]): BenchmarkRunOptions {
     startRepetition,
     maxWallClockMinutes,
     approvedThroughRepetition,
+    preserveOnFailure,
+    detailedFailureDiagnostics,
     assetProfiles,
     lambdaConfigs,
     implementations,
@@ -250,6 +283,7 @@ export function benchmarkConfigurationSha256(options: BenchmarkRunOptions): stri
         assetProfiles: options.assetProfiles,
         lambdaConfigs: options.lambdaConfigs,
         implementations: options.implementations,
+        detailedFailureDiagnostics: options.detailedFailureDiagnostics,
         phases: options.phases,
         decisionRunId: options.decisionRunId ?? null,
         comparisonVariant: options.comparisonVariant ?? null,
@@ -327,6 +361,11 @@ function optionalPositiveNumber(
   if (!Number.isFinite(parsed) || parsed <= 0) throw new Error(`${name} must be positive.`);
   return parsed;
 }
+function booleanValue(value: string | boolean, name: string): boolean {
+  if (value === true || value === "true") return true;
+  if (value === false || value === "false") return false;
+  throw new Error(`${name} must be true or false.`);
+}
 function today(): string {
   return new Date().toISOString().slice(0, 10);
 }
@@ -337,6 +376,6 @@ function isIsoDate(value: string): boolean {
 }
 function usage(): never {
   throw new Error(
-    "Usage: benchmark:run-assets --config <file> [--run-id <uuid>] [--repetitions 5] [--start-repetition 1] [--approved-through-repetition <n>] [--max-wall-clock-minutes <minutes>] [--concurrency 1]",
+    "Usage: benchmark:run-assets --config <file> [--run-id <uuid>] [--repetitions 5] [--start-repetition 1] [--approved-through-repetition <n>] [--max-wall-clock-minutes <minutes>] [--preserve-on-failure true|false] [--detailed-failure-diagnostics true|false] [--concurrency 1]",
   );
 }
