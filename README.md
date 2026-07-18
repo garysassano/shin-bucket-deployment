@@ -87,7 +87,7 @@ The construct follows the upstream `BucketDeployment` API where the behavior map
 | CloudFront           | `cloudfrontInvalidation`                                                                                                                       |
 | Provider Lambda      | `architecture`, `failureDiagnostics`, `logGroup`, `memoryLimit`, `providerScope`, `role`, `securityGroups`, `vpc`, `vpcSubnets`              |
 | Provider build       | `localProviderBuild`                                                                                                                           |
-| Runtime tuning       | `maxParallelTransfers`, experimental `advancedRuntimeTuning`                                                                                   |
+| Runtime tuning       | `maxParallelTransfers`, `advancedRuntimeTuning`                                                                                                |
 | Outputs and response | `deployedBucket`, `objectKeys`, `handlerRole`, `handlerFunction`                                                                               |
 
 ### Replaced Properties
