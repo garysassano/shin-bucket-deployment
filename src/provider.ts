@@ -9,6 +9,7 @@ import {
   Runtime,
 } from "aws-cdk-lib/aws-lambda";
 import type { Construct } from "constructs";
+import { FailureDiagnostics, ProviderScope } from "./enums";
 import { ValidationError } from "./errors";
 import type { ShinBucketDeploymentProps } from "./shin-bucket-deployment";
 import { normalizeSingletonValue, stableStringify } from "./stable-json";
@@ -58,7 +59,7 @@ export function getOrCreateHandler(
     : undefined;
   const manifestPath =
     rustProjectPath !== undefined ? join(rustProjectPath, "Cargo.toml") : undefined;
-  const stackScoped = (props.providerScope ?? "stack") === "stack";
+  const stackScoped = (props.providerScope ?? ProviderScope.STACK) === ProviderScope.STACK;
   const handlerId = stackScoped
     ? `${SHARED_HANDLER_ID_PREFIX}${renderHandlerConfigHash(
         stack,
@@ -92,7 +93,7 @@ export function getOrCreateHandler(
       props.securityGroups && props.securityGroups.length > 0 ? props.securityGroups : undefined,
     environment: {
       RUST_BACKTRACE: "1",
-      ...(props.failureDiagnostics === "detailed"
+      ...(props.failureDiagnostics === FailureDiagnostics.DETAILED
         ? { SHIN_DETAILED_FAILURE_DIAGNOSTICS: "true" }
         : {}),
     },
@@ -291,7 +292,7 @@ function renderHandlerConfigHash(
   const config = {
     architecture: architecture.name,
     bundling: normalizeSingletonValue(props.localProviderBuild?.bundling),
-    failureDiagnostics: props.failureDiagnostics ?? "standard",
+    failureDiagnostics: props.failureDiagnostics ?? FailureDiagnostics.STANDARD,
     handlerSource,
     logGroup: normalizeSingletonValue(props.logGroup),
     memoryLimit: normalizeSingletonValue(props.memoryLimit ?? DEFAULT_MEMORY_LIMIT_MB),

@@ -33,6 +33,7 @@
   "files": [
     "lib/**/*.js",
     "lib/cataloged-source.d.ts",
+    "lib/enums.d.ts",
     "lib/errors.d.ts",
     "lib/index.d.ts",
     "lib/shin-bucket-deployment.d.ts",

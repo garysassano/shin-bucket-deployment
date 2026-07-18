@@ -1,6 +1,7 @@
 import { Token } from "aws-cdk-lib";
 import type { BucketDeploymentProps } from "aws-cdk-lib/aws-s3-deployment";
 import type { Construct } from "constructs";
+import { DestinationWriteRetryJitter, FailureDiagnostics, ProviderScope } from "./enums";
 import { ValidationError } from "./errors";
 import type {
   ShinBucketDeploymentAdvancedRuntimeTuning,
@@ -57,20 +58,23 @@ export function validateDeploymentProps(scope: Construct, props: ShinBucketDeplo
       })
     | undefined;
 
-  if (props.providerScope !== undefined && !["deployment", "stack"].includes(props.providerScope)) {
+  if (
+    props.providerScope !== undefined &&
+    !Object.values(ProviderScope).includes(props.providerScope)
+  ) {
     throw new ValidationError(
       "ShinBucketDeploymentInvalidProviderScope",
-      'providerScope must be either "deployment" or "stack".',
+      "providerScope must be ProviderScope.STACK or ProviderScope.DEPLOYMENT.",
       scope,
     );
   }
   if (
     props.failureDiagnostics !== undefined &&
-    !["detailed", "standard"].includes(props.failureDiagnostics)
+    !Object.values(FailureDiagnostics).includes(props.failureDiagnostics)
   ) {
     throw new ValidationError(
       "ShinBucketDeploymentInvalidFailureDiagnostics",
-      'failureDiagnostics must be either "detailed" or "standard".',
+      "failureDiagnostics must be FailureDiagnostics.STANDARD or FailureDiagnostics.DETAILED.",
       scope,
     );
   }
@@ -111,14 +115,14 @@ export function validateDeploymentProps(scope: Construct, props: ShinBucketDeplo
   if (maybeRemovedProps.shareHandler !== undefined) {
     throw new ValidationError(
       "ShinBucketDeploymentShareHandlerReplaced",
-      'ShinBucketDeployment replaces shareHandler with providerScope: "stack" or "deployment".',
+      "ShinBucketDeployment replaces shareHandler with providerScope using ProviderScope.STACK or ProviderScope.DEPLOYMENT.",
       scope,
     );
   }
   if (maybeRemovedProps.detailedFailureDiagnostics !== undefined) {
     throw new ValidationError(
       "ShinBucketDeploymentDetailedFailureDiagnosticsReplaced",
-      'ShinBucketDeployment replaces detailedFailureDiagnostics with failureDiagnostics: "standard" or "detailed".',
+      "ShinBucketDeployment replaces detailedFailureDiagnostics with failureDiagnostics using FailureDiagnostics.STANDARD or FailureDiagnostics.DETAILED.",
       scope,
     );
   }
@@ -383,10 +387,13 @@ function validateDestinationWriteRetryProps(
       scope,
     );
   }
-  if (props.jitter !== undefined && props.jitter !== "full" && props.jitter !== "none") {
+  if (
+    props.jitter !== undefined &&
+    !Object.values(DestinationWriteRetryJitter).includes(props.jitter)
+  ) {
     throw new ValidationError(
       "ShinBucketDeploymentInvalidDestinationWriteRetryJitter",
-      'advancedRuntimeTuning.destinationWriteRetry.jitter must be either "full" or "none".',
+      "advancedRuntimeTuning.destinationWriteRetry.jitter must be DestinationWriteRetryJitter.FULL or DestinationWriteRetryJitter.NONE.",
       scope,
     );
   }

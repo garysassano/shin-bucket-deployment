@@ -9,7 +9,7 @@ import { Architecture } from "aws-cdk-lib/aws-lambda";
 import { Bucket, BucketEncryption, BucketNamespace, CfnBucket } from "aws-cdk-lib/aws-s3";
 import type { IConstruct } from "constructs";
 import { expect, test } from "vitest";
-import { ShinBucketDeployment, Source } from "../../src";
+import { FailureDiagnostics, ProviderScope, ShinBucketDeployment, Source } from "../../src";
 import { stableStringify } from "../../src/stable-json";
 import { testLocalProviderBuild } from "../support/bundling";
 import { ensurePrebuiltBootstrapAssets } from "../support/prebuilt-assets";
@@ -164,7 +164,7 @@ test("reuses a shared prebuilt handler for compatible deployments", () => {
     const second = new ShinBucketDeployment(stack, "SecondDeploy", {
       sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
       destinationBucket: secondBucket,
-      providerScope: "stack",
+      providerScope: ProviderScope.STACK,
     });
 
     expect(first.handlerFunction).toBe(second.handlerFunction);
@@ -195,7 +195,7 @@ test("binds shared prebuilt handler identity to the package version and archive 
       .update(
         stableStringify({
           architecture: "arm64",
-          failureDiagnostics: "standard",
+          failureDiagnostics: FailureDiagnostics.STANDARD,
           handlerSource: {
             kind: "prebuilt",
             packageVersion: manifest.version,
@@ -225,7 +225,7 @@ test("detailed failure diagnostics are opt-in and select a distinct shared handl
   const diagnosticDeployment = new ShinBucketDeployment(stack, "DiagnosticDeploy", {
     sources: [Source.data("diagnostic.txt", "diagnostic")],
     destinationBucket: new Bucket(stack, "DiagnosticDest"),
-    failureDiagnostics: "detailed",
+    failureDiagnostics: FailureDiagnostics.DETAILED,
     localProviderBuild: testLocalProviderBuild(),
   });
 
@@ -312,7 +312,7 @@ test("reuses a shared handler for compatible deployments in the same stack", () 
 });
 
 test("keeps omitted and explicit stack-scoped provider templates identical", () => {
-  function synth(providerScope: "stack" | undefined): Record<string, unknown> {
+  function synth(providerScope: ProviderScope.STACK | undefined): Record<string, unknown> {
     const stack = new Stack();
     const destinationBucket = new Bucket(stack, "Dest");
     new ShinBucketDeployment(stack, "Deploy", {
@@ -324,7 +324,7 @@ test("keeps omitted and explicit stack-scoped provider templates identical", () 
     return Template.fromStack(stack).toJSON();
   }
 
-  expect(synth("stack")).toEqual(synth(undefined));
+  expect(synth(ProviderScope.STACK)).toEqual(synth(undefined));
 });
 
 test("creates separate handlers when the provider configuration differs", () => {
@@ -366,19 +366,19 @@ test("isolates functions, generated roles, and destination policies per deployme
   const sharedSecond = new ShinBucketDeployment(stack, "SharedSecondDeploy", {
     sources: [Source.data("index.html", "shared-second")],
     destinationBucket: sharedSecondBucket,
-    providerScope: "stack",
+    providerScope: ProviderScope.STACK,
     localProviderBuild: testLocalProviderBuild(),
   });
   const isolatedFirst = new ShinBucketDeployment(stack, "IsolatedFirstDeploy", {
     sources: [Source.data("index.html", "isolated-first")],
     destinationBucket: isolatedFirstBucket,
-    providerScope: "deployment",
+    providerScope: ProviderScope.DEPLOYMENT,
     localProviderBuild: testLocalProviderBuild(),
   });
   const isolatedSecond = new ShinBucketDeployment(stack, "IsolatedSecondDeploy", {
     sources: [Source.data("index.html", "isolated-second")],
     destinationBucket: isolatedSecondBucket,
-    providerScope: "deployment",
+    providerScope: ProviderScope.DEPLOYMENT,
     localProviderBuild: testLocalProviderBuild(),
   });
 
@@ -479,7 +479,7 @@ test("keeps an isolated handler and service token stable across configuration up
     const deployment = new ShinBucketDeployment(stack, "Deploy", {
       sources: [Source.data("index.html", `memory=${memoryLimit}`)],
       destinationBucket,
-      providerScope: "deployment",
+      providerScope: ProviderScope.DEPLOYMENT,
       memoryLimit,
       localProviderBuild: testLocalProviderBuild(),
     });

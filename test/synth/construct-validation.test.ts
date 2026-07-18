@@ -6,6 +6,7 @@ import { S3BucketOrigin } from "aws-cdk-lib/aws-cloudfront-origins";
 import { Bucket } from "aws-cdk-lib/aws-s3";
 import { describe, expect, test } from "vitest";
 import {
+  DestinationWriteRetryJitter,
   ShinBucketDeployment,
   type ShinBucketDeploymentProps,
   Source,
@@ -42,7 +43,7 @@ describe("ShinBucketDeployment validation and option coverage", () => {
           providerScope: "shared" as never,
           localProviderBuild: testLocalProviderBuild(),
         }),
-    ).toThrow(/providerScope must be either "deployment" or "stack"/);
+    ).toThrow(/ProviderScope\.STACK or ProviderScope\.DEPLOYMENT/);
   });
 
   test("rejects an invalid failure diagnostics mode", () => {
@@ -57,7 +58,7 @@ describe("ShinBucketDeployment validation and option coverage", () => {
           failureDiagnostics: "full" as never,
           localProviderBuild: testLocalProviderBuild(),
         }),
-    ).toThrow(/failureDiagnostics must be either "detailed" or "standard"/);
+    ).toThrow(/FailureDiagnostics\.STANDARD or FailureDiagnostics\.DETAILED/);
   });
 
   test("renders destination ownership without authorizing previous cleanup by default", () => {
@@ -380,8 +381,8 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     ["retainOnDelete", false, /destinationLifecycle\.onChange\.deleteObjects/],
     ["distributionPaths", ["/*"], /cloudfrontInvalidation/],
     ["outputObjectKeys", false, /objectKeys property is accessed/],
-    ["shareHandler", false, /providerScope/],
-    ["detailedFailureDiagnostics", true, /failureDiagnostics/],
+    ["shareHandler", false, /ProviderScope/],
+    ["detailedFailureDiagnostics", true, /FailureDiagnostics/],
     ["rustProjectPath", "/tmp/rust", /localProviderBuild/],
     ["bundling", {}, /localProviderBuild/],
   ] as const)("rejects unsupported prop %s", (propName, value, pattern) => {
@@ -576,7 +577,7 @@ describe("ShinBucketDeployment validation and option coverage", () => {
           maxDelayMs: 1_000,
           slowdownBaseDelayMs: 2_000,
           slowdownMaxDelayMs: 20_000,
-          jitter: "none",
+          jitter: DestinationWriteRetryJitter.NONE,
         },
       },
       localProviderBuild: testLocalProviderBuild(),
@@ -667,7 +668,7 @@ describe("ShinBucketDeployment validation and option coverage", () => {
           },
         },
       });
-    }).toThrow(/jitter/);
+    }).toThrow(/DestinationWriteRetryJitter\.FULL or DestinationWriteRetryJitter\.NONE/);
 
     expect(() => {
       new ShinBucketDeployment(stack, "SmallSourceBlock", {

@@ -1,6 +1,6 @@
 import { App, CfnOutput, RemovalPolicy, Stack, type StackProps } from "aws-cdk-lib";
 import { Bucket } from "aws-cdk-lib/aws-s3";
-import { ShinBucketDeployment, Source } from "../../../src";
+import { ProviderScope, ShinBucketDeployment, Source } from "../../../src";
 
 class HandlerIsolationStack extends Stack {
   constructor(scope: App, id: string, props?: StackProps) {
@@ -30,7 +30,7 @@ class HandlerIsolationStack extends Stack {
         sources: [Source.data("value.txt", `${prefix}\n`)],
         destinationBucket,
         destinationKeyPrefix: prefix,
-        providerScope: "deployment",
+        providerScope: ProviderScope.DEPLOYMENT,
       });
     }
 

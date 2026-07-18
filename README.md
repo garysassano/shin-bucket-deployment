@@ -90,6 +90,8 @@ The construct follows the upstream `BucketDeployment` API where the behavior map
 | Runtime tuning       | `maxParallelTransfers`, experimental `advancedRuntimeTuning`                                                                                   |
 | Outputs and response | `deployedBucket`, `objectKeys`, `handlerRole`, `handlerFunction`                                                                               |
 
+Closed mode selections use the `ProviderScope`, `FailureDiagnostics`, and `DestinationWriteRetryJitter` enums exported from the package root.
+
 Configure `cloudfrontInvalidation` only when a successful deployment should invalidate a CloudFront distribution:
 
 ```ts
@@ -100,7 +102,7 @@ cloudfrontInvalidation: {
 },
 ```
 
-The provider is stack-scoped by default. Set `providerScope: "deployment"` only when a deployment needs its own Lambda and generated role. Set `failureDiagnostics: "detailed"` only while investigating destination-write failures. Access `objectKeys` only when the deployed key list is needed; otherwise Shin omits it from the custom-resource response automatically.
+The provider is stack-scoped by default. Set `providerScope: ProviderScope.DEPLOYMENT` only when a deployment needs its own Lambda and generated role. Set `failureDiagnostics: FailureDiagnostics.DETAILED` only while investigating destination-write failures. Access `objectKeys` only when the deployed key list is needed; otherwise Shin omits it from the custom-resource response automatically.
 
 ### Replaced Properties
 

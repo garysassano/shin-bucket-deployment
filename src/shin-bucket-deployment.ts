@@ -18,6 +18,7 @@ import { Bucket, type IBucket } from "aws-cdk-lib/aws-s3";
 import type { BucketDeploymentProps, ISource, SourceConfig } from "aws-cdk-lib/aws-s3-deployment";
 import { Construct } from "constructs";
 import { destinationChecksumStrategy, inspectableDestinationBucketResource } from "./destination";
+import type { DestinationWriteRetryJitter, FailureDiagnostics, ProviderScope } from "./enums";
 import { ValidationError } from "./errors";
 import { grantDestinationPermissions } from "./iam";
 import { PROVIDER_TIMEOUT, getOrCreateHandler } from "./provider";
@@ -30,12 +31,6 @@ import {
 import { destinationOwnerPrefix, validateDeploymentProps } from "./validation";
 
 const CUSTOM_RESOURCE_OWNER_TAG = "aws-cdk:cr-owned";
-
-export type ShinBucketDeploymentDestinationWriteRetryJitter = "full" | "none";
-
-export type ShinBucketDeploymentProviderScope = "deployment" | "stack";
-
-export type ShinBucketDeploymentFailureDiagnostics = "detailed" | "standard";
 
 export interface ShinBucketDeploymentBundlingCommandHooks {
   /**
@@ -236,9 +231,9 @@ export interface ShinBucketDeploymentDestinationWriteRetryTuning {
 
   /**
    * Jitter mode applied to computed destination write retry delays.
-   * @default "full"
+   * @default DestinationWriteRetryJitter.FULL
    */
-  readonly jitter?: ShinBucketDeploymentDestinationWriteRetryJitter;
+  readonly jitter?: DestinationWriteRetryJitter;
 }
 
 /**
@@ -430,34 +425,34 @@ export interface ShinBucketDeploymentProps
   /**
    * Scope of the provider Lambda.
    *
-   * `"stack"` reuses one Lambda for deployments with the same provider
-   * configuration. `"deployment"` creates a deployment-scoped function and
-   * generated role, preventing permissions from other deployments from
-   * accumulating on them. Explicit `role` and `logGroup` values remain
-   * caller-owned and can still be shared intentionally.
+   * `ProviderScope.STACK` reuses one Lambda for deployments with the same
+   * provider configuration. `ProviderScope.DEPLOYMENT` creates a
+   * deployment-scoped function and generated role, preventing permissions from
+   * other deployments from accumulating on them. Explicit `role` and
+   * `logGroup` values remain caller-owned and can still be shared intentionally.
    *
    * Isolation creates more Lambda, role, and log resources and gives each
    * deployment an independent cold-start lifecycle.
    *
-   * @default "stack"
+   * @default ProviderScope.STACK
    */
-  readonly providerScope?: ShinBucketDeploymentProviderScope;
+  readonly providerScope?: ProviderScope;
 
   /**
    * Failure diagnostics mode for destination `PutObject` attempts.
    *
-   * `"detailed"` records body progress and instantaneous source pressure,
-   * emits an immediate sanitized failure event, and includes bounded failure
-   * groups in the final deployment summary. This adds bookkeeping to streamed
-   * uploads and is intended for diagnostics rather than normal production
-   * operation.
+   * `FailureDiagnostics.DETAILED` records body progress and instantaneous
+   * source pressure, emits an immediate sanitized failure event, and includes
+   * bounded failure groups in the final deployment summary. This adds
+   * bookkeeping to streamed uploads and is intended for diagnostics rather
+   * than normal production operation.
    *
    * This setting is part of the shared-handler identity, so deployments using
    * different values do not share a Lambda function.
    *
-   * @default "standard"
+   * @default FailureDiagnostics.STANDARD
    */
-  readonly failureDiagnostics?: ShinBucketDeploymentFailureDiagnostics;
+  readonly failureDiagnostics?: FailureDiagnostics;
 
   /**
    * Memory allocated to the provider Lambda, in MiB.
@@ -477,7 +472,7 @@ export interface ShinBucketDeploymentProps
    * Deployments with the same provider configuration share a handler and role
    * by default. Source, destination, KMS, and CloudFront permissions from every
    * sharing deployment accumulate on that role. A caller-supplied role remains
-   * caller-owned even when `providerScope` is `"deployment"`.
+   * caller-owned even when `providerScope` is `ProviderScope.DEPLOYMENT`.
    *
    * @default - a role is created for the provider
    */
@@ -552,8 +547,9 @@ export interface ShinBucketDeploymentProps
  * source, destination, KMS key, and CloudFront distribution used by those
  * deployments. Handler settings and the package/provider identity participate
  * in shared identity; request-level `advancedRuntimeTuning` does not and can
- * differ between sharing deployments. Set `providerScope: "deployment"` for a
- * deployment-scoped function and generated role.
+ * differ between sharing deployments. Set
+ * `providerScope: ProviderScope.DEPLOYMENT` for a deployment-scoped function
+ * and generated role.
  */
 export class ShinBucketDeployment extends Construct {
   private readonly cr: CustomResource;
@@ -576,7 +572,7 @@ export class ShinBucketDeployment extends Construct {
    * The backing Rust Lambda function.
    *
    * This is shared by default and deployment-scoped when `providerScope` is
-   * `"deployment"`.
+   * `ProviderScope.DEPLOYMENT`.
    */
   public readonly handlerFunction: LambdaFunction;
 

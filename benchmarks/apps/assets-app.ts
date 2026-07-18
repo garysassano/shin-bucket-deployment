@@ -16,7 +16,7 @@ import {
   Source as AwsSource,
 } from "aws-cdk-lib/aws-s3-deployment";
 import type { Construct } from "constructs";
-import { ShinBucketDeployment, Source as ShinSource } from "../../src";
+import { FailureDiagnostics, ShinBucketDeployment, Source as ShinSource } from "../../src";
 import { ensureBenchmarkAssets } from "../src/assets";
 import {
   MARKER_BENCHMARK_VALUE_A,
@@ -90,7 +90,9 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
     if (implementation === "shin") {
       deployment = new ShinBucketDeployment(this, "DeployBenchmarkAssets", {
         ...deploymentProps,
-        failureDiagnostics: detailedFailureDiagnostics ? "detailed" : "standard",
+        failureDiagnostics: detailedFailureDiagnostics
+          ? FailureDiagnostics.DETAILED
+          : FailureDiagnostics.STANDARD,
         destinationLifecycle: {
           onDeploy: {
             deleteStaleObjects,
