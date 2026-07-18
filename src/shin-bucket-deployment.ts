@@ -295,28 +295,30 @@ export interface ShinBucketDeploymentDestinationLifecycle {
    */
   readonly onChange?: {
     /**
-     * Delete objects from the old destination namespace.
+     * Delete objects from the previous destination namespace.
      *
-     * CloudFormation supplies the old prefix through `OldResourceProperties`.
-     * For a child-to-parent move, cleanup preserves old-child keys that remain
-     * in the current deployment plan.
+     * CloudFormation supplies the previous prefix through
+     * `OldResourceProperties`.
+     * For a child-to-parent move, cleanup preserves previous-child keys that
+     * remain in the current deployment plan.
      *
      * @default false
      */
-    readonly deleteObjects?: boolean;
+    readonly deletePreviousObjects?: boolean;
 
     /**
-     * Bucket containing the objects to delete when the destination bucket
-     * changes.
+     * Previous destination bucket containing the objects to delete when the
+     * destination bucket changes.
      *
-     * Omit this for same-bucket prefix changes. Requires `deleteObjects=true`.
+     * Omit this for same-bucket prefix changes. Requires
+     * `deletePreviousObjects=true`.
      *
      * @default - the current destination bucket
      */
-    readonly fromBucket?: IBucket;
+    readonly previousBucket?: IBucket;
 
     /**
-     * Invalidate the old CloudFront distribution after its cached content
+     * Invalidate the previous CloudFront distribution after its cached content
      * changes.
      *
      * Provide this only when the distribution changed. An unchanged current
@@ -324,7 +326,7 @@ export interface ShinBucketDeploymentDestinationLifecycle {
      *
      * @default - no separate previous distribution
      */
-    readonly invalidateDistribution?: IDistribution;
+    readonly invalidatePreviousDistribution?: IDistribution;
   };
 
   /**
@@ -332,11 +334,11 @@ export interface ShinBucketDeploymentDestinationLifecycle {
    */
   readonly onDelete?: {
     /**
-     * Delete objects from the destination namespace.
+     * Delete objects from the current destination namespace.
      *
      * @default false
      */
-    readonly deleteObjects?: boolean;
+    readonly deleteCurrentObjects?: boolean;
   };
 }
 
@@ -565,12 +567,15 @@ export class ShinBucketDeployment extends Construct {
       this,
       this.destinationBucket,
     );
-    const deleteObjectsOnChange = props.destinationLifecycle?.onChange?.deleteObjects === true;
-    const previousDestinationBucket = deleteObjectsOnChange
-      ? (props.destinationLifecycle?.onChange?.fromBucket ?? this.destinationBucket)
+    const deletePreviousObjectsOnChange =
+      props.destinationLifecycle?.onChange?.deletePreviousObjects === true;
+    const previousBucket = deletePreviousObjectsOnChange
+      ? (props.destinationLifecycle?.onChange?.previousBucket ?? this.destinationBucket)
       : undefined;
-    const previousDistribution = props.destinationLifecycle?.onChange?.invalidateDistribution;
-    const deleteObjectsOnDelete = props.destinationLifecycle?.onDelete?.deleteObjects === true;
+    const previousDistribution =
+      props.destinationLifecycle?.onChange?.invalidatePreviousDistribution;
+    const deleteCurrentObjectsOnDelete =
+      props.destinationLifecycle?.onDelete?.deleteCurrentObjects === true;
     const deleteStaleObjectsOnDeploy =
       props.destinationLifecycle?.onDeploy?.deleteStaleObjects ?? true;
 
@@ -598,8 +603,8 @@ export class ShinBucketDeployment extends Construct {
     grantDestinationPermissions(this, this.handlerFunction, {
       destinationBucket: this.destinationBucket,
       destinationKeyPrefix: props.destinationKeyPrefix,
-      deleteCurrentObjects: deleteStaleObjectsOnDeploy || deleteObjectsOnDelete,
-      previousDestinationBucket,
+      deleteCurrentObjects: deleteStaleObjectsOnDeploy || deleteCurrentObjectsOnDelete,
+      previousBucket,
       distribution: props.distribution,
       previousDistribution,
     });
@@ -656,15 +661,15 @@ export class ShinBucketDeployment extends Construct {
         DestinationOwnerId: Lazy.uncachedString({
           produce: () => this.cr.node.addr.slice(-8),
         }),
-        DeletePreviousObjectsOnChange: previousDestinationBucket
+        DeletePreviousObjectsOnChange: previousBucket
           ? {
-              DestinationBucketName: previousDestinationBucket.bucketName,
+              DestinationBucketName: previousBucket.bucketName,
             }
           : undefined,
         InvalidatePreviousDistributionOnChange:
           previousDistribution?.distributionRef.distributionId,
         WaitForDistributionInvalidation: props.waitForDistributionInvalidation ?? true,
-        DeleteCurrentObjectsOnDelete: deleteObjectsOnDelete,
+        DeleteCurrentObjectsOnDelete: deleteCurrentObjectsOnDelete,
         Extract: props.extract ?? true,
         DeleteStaleObjectsOnDeployment: deleteStaleObjectsOnDeploy,
         Exclude: props.exclude,

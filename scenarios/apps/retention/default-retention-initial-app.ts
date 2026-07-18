@@ -13,7 +13,7 @@ class DefaultRetentionShinBucketDeploymentStack extends Stack {
     new ShinBucketDeployment(this, "DeployWebsite", {
       sources: [
         Source.asset("test/fixtures/my-website"),
-        Source.data("runtime/current.txt", "phase=initial\nstate=retain-old-prefix-on-update"),
+        Source.data("runtime/current.txt", "phase=initial\nstate=retain-previous-prefix-on-update"),
       ],
       destinationBucket: websiteBucket,
       destinationKeyPrefix: "retain-initial",

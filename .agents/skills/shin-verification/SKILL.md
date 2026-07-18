@@ -117,9 +117,9 @@ The default suite includes:
 
 Lifecycle scenarios and assertions must use the public phase names
 `onDeploy`, `onChange`, and `onDelete`. Use `deleteStaleObjects`,
-`deleteObjects`, `fromBucket`, and `invalidateDistribution` for the actions and
-cross-bucket target. Do not describe the public behavior as `prune` or
-`retainOnDelete`.
+`deletePreviousObjects`, `previousBucket`, `invalidatePreviousDistribution`,
+and `deleteCurrentObjects` for the actions and cross-bucket target. Do not
+describe the public behavior as `prune` or `retainOnDelete`.
 
 Always destroy AWS verification stacks and verify they are absent before finalizing `docs/verification.md`. Raw AWS logs and resource identifiers stay in scratch only.
 

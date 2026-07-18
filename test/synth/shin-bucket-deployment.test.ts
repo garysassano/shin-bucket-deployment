@@ -441,7 +441,7 @@ test("gives each handler replacement a distinct destination owner", () => {
     new ShinBucketDeployment(stack, "Deploy", {
       sources: [Source.data("index.html", `memory=${memoryLimit}`)],
       destinationBucket,
-      destinationLifecycle: { onDelete: { deleteObjects: true } },
+      destinationLifecycle: { onDelete: { deleteCurrentObjects: true } },
       memoryLimit,
       bundling: testBundling(),
     });
@@ -853,7 +853,7 @@ test("keeps delete and list permissions scoped when current object deletion is e
     destinationKeyPrefix: "site",
     destinationLifecycle: {
       onDelete: {
-        deleteObjects: true,
+        deleteCurrentObjects: true,
       },
     },
     bundling: testBundling(),
@@ -954,7 +954,7 @@ test("keeps explicit same-bucket previous cleanup broad and deliberate", () => {
     destinationKeyPrefix: "site/current",
     destinationLifecycle: {
       onDeploy: { deleteStaleObjects: false },
-      onChange: { deleteObjects: true },
+      onChange: { deletePreviousObjects: true },
     },
     bundling: testBundling(),
   });
@@ -987,7 +987,7 @@ test("keeps explicit same-bucket previous cleanup broad and deliberate", () => {
   });
 });
 
-test("limits cross-bucket cleanup authority to the explicitly authorized old bucket", () => {
+test("limits cross-bucket cleanup authority to the explicitly authorized previous bucket", () => {
   const stack = new Stack();
   const previousBucket = new Bucket(stack, "PreviousDest");
   const destinationBucket = new Bucket(stack, "CurrentDest");
@@ -998,7 +998,10 @@ test("limits cross-bucket cleanup authority to the explicitly authorized old buc
     destinationKeyPrefix: "site/current",
     destinationLifecycle: {
       onDeploy: { deleteStaleObjects: false },
-      onChange: { deleteObjects: true, fromBucket: previousBucket },
+      onChange: {
+        deletePreviousObjects: true,
+        previousBucket,
+      },
     },
     bundling: testBundling(),
   });

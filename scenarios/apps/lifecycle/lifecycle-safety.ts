@@ -113,7 +113,7 @@ class LifecycleSafetyStack extends Stack {
         ? {
             destinationLifecycle: {
               onDeploy: { deleteStaleObjects: false },
-              onChange: { deleteObjects: true },
+              onChange: { deletePreviousObjects: true },
             },
           }
         : {}),

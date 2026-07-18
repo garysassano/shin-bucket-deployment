@@ -19,35 +19,38 @@ class CrossBucketChangeStack extends Stack {
   constructor(scope: App, id: string, updated: boolean, props?: StackProps) {
     super(scope, id, props);
 
-    const oldBucket = new Bucket(this, "OldBucket", {
+    const previousBucket = new Bucket(this, "PreviousBucket", {
       autoDeleteObjects: true,
       removalPolicy: RemovalPolicy.DESTROY,
     });
-    const newBucket = new Bucket(this, "NewBucket", {
+    const currentBucket = new Bucket(this, "CurrentBucket", {
       autoDeleteObjects: true,
       removalPolicy: RemovalPolicy.DESTROY,
     });
 
     new ShinBucketDeployment(this, "DeployWebsite", {
       sources: updated
-        ? [Source.data("current.txt", "bucket=new\n")]
+        ? [Source.data("current.txt", "bucket=current\n")]
         : [
-            Source.data("current.txt", "bucket=old\n"),
+            Source.data("current.txt", "bucket=previous\n"),
             Source.data("obsolete.txt", "state=obsolete\n"),
           ],
-      destinationBucket: updated ? newBucket : oldBucket,
-      destinationKeyPrefix: updated ? "site/new" : "site/old",
+      destinationBucket: updated ? currentBucket : previousBucket,
+      destinationKeyPrefix: updated ? "site/current" : "site/previous",
       ...(updated
         ? {
             destinationLifecycle: {
               onDeploy: { deleteStaleObjects: false },
-              onChange: { deleteObjects: true, fromBucket: oldBucket },
+              onChange: {
+                deletePreviousObjects: true,
+                previousBucket,
+              },
             },
           }
         : {}),
     });
 
-    new CfnOutput(this, "OldBucketName", { value: oldBucket.bucketName });
-    new CfnOutput(this, "NewBucketName", { value: newBucket.bucketName });
+    new CfnOutput(this, "PreviousBucketName", { value: previousBucket.bucketName });
+    new CfnOutput(this, "CurrentBucketName", { value: currentBucket.bucketName });
   }
 }

@@ -9,7 +9,7 @@ interface DestinationPermissions {
   readonly destinationBucket: Bucket;
   readonly destinationKeyPrefix?: string;
   readonly deleteCurrentObjects: boolean;
-  readonly previousDestinationBucket?: IBucket;
+  readonly previousBucket?: IBucket;
   readonly distribution?: IDistributionRef;
   readonly previousDistribution?: IDistributionRef;
 }
@@ -51,15 +51,13 @@ export function grantDestinationPermissions(
   // other key and service.
   handler.addToRolePolicy(awsManagedS3KmsPolicyStatement(scope));
 
-  if (permissions.previousDestinationBucket) {
-    const previousGrants = BucketGrants.fromBucket(permissions.previousDestinationBucket);
+  if (permissions.previousBucket) {
+    const previousGrants = BucketGrants.fromBucket(permissions.previousBucket);
     previousGrants.actionsOnObjectKeys(handler, "*", "s3:DeleteObject");
     handler.addToRolePolicy(
-      destinationListPolicyStatement(permissions.previousDestinationBucket.bucketArn, undefined),
+      destinationListPolicyStatement(permissions.previousBucket.bucketArn, undefined),
     );
-    handler.addToRolePolicy(
-      bucketTagReadStatement(permissions.previousDestinationBucket.bucketArn),
-    );
+    handler.addToRolePolicy(bucketTagReadStatement(permissions.previousBucket.bucketArn));
   }
 
   if (permissions.distribution) {

@@ -186,7 +186,7 @@ describe("ShinBucketDeployment validation and option coverage", () => {
       destinationKeyPrefix: "new-site",
       destinationLifecycle: {
         onChange: {
-          deleteObjects: true,
+          deletePreviousObjects: true,
         },
       },
       bundling: testBundling(),
@@ -254,12 +254,12 @@ describe("ShinBucketDeployment validation and option coverage", () => {
           deleteStaleObjects: false,
         },
         onChange: {
-          deleteObjects: true,
-          fromBucket: previousBucket,
-          invalidateDistribution: previousDistribution,
+          deletePreviousObjects: true,
+          previousBucket,
+          invalidatePreviousDistribution: previousDistribution,
         },
         onDelete: {
-          deleteObjects: true,
+          deleteCurrentObjects: true,
         },
       },
       bundling: testBundling(),
@@ -375,7 +375,7 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     ],
     ["expires", { toString: (): string => "tomorrow" }, /does not support expires/],
     ["prune", false, /destinationLifecycle\.onDeploy\.deleteStaleObjects/],
-    ["retainOnDelete", false, /explicit destinationLifecycle\.onChange/],
+    ["retainOnDelete", false, /destinationLifecycle\.onChange\.deletePreviousObjects/],
   ] as const)("rejects unsupported prop %s", (propName, value, pattern) => {
     const stack = new Stack();
     const destinationBucket = new Bucket(stack, "Dest");
@@ -401,10 +401,10 @@ describe("ShinBucketDeployment validation and option coverage", () => {
           deleteDestinationObjectsOnDelete: true,
         },
       } as never);
-    }).toThrow(/onChange\.deleteObjects/);
+    }).toThrow(/onChange\.deletePreviousObjects/);
   });
 
-  test("rejects obsolete nested destination lifecycle action names", () => {
+  test("rejects replaced nested destination lifecycle action names", () => {
     const stack = new Stack();
     const destinationBucket = new Bucket(stack, "Dest");
 
@@ -414,17 +414,17 @@ describe("ShinBucketDeployment validation and option coverage", () => {
         destinationBucket,
         destinationLifecycle: {
           onChange: {
-            deletePreviousObjects: true,
+            deleteObjects: true,
           },
           onDelete: {
-            deleteCurrentObjects: true,
+            deleteObjects: true,
           },
         },
       } as never);
-    }).toThrow(/onChange\.deleteObjects/);
+    }).toThrow(/onChange\.deletePreviousObjects/);
   });
 
-  test("rejects fromBucket without deleteObjects", () => {
+  test("rejects previousBucket without deletePreviousObjects", () => {
     const stack = new Stack();
     const destinationBucket = new Bucket(stack, "Dest");
     const previousBucket = new Bucket(stack, "PreviousDest");
@@ -435,11 +435,11 @@ describe("ShinBucketDeployment validation and option coverage", () => {
         destinationBucket,
         destinationLifecycle: {
           onChange: {
-            fromBucket: previousBucket,
+            previousBucket,
           },
         },
       });
-    }).toThrow(/fromBucket requires deleteObjects=true/);
+    }).toThrow(/previousBucket requires deletePreviousObjects=true/);
   });
 
   test("fails synthesis when extract=false is combined with deploy-time markers", () => {
