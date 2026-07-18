@@ -97,7 +97,7 @@ The construct follows the upstream `BucketDeployment` API where the behavior map
 | `prune` | `destinationLifecycle.onDeploy.deleteStaleObjects` |
 | `retainOnDelete` | `destinationLifecycle.onChange.deleteObjects` and `destinationLifecycle.onDelete.deleteObjects` |
 | `distribution`, `distributionPaths`, `waitForDistributionInvalidation` | `cloudfrontInvalidation.distribution`, `cloudfrontInvalidation.paths`, `cloudfrontInvalidation.waitForCompletion` |
-| `outputObjectKeys` | Remove it; access `deployment.objectKeys` only when the deployed key list is needed. |
+| `outputObjectKeys` | `objectKeys`; Shin returns the key list only when this property is accessed. |
 | `logRetention` | `logGroup` |
 | `serverSideEncryption`, `serverSideEncryptionAwsKmsKeyId` | Default encryption on `destinationBucket` |
 
