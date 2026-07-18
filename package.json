@@ -1,6 +1,6 @@
 {
   "name": "shin-bucket-deployment",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "description": "Rust-backed near drop-in alternative to the AWS CDK BucketDeployment construct",
   "license": "MIT",
   "keywords": [
