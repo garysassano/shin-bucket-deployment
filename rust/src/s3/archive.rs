@@ -91,6 +91,7 @@ pub(crate) struct SourceDiagnostics {
     active_readers: AtomicU64,
     active_readers_high_water: AtomicU64,
     resident_bytes_high_water: AtomicU64,
+    local_capacity_waiters: AtomicU64,
 }
 
 #[derive(Debug)]
@@ -133,6 +134,10 @@ pub(crate) struct SourceDiagnosticsSnapshot {
 }
 
 struct ActiveSourceGetGuard {
+    diagnostics: Arc<SourceDiagnostics>,
+}
+
+struct LocalCapacityWaitGuard {
     diagnostics: Arc<SourceDiagnostics>,
 }
 
@@ -224,12 +229,31 @@ pub(crate) struct SourceByteBudget {
     permit_unit_bytes: u64,
     semaphore: Arc<Semaphore>,
     stats: Arc<DeploymentStats>,
+    capacity_waiters: Option<AtomicU64>,
 }
 
 struct SourceBudgetPermit {
     bytes: u64,
     _permit: OwnedSemaphorePermit,
-    stats: Arc<DeploymentStats>,
+    budget: Arc<SourceByteBudget>,
+}
+
+struct SourceBudgetWaitGuard {
+    budget: Arc<SourceByteBudget>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct SourceAttemptSnapshot {
+    pub(crate) local_window_bytes: u64,
+    pub(crate) local_committed_bytes: u64,
+    pub(crate) local_resident_bytes: u64,
+    pub(crate) local_capacity_waiters: u64,
+    pub(crate) global_budget_bytes: u64,
+    pub(crate) global_resident_bytes: u64,
+    pub(crate) global_available_permits: u64,
+    pub(crate) global_permit_unit_bytes: u64,
+    pub(crate) global_permit_waiters: u64,
+    pub(crate) active_fetches: u64,
 }
 
 pub(crate) struct SourcePlanningPermit {
@@ -519,6 +543,7 @@ impl SourceDiagnostics {
             active_readers: AtomicU64::new(0),
             active_readers_high_water: AtomicU64::new(0),
             resident_bytes_high_water: AtomicU64::new(0),
+            local_capacity_waiters: AtomicU64::new(0),
         }
     }
 
@@ -553,6 +578,13 @@ impl SourceDiagnostics {
         let active = self.active_gets.fetch_add(1, Ordering::AcqRel) + 1;
         update_high_water(&self.active_gets_high_water, active);
         ActiveSourceGetGuard {
+            diagnostics: Arc::clone(self),
+        }
+    }
+
+    fn track_local_capacity_wait(self: &Arc<Self>) -> LocalCapacityWaitGuard {
+        self.local_capacity_waiters.fetch_add(1, Ordering::AcqRel);
+        LocalCapacityWaitGuard {
             diagnostics: Arc::clone(self),
         }
     }
@@ -670,6 +702,14 @@ impl Drop for ActiveSourceGetGuard {
     }
 }
 
+impl Drop for LocalCapacityWaitGuard {
+    fn drop(&mut self) {
+        self.diagnostics
+            .local_capacity_waiters
+            .fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
 impl EntryAttemptClaim {
     pub(super) fn activate(mut self) -> io::Result<VecDeque<usize>> {
         self.store.activate_reader(&self.indices)?;
@@ -712,7 +752,11 @@ impl Drop for SourceFetchReservation {
 }
 
 impl SourceByteBudget {
-    pub(crate) fn new(limit_bytes: usize, stats: Arc<DeploymentStats>) -> Arc<Self> {
+    pub(crate) fn new(
+        limit_bytes: usize,
+        stats: Arc<DeploymentStats>,
+        detailed_failure_diagnostics: bool,
+    ) -> Arc<Self> {
         assert!(limit_bytes > 0, "source byte budget must be positive");
         let limit_bytes = u64::try_from(limit_bytes).expect("usize source budget fits u64");
         let permit_unit_bytes = SOURCE_BUDGET_PERMIT_UNIT_BYTES.min(limit_bytes);
@@ -724,6 +768,7 @@ impl SourceByteBudget {
             permit_unit_bytes,
             semaphore: Arc::new(Semaphore::new(permit_count)),
             stats,
+            capacity_waiters: detailed_failure_diagnostics.then(|| AtomicU64::new(0)),
         })
     }
 
@@ -759,23 +804,61 @@ impl SourceByteBudget {
                 "source block budget permit count exceeds the semaphore limit",
             )
         })?;
-        let acquisition = Arc::clone(&self.semaphore).acquire_many_owned(permits);
-        let permit = tokio::select! {
-            permit = acquisition => permit.map_err(|_| io::Error::other("source byte budget is closed"))?,
-            () = cancel_wait => return Err(io::Error::other("source block reservation was cancelled")),
+        let permit = if self.capacity_waiters.is_some() {
+            let acquisition = Arc::clone(&self.semaphore).acquire_many_owned(permits);
+            tokio::pin!(acquisition);
+            match futures_util::poll!(&mut acquisition) {
+                Poll::Ready(permit) => {
+                    permit.map_err(|_| io::Error::other("source byte budget is closed"))?
+                }
+                Poll::Pending => {
+                    let _waiter = SourceBudgetWaitGuard::new(Arc::clone(self));
+                    tokio::select! {
+                        permit = &mut acquisition => permit.map_err(|_| io::Error::other("source byte budget is closed"))?,
+                        () = cancel_wait => return Err(io::Error::other("source block reservation was cancelled")),
+                    }
+                }
+            }
+        } else {
+            tokio::select! {
+                permit = Arc::clone(&self.semaphore).acquire_many_owned(permits) =>
+                    permit.map_err(|_| io::Error::other("source byte budget is closed"))?,
+                () = cancel_wait => return Err(io::Error::other("source block reservation was cancelled")),
+            }
         };
         self.stats.acquire_source_global_bytes(bytes);
         Ok(SourceBudgetPermit {
             bytes,
             _permit: permit,
-            stats: Arc::clone(&self.stats),
+            budget: Arc::clone(self),
         })
+    }
+}
+
+impl SourceBudgetWaitGuard {
+    fn new(budget: Arc<SourceByteBudget>) -> Self {
+        budget
+            .capacity_waiters
+            .as_ref()
+            .expect("waiter tracking is enabled")
+            .fetch_add(1, Ordering::AcqRel);
+        Self { budget }
+    }
+}
+
+impl Drop for SourceBudgetWaitGuard {
+    fn drop(&mut self) {
+        self.budget
+            .capacity_waiters
+            .as_ref()
+            .expect("waiter tracking is enabled")
+            .fetch_sub(1, Ordering::AcqRel);
     }
 }
 
 impl Drop for SourceBudgetPermit {
     fn drop(&mut self) {
-        self.stats.release_source_global_bytes(self.bytes);
+        self.budget.stats.release_source_global_bytes(self.bytes);
     }
 }
 
@@ -927,6 +1010,34 @@ impl SourceBlockStore {
         });
     }
 
+    pub(crate) fn attempt_snapshot(&self) -> SourceAttemptSnapshot {
+        let state = self
+            .state
+            .lock()
+            .expect("source block state mutex should not be poisoned");
+        SourceAttemptSnapshot {
+            local_window_bytes: self.window_bytes,
+            local_committed_bytes: state.window_committed_bytes,
+            local_resident_bytes: state.resident_bytes,
+            local_capacity_waiters: self
+                .source
+                .diagnostics
+                .local_capacity_waiters
+                .load(Ordering::Acquire),
+            global_budget_bytes: self.budget.limit_bytes,
+            global_resident_bytes: self.budget.stats.source_global_resident_bytes_current(),
+            global_available_permits: u64::try_from(self.budget.semaphore.available_permits())
+                .unwrap_or(u64::MAX),
+            global_permit_unit_bytes: self.budget.permit_unit_bytes,
+            global_permit_waiters: self
+                .budget
+                .capacity_waiters
+                .as_ref()
+                .map_or(0, |waiters| waiters.load(Ordering::Acquire)),
+            active_fetches: self.source.diagnostics.active_gets.load(Ordering::Acquire),
+        }
+    }
+
     async fn run_scheduler(self: Arc<Self>) -> io::Result<()> {
         let mut tasks = FuturesUnordered::new();
         let mut next_index = 0_usize;
@@ -1072,7 +1183,12 @@ impl SourceBlockStore {
 
                 enabled_notification(&self.capacity_notify)
             };
-            wait.await;
+            if self.budget.capacity_waiters.is_some() {
+                let _waiter = self.source.diagnostics.track_local_capacity_wait();
+                wait.await;
+            } else {
+                wait.await;
+            }
         };
 
         let mut reservation = SourceFetchReservation {
@@ -1873,7 +1989,7 @@ mod tests {
             let replay = StaticReplayClient::new(vec![get_success_bytes(bytes.clone())]);
             let source = replay_source_client(replay.clone(), bytes.len() as u64);
             let stats = Arc::new(DeploymentStats::default());
-            let budget = super::SourceByteBudget::new(64 * 1024 * 1024, Arc::clone(&stats));
+            let budget = super::SourceByteBudget::new(64 * 1024 * 1024, Arc::clone(&stats), false);
 
             let prepared = prepare_zip_directory_reader(source, 8 * 1024 * 1024, budget, 0)
                 .await
@@ -1984,7 +2100,7 @@ mod tests {
     #[tokio::test]
     async fn invocation_budget_bounds_multiple_sources_and_cancel_releases_permits() {
         let stats = Arc::new(crate::types::DeploymentStats::default());
-        let budget = super::SourceByteBudget::new(64, Arc::clone(&stats));
+        let budget = super::SourceByteBudget::new(64, Arc::clone(&stats), true);
         let first = pending_store_for_span(48, Arc::clone(&budget));
         let second = pending_store_for_span(48, budget);
 
@@ -1994,6 +2110,7 @@ mod tests {
             .unwrap()
             .expect("first source reservation");
         assert_eq!(stats.source_global_memory_for_test(), (64, 48, 48));
+        assert_eq!(first.attempt_snapshot().global_permit_waiters, 0);
 
         let waiting_store = Arc::clone(&second);
         let waiting = tokio::spawn(async move {
@@ -2001,8 +2118,9 @@ mod tests {
                 .reserve_fetch(0, SourceFetchMode::Prefetch)
                 .await
         });
-        tokio::task::yield_now().await;
+        wait_for_test_condition(|| second.attempt_snapshot().global_permit_waiters == 1).await;
         assert!(!waiting.is_finished());
+        assert_eq!(second.attempt_snapshot().global_permit_waiters, 1);
 
         first.cancel("injected first-source cancellation");
         let second_reservation = tokio::time::timeout(Duration::from_secs(1), waiting)
@@ -2012,6 +2130,7 @@ mod tests {
             .expect("second source reservation")
             .expect("second source block");
         assert_eq!(stats.source_global_memory_for_test(), (64, 48, 48));
+        assert_eq!(second.attempt_snapshot().global_permit_waiters, 0);
 
         second.cancel("test complete");
         assert_eq!(stats.source_global_memory_for_test(), (64, 0, 48));
@@ -2022,7 +2141,7 @@ mod tests {
     async fn replay_demand_borrows_global_capacity_when_the_local_window_is_full() {
         const BLOCK_BYTES: usize = 4 * 1024;
         let stats = Arc::new(crate::types::DeploymentStats::default());
-        let budget = super::SourceByteBudget::new(BLOCK_BYTES * 2, Arc::clone(&stats));
+        let budget = super::SourceByteBudget::new(BLOCK_BYTES * 2, Arc::clone(&stats), false);
         let plans = [
             plan_with_span("early.txt", 0, BLOCK_BYTES as u64),
             plan_with_span("later.txt", BLOCK_BYTES as u64, (BLOCK_BYTES * 2) as u64),
@@ -2403,6 +2522,264 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn unpolled_retryable_clone_does_not_overwrite_consumed_attempt_state() {
+        let zip = zip_from_entry("snapshot.txt", b"snapshot body");
+        let plan = zip_plan_from_archive(&zip, "snapshot.txt");
+        let store = ready_store_for_plan(&zip, &plan);
+        let body_state = Arc::new(UploadBodyState::new(true));
+        let body = zip_entry_body(
+            Arc::clone(&store),
+            plan,
+            b"snapshot body".len() as u64,
+            Arc::clone(&body_state),
+            DestinationChecksumStrategy::SseS3Etag,
+            Arc::new(AtomicUsize::new(0)),
+        );
+        let sdk_body = body.into_inner();
+        let unpolled_clone = sdk_body.try_clone().expect("retryable body clone");
+
+        let bytes = aws_sdk_s3::primitives::ByteStream::new(sdk_body)
+            .collect()
+            .await
+            .expect("consumed body")
+            .into_bytes();
+        assert_eq!(bytes.as_ref(), b"snapshot body");
+        wait_for_test_condition(|| {
+            body_state
+                .attempt_snapshot()
+                .is_some_and(|snapshot| snapshot.producer_completed)
+        })
+        .await;
+        let before = body_state
+            .attempt_snapshot()
+            .expect("consumed attempt snapshot");
+
+        drop(unpolled_clone);
+
+        let after = body_state
+            .attempt_snapshot()
+            .expect("unpolled clone must not clear the snapshot");
+        assert_eq!(after.attempt_number, before.attempt_number);
+        assert_eq!(after.producer_stage, "complete");
+        assert!(after.producer_completed);
+        assert_eq!(after.bytes_emitted, b"snapshot body".len() as u64);
+        assert_eq!(after.remaining_bytes, 0);
+        assert!(after.final_frame_delivered);
+        assert!(!after.receiver_dropped);
+        assert!(!after.receiver_drop_aborted_producer);
+        assert!(after.source_at_receiver_drop.is_none());
+    }
+
+    #[tokio::test]
+    async fn abandoned_polled_upload_body_releases_claims_without_retry() {
+        let zip = zip_from_entry("abandoned.txt", b"abandoned body");
+        let plan = zip_plan_from_archive(&zip, "abandoned.txt");
+        let block_bytes = usize::try_from(plan.source_span_end - plan.source_offset).unwrap();
+        let stats = Arc::new(DeploymentStats::default());
+        let budget = super::SourceByteBudget::new(block_bytes, Arc::clone(&stats), false);
+        let held_capacity = budget
+            .reserve_planning(block_bytes as u64)
+            .await
+            .expect("hold the complete source budget");
+        let store = super::SourceBlockStore::new(
+            Arc::new(super::SourceClient {
+                client: dummy_s3_client(),
+                bucket: "bucket".to_string(),
+                key: "archive.zip".to_string(),
+                len: zip.len() as u64,
+                etag: None,
+                diagnostics: Arc::new(SourceDiagnostics::new(zip.len() as u64)),
+            }),
+            std::slice::from_ref(&plan),
+            SourceBlockOptions {
+                block_bytes,
+                merge_gap_bytes: 0,
+                get_concurrency: 1,
+                window_bytes: block_bytes,
+            },
+            budget,
+        );
+        let body_state = Arc::new(UploadBodyState::default());
+        let mut body = zip_entry_body(
+            Arc::clone(&store),
+            plan.clone(),
+            plan.size,
+            Arc::clone(&body_state),
+            DestinationChecksumStrategy::SseS3Etag,
+            Arc::new(AtomicUsize::new(0)),
+        )
+        .into_inner();
+
+        let mut context = Context::from_waker(std::task::Waker::noop());
+        assert!(Pin::new(&mut body).poll_frame(&mut context).is_pending());
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if matches!(
+                    store.state.lock().expect("source block state").slots[0].status,
+                    SourceBlockStatus::Reserving
+                ) {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("polled body producer should wait on global capacity");
+
+        drop(body);
+
+        assert!(
+            body_state.attempt_snapshot().is_none(),
+            "production-disabled diagnostics must not publish an attempt snapshot"
+        );
+
+        let released = tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                let released = {
+                    let state = store.state.lock().expect("source block state");
+                    let slot = &state.slots[0];
+                    matches!(slot.status, SourceBlockStatus::Pending)
+                        && slot.remaining_claims == 0
+                        && slot.live_claims == 0
+                        && state.window_committed_bytes == 0
+                        && state.resident_bytes == 0
+                };
+                if released {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        if released.is_err() {
+            let state = store.state.lock().expect("source block state");
+            let slot = &state.slots[0];
+            let status = match &slot.status {
+                SourceBlockStatus::Pending => "Pending",
+                SourceBlockStatus::Reserving => "Reserving",
+                SourceBlockStatus::Fetching => "Fetching",
+                SourceBlockStatus::Ready(_) => "Ready",
+                SourceBlockStatus::Released => "Released",
+                SourceBlockStatus::Failed(_) => "Failed",
+            };
+            panic!(
+                "abandoned body retained producer state: status={status}, remaining_claims={}, live_claims={}, window_committed_bytes={}, resident_bytes={}",
+                slot.remaining_claims,
+                slot.live_claims,
+                state.window_committed_bytes,
+                state.resident_bytes
+            );
+        }
+
+        assert_eq!(
+            stats.source_global_memory_for_test().1,
+            block_bytes as u64,
+            "only the deliberately held planning capacity should remain"
+        );
+        drop(held_capacity);
+        assert_eq!(stats.source_global_memory_for_test().1, 0);
+    }
+
+    #[tokio::test]
+    async fn abandoned_polled_upload_body_captures_detailed_state_before_abort() {
+        let zip = zip_from_entry("abandoned-detailed.txt", b"abandoned detailed body");
+        let plan = zip_plan_from_archive(&zip, "abandoned-detailed.txt");
+        let block_bytes = usize::try_from(plan.source_span_end - plan.source_offset).unwrap();
+        let stats = Arc::new(DeploymentStats::new(true));
+        let budget = super::SourceByteBudget::new(block_bytes, Arc::clone(&stats), true);
+        let held_capacity = budget
+            .reserve_planning(block_bytes as u64)
+            .await
+            .expect("hold the complete source budget");
+        let store = super::SourceBlockStore::new(
+            Arc::new(super::SourceClient {
+                client: dummy_s3_client(),
+                bucket: "bucket".to_string(),
+                key: "archive.zip".to_string(),
+                len: zip.len() as u64,
+                etag: None,
+                diagnostics: Arc::new(SourceDiagnostics::new(zip.len() as u64)),
+            }),
+            std::slice::from_ref(&plan),
+            SourceBlockOptions {
+                block_bytes,
+                merge_gap_bytes: 0,
+                get_concurrency: 1,
+                window_bytes: block_bytes,
+            },
+            budget,
+        );
+        let body_state = Arc::new(UploadBodyState::new(true));
+        let mut body = zip_entry_body(
+            Arc::clone(&store),
+            plan.clone(),
+            plan.size,
+            Arc::clone(&body_state),
+            DestinationChecksumStrategy::SseS3Etag,
+            Arc::new(AtomicUsize::new(0)),
+        )
+        .into_inner();
+
+        let mut context = Context::from_waker(std::task::Waker::noop());
+        assert!(Pin::new(&mut body).poll_frame(&mut context).is_pending());
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if matches!(
+                    store.state.lock().expect("source block state").slots[0].status,
+                    SourceBlockStatus::Reserving
+                ) && store.attempt_snapshot().global_permit_waiters == 1
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("polled body producer should wait on global capacity");
+
+        drop(body);
+
+        let dropped = body_state
+            .attempt_snapshot()
+            .expect("dropped receiver should publish its detailed attempt");
+        assert_eq!(dropped.attempt_number, 1);
+        assert!(!dropped.replay);
+        assert_eq!(dropped.bytes_emitted, 0);
+        assert_eq!(dropped.remaining_bytes, plan.size);
+        assert_eq!(dropped.producer_stage, "reading-source");
+        assert!(!dropped.final_frame_delivered);
+        assert!(!dropped.producer_completed);
+        assert!(!dropped.body_error_observed);
+        assert!(dropped.receiver_dropped);
+        assert!(dropped.receiver_drop_aborted_producer);
+        let source = dropped
+            .source_at_receiver_drop
+            .expect("source state must be captured before producer abort");
+        assert_eq!(source.local_window_bytes, block_bytes as u64);
+        assert_eq!(source.local_committed_bytes, block_bytes as u64);
+        assert_eq!(source.local_resident_bytes, 0);
+        assert_eq!(source.local_capacity_waiters, 0);
+        assert_eq!(source.global_budget_bytes, block_bytes as u64);
+        assert_eq!(source.global_resident_bytes, block_bytes as u64);
+        assert_eq!(source.global_available_permits, 0);
+        assert_eq!(source.global_permit_waiters, 1);
+        assert_eq!(source.active_fetches, 0);
+
+        wait_for_test_condition(|| {
+            let state = store.state.lock().expect("source block state");
+            let slot = &state.slots[0];
+            matches!(slot.status, SourceBlockStatus::Pending)
+                && slot.remaining_claims == 0
+                && slot.live_claims == 0
+                && state.window_committed_bytes == 0
+                && state.resident_bytes == 0
+        })
+        .await;
+        drop(held_capacity);
+        assert_eq!(stats.source_global_memory_for_test().1, 0);
+    }
+
+    #[tokio::test]
     async fn completed_upload_body_reports_end_before_terminal_poll() {
         let expected = b"complete body";
         let zip = zip_from_entry("complete.txt", expected);
@@ -2493,7 +2870,7 @@ mod tests {
             zip.len() as u64,
         )]);
         let stats = Arc::new(DeploymentStats::default());
-        let budget = super::SourceByteBudget::new(block_bytes, Arc::clone(&stats));
+        let budget = super::SourceByteBudget::new(block_bytes, Arc::clone(&stats), false);
         let held_capacity = budget
             .reserve_planning(block_bytes as u64)
             .await
@@ -2601,7 +2978,7 @@ mod tests {
         let expected_requests = events.len();
         let replay = StaticReplayClient::new(events);
         let stats = Arc::new(DeploymentStats::default());
-        let budget = super::SourceByteBudget::new(BLOCK_BYTES, Arc::clone(&stats));
+        let budget = super::SourceByteBudget::new(BLOCK_BYTES, Arc::clone(&stats), false);
         let store = pending_replay_store(&zip, &plan, replay.clone(), budget, BLOCK_BYTES);
         let body = zip_entry_body(
             Arc::clone(&store),
@@ -2834,6 +3211,7 @@ mod tests {
             budget: super::SourceByteBudget::new(
                 usize::try_from(block.len()).unwrap(),
                 Arc::new(crate::types::DeploymentStats::default()),
+                false,
             ),
             source_get_concurrency: 1,
             window_bytes: block.len(),
@@ -3015,6 +3393,7 @@ mod tests {
             budget: super::SourceByteBudget::new(
                 usize::try_from(block.len()).unwrap(),
                 Arc::new(crate::types::DeploymentStats::default()),
+                false,
             ),
             source_get_concurrency: 1,
             window_bytes: block.len(),

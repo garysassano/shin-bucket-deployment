@@ -45,6 +45,21 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     ).toThrow(/shareHandler must be a boolean/);
   });
 
+  test("rejects a non-boolean detailed diagnostics value", () => {
+    const stack = new Stack();
+    const destinationBucket = new Bucket(stack, "Dest");
+
+    expect(
+      () =>
+        new ShinBucketDeployment(stack, "Deploy", {
+          sources: [Source.data("index.html", "ok")],
+          destinationBucket,
+          detailedFailureDiagnostics: "true" as never,
+          bundling: testBundling(),
+        }),
+    ).toThrow(/detailedFailureDiagnostics must be a boolean/);
+  });
+
   test("renders destination ownership without authorizing previous cleanup by default", () => {
     const stack = new Stack();
     const destinationBucket = new Bucket(stack, "Dest");

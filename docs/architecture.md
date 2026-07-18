@@ -479,7 +479,11 @@ Cataloged asset packaging limitations:
 
 ## Diagnostics
 
-Each extracted deployment logs the effective source schedule and a final source diagnostics record per source archive. These records include planned entries and blocks, planned and fetched source bytes, source amplification, ranged `GetObject` wire attempts and typed failures, block hits/misses/releases/refetches, split wait counters for in-flight fetches versus source-window capacity, consumed body attempts/replays, per-archive resident source-window high-water, true active ZIP entry reader high-water, and active source GET high-water. The aggregate `shin_deployment_summary` is schema version 3 and is emitted after the CloudFormation callback attempt so `durationMs` and callback telemetry include callback delivery time even when the callback fails. Its `deploymentStatus` reports whether deployment work succeeded before callback delivery; callback delivery has independent counters because a successful deployment can still have a failed callback. The summary adds the actual Lambda memory, invocation-global source budget/current/high-water values, destination metadata/page high-water, catalog trust and fallback work, inferred deletion outcomes, and callback attempts. It separates logical transfer objects and cancellations from source and destination SDK work; extracted uploads log destination `PutObject` retry settings, throttling, wait time, and failures grouped by error code, while direct copies emit a parallel `CopyObject` diagnostics record. Its `markerReplacement` object names the strategy and semantics, declares the nominal two passes for an uploaded marker object, and reports actual planning and upload passes for the invocation.
+Each extracted deployment logs the effective source schedule and a final source diagnostics record per source archive. These records include planned entries and blocks, planned and fetched source bytes, source amplification, ranged `GetObject` wire attempts and typed failures, block hits/misses/releases/refetches, split wait counters for in-flight fetches versus source-window capacity, consumed body attempts/replays, per-archive resident source-window high-water, true active ZIP entry reader high-water, and active source GET high-water. The aggregate `shin_deployment_summary` is schema version 4 and is emitted after the CloudFormation callback attempt so `durationMs` and callback telemetry include callback delivery time even when the callback fails. Its `deploymentStatus` reports whether deployment work succeeded before callback delivery; callback delivery has independent counters because a successful deployment can still have a failed callback. The summary adds the actual Lambda memory, invocation-global source budget/current/high-water values, destination metadata/page high-water, catalog trust and fallback work, inferred deletion outcomes, callback attempts, and bounded correlated `PutObject` failure state. It separates logical transfer objects and cancellations from source and destination SDK work; extracted uploads log destination `PutObject` retry settings, throttling, wait time, and sanitized error classifications, while direct copies emit a parallel `CopyObject` diagnostics record. Its `markerReplacement` object names the strategy and semantics, declares the nominal two passes for an uploaded marker object, and reports actual planning and upload passes for the invocation. Benchmark collectors continue to validate historical schema-v3 summaries using their original strict shape; schema v4 adds fields only to `putObject`.
+
+Detailed failure diagnostics are opt-in through `detailedFailureDiagnostics: true`; production defaults to `false`. Schema v4 exposes that choice as `detailedFailureDiagnosticsEnabled`. Basic aggregate wire, failure, retry, throttle, and wait counters remain enabled in both modes. When detailed mode is disabled, the SDK/service maps and failure-state array are empty and `failureStateOverflowAttempts` is zero, even if `failedAttempts` is nonzero. Disabled mode does not allocate per-attempt diagnostic state, track source-capacity waiters, start a per-attempt clock, capture source snapshots, or emit immediate failure events. Handler identity includes the setting, so enabled and disabled deployments cannot share a Lambda.
+
+When detailed mode is enabled, every failed extracted `PutObject` SDK attempt also emits a schema-v1 `shin_put_object_attempt_failure` event synchronously in the SDK error path, before provider retry delay or transfer cleanup. This immediate event is the primary failure record when an invocation ends before `shin_deployment_summary` can be emitted. It contains only fixed SDK and dispatch classifications, a bounded sanitized service-code label, attempt elapsed time, body progress/lifecycle state, and an instantaneous source snapshot. It never includes the destination key or bucket, request ID, ARN, ETag, profile name, or an arbitrary SDK error string. A final summary is useful aggregation, not a prerequisite for preserving an immediate attempt event.
 
 Diagnostics are emitted to CloudWatch Logs through structured `tracing` fields. They are not returned in the CloudFormation custom-resource response because that response has a small practical size limit and is already used for `objectKeys` and `deployedBucket` outputs.
 
@@ -540,6 +544,24 @@ Source diagnostics field reference:
 | `globalResidentBytesCurrent` | Globally admitted source block bytes still held when the summary is emitted. | Detect leaked permits; successful requests should report zero. |
 | `globalResidentBytesHighWater` | Peak source block bytes admitted across all archives in the invocation. | Prove aggregate use stayed at or below `globalBudgetBytes`. |
 
+Correlated `PutObject` failure source fields are instantaneous observations, unlike the cumulative and high-water source fields above:
+
+| Field | Meaning | Use when debugging |
+| --- | --- | --- |
+| `observed` | Whether source state was available for the failed payload. | Distinguish a ZIP-backed attempt snapshot from a failure without source state. |
+| `localWindowBytes` | Configured per-archive source-window target. | Identify the local window used by the failing archive. |
+| `localCommittedBytes` | Bytes currently committed by that archive to pending, reserving, fetching, or resident source blocks. Demand replay can temporarily exceed the target while the invocation-global budget remains the hard cap. | Diagnose local scheduling pressure without treating it as resident memory. |
+| `localResidentBytes` | Fetched source block bytes currently resident for that archive. | Separate retained bytes from reservations still awaiting a fetch or global permit. |
+| `localCapacityWaiters` | Current fetch reservations blocked by the per-archive source window. | Identify local-window contention at the failure instant. |
+| `globalBudgetBytes` | Invocation-global source budget shared by every archive. | Establish the hard source-memory cap. |
+| `globalResidentBytes` | Source bytes currently admitted against the global budget across the invocation. | Measure invocation-wide source occupancy at the failure instant. |
+| `globalAvailablePermits` | Semaphore permits immediately available at the failure instant. | Interpret remaining capacity together with `globalPermitUnitBytes`. |
+| `globalPermitUnitBytes` | Bytes represented by one global semaphore permit. | Convert available permits to approximate immediately available bytes. |
+| `globalPermitWaiters` | Current global acquisitions whose fair semaphore future was pending on its first poll and is still waiting for permits. Immediately satisfiable acquisitions are excluded. | Identify invocation-global capacity contention, separately from local-window waiting. |
+| `activeFetches` | Active ranged source fetches for the failing source archive. | Correlate the failed upload with source activity at the same instant. |
+
+For an abnormal upload receiver drop, the source snapshot is taken while the receiver and producer are still live and before the producer task is aborted. Otherwise the source state is sampled in the failed SDK-attempt path. These fields are observations, not proof of causation: local-window waiters do not imply invocation-global exhaustion, and global occupancy does not imply that the failed request was starved.
+
 Runtime and destination planning diagnostics field reference:
 
 | Field | Meaning | Use when debugging |
@@ -569,7 +591,7 @@ Destination deletion diagnostics field reference:
 | `inferredDeletedObjects` | Requested identifiers not represented by errors in a `quiet=true` response. S3 does not return successful deletion entries in quiet mode, so this is inferred rather than proof that an object previously existed or was mutated. | Compare inferred completion with requested and unconfirmed identifiers. |
 | `unconfirmedObjects` | Requested identifiers returned as per-object deletion errors or whose SDK call failed. | Identify cleanup work whose outcome was not confirmed. |
 | `noSuchBucketRequestedIdentifiers` | Requested identifiers in an SDK call that returned `NoSuchBucket`. This describes the call outcome, not whether any object existed. | Separate missing-bucket idempotency from per-object response inference. |
-| `counts.deleteObjects` | Same inferred deletion count exposed in the aggregate counts object. | Compare schema-v3 records with their detailed deletion accounting. |
+| `counts.deleteObjects` | Same inferred deletion count exposed in the aggregate counts object. | Compare provider summaries with their detailed deletion accounting. |
 | `counts.deleteBatches` | `DeleteObjects` responses containing at least one requested identifier not represented by an error. | Count responses with inferred deletion outcomes, including partial-error responses. |
 
 Destination upload diagnostics field reference:
@@ -584,7 +606,18 @@ Destination upload diagnostics field reference:
 | `throttleCooldownWaits` | Worker waits caused by shared throttle cooldown. | Diagnose throttle fan-out control. |
 | `throttleCooldownWaitMs` | Milliseconds spent in shared throttle cooldown waits. | Estimate throttle cooldown cost. |
 
-Direct-copy deployments emit a separate `destination CopyObject diagnostics` structured record with the same field names. `wireAttempts` counts provider-owned copy attempts with SDK retries disabled; the retry, throttling, and wait fields have the same meanings as above. `counts.copiedObjects` and `bytes.copied` remain the logical-success totals in the schema-v3 summary.
+Schema-v4 `putObject` failure fields:
+
+| Field | Meaning | Use when debugging |
+| --- | --- | --- |
+| `failuresBySdkErrorKind` | Counts by fixed AWS SDK category: `ConstructionFailure`, `TimeoutError`, `DispatchFailure`, `ResponseError`, `ServiceError`, or fallback `SdkError`. | Separate service responses from timeout, dispatch, response, and request-construction failures. |
+| `failuresByServiceCode` | Counts by service code for `ServiceError` attempts. Labels must start with an ASCII letter, contain only ASCII alphanumerics, and be at most 64 bytes; rejected or excess labels become `Other`. | Identify bounded service classifications such as `RequestTimeout` without retaining an arbitrary message. |
+| `failureStates` | Up to 32 correlated failure groups. A group key combines SDK/dispatch/service classifications with categorical body/source state; `count` is the represented attempt count. Numeric observations use `{min,max,total}` ranges across the group. | Correlate transport classification with body progress and source pressure while keeping the final event bounded. |
+| `failureStateOverflowAttempts` | Failed attempts omitted because the 32-group bound was reached. Represented group counts plus this value equal `failedAttempts`. | Detect aggregation loss explicitly. |
+
+Each label-count map contains at most 32 entries and reserves capacity for the `Other` bucket. Each `failureStates` body records whether a body attempt was observed, its attempt/replay number, bytes emitted and remaining, final-frame delivery, producer stage/completion, body error, receiver drop, and whether that drop aborted the producer. Producer stages are fixed values: `awaiting-first-poll`, `reading-source`, `final-frame-ready`, `complete`, `receiver-closed`, `body-error`, or `not-observed`. Retryable SDK clones that are never polled do not start an attempt and cannot replace the consumed attempt's snapshot. The nested source object uses the instantaneous fields above. The immediate event carries one unaggregated state with the same shape (`count=1`); the summary groups compatible states into bounded ranges.
+
+Direct-copy deployments emit a separate `destination CopyObject diagnostics` structured record with the original retry fields. `wireAttempts` counts provider-owned copy attempts with SDK retries disabled; the retry, throttling, and wait fields have the same meanings as above. Schema-v4 correlated failure fields apply only to extracted `PutObject` attempts; CopyObject diagnostics behavior is unchanged. `counts.copiedObjects` and `bytes.copied` remain the logical-success totals in both historical schema-v3 and current schema-v4 summaries.
 
 CloudFormation callback diagnostics field reference:
 

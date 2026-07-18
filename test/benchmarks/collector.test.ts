@@ -3,6 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { collectBenchmarkResult } from "../../benchmarks/src/collect-results";
+import {
+  providerSummaryErrors,
+  readBenchmarkResultRecords,
+  sanitizeProviderSummary,
+} from "../../benchmarks/src/model";
 import { renderBenchmarkReport } from "../../benchmarks/src/render/comparison-report";
 import { renderBenchmarkResultsTable } from "../../benchmarks/src/render/telemetry-table";
 
@@ -263,6 +268,154 @@ describe("benchmark result collector", () => {
     });
   });
 
+  test("round-trips strict schema-v4 PutObject failure diagnostics", () => {
+    const dir = mkdtempSync(join(tmpdir(), "shin-bench-collector-v4-"));
+    const logFile = join(dir, "deploy.log");
+    const summaryFile = join(dir, "summary.json");
+    const outputFile = join(dir, "results.jsonl");
+    const summary = providerSummaryV4Fixture();
+    writeFileSync(
+      logFile,
+      [
+        "Stack.BenchmarkImplementation = shin",
+        "Stack.BenchmarkSourceWindowBytes = 134217728",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(
+      summaryFile,
+      JSON.stringify({
+        events: [
+          {
+            timestamp: 1,
+            message: `summary=${JSON.stringify(JSON.stringify(summary))}`,
+          },
+        ],
+      }),
+    );
+
+    const collected = collectBenchmarkResult({
+      logFile,
+      summaryFile,
+      outputFile,
+      phase: "cold-create",
+    });
+
+    expect(collected.providerSummary).toEqual(summary);
+    expect(collected.sourceWindowBytes).toBe(134217728);
+    expect(sanitizeProviderSummary(summary)).toEqual(summary);
+    expect(providerSummaryErrors(summary)).toEqual([]);
+  });
+
+  test("keeps strict schema-v3 summaries and committed historical rows readable", () => {
+    const v4 = providerSummaryV4Fixture();
+    const { detailedFailureDiagnosticsEnabled: _detailedFailureDiagnosticsEnabled, ...v3TopLevel } =
+      v4;
+    const {
+      failuresBySdkErrorKind: _sdkKinds,
+      failuresByServiceCode: _serviceCodes,
+      failureStates: _failureStates,
+      failureStateOverflowAttempts: _overflow,
+      ...putObject
+    } = v4.putObject;
+    const v3 = { ...v3TopLevel, schemaVersion: 3, putObject };
+
+    expect(providerSummaryErrors(v3)).toEqual([]);
+    const committed = readBenchmarkResultRecords(
+      join(process.cwd(), "benchmarks", "results.jsonl"),
+    );
+    expect(committed.length).toBeGreaterThan(0);
+    expect(committed.some((row) => row.providerSummary?.schemaVersion === 3)).toBe(true);
+  });
+
+  test("accepts schema-v4 basic failures with detailed diagnostics disabled", () => {
+    const summary = providerSummaryV4Fixture();
+    summary.detailedFailureDiagnosticsEnabled = false;
+    Object.assign(summary.putObject, {
+      failuresBySdkErrorKind: {},
+      failuresByServiceCode: {},
+    });
+    summary.putObject.failureStates = [];
+    summary.putObject.failureStateOverflowAttempts = 0;
+
+    expect(summary.putObject.failedAttempts).toBe(2);
+    expect(sanitizeProviderSummary(summary)).toEqual(summary);
+    expect(providerSummaryErrors(summary)).toEqual([]);
+  });
+
+  test("requires an exact schema-v4 diagnostics marker and empty disabled detail", () => {
+    const missing = providerSummaryV4Fixture();
+    delete (missing as Partial<typeof missing>).detailedFailureDiagnosticsEnabled;
+    expect(providerSummaryErrors(missing).join("; ")).toContain(
+      "detailedFailureDiagnosticsEnabled must be boolean",
+    );
+
+    const invalid = providerSummaryV4Fixture();
+    invalid.detailedFailureDiagnosticsEnabled = "true" as never;
+    expect(providerSummaryErrors(invalid).join("; ")).toContain(
+      "detailedFailureDiagnosticsEnabled",
+    );
+
+    const disabledWithDetail = providerSummaryV4Fixture();
+    disabledWithDetail.detailedFailureDiagnosticsEnabled = false;
+    expect(providerSummaryErrors(disabledWithDetail).join("; ")).toContain(
+      "disabled detailed failure diagnostics must be empty",
+    );
+  });
+
+  test("rejects identifiers, arbitrary strings, and unexpected nested v4 fields", () => {
+    for (const [field, value] of [
+      ["objectKey", "private/object.txt"],
+      ["bucketName", "private-bucket"],
+      ["requestId", "request-identifier"],
+      ["rawError", "raw transport detail"],
+    ] as const) {
+      const summary = providerSummaryV4Fixture();
+      const state = firstFailureState(summary);
+      summary.putObject.failureStates[0] = {
+        ...state,
+        [field]: value,
+      };
+      expect(providerSummaryErrors(summary).join("; ")).toContain("unexpected field");
+    }
+
+    const invalidLabel = providerSummaryV4Fixture();
+    firstFailureState(invalidLabel).serviceCode = "RequestTimeout/private-object";
+    expect(providerSummaryErrors(invalidLabel).join("; ")).toContain("serviceCode is invalid");
+  });
+
+  test("rejects oversized v4 maps and failure-state arrays", () => {
+    const oversizedMap = providerSummaryV4Fixture();
+    Object.assign(
+      oversizedMap.putObject.failuresByServiceCode,
+      Object.fromEntries(Array.from({ length: 33 }, (_, index) => [`Code${index}`, 0])),
+    );
+    expect(providerSummaryErrors(oversizedMap).join("; ")).toContain("exceeds 32 labels");
+
+    const oversizedStates = providerSummaryV4Fixture();
+    const state = firstFailureState(oversizedStates);
+    oversizedStates.putObject.failureStates = Array.from({ length: 33 }, () =>
+      structuredClone(state),
+    );
+    expect(providerSummaryErrors(oversizedStates).join("; ")).toContain("exceeds 32 groups");
+  });
+
+  test("rejects malformed v4 ranges and inconsistent failure totals", () => {
+    const inverted = providerSummaryV4Fixture();
+    firstFailureState(inverted).elapsedMs = { min: 2, max: 1, total: 3 };
+    expect(providerSummaryErrors(inverted).join("; ")).toContain("min exceeds max");
+
+    const outside = providerSummaryV4Fixture();
+    firstFailureState(outside).body.remainingBytes.total = 1;
+    expect(providerSummaryErrors(outside).join("; ")).toContain("outside the represented range");
+
+    const inconsistent = providerSummaryV4Fixture();
+    inconsistent.putObject.failureStateOverflowAttempts = 1;
+    expect(providerSummaryErrors(inconsistent).join("; ")).toContain(
+      "counts plus overflow must equal failedAttempts",
+    );
+  });
+
   test("rejects unsanitized provider summary fields", () => {
     const dir = mkdtempSync(join(tmpdir(), "shin-bench-collector-"));
     const logFile = join(dir, "deploy.log");
@@ -369,6 +522,33 @@ describe("benchmark result collector", () => {
           methodologyVersion: 1,
           gitDirty: false,
           snapshotDate: "2026-05-08",
+          providerImplementationCommit: "abc1234",
+          providerImplementationSubject: "test",
+          resultDocumentationCommit: null,
+          region: "ap-southeast-2",
+          implementation: "shin",
+          profile: "mixed",
+          memoryMb: 1024,
+          parallel: 8,
+          sourceWindowBytes: 134217728,
+          phase: "cold-create",
+          state: "baseline",
+          fileCount: 442,
+          totalBytes: 52904649,
+          cdkDeploySeconds: 70,
+          localWallSeconds: 100,
+          providerDurationSeconds: 4,
+          billedDurationSeconds: 4.1,
+          initDurationSeconds: 0.15,
+          maxMemoryMb: 100,
+          providerInvoked: true,
+          cleanup: "all benchmark stacks destroyed",
+          notes: null,
+        },
+        {
+          methodologyVersion: 1,
+          gitDirty: false,
+          snapshotDate: "2026-05-08",
           providerImplementationCommit: null,
           providerImplementationSubject: null,
           resultDocumentationCommit: null,
@@ -405,14 +585,26 @@ describe("benchmark result collector", () => {
 
     expect(readFileSync(outputFile, "utf8")).toEqual(report);
     expect(report).toContain("Benchmark Report: mixed");
+    expect(report).toContain("- Source window bytes: adaptive, 134217728");
     expect(report).toContain(
-      "| mixed | cold-create | 1024 | 8 | shin | 1 | 2 | 2 | 2 | 0 | 2 | 2 |",
+      "| mixed | cold-create | 1024 | 8 | adaptive | shin | 1 | 2 | 2 | 2 | 0 | 2 | 2 |",
+    );
+    expect(report).toContain(
+      "| mixed | cold-create | 1024 | 8 | 134217728 | shin | 1 | 4 | 4 | 4 | 0 | 4 | 4 |",
     );
     expect(report).toContain("## ShinBucketDeployment vs AWS BucketDeployment");
     expect(report).toContain(
-      "| mixed | cold-create | 1024 | 8 | 2 s vs 8 s (4x faster) | 90 s vs 120 s (1.333x faster) | 60 s vs 90 s (1.5x faster) | 80 MiB vs 180 MiB (55.556% lower) |",
+      "| mixed | cold-create | 1024 | 8 | adaptive | 2 s vs 8 s (4x faster) | 90 s vs 120 s (1.333x faster) | 60 s vs 90 s (1.5x faster) | 80 MiB vs 180 MiB (55.556% lower) |",
     );
-    expect(report).toContain("### mixed cold-create at 1024 MiB / parallel 8");
+    expect(report).toContain(
+      "| mixed | cold-create | 1024 | 8 | 134217728 | 4 s vs 8 s (2x faster) | 100 s vs 120 s (1.2x faster) | 70 s vs 90 s (1.286x faster) | 100 MiB vs 180 MiB (44.444% lower) |",
+    );
+    expect(report).toContain(
+      "### mixed cold-create at 1024 MiB / parallel 8 / source window adaptive",
+    );
+    expect(report).toContain(
+      "### mixed cold-create at 1024 MiB / parallel 8 / source window 134217728",
+    );
     expect(report).toContain("| Provider duration | 2 s | 8 s | +6 s | 4x | +300% |");
     expect(report).toContain("| Init duration | 0.1 s | 0.2 s | +0.1 s | 2x | +100% |");
     expect(report).toContain("| Max memory | 80 MiB | 180 MiB | +100 MiB | 2.25x | +125% |");
@@ -545,3 +737,177 @@ describe("benchmark result collector", () => {
     expect(table).toContain("| Shin telemetry rows | 1 |");
   });
 });
+
+function providerSummaryV4Fixture() {
+  const zeros = (names: readonly string[]) => Object.fromEntries(names.map((name) => [name, 0]));
+  const range = (value: number, count = 2) => ({ min: value, max: value, total: value * count });
+  return {
+    event: "shin_deployment_summary",
+    schemaVersion: 4,
+    requestType: "Create",
+    deploymentStatus: "success",
+    extract: true,
+    destinationChecksumStrategy: "sse-s3-etag",
+    deleteStaleObjectsOnDeployment: true,
+    availableMemoryMb: 1024,
+    maxParallelTransfers: 32,
+    detailedFailureDiagnosticsEnabled: true,
+    durationMs: 60000,
+    phaseMs: zeros([
+      "plan",
+      "destinationList",
+      "transfer",
+      "delete",
+      "cloudfront",
+      "oldPrefixDelete",
+      "callback",
+    ]),
+    counts: {
+      ...zeros([
+        "sourceArchives",
+        "plannedEntries",
+        "filteredEntries",
+        "markerEntries",
+        "destinationObjects",
+        "destinationMetadataRetained",
+        "destinationPageObjectsHighWater",
+        "deleteObjects",
+        "deleteBatches",
+        "uploadedObjects",
+        "skippedObjects",
+        "conditionalConflicts",
+        "copiedObjects",
+        "md5HashAttempts",
+        "md5Skips",
+        "catalogSkips",
+      ]),
+      plannedEntries: 1,
+      uploadedObjects: 1,
+    },
+    bytes: { sourceZip: 1048576, uploaded: 1048576, copied: 0 },
+    transfer: {
+      scheduledObjects: 1,
+      completedObjects: 1,
+      failedObjects: 0,
+      cancelledObjects: 0,
+      panickedObjects: 0,
+      inFlightHighWater: 1,
+    },
+    markerReplacement: {
+      strategy: "planning-plus-retryable-stream",
+      semantics: "leftmost-longest-non-recursive",
+      plannedPassesPerUpload: 2,
+      planningPasses: 0,
+      uploadPasses: 0,
+    },
+    catalog: zeros([
+      "trustedArchives",
+      "untrustedArchives",
+      "trustedEntries",
+      "fallbackHashAttempts",
+      "sparseSkips",
+    ]),
+    source: {
+      ...zeros([
+        "plannedBlocks",
+        "plannedBytes",
+        "fetchedBlocks",
+        "fetchedBytes",
+        "getAttempts",
+        "getRetries",
+        "getThrottledAttempts",
+        "getRetryableErrors",
+        "getPermanentErrors",
+        "getRequestErrors",
+        "getBodyErrors",
+        "getShortBodyErrors",
+        "getErrors",
+        "blockHits",
+        "blockMisses",
+        "blockRefetches",
+        "blockWaits",
+        "blockWaitsFetching",
+        "blockWaitsCapacity",
+        "replayClaims",
+        "replayClaimsAfterRelease",
+        "replayClaimsAfterFailure",
+        "bodyAttempts",
+        "bodyReplays",
+        "activeGetsHighWater",
+        "activeReadersHighWater",
+        "residentBytesHighWater",
+        "globalBudgetBytes",
+        "globalResidentBytesCurrent",
+        "globalResidentBytesHighWater",
+      ]),
+      globalBudgetBytes: 536870912,
+    },
+    putObject: {
+      wireAttempts: 3,
+      failedAttempts: 2,
+      retryAttempts: 2,
+      throttledAttempts: 0,
+      retryWaitMs: 500,
+      throttleCooldownWaits: 0,
+      throttleCooldownWaitMs: 0,
+      failuresBySdkErrorKind: { ServiceError: 2 },
+      failuresByServiceCode: { RequestTimeout: 2 },
+      failureStates: [
+        {
+          count: 2,
+          sdkErrorKind: "ServiceError",
+          dispatchFailureKind: null,
+          serviceCode: "RequestTimeout",
+          elapsedMs: { min: 56200, max: 56300, total: 112500 },
+          body: {
+            attemptObserved: true,
+            replay: false,
+            producerStage: "reading-source",
+            finalFrameDelivered: false,
+            producerCompleted: false,
+            bodyErrorObserved: false,
+            receiverDropped: true,
+            receiverDropAbortedProducer: true,
+            attemptNumber: range(1),
+            bytesEmitted: range(0),
+            remainingBytes: range(1048576),
+          },
+          source: {
+            observed: true,
+            localWindowBytes: range(67108864),
+            localCommittedBytes: range(8388608),
+            localResidentBytes: range(0),
+            localCapacityWaiters: range(1),
+            globalBudgetBytes: range(536870912),
+            globalResidentBytes: range(528482304),
+            globalAvailablePermits: range(1),
+            globalPermitUnitBytes: range(4096),
+            globalPermitWaiters: range(1),
+            activeFetches: range(0),
+          },
+        },
+      ],
+      failureStateOverflowAttempts: 0,
+    },
+    deleteObject: zeros([
+      "sdkCalls",
+      "failedCalls",
+      "requestedObjects",
+      "inferredDeletedObjects",
+      "unconfirmedObjects",
+      "noSuchBucketRequestedIdentifiers",
+    ]),
+    callback: {
+      wireAttempts: 1,
+      failedAttempts: 0,
+      retryAttempts: 0,
+      confirmedResponses: 1,
+    },
+  };
+}
+
+function firstFailureState(summary: ReturnType<typeof providerSummaryV4Fixture>) {
+  const state = summary.putObject.failureStates[0];
+  if (state === undefined) throw new Error("schema-v4 fixture must contain one failure state");
+  return state;
+}

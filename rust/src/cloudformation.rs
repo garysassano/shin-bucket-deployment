@@ -360,7 +360,7 @@ async fn process_request(
     let previous_destination = old_resource_properties.map(parse_old_destination);
     preflight_invalidation_requests(request_type, &request, previous_destination.as_ref())?;
 
-    let stats = Arc::new(DeploymentStats::default());
+    let stats = Arc::new(DeploymentStats::new(state.detailed_failure_diagnostics));
     let result = process_request_inner(
         state,
         request_type,
@@ -864,9 +864,9 @@ mod tests {
     }
 
     #[test]
-    fn deployment_summary_uses_diagnostics_schema_v3() {
+    fn deployment_summary_uses_diagnostics_schema_v4() {
         let request = deployment_request_with_paths(vec!["/*".to_string()]);
-        let stats = crate::types::DeploymentStats::default();
+        let stats = crate::types::DeploymentStats::new(true);
         stats.add_marker_planning_pass();
         stats.add_marker_upload_pass();
         stats.add_trusted_catalog(3);
@@ -885,7 +885,8 @@ mod tests {
         let summary = serde_json::to_value(stats.snapshot("Create", "success", &request))
             .expect("serializable summary");
 
-        assert_eq!(summary["schemaVersion"], 3);
+        assert_eq!(summary["schemaVersion"], 4);
+        assert_eq!(summary["detailedFailureDiagnosticsEnabled"], true);
         assert_eq!(summary["deploymentStatus"], "success");
         assert!(summary.get("status").is_none());
         assert_eq!(summary["transfer"]["scheduledObjects"], 0);
@@ -912,6 +913,10 @@ mod tests {
         assert_eq!(summary["counts"]["destinationMetadataRetained"], 0);
         assert_eq!(summary["counts"]["destinationPageObjectsHighWater"], 0);
         assert_eq!(summary["putObject"]["wireAttempts"], 0);
+        assert_eq!(summary["putObject"]["failuresBySdkErrorKind"], json!({}));
+        assert_eq!(summary["putObject"]["failuresByServiceCode"], json!({}));
+        assert_eq!(summary["putObject"]["failureStates"], json!([]));
+        assert_eq!(summary["putObject"]["failureStateOverflowAttempts"], 0);
         assert_eq!(summary["counts"]["deleteObjects"], 3);
         assert_eq!(summary["deleteObject"]["sdkCalls"], 2);
         assert_eq!(summary["deleteObject"]["failedCalls"], 1);
@@ -926,6 +931,147 @@ mod tests {
         assert_eq!(summary["callback"]["failedAttempts"], 1);
         assert_eq!(summary["callback"]["retryAttempts"], 1);
         assert_eq!(summary["callback"]["confirmedResponses"], 1);
+    }
+
+    #[test]
+    fn deployment_summary_bounds_and_merges_put_failure_diagnostics() {
+        use std::collections::BTreeMap;
+
+        use crate::types::{
+            DiagnosticRangeStats, PutObjectFailureBodyStats, PutObjectFailureSourceStats,
+            PutObjectFailureStateStats, PutObjectStats,
+        };
+
+        fn range(value: u64) -> DiagnosticRangeStats {
+            DiagnosticRangeStats {
+                min: value,
+                max: value,
+                total: value,
+            }
+        }
+        fn failure(code: &str, elapsed_ms: u64) -> PutObjectFailureStateStats {
+            PutObjectFailureStateStats {
+                count: 1,
+                sdk_error_kind: "ServiceError".to_string(),
+                dispatch_failure_kind: None,
+                service_code: Some(code.to_string()),
+                elapsed_ms: range(elapsed_ms),
+                body: PutObjectFailureBodyStats {
+                    attempt_observed: false,
+                    replay: false,
+                    producer_stage: "not-observed".to_string(),
+                    final_frame_delivered: false,
+                    producer_completed: false,
+                    body_error_observed: false,
+                    receiver_dropped: false,
+                    receiver_drop_aborted_producer: false,
+                    attempt_number: range(0),
+                    bytes_emitted: range(0),
+                    remaining_bytes: range(0),
+                },
+                source: PutObjectFailureSourceStats {
+                    observed: false,
+                    local_window_bytes: range(0),
+                    local_committed_bytes: range(0),
+                    local_resident_bytes: range(0),
+                    local_capacity_waiters: range(0),
+                    global_budget_bytes: range(0),
+                    global_resident_bytes: range(0),
+                    global_available_permits: range(0),
+                    global_permit_unit_bytes: range(0),
+                    global_permit_waiters: range(0),
+                    active_fetches: range(0),
+                },
+            }
+        }
+
+        let request = deployment_request_with_paths(vec!["/*".to_string()]);
+        let stats = crate::types::DeploymentStats::new(true);
+        let first = failure("Code0", 10);
+        stats.add_put_stats(&PutObjectStats {
+            wire_attempts: 2,
+            failed_attempts: 2,
+            failures_by_sdk_error_kind: BTreeMap::from([("ServiceError".to_string(), 2)]),
+            failures_by_service_code: BTreeMap::from([("Code0".to_string(), 2)]),
+            failure_states: vec![first.clone(), failure("Code0", 20)],
+            ..PutObjectStats::default()
+        });
+        stats.add_put_stats(&PutObjectStats {
+            wire_attempts: 32,
+            failed_attempts: 32,
+            failures_by_sdk_error_kind: BTreeMap::from([("ServiceError".to_string(), 32)]),
+            failures_by_service_code: (1..=32).map(|index| (format!("Code{index}"), 1)).collect(),
+            failure_states: (1..=32)
+                .map(|index| failure(&format!("Code{index}"), index))
+                .collect(),
+            ..PutObjectStats::default()
+        });
+        stats.record_callback_attempt(true);
+        stats.record_callback_success();
+
+        let summary = serde_json::to_value(stats.snapshot("Create", "success", &request))
+            .expect("serializable summary");
+        assert_eq!(
+            summary["putObject"]["failuresBySdkErrorKind"]["ServiceError"],
+            34
+        );
+        assert_eq!(
+            summary["putObject"]["failuresByServiceCode"]
+                .as_object()
+                .expect("service-code map")
+                .len(),
+            32
+        );
+        assert_eq!(summary["putObject"]["failuresByServiceCode"]["Other"], 2);
+        assert_eq!(
+            summary["putObject"]["failureStates"]
+                .as_array()
+                .expect("failure states")
+                .len(),
+            32
+        );
+        assert_eq!(summary["putObject"]["failureStates"][0]["count"], 2);
+        assert_eq!(
+            summary["putObject"]["failureStates"][0]["elapsedMs"]["min"],
+            10
+        );
+        assert_eq!(
+            summary["putObject"]["failureStates"][0]["elapsedMs"]["max"],
+            20
+        );
+        assert_eq!(
+            summary["putObject"]["failureStates"][0]["elapsedMs"]["total"],
+            30
+        );
+        assert_eq!(summary["putObject"]["failureStateOverflowAttempts"], 1);
+    }
+
+    #[test]
+    fn deployment_summary_marks_disabled_failure_diagnostics_and_omits_detail() {
+        use std::collections::BTreeMap;
+
+        use crate::types::PutObjectStats;
+
+        let request = deployment_request_with_paths(vec!["/*".to_string()]);
+        let stats = crate::types::DeploymentStats::default();
+        stats.add_put_stats(&PutObjectStats {
+            wire_attempts: 1,
+            failed_attempts: 1,
+            failures_by_sdk_error_kind: BTreeMap::from([("ServiceError".to_string(), 1)]),
+            failures_by_service_code: BTreeMap::from([("RequestTimeout".to_string(), 1)]),
+            failure_state_overflow_attempts: 1,
+            ..PutObjectStats::default()
+        });
+
+        let summary = serde_json::to_value(stats.snapshot("Create", "failed", &request))
+            .expect("serializable summary");
+        assert_eq!(summary["schemaVersion"], 4);
+        assert_eq!(summary["detailedFailureDiagnosticsEnabled"], false);
+        assert_eq!(summary["putObject"]["failedAttempts"], 1);
+        assert_eq!(summary["putObject"]["failuresBySdkErrorKind"], json!({}));
+        assert_eq!(summary["putObject"]["failuresByServiceCode"], json!({}));
+        assert_eq!(summary["putObject"]["failureStates"], json!([]));
+        assert_eq!(summary["putObject"]["failureStateOverflowAttempts"], 0);
     }
 
     #[test]

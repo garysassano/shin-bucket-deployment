@@ -125,6 +125,8 @@ export function validateMethodologyV2Run(
       record.profile !== sample.assetProfile ||
       record.memoryMb !== sample.memoryMb ||
       record.parallel !== sample.parallel ||
+      (Object.hasOwn(sample, "sourceWindowBytes") && !Object.hasOwn(record, "sourceWindowBytes")) ||
+      (record.sourceWindowBytes ?? null) !== (sample.sourceWindowBytes ?? null) ||
       record.state !== planned.phase.assetState
     ) {
       errors.push(

@@ -134,6 +134,7 @@ pub(crate) async fn deploy(
     let source_budget = archive::SourceByteBudget::new(
         request.runtime.source_memory_budget_bytes,
         Arc::clone(&stats),
+        state.detailed_failure_diagnostics,
     );
 
     let filters = compile_filters(&request.exclude, &request.include)?;
@@ -327,6 +328,7 @@ mod aws_integration_tests {
             destination_s3: destination_s3.clone(),
             cloudfront: CloudFrontClient::new(&config),
             http: HttpClient::new(),
+            detailed_failure_diagnostics: crate::types::detailed_failure_diagnostics_from_env()?,
         };
 
         let suffix = Uuid::new_v4().simple().to_string();
@@ -394,7 +396,7 @@ mod aws_integration_tests {
                 source_block_merge_gap_bytes: Some(4 * 1024),
                 source_get_concurrency: Some(2),
                 source_window_bytes: Some(128 * 1024),
-                source_window_memory_budget_mb: Some(128),
+                source_window_memory_budget_mb: Some(64),
                 put_object_max_attempts: Some(3),
                 put_object_retry_base_delay_ms: Some(50),
                 put_object_retry_max_delay_ms: Some(500),

@@ -21,6 +21,7 @@ use bytes::Bytes;
 use crc32fast::Hasher as Crc32Hasher;
 use fastrand::Rng;
 use md5::{Digest as Md5Digest, Md5};
+use serde::Serialize;
 use sha2::Sha256;
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::time::{Instant, sleep_until};
@@ -28,8 +29,10 @@ use tokio::time::{Instant, sleep_until};
 use crate::deadline::{InvocationDeadlines, TaskDrainBudget};
 use crate::replace::MarkerReplacements;
 use crate::types::{
-    AppState, DeploymentRequest, DeploymentStats, DestinationChecksumStrategy, MarkerConfig,
-    PutObjectRetryJitter, PutObjectRetryOptions, PutObjectStats, SourceArchive,
+    AppState, DeploymentRequest, DeploymentStats, DestinationChecksumStrategy,
+    DiagnosticRangeStats, MarkerConfig, PutObjectFailureBodyStats, PutObjectFailureSourceStats,
+    PutObjectFailureStateStats, PutObjectRetryJitter, PutObjectRetryOptions, PutObjectStats,
+    SourceArchive,
 };
 
 use super::archive::{
@@ -52,6 +55,9 @@ use scheduler::TransferScheduler;
 const COPY_RECONCILIATION_METADATA_KEY: &str = "shin-copy-identity";
 // Bump whenever the CopyObject output contract changes (for example, inferred metadata).
 const COPY_RECONCILIATION_TOKEN_VERSION: &str = "shin-copy-v1";
+const MAX_FAILURE_DIAGNOSTIC_GROUPS: usize = 32;
+const MAX_FAILURE_DIAGNOSTIC_LABELS: usize = 32;
+const OTHER_DIAGNOSTIC_LABEL: &str = "Other";
 
 enum UploadPayload {
     #[cfg(test)]
@@ -89,12 +95,13 @@ impl UploadPayload {
         store: Arc<SourceBlockStore>,
         plan: ZipEntryPlan,
         content_length: u64,
+        detailed_failure_diagnostics: bool,
     ) -> Self {
         Self::ZipEntry {
             store,
             plan,
             content_length,
-            body_state: Arc::new(UploadBodyState::default()),
+            body_state: Arc::new(UploadBodyState::new(detailed_failure_diagnostics)),
             body_attempts: Arc::new(AtomicUsize::new(0)),
             marker_replacements: None,
             deployment_stats: None,
@@ -107,12 +114,13 @@ impl UploadPayload {
         content_length: u64,
         marker_replacements: Arc<MarkerReplacements>,
         deployment_stats: Arc<DeploymentStats>,
+        detailed_failure_diagnostics: bool,
     ) -> Self {
         Self::ZipEntry {
             store,
             plan,
             content_length,
-            body_state: Arc::new(UploadBodyState::default()),
+            body_state: Arc::new(UploadBodyState::new(detailed_failure_diagnostics)),
             body_attempts: Arc::new(AtomicUsize::new(0)),
             marker_replacements: Some(marker_replacements),
             deployment_stats: Some(deployment_stats),
@@ -146,6 +154,18 @@ impl UploadPayload {
             body_state.record_checksum_sha256(sha256_base64(bytes));
         }
     }
+
+    fn source_attempt_snapshot(&self) -> Option<super::archive::SourceAttemptSnapshot> {
+        match self {
+            #[cfg(test)]
+            UploadPayload::Bytes { .. } => None,
+            UploadPayload::ZipEntry { store, .. } => Some(store.attempt_snapshot()),
+        }
+    }
+
+    fn reset_attempt_diagnostics(&self) {
+        self.body_state().reset_attempt_diagnostics();
+    }
 }
 
 struct PreparedUploadPayload {
@@ -153,7 +173,6 @@ struct PreparedUploadPayload {
     etag: Option<String>,
 }
 
-#[derive(Default)]
 struct WriteDiagnostics {
     wire_attempts: AtomicU64,
     failed_attempts: AtomicU64,
@@ -163,6 +182,21 @@ struct WriteDiagnostics {
     throttle_cooldown_waits: AtomicU64,
     throttle_cooldown_wait_millis: AtomicU64,
     failures_by_error_code: Mutex<BTreeMap<String, u64>>,
+    detailed: Option<Box<DetailedWriteDiagnostics>>,
+}
+
+#[derive(Default)]
+struct DetailedWriteDiagnostics {
+    failures_by_sdk_error_kind: Mutex<BTreeMap<String, u64>>,
+    failures_by_service_code: Mutex<BTreeMap<String, u64>>,
+    failure_states: Mutex<Vec<PutObjectFailureStateStats>>,
+    failure_state_overflow_attempts: AtomicU64,
+}
+
+impl Default for WriteDiagnostics {
+    fn default() -> Self {
+        Self::new(false)
+    }
 }
 
 #[derive(Debug)]
@@ -175,6 +209,18 @@ struct WriteDiagnosticsSnapshot {
     throttle_cooldown_waits: u64,
     throttle_cooldown_wait_millis: u64,
     failures_by_error_code: BTreeMap<String, u64>,
+    failures_by_sdk_error_kind: BTreeMap<String, u64>,
+    failures_by_service_code: BTreeMap<String, u64>,
+    failure_states: Vec<PutObjectFailureStateStats>,
+    failure_state_overflow_attempts: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PutObjectAttemptFailureEvent<'a> {
+    event: &'static str,
+    schema_version: u8,
+    failure: &'a PutObjectFailureStateStats,
 }
 
 struct WriteRetryCoordinator {
@@ -210,7 +256,7 @@ pub(super) async fn execute_copy_plans(
     execution: TransferExecution,
 ) -> Result<()> {
     let TransferExecution { stats, deadlines } = execution;
-    let copy_diagnostics = Arc::new(WriteDiagnostics::default());
+    let copy_diagnostics = Arc::new(WriteDiagnostics::new(false));
     let retry_coordinator = Arc::new(WriteRetryCoordinator::new());
     let retry = request.runtime.put_object_retry.clone();
     let mut scheduler = TransferScheduler::new(
@@ -266,7 +312,7 @@ pub(super) async fn upload_zip_entries(
     execution: TransferExecution,
 ) -> Result<()> {
     let TransferExecution { stats, deadlines } = execution;
-    let put_diagnostics = Arc::new(WriteDiagnostics::default());
+    let put_diagnostics = Arc::new(WriteDiagnostics::new(state.detailed_failure_diagnostics));
     let put_retry_coordinator = Arc::new(WriteRetryCoordinator::new());
     let mut archive_diagnostics_sources = Vec::new();
     let mut block_stores = Vec::new();
@@ -442,6 +488,7 @@ async fn prepare_zip_entry_upload(
             store.clone(),
             plan.clone(),
             plan.size,
+            stats.detailed_failure_diagnostics_enabled(),
         )));
     }
 
@@ -693,7 +740,12 @@ async fn prepare_zip_entry_for_comparison(
     if source_markers.is_empty() {
         let etag = hash_zip_entry_reader(store.clone(), plan.clone()).await?;
         Ok(PreparedUploadPayload {
-            payload: UploadPayload::from_zip_entry(store, plan.clone(), plan.size),
+            payload: UploadPayload::from_zip_entry(
+                store,
+                plan.clone(),
+                plan.size,
+                stats.detailed_failure_diagnostics_enabled(),
+            ),
             etag: Some(etag),
         })
     } else {
@@ -721,6 +773,7 @@ async fn prepare_zip_entry_for_comparison(
                 planned.output_bytes,
                 replacements,
                 Arc::clone(stats),
+                stats.detailed_failure_diagnostics_enabled(),
             ),
             etag,
         })
@@ -747,6 +800,7 @@ async fn upload_payload(
                 "destination PutObject throttle cooldown for {destination_key} reaches or exceeds the deployment work deadline"
             ));
         }
+        payload.reset_attempt_diagnostics();
         let body = payload_body(&payload, context.checksum_strategy);
         let mut request = context
             .destination_s3
@@ -768,8 +822,12 @@ async fn upload_payload(
             .diagnostics
             .wire_attempts
             .fetch_add(1, Ordering::Relaxed);
+        let attempt_started = context
+            .diagnostics
+            .detailed_failure_diagnostics_enabled()
+            .then(Instant::now);
 
-        match apply_put_content_type(request, destination_key)
+        let result = apply_put_content_type(request, destination_key)
             .body(body)
             .customize()
             .config_override(
@@ -778,8 +836,10 @@ async fn upload_payload(
                     .request_checksum_calculation(request_checksum_calculation),
             )
             .send()
-            .await
-        {
+            .await;
+        let attempt_elapsed = attempt_started.map_or(Duration::ZERO, |started| started.elapsed());
+
+        match result {
             Ok(_) => {
                 context.stats.add_uploaded_object(payload.content_length());
                 return Ok(());
@@ -792,7 +852,12 @@ async fn upload_payload(
             {
                 let code = write_error_code(&error);
                 let throttled = code.as_deref().is_some_and(is_write_throttle_error_code);
-                context.diagnostics.record_failure(&error, throttled);
+                context.diagnostics.record_put_failure(
+                    &error,
+                    throttled,
+                    attempt_elapsed,
+                    &payload,
+                );
                 if !wait_for_write_retry_before_deadline(
                     context.retry_coordinator,
                     context.diagnostics,
@@ -827,7 +892,12 @@ async fn upload_payload(
                 let throttled = write_error_code(&error)
                     .as_deref()
                     .is_some_and(is_write_throttle_error_code);
-                context.diagnostics.record_failure(&error, throttled);
+                context.diagnostics.record_put_failure(
+                    &error,
+                    throttled,
+                    attempt_elapsed,
+                    &payload,
+                );
                 if is_conditional_write_conflict(&error) {
                     context.stats.add_conditional_conflict();
                     if reconcile_conditional_put(&context, destination_key, &payload).await {
@@ -1209,6 +1279,25 @@ async fn wait_for_write_retry_before_deadline(
 }
 
 impl WriteDiagnostics {
+    fn new(detailed_failure_diagnostics: bool) -> Self {
+        Self {
+            wire_attempts: AtomicU64::new(0),
+            failed_attempts: AtomicU64::new(0),
+            retry_attempts: AtomicU64::new(0),
+            throttled_attempts: AtomicU64::new(0),
+            retry_wait_millis: AtomicU64::new(0),
+            throttle_cooldown_waits: AtomicU64::new(0),
+            throttle_cooldown_wait_millis: AtomicU64::new(0),
+            failures_by_error_code: Mutex::new(BTreeMap::new()),
+            detailed: detailed_failure_diagnostics
+                .then(|| Box::new(DetailedWriteDiagnostics::default())),
+        }
+    }
+
+    fn detailed_failure_diagnostics_enabled(&self) -> bool {
+        self.detailed.is_some()
+    }
+
     fn record_failure<E: ProvideErrorMetadata>(&self, error: &SdkError<E>, throttled: bool) {
         self.failed_attempts.fetch_add(1, Ordering::Relaxed);
         if throttled {
@@ -1220,6 +1309,105 @@ impl WriteDiagnostics {
             .lock()
             .expect("write diagnostics mutex should not be poisoned");
         *failures.entry(code).or_default() += 1;
+    }
+
+    fn record_put_failure<E: ProvideErrorMetadata>(
+        &self,
+        error: &SdkError<E>,
+        throttled: bool,
+        elapsed: Duration,
+        payload: &UploadPayload,
+    ) {
+        self.record_failure(error, throttled);
+        let Some(detailed) = &self.detailed else {
+            return;
+        };
+
+        let sdk_error_kind = write_error_kind(error).to_string();
+        let service_code = write_error_code(error).map(|code| sanitize_diagnostic_label(&code));
+        let dispatch_failure_kind = dispatch_failure_kind(error).map(str::to_string);
+        record_bounded_diagnostic_count(
+            &detailed.failures_by_sdk_error_kind,
+            sdk_error_kind.clone(),
+        );
+        if let Some(code) = &service_code {
+            record_bounded_diagnostic_count(&detailed.failures_by_service_code, code.clone());
+        }
+
+        let body_snapshot = payload.body_state().attempt_snapshot();
+        let source_snapshot = body_snapshot
+            .as_ref()
+            .and_then(|body| body.source_at_receiver_drop.clone())
+            .or_else(|| payload.source_attempt_snapshot());
+        let failure = PutObjectFailureStateStats {
+            count: 1,
+            sdk_error_kind,
+            dispatch_failure_kind,
+            service_code,
+            elapsed_ms: DiagnosticRangeStats::single(duration_millis_u64(elapsed)),
+            body: match body_snapshot {
+                Some(body) => PutObjectFailureBodyStats {
+                    attempt_observed: true,
+                    replay: body.replay,
+                    producer_stage: body.producer_stage.to_string(),
+                    final_frame_delivered: body.final_frame_delivered,
+                    producer_completed: body.producer_completed,
+                    body_error_observed: body.body_error_observed,
+                    receiver_dropped: body.receiver_dropped,
+                    receiver_drop_aborted_producer: body.receiver_drop_aborted_producer,
+                    attempt_number: DiagnosticRangeStats::single(body.attempt_number),
+                    bytes_emitted: DiagnosticRangeStats::single(body.bytes_emitted),
+                    remaining_bytes: DiagnosticRangeStats::single(body.remaining_bytes),
+                },
+                None => PutObjectFailureBodyStats::not_observed(),
+            },
+            source: match source_snapshot {
+                Some(source) => PutObjectFailureSourceStats {
+                    observed: true,
+                    local_window_bytes: DiagnosticRangeStats::single(source.local_window_bytes),
+                    local_committed_bytes: DiagnosticRangeStats::single(
+                        source.local_committed_bytes,
+                    ),
+                    local_resident_bytes: DiagnosticRangeStats::single(source.local_resident_bytes),
+                    local_capacity_waiters: DiagnosticRangeStats::single(
+                        source.local_capacity_waiters,
+                    ),
+                    global_budget_bytes: DiagnosticRangeStats::single(source.global_budget_bytes),
+                    global_resident_bytes: DiagnosticRangeStats::single(
+                        source.global_resident_bytes,
+                    ),
+                    global_available_permits: DiagnosticRangeStats::single(
+                        source.global_available_permits,
+                    ),
+                    global_permit_unit_bytes: DiagnosticRangeStats::single(
+                        source.global_permit_unit_bytes,
+                    ),
+                    global_permit_waiters: DiagnosticRangeStats::single(
+                        source.global_permit_waiters,
+                    ),
+                    active_fetches: DiagnosticRangeStats::single(source.active_fetches),
+                },
+                None => PutObjectFailureSourceStats::not_observed(),
+            },
+        };
+        log_put_attempt_failure(&failure);
+
+        let mut failures = detailed
+            .failure_states
+            .lock()
+            .expect("PutObject failure-state mutex should not be poisoned");
+        if let Some(existing) = failures
+            .iter_mut()
+            .find(|existing| same_failure_signature(existing, &failure))
+        {
+            existing.merge(&failure);
+        } else if failures.len() < MAX_FAILURE_DIAGNOSTIC_GROUPS {
+            failures.push(failure);
+        } else {
+            detailed
+                .failure_state_overflow_attempts
+                .fetch_add(1, Ordering::Relaxed);
+        }
     }
 
     fn snapshot(&self) -> WriteDiagnosticsSnapshot {
@@ -1238,8 +1426,213 @@ impl WriteDiagnostics {
                 .lock()
                 .expect("write diagnostics mutex should not be poisoned")
                 .clone(),
+            failures_by_sdk_error_kind: self.detailed.as_ref().map_or_else(
+                BTreeMap::new,
+                |detailed| {
+                    detailed
+                        .failures_by_sdk_error_kind
+                        .lock()
+                        .expect("write diagnostics SDK-kind mutex should not be poisoned")
+                        .clone()
+                },
+            ),
+            failures_by_service_code: self.detailed.as_ref().map_or_else(
+                BTreeMap::new,
+                |detailed| {
+                    detailed
+                        .failures_by_service_code
+                        .lock()
+                        .expect("write diagnostics service-code mutex should not be poisoned")
+                        .clone()
+                },
+            ),
+            failure_states: self.detailed.as_ref().map_or_else(Vec::new, |detailed| {
+                detailed
+                    .failure_states
+                    .lock()
+                    .expect("write diagnostics failure-state mutex should not be poisoned")
+                    .clone()
+            }),
+            failure_state_overflow_attempts: self.detailed.as_ref().map_or(0, |detailed| {
+                detailed
+                    .failure_state_overflow_attempts
+                    .load(Ordering::Relaxed)
+            }),
         }
     }
+}
+
+impl DiagnosticRangeStats {
+    fn single(value: u64) -> Self {
+        Self {
+            min: value,
+            max: value,
+            total: value,
+        }
+    }
+
+    fn merge(&mut self, other: &Self) {
+        self.min = self.min.min(other.min);
+        self.max = self.max.max(other.max);
+        self.total = self.total.saturating_add(other.total);
+    }
+}
+
+impl PutObjectFailureBodyStats {
+    fn not_observed() -> Self {
+        Self {
+            attempt_observed: false,
+            replay: false,
+            producer_stage: "not-observed".to_string(),
+            final_frame_delivered: false,
+            producer_completed: false,
+            body_error_observed: false,
+            receiver_dropped: false,
+            receiver_drop_aborted_producer: false,
+            attempt_number: DiagnosticRangeStats::single(0),
+            bytes_emitted: DiagnosticRangeStats::single(0),
+            remaining_bytes: DiagnosticRangeStats::single(0),
+        }
+    }
+
+    fn merge(&mut self, other: &Self) {
+        self.attempt_number.merge(&other.attempt_number);
+        self.bytes_emitted.merge(&other.bytes_emitted);
+        self.remaining_bytes.merge(&other.remaining_bytes);
+    }
+}
+
+impl PutObjectFailureSourceStats {
+    fn not_observed() -> Self {
+        Self {
+            observed: false,
+            local_window_bytes: DiagnosticRangeStats::single(0),
+            local_committed_bytes: DiagnosticRangeStats::single(0),
+            local_resident_bytes: DiagnosticRangeStats::single(0),
+            local_capacity_waiters: DiagnosticRangeStats::single(0),
+            global_budget_bytes: DiagnosticRangeStats::single(0),
+            global_resident_bytes: DiagnosticRangeStats::single(0),
+            global_available_permits: DiagnosticRangeStats::single(0),
+            global_permit_unit_bytes: DiagnosticRangeStats::single(0),
+            global_permit_waiters: DiagnosticRangeStats::single(0),
+            active_fetches: DiagnosticRangeStats::single(0),
+        }
+    }
+
+    fn merge(&mut self, other: &Self) {
+        self.local_window_bytes.merge(&other.local_window_bytes);
+        self.local_committed_bytes
+            .merge(&other.local_committed_bytes);
+        self.local_resident_bytes.merge(&other.local_resident_bytes);
+        self.local_capacity_waiters
+            .merge(&other.local_capacity_waiters);
+        self.global_budget_bytes.merge(&other.global_budget_bytes);
+        self.global_resident_bytes
+            .merge(&other.global_resident_bytes);
+        self.global_available_permits
+            .merge(&other.global_available_permits);
+        self.global_permit_unit_bytes
+            .merge(&other.global_permit_unit_bytes);
+        self.global_permit_waiters
+            .merge(&other.global_permit_waiters);
+        self.active_fetches.merge(&other.active_fetches);
+    }
+}
+
+impl PutObjectFailureStateStats {
+    fn merge(&mut self, other: &Self) {
+        self.count = self.count.saturating_add(other.count);
+        self.elapsed_ms.merge(&other.elapsed_ms);
+        self.body.merge(&other.body);
+        self.source.merge(&other.source);
+    }
+}
+
+fn same_failure_signature(
+    left: &PutObjectFailureStateStats,
+    right: &PutObjectFailureStateStats,
+) -> bool {
+    left.sdk_error_kind == right.sdk_error_kind
+        && left.dispatch_failure_kind == right.dispatch_failure_kind
+        && left.service_code == right.service_code
+        && left.body.attempt_observed == right.body.attempt_observed
+        && left.body.replay == right.body.replay
+        && left.body.producer_stage == right.body.producer_stage
+        && left.body.final_frame_delivered == right.body.final_frame_delivered
+        && left.body.producer_completed == right.body.producer_completed
+        && left.body.body_error_observed == right.body.body_error_observed
+        && left.body.receiver_dropped == right.body.receiver_dropped
+        && left.body.receiver_drop_aborted_producer == right.body.receiver_drop_aborted_producer
+        && left.source.observed == right.source.observed
+}
+
+fn record_bounded_diagnostic_count(target: &Mutex<BTreeMap<String, u64>>, label: String) {
+    let mut counts = target
+        .lock()
+        .expect("write diagnostic count mutex should not be poisoned");
+    if let Some(count) = counts.get_mut(&label) {
+        *count = count.saturating_add(1);
+    } else if label != OTHER_DIAGNOSTIC_LABEL
+        && counts.len() < MAX_FAILURE_DIAGNOSTIC_LABELS.saturating_sub(1)
+    {
+        counts.insert(label, 1);
+    } else {
+        let count = counts
+            .entry(OTHER_DIAGNOSTIC_LABEL.to_string())
+            .or_default();
+        *count = count.saturating_add(1);
+    }
+}
+
+fn sanitize_diagnostic_label(value: &str) -> String {
+    const MAX_LABEL_BYTES: usize = 64;
+    if !value
+        .as_bytes()
+        .first()
+        .is_some_and(u8::is_ascii_alphabetic)
+        || value.len() > MAX_LABEL_BYTES
+        || !value.bytes().all(|byte| byte.is_ascii_alphanumeric())
+    {
+        OTHER_DIAGNOSTIC_LABEL.to_string()
+    } else {
+        value.to_string()
+    }
+}
+
+fn dispatch_failure_kind<E>(error: &SdkError<E>) -> Option<&'static str> {
+    let SdkError::DispatchFailure(dispatch) = error else {
+        return None;
+    };
+    Some(if dispatch.is_timeout() {
+        "timeout"
+    } else if dispatch.is_io() {
+        "io"
+    } else if dispatch.is_user() {
+        "user"
+    } else {
+        "other"
+    })
+}
+
+fn log_put_attempt_failure(failure: &PutObjectFailureStateStats) {
+    match serialize_put_attempt_failure(failure) {
+        Ok(attempt_failure) => {
+            tracing::warn!(attempt_failure, "shin PutObject attempt failure");
+        }
+        Err(error) => {
+            tracing::warn!(error = %error, "failed to serialize PutObject attempt failure");
+        }
+    }
+}
+
+fn serialize_put_attempt_failure(
+    failure: &PutObjectFailureStateStats,
+) -> serde_json::Result<String> {
+    serde_json::to_string(&PutObjectAttemptFailureEvent {
+        event: "shin_put_object_attempt_failure",
+        schema_version: 1,
+        failure,
+    })
 }
 
 impl WriteRetryCoordinator {
@@ -1397,6 +1790,10 @@ fn log_put_diagnostics(
         retry_wait_ms: diagnostics.retry_wait_millis,
         throttle_cooldown_waits: diagnostics.throttle_cooldown_waits,
         throttle_cooldown_wait_ms: diagnostics.throttle_cooldown_wait_millis,
+        failures_by_sdk_error_kind: diagnostics.failures_by_sdk_error_kind.clone(),
+        failures_by_service_code: diagnostics.failures_by_service_code.clone(),
+        failure_states: diagnostics.failure_states.clone(),
+        failure_state_overflow_attempts: diagnostics.failure_state_overflow_attempts,
     });
     tracing::info!(
         max_attempts = retry.max_attempts,
@@ -1480,12 +1877,19 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::io::Cursor;
+    use std::collections::BTreeMap;
+    use std::io::{Cursor, Write};
+    use std::sync::{Arc, Mutex};
 
     use anyhow::Result;
+    use aws_sdk_s3::error::ConnectorError;
+    use aws_sdk_s3::operation::put_object::PutObjectError;
     use aws_sdk_s3::primitives::SdkBody;
     use aws_smithy_http_client::test_util::{ReplayEvent, StaticReplayClient};
     use http::{Request, Response};
+    use tracing::instrument::WithSubscriber as _;
+    use tracing_subscriber::fmt::MakeWriter;
+    use tracing_subscriber::layer::SubscriberExt;
 
     use super::super::destination::{
         DestinationObject, DestinationWritePrecondition, destination_write_precondition,
@@ -1499,10 +1903,48 @@ mod tests {
     use super::{
         COPY_RECONCILIATION_METADATA_KEY, CopyContext, PutContext, UploadPayload, WriteDiagnostics,
         WriteDiagnosticsSnapshot, WriteRetryCoordinator, catalog_skips_zip_entry,
-        copy_reconciliation_identity, copy_source_object, digest_async_reader, duration_millis_u64,
-        md5_hex, quoted_etag, read_async_reader_to_vec, request_checksum_calculation,
-        sha256_base64, should_compare_marker_free_entry, upload_payload, write_retry_cap_millis,
+        copy_reconciliation_identity, copy_source_object, digest_async_reader,
+        dispatch_failure_kind, duration_millis_u64, md5_hex, quoted_etag, read_async_reader_to_vec,
+        record_bounded_diagnostic_count, request_checksum_calculation, sanitize_diagnostic_label,
+        serialize_put_attempt_failure, sha256_base64, should_compare_marker_free_entry,
+        upload_payload, write_error_kind, write_retry_cap_millis,
     };
+
+    #[derive(Clone, Default)]
+    struct TestWriter(Arc<Mutex<Vec<u8>>>);
+
+    struct TestWriterGuard(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for TestWriterGuard {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0
+                .lock()
+                .expect("test log buffer")
+                .extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'writer> MakeWriter<'writer> for TestWriter {
+        type Writer = TestWriterGuard;
+
+        fn make_writer(&'writer self) -> Self::Writer {
+            TestWriterGuard(Arc::clone(&self.0))
+        }
+    }
+
+    fn test_log_subscriber(writer: TestWriter) -> impl tracing::Subscriber + Send + Sync + 'static {
+        tracing_subscriber::registry().with(
+            tracing_subscriber::fmt::layer()
+                .without_time()
+                .with_ansi(false)
+                .with_writer(writer),
+        )
+    }
 
     #[test]
     fn md5_hex_matches_known_digest() {
@@ -2072,11 +2514,203 @@ mod tests {
     async fn each_application_put_attempt_uses_one_sdk_attempt() {
         let replay = StaticReplayClient::new(vec![error_event(500, "InternalError")]);
         let client = replay_s3_client(replay.clone());
-        let diagnostics = WriteDiagnostics::default();
+        let diagnostics = WriteDiagnostics::new(true);
         let stats = DeploymentStats::default();
         let retry_coordinator = WriteRetryCoordinator::new();
         let mut retry = test_retry_options();
         retry.max_attempts = 1;
+
+        let writer = TestWriter::default();
+        let result = upload_payload(
+            PutContext {
+                destination_s3: &client,
+                destination_bucket: "destination",
+                checksum_strategy: DestinationChecksumStrategy::SseS3Etag,
+                retry: &retry,
+                retry_coordinator: &retry_coordinator,
+                diagnostics: &diagnostics,
+                stats: &stats,
+                work_deadline: test_work_deadline(),
+            },
+            "file.txt",
+            test_payload(DestinationChecksumStrategy::SseS3Etag),
+            None,
+        )
+        .with_subscriber(test_log_subscriber(writer.clone()))
+        .await;
+
+        assert!(result.is_err());
+        assert_eq!(
+            replay
+                .actual_requests()
+                .map(|request| request.method().to_string())
+                .collect::<Vec<_>>(),
+            vec!["PUT"]
+        );
+        let snapshot = diagnostics.snapshot();
+        assert_eq!(snapshot.failed_attempts, 1);
+        assert_eq!(
+            snapshot.failures_by_sdk_error_kind.get("ServiceError"),
+            Some(&1)
+        );
+        assert_eq!(
+            snapshot.failures_by_service_code.get("InternalError"),
+            Some(&1)
+        );
+        assert_eq!(snapshot.failure_states.len(), 1);
+        assert_eq!(snapshot.failure_state_overflow_attempts, 0);
+        let failure = &snapshot.failure_states[0];
+        assert_eq!(failure.sdk_error_kind, "ServiceError");
+        assert_eq!(failure.service_code.as_deref(), Some("InternalError"));
+        assert!(failure.dispatch_failure_kind.is_none());
+        assert!(!failure.body.attempt_observed);
+        assert!(!failure.source.observed);
+
+        let event = serialize_put_attempt_failure(failure).expect("serializable failure event");
+        let parsed: serde_json::Value = serde_json::from_str(&event).expect("failure event JSON");
+        assert_eq!(parsed["event"], "shin_put_object_attempt_failure");
+        assert_eq!(parsed["schemaVersion"], 1);
+        assert_eq!(parsed["failure"]["sdkErrorKind"], "ServiceError");
+        for forbidden in [
+            "file.txt",
+            "destination",
+            "requestId",
+            "test error",
+            "arn:aws",
+            "etag",
+        ] {
+            assert!(
+                !event.contains(forbidden),
+                "immediate failure event retained forbidden value {forbidden}"
+            );
+        }
+        let logs = String::from_utf8(writer.0.lock().expect("test log buffer").clone())
+            .expect("UTF-8 trace output");
+        let immediate_event_lines = logs
+            .lines()
+            .filter(|line| line.contains("shin_put_object_attempt_failure"))
+            .collect::<Vec<_>>();
+        assert_eq!(immediate_event_lines.len(), 1);
+        let immediate_event_line = immediate_event_lines[0];
+        for forbidden in ["file.txt", "destination", "requestId", "arn:aws", "etag"] {
+            assert!(
+                !immediate_event_line.contains(forbidden),
+                "immediate failure log retained forbidden value {forbidden}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn disabled_put_diagnostics_keep_basic_counters_without_detailed_state() {
+        let replay = StaticReplayClient::new(vec![error_event(500, "InternalError")]);
+        let client = replay_s3_client(replay.clone());
+        let diagnostics = WriteDiagnostics::new(false);
+        let stats = DeploymentStats::default();
+        let retry_coordinator = WriteRetryCoordinator::new();
+        let mut retry = test_retry_options();
+        retry.max_attempts = 1;
+
+        let writer = TestWriter::default();
+        let result = upload_payload(
+            PutContext {
+                destination_s3: &client,
+                destination_bucket: "destination",
+                checksum_strategy: DestinationChecksumStrategy::SseS3Etag,
+                retry: &retry,
+                retry_coordinator: &retry_coordinator,
+                diagnostics: &diagnostics,
+                stats: &stats,
+                work_deadline: test_work_deadline(),
+            },
+            "file.txt",
+            test_payload(DestinationChecksumStrategy::SseS3Etag),
+            None,
+        )
+        .with_subscriber(test_log_subscriber(writer.clone()))
+        .await;
+
+        assert!(result.is_err());
+        assert_eq!(replay.actual_requests().count(), 1);
+        let snapshot = diagnostics.snapshot();
+        assert_eq!(snapshot.wire_attempts, 1);
+        assert_eq!(snapshot.failed_attempts, 1);
+        assert_eq!(
+            snapshot.failures_by_error_code.get("InternalError"),
+            Some(&1)
+        );
+        assert!(snapshot.failures_by_sdk_error_kind.is_empty());
+        assert!(snapshot.failures_by_service_code.is_empty());
+        assert!(snapshot.failure_states.is_empty());
+        assert_eq!(snapshot.failure_state_overflow_attempts, 0);
+        let logs = String::from_utf8(writer.0.lock().expect("test log buffer").clone())
+            .expect("UTF-8 trace output");
+        assert!(!logs.contains("shin_put_object_attempt_failure"));
+    }
+
+    #[test]
+    fn put_failure_classification_uses_fixed_sdk_and_dispatch_kinds() {
+        for (connector, expected) in [
+            (
+                ConnectorError::timeout(Box::new(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "timeout detail",
+                ))),
+                "timeout",
+            ),
+            (
+                ConnectorError::io(Box::new(std::io::Error::other("io detail"))),
+                "io",
+            ),
+            (
+                ConnectorError::user(Box::new(std::io::Error::other("user detail"))),
+                "user",
+            ),
+            (
+                ConnectorError::other(Box::new(std::io::Error::other("other detail")), None),
+                "other",
+            ),
+        ] {
+            let error = aws_sdk_s3::error::SdkError::<PutObjectError>::dispatch_failure(connector);
+            assert_eq!(write_error_kind(&error), "DispatchFailure");
+            assert_eq!(dispatch_failure_kind(&error), Some(expected));
+        }
+
+        let timeout = aws_sdk_s3::error::SdkError::<PutObjectError>::timeout_error(
+            std::io::Error::new(std::io::ErrorKind::TimedOut, "timeout detail"),
+        );
+        assert_eq!(write_error_kind(&timeout), "TimeoutError");
+        assert_eq!(dispatch_failure_kind(&timeout), None);
+    }
+
+    #[test]
+    fn diagnostic_label_maps_reserve_the_other_bucket() {
+        let counts = Mutex::new(BTreeMap::new());
+        for index in 0..40 {
+            record_bounded_diagnostic_count(&counts, format!("Code{index}"));
+        }
+        let counts = counts.lock().expect("diagnostic counts");
+        assert_eq!(counts.len(), 32);
+        assert_eq!(counts.get("Other"), Some(&9));
+        assert_eq!(
+            sanitize_diagnostic_label("RequestTimeout"),
+            "RequestTimeout"
+        );
+        assert_eq!(sanitize_diagnostic_label("1RequestTimeout"), "Other");
+        assert_eq!(sanitize_diagnostic_label("Request-Timeout"), "Other");
+    }
+
+    #[tokio::test]
+    async fn put_failure_groups_are_bounded_with_explicit_overflow() {
+        let events = (0..33)
+            .map(|index| error_event(500, &format!("Code{index}")))
+            .collect();
+        let replay = StaticReplayClient::new(events);
+        let client = replay_s3_client(replay.clone());
+        let diagnostics = WriteDiagnostics::new(true);
+        let stats = DeploymentStats::default();
+        let retry_coordinator = WriteRetryCoordinator::new();
+        let mut retry = test_retry_options();
+        retry.max_attempts = 33;
 
         let result = upload_payload(
             PutContext {
@@ -2096,13 +2730,17 @@ mod tests {
         .await;
 
         assert!(result.is_err());
+        assert_eq!(replay.actual_requests().count(), 33);
+        let snapshot = diagnostics.snapshot();
+        assert_eq!(snapshot.failed_attempts, 33);
+        assert_eq!(snapshot.failure_states.len(), 32);
+        assert_eq!(snapshot.failure_state_overflow_attempts, 1);
         assert_eq!(
-            replay
-                .actual_requests()
-                .map(|request| request.method().to_string())
-                .collect::<Vec<_>>(),
-            vec!["PUT"]
+            snapshot.failures_by_sdk_error_kind.get("ServiceError"),
+            Some(&33)
         );
+        assert_eq!(snapshot.failures_by_service_code.len(), 32);
+        assert_eq!(snapshot.failures_by_service_code.get("Other"), Some(&2));
     }
 
     #[tokio::test]

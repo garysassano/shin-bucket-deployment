@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, HashMap};
-use std::sync::Arc;
+use std::ffi::OsStr;
+use std::io;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use aws_sdk_cloudfront::Client as CloudFrontClient;
@@ -9,12 +11,57 @@ use reqwest::Client as HttpClient;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
 
+const MAX_FAILURE_DIAGNOSTIC_GROUPS: usize = 32;
+const MAX_FAILURE_DIAGNOSTIC_LABELS: usize = 32;
+const OTHER_DIAGNOSTIC_LABEL: &str = "Other";
+
 #[derive(Clone)]
 pub(crate) struct AppState {
     pub(crate) source_s3: S3Client,
     pub(crate) destination_s3: S3Client,
     pub(crate) cloudfront: CloudFrontClient,
     pub(crate) http: HttpClient,
+    pub(crate) detailed_failure_diagnostics: bool,
+}
+
+pub(crate) fn detailed_failure_diagnostics_from_env() -> io::Result<bool> {
+    parse_detailed_failure_diagnostics(std::env::var_os("SHIN_DETAILED_FAILURE_DIAGNOSTICS"))
+}
+
+fn parse_detailed_failure_diagnostics(value: Option<impl AsRef<OsStr>>) -> io::Result<bool> {
+    match value {
+        None => Ok(false),
+        Some(value) if value.as_ref() == OsStr::new("true") => Ok(true),
+        Some(_) => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "SHIN_DETAILED_FAILURE_DIAGNOSTICS must be absent or exactly `true`",
+        )),
+    }
+}
+
+#[cfg(test)]
+mod detailed_failure_diagnostics_tests {
+    use std::ffi::{OsStr, OsString};
+
+    use super::parse_detailed_failure_diagnostics;
+
+    #[test]
+    fn detailed_failure_diagnostics_default_to_disabled() {
+        assert!(!parse_detailed_failure_diagnostics(None::<&OsStr>).expect("absent flag"));
+    }
+
+    #[test]
+    fn detailed_failure_diagnostics_require_exact_true() {
+        assert!(
+            parse_detailed_failure_diagnostics(Some(OsStr::new("true")))
+                .expect("exact true should enable diagnostics")
+        );
+        for invalid in ["false", "TRUE", " true", "true ", "1", ""] {
+            let error = parse_detailed_failure_diagnostics(Some(OsString::from(invalid)))
+                .expect_err("all non-exact values must fail closed");
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -262,10 +309,19 @@ pub(crate) struct DeploymentStats {
     put_retry_wait_millis: AtomicU64,
     put_throttle_cooldown_waits: AtomicU64,
     put_throttle_cooldown_wait_millis: AtomicU64,
+    detailed_put_object: Option<Box<DetailedPutObjectStats>>,
     callback_wire_attempts: AtomicU64,
     callback_failed_attempts: AtomicU64,
     callback_retry_attempts: AtomicU64,
     callback_confirmed_responses: AtomicU64,
+}
+
+#[derive(Default)]
+struct DetailedPutObjectStats {
+    failures_by_sdk_error_kind: Mutex<BTreeMap<String, u64>>,
+    failures_by_service_code: Mutex<BTreeMap<String, u64>>,
+    failure_states: Mutex<Vec<PutObjectFailureStateStats>>,
+    failure_state_overflow_attempts: AtomicU64,
 }
 
 struct OnceInstant(Instant);
@@ -282,6 +338,7 @@ pub(crate) struct DeploymentStatsSnapshot<'a> {
     pub(crate) delete_stale_objects_on_deployment: bool,
     pub(crate) available_memory_mb: u64,
     pub(crate) max_parallel_transfers: usize,
+    pub(crate) detailed_failure_diagnostics_enabled: bool,
     pub(crate) duration_ms: u64,
     pub(crate) phase_ms: PhaseMillis,
     pub(crate) counts: DeploymentCounts,
@@ -392,7 +449,7 @@ pub(crate) struct MarkerReplacementStats {
     pub(crate) upload_passes: u64,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct PutObjectStats {
     pub(crate) wire_attempts: u64,
@@ -402,6 +459,62 @@ pub(crate) struct PutObjectStats {
     pub(crate) retry_wait_ms: u64,
     pub(crate) throttle_cooldown_waits: u64,
     pub(crate) throttle_cooldown_wait_ms: u64,
+    pub(crate) failures_by_sdk_error_kind: BTreeMap<String, u64>,
+    pub(crate) failures_by_service_code: BTreeMap<String, u64>,
+    pub(crate) failure_states: Vec<PutObjectFailureStateStats>,
+    pub(crate) failure_state_overflow_attempts: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PutObjectFailureStateStats {
+    pub(crate) count: u64,
+    pub(crate) sdk_error_kind: String,
+    pub(crate) dispatch_failure_kind: Option<String>,
+    pub(crate) service_code: Option<String>,
+    pub(crate) elapsed_ms: DiagnosticRangeStats,
+    pub(crate) body: PutObjectFailureBodyStats,
+    pub(crate) source: PutObjectFailureSourceStats,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PutObjectFailureBodyStats {
+    pub(crate) attempt_observed: bool,
+    pub(crate) replay: bool,
+    pub(crate) producer_stage: String,
+    pub(crate) final_frame_delivered: bool,
+    pub(crate) producer_completed: bool,
+    pub(crate) body_error_observed: bool,
+    pub(crate) receiver_dropped: bool,
+    pub(crate) receiver_drop_aborted_producer: bool,
+    pub(crate) attempt_number: DiagnosticRangeStats,
+    pub(crate) bytes_emitted: DiagnosticRangeStats,
+    pub(crate) remaining_bytes: DiagnosticRangeStats,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PutObjectFailureSourceStats {
+    pub(crate) observed: bool,
+    pub(crate) local_window_bytes: DiagnosticRangeStats,
+    pub(crate) local_committed_bytes: DiagnosticRangeStats,
+    pub(crate) local_resident_bytes: DiagnosticRangeStats,
+    pub(crate) local_capacity_waiters: DiagnosticRangeStats,
+    pub(crate) global_budget_bytes: DiagnosticRangeStats,
+    pub(crate) global_resident_bytes: DiagnosticRangeStats,
+    pub(crate) global_available_permits: DiagnosticRangeStats,
+    pub(crate) global_permit_unit_bytes: DiagnosticRangeStats,
+    pub(crate) global_permit_waiters: DiagnosticRangeStats,
+    pub(crate) active_fetches: DiagnosticRangeStats,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DiagnosticRangeStats {
+    pub(crate) min: u64,
+    pub(crate) max: u64,
+    pub(crate) total: u64,
 }
 
 #[derive(Serialize)]
@@ -441,6 +554,18 @@ impl Default for OnceInstant {
 }
 
 impl DeploymentStats {
+    pub(crate) fn new(detailed_failure_diagnostics: bool) -> Self {
+        Self {
+            detailed_put_object: detailed_failure_diagnostics
+                .then(|| Box::new(DetailedPutObjectStats::default())),
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn detailed_failure_diagnostics_enabled(&self) -> bool {
+        self.detailed_put_object.is_some()
+    }
+
     pub(crate) fn add_plan_millis(&self, millis: u64) {
         self.plan_millis.fetch_add(millis, Ordering::Relaxed);
     }
@@ -688,6 +813,10 @@ impl DeploymentStats {
         );
     }
 
+    pub(crate) fn source_global_resident_bytes_current(&self) -> u64 {
+        self.source_global_resident_bytes.load(Ordering::Acquire)
+    }
+
     #[cfg(test)]
     pub(crate) fn source_global_memory_for_test(&self) -> (u64, u64, u64) {
         (
@@ -740,6 +869,21 @@ impl DeploymentStats {
             .fetch_add(stats.throttle_cooldown_waits, Ordering::Relaxed);
         self.put_throttle_cooldown_wait_millis
             .fetch_add(stats.throttle_cooldown_wait_ms, Ordering::Relaxed);
+        if let Some(detailed) = &self.detailed_put_object {
+            merge_diagnostic_counts(
+                &detailed.failures_by_sdk_error_kind,
+                &stats.failures_by_sdk_error_kind,
+            );
+            merge_diagnostic_counts(
+                &detailed.failures_by_service_code,
+                &stats.failures_by_service_code,
+            );
+            let overflow = merge_failure_states(&detailed.failure_states, &stats.failure_states)
+                .saturating_add(stats.failure_state_overflow_attempts);
+            detailed
+                .failure_state_overflow_attempts
+                .fetch_add(overflow, Ordering::Relaxed);
+        }
     }
 
     pub(crate) fn snapshot<'a>(
@@ -750,7 +894,7 @@ impl DeploymentStats {
     ) -> DeploymentStatsSnapshot<'a> {
         DeploymentStatsSnapshot {
             event: "shin_deployment_summary",
-            schema_version: 3,
+            schema_version: 4,
             request_type,
             deployment_status,
             extract: request.extract,
@@ -758,6 +902,7 @@ impl DeploymentStats {
             delete_stale_objects_on_deployment: request.delete_stale_objects_on_deployment,
             available_memory_mb: request.runtime.available_memory_mb,
             max_parallel_transfers: request.runtime.max_parallel_transfers,
+            detailed_failure_diagnostics_enabled: self.detailed_failure_diagnostics_enabled(),
             duration_ms: duration_ms(self.started.0.elapsed()),
             phase_ms: PhaseMillis {
                 plan: self.plan_millis.load(Ordering::Relaxed),
@@ -874,6 +1019,44 @@ impl DeploymentStats {
                 throttle_cooldown_wait_ms: self
                     .put_throttle_cooldown_wait_millis
                     .load(Ordering::Relaxed),
+                failures_by_sdk_error_kind: self.detailed_put_object.as_ref().map_or_else(
+                    BTreeMap::new,
+                    |detailed| {
+                        detailed
+                            .failures_by_sdk_error_kind
+                            .lock()
+                            .expect("PutObject SDK-error-kind mutex should not be poisoned")
+                            .clone()
+                    },
+                ),
+                failures_by_service_code: self.detailed_put_object.as_ref().map_or_else(
+                    BTreeMap::new,
+                    |detailed| {
+                        detailed
+                            .failures_by_service_code
+                            .lock()
+                            .expect("PutObject service-code mutex should not be poisoned")
+                            .clone()
+                    },
+                ),
+                failure_states: self.detailed_put_object.as_ref().map_or_else(
+                    Vec::new,
+                    |detailed| {
+                        detailed
+                            .failure_states
+                            .lock()
+                            .expect("PutObject failure-state mutex should not be poisoned")
+                            .clone()
+                    },
+                ),
+                failure_state_overflow_attempts: self.detailed_put_object.as_ref().map_or(
+                    0,
+                    |detailed| {
+                        detailed
+                            .failure_state_overflow_attempts
+                            .load(Ordering::Relaxed)
+                    },
+                ),
             },
             delete_object: DeleteObjectStats {
                 sdk_calls: self.delete_sdk_calls.load(Ordering::Relaxed),
@@ -893,6 +1076,134 @@ impl DeploymentStats {
             },
         }
     }
+}
+
+fn merge_diagnostic_counts(
+    destination: &Mutex<BTreeMap<String, u64>>,
+    source: &BTreeMap<String, u64>,
+) {
+    let mut destination = destination
+        .lock()
+        .expect("diagnostic count mutex should not be poisoned");
+    for (key, count) in source {
+        let key = if destination.contains_key(key)
+            || (key != OTHER_DIAGNOSTIC_LABEL
+                && destination.len() < MAX_FAILURE_DIAGNOSTIC_LABELS.saturating_sub(1))
+        {
+            key.clone()
+        } else {
+            OTHER_DIAGNOSTIC_LABEL.to_string()
+        };
+        let destination_count = destination.entry(key).or_default();
+        *destination_count = destination_count.saturating_add(*count);
+    }
+}
+
+fn merge_failure_states(
+    destination: &Mutex<Vec<PutObjectFailureStateStats>>,
+    source: &[PutObjectFailureStateStats],
+) -> u64 {
+    let mut destination = destination
+        .lock()
+        .expect("PutObject failure-state mutex should not be poisoned");
+    let mut overflow = 0_u64;
+    for failure in source {
+        if let Some(existing) = destination
+            .iter_mut()
+            .find(|existing| same_failure_signature(existing, failure))
+        {
+            merge_failure_state(existing, failure);
+        } else if destination.len() < MAX_FAILURE_DIAGNOSTIC_GROUPS {
+            destination.push(failure.clone());
+        } else {
+            overflow = overflow.saturating_add(failure.count);
+        }
+    }
+    overflow
+}
+
+fn same_failure_signature(
+    left: &PutObjectFailureStateStats,
+    right: &PutObjectFailureStateStats,
+) -> bool {
+    left.sdk_error_kind == right.sdk_error_kind
+        && left.dispatch_failure_kind == right.dispatch_failure_kind
+        && left.service_code == right.service_code
+        && left.body.attempt_observed == right.body.attempt_observed
+        && left.body.replay == right.body.replay
+        && left.body.producer_stage == right.body.producer_stage
+        && left.body.final_frame_delivered == right.body.final_frame_delivered
+        && left.body.producer_completed == right.body.producer_completed
+        && left.body.body_error_observed == right.body.body_error_observed
+        && left.body.receiver_dropped == right.body.receiver_dropped
+        && left.body.receiver_drop_aborted_producer == right.body.receiver_drop_aborted_producer
+        && left.source.observed == right.source.observed
+}
+
+fn merge_failure_state(
+    destination: &mut PutObjectFailureStateStats,
+    source: &PutObjectFailureStateStats,
+) {
+    destination.count = destination.count.saturating_add(source.count);
+    merge_range(&mut destination.elapsed_ms, &source.elapsed_ms);
+    merge_range(
+        &mut destination.body.attempt_number,
+        &source.body.attempt_number,
+    );
+    merge_range(
+        &mut destination.body.bytes_emitted,
+        &source.body.bytes_emitted,
+    );
+    merge_range(
+        &mut destination.body.remaining_bytes,
+        &source.body.remaining_bytes,
+    );
+    merge_range(
+        &mut destination.source.local_window_bytes,
+        &source.source.local_window_bytes,
+    );
+    merge_range(
+        &mut destination.source.local_committed_bytes,
+        &source.source.local_committed_bytes,
+    );
+    merge_range(
+        &mut destination.source.local_resident_bytes,
+        &source.source.local_resident_bytes,
+    );
+    merge_range(
+        &mut destination.source.local_capacity_waiters,
+        &source.source.local_capacity_waiters,
+    );
+    merge_range(
+        &mut destination.source.global_budget_bytes,
+        &source.source.global_budget_bytes,
+    );
+    merge_range(
+        &mut destination.source.global_resident_bytes,
+        &source.source.global_resident_bytes,
+    );
+    merge_range(
+        &mut destination.source.global_available_permits,
+        &source.source.global_available_permits,
+    );
+    merge_range(
+        &mut destination.source.global_permit_unit_bytes,
+        &source.source.global_permit_unit_bytes,
+    );
+    merge_range(
+        &mut destination.source.global_permit_waiters,
+        &source.source.global_permit_waiters,
+    );
+    merge_range(
+        &mut destination.source.active_fetches,
+        &source.source.active_fetches,
+    );
+}
+
+fn merge_range(destination: &mut DiagnosticRangeStats, source: &DiagnosticRangeStats) {
+    destination.min = destination.min.min(source.min);
+    destination.max = destination.max.max(source.max);
+    destination.total = destination.total.saturating_add(source.total);
 }
 
 pub(crate) fn duration_ms(duration: std::time::Duration) -> u64 {

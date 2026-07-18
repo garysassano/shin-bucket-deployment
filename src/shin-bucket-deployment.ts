@@ -398,6 +398,23 @@ export interface ShinBucketDeploymentProps
   readonly shareHandler?: boolean;
 
   /**
+   * Collect detailed correlated state for failed destination `PutObject`
+   * attempts.
+   *
+   * When enabled, the provider records body progress and instantaneous source
+   * pressure, emits an immediate sanitized failure event, and includes bounded
+   * failure groups in the final deployment summary. This adds bookkeeping to
+   * streamed uploads and is intended for diagnostics rather than normal
+   * production operation.
+   *
+   * This setting is part of the shared-handler identity, so deployments using
+   * different values do not share a Lambda function.
+   *
+   * @default false
+   */
+  readonly detailedFailureDiagnostics?: boolean;
+
+  /**
    * Memory allocated to the provider Lambda, in MiB.
    *
    * The provider derives its invocation-global source-block budget from the

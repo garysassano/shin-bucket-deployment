@@ -9,6 +9,7 @@ export type PlannedBenchmarkRun = {
   readonly assetProfile: BenchmarkAssetProfile;
   readonly memoryMb: number;
   readonly parallel: number | null;
+  readonly sourceWindowBytes?: number | null;
 };
 
 export function createBenchmarkPlan(options: BenchmarkRunOptions): PlannedBenchmarkRun[] {
@@ -50,6 +51,9 @@ function planImplementations(
     assetProfile,
     memoryMb: lambdaConfig.memoryMb,
     parallel: implementation === "aws" ? null : lambdaConfig.parallel,
+    ...(implementation === "shin" && Object.hasOwn(lambdaConfig, "sourceWindowBytes")
+      ? { sourceWindowBytes: lambdaConfig.sourceWindowBytes ?? null }
+      : {}),
   }));
 }
 
@@ -58,9 +62,13 @@ function deduplicateRuns(
 ): Array<Omit<PlannedBenchmarkRun, "repetition" | "sampleId">> {
   const seen = new Set<string>();
   return runs.filter((run) => {
-    const key = [run.implementation, run.assetProfile, run.memoryMb, run.parallel ?? "na"].join(
-      "\0",
-    );
+    const key = [
+      run.implementation,
+      run.assetProfile,
+      run.memoryMb,
+      run.parallel ?? "na",
+      ...(Object.hasOwn(run, "sourceWindowBytes") ? [run.sourceWindowBytes ?? "adaptive"] : []),
+    ].join("\0");
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -81,6 +89,7 @@ export function benchmarkSampleId(
         run.assetProfile,
         run.memoryMb,
         run.parallel ?? "na",
+        ...(Object.hasOwn(run, "sourceWindowBytes") ? [run.sourceWindowBytes ?? "adaptive"] : []),
       ].join("\0"),
     )
     .digest("hex")

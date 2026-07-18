@@ -82,6 +82,7 @@ const records = plan.flatMap((sample) =>
       profile: sample.assetProfile,
       memoryMb: sample.memoryMb,
       parallel: sample.parallel,
+      detailedFailureDiagnostics: shin ? true : null,
       phase: phase.name,
       state: phase.assetState,
       fileCount: 1,
@@ -109,7 +110,7 @@ function providerSummary(memoryMb, parallel, create) {
   const zeroFields = (names) => Object.fromEntries(names.map((name) => [name, 0]));
   return {
     event: "shin_deployment_summary",
-    schemaVersion: 3,
+    schemaVersion: 4,
     requestType: create ? "Create" : "Update",
     deploymentStatus: "success",
     extract: true,
@@ -117,6 +118,7 @@ function providerSummary(memoryMb, parallel, create) {
     deleteStaleObjectsOnDeployment: true,
     availableMemoryMb: memoryMb,
     maxParallelTransfers: parallel,
+    detailedFailureDiagnosticsEnabled: true,
     durationMs: 1,
     phaseMs: zeroFields([
       "plan",
@@ -204,15 +206,21 @@ function providerSummary(memoryMb, parallel, create) {
       "globalResidentBytesCurrent",
       "globalResidentBytesHighWater",
     ]),
-    putObject: zeroFields([
-      "wireAttempts",
-      "failedAttempts",
-      "retryAttempts",
-      "throttledAttempts",
-      "retryWaitMs",
-      "throttleCooldownWaits",
-      "throttleCooldownWaitMs",
-    ]),
+    putObject: {
+      ...zeroFields([
+        "wireAttempts",
+        "failedAttempts",
+        "retryAttempts",
+        "throttledAttempts",
+        "retryWaitMs",
+        "throttleCooldownWaits",
+        "throttleCooldownWaitMs",
+      ]),
+      failuresBySdkErrorKind: {},
+      failuresByServiceCode: {},
+      failureStates: [],
+      failureStateOverflowAttempts: 0,
+    },
     deleteObject: zeroFields([
       "sdkCalls",
       "failedCalls",

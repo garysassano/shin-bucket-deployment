@@ -38,6 +38,9 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
     const maxParallelTransfers = parseOptionalPositiveIntegerEnv(
       "SHIN_BENCH_LAMBDA_MAX_PARALLEL_TRANSFERS",
     );
+    const sourceWindowBytes = parseOptionalPositiveIntegerEnv("SHIN_BENCH_SOURCE_WINDOW_BYTES");
+    const detailedFailureDiagnostics =
+      parseOptionalBooleanEnv("SHIN_BENCH_DETAILED_FAILURE_DIAGNOSTICS") ?? true;
     const implementation = parseImplementation(process.env.SHIN_BENCH_IMPLEMENTATION);
     const runOwner = process.env.SHIN_BENCH_RUN_OWNER;
     const sampleOwner = process.env.SHIN_BENCH_SAMPLE_OWNER;
@@ -88,6 +91,7 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
     if (implementation === "shin") {
       deployment = new ShinBucketDeployment(this, "DeployBenchmarkAssets", {
         ...deploymentProps,
+        detailedFailureDiagnostics,
         destinationLifecycle: {
           onDeploy: {
             deleteStaleObjects,
@@ -101,6 +105,9 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
               }),
         },
         ...(maxParallelTransfers === undefined ? {} : { maxParallelTransfers }),
+        ...(sourceWindowBytes === undefined
+          ? {}
+          : { advancedRuntimeTuning: { sourceWindowBytes } }),
         sources: [
           ...bundle.sourceRoots.map((root) => ShinSource.asset(root)),
           ...(markerPayload === undefined
@@ -164,6 +171,14 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
 
     new CfnOutput(this, "BenchmarkMaxParallelTransfers", {
       value: String(maxParallelTransfers ?? 32),
+    });
+
+    new CfnOutput(this, "BenchmarkSourceWindowBytes", {
+      value: sourceWindowBytes === undefined ? "adaptive" : String(sourceWindowBytes),
+    });
+
+    new CfnOutput(this, "BenchmarkDetailedFailureDiagnostics", {
+      value: implementation === "shin" ? String(detailedFailureDiagnostics) : "not-applicable",
     });
 
     new CfnOutput(this, "BenchmarkImplementation", {

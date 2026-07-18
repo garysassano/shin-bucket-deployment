@@ -195,6 +195,7 @@ test("binds shared prebuilt handler identity to the package version and archive 
       .update(
         stableStringify({
           architecture: "arm64",
+          detailedFailureDiagnostics: false,
           handlerSource: {
             kind: "prebuilt",
             packageVersion: manifest.version,
@@ -212,6 +213,38 @@ test("binds shared prebuilt handler identity to the package version and archive 
   } finally {
     cleanup();
   }
+});
+
+test("detailed failure diagnostics are opt-in and select a distinct shared handler", () => {
+  const stack = new Stack();
+  const defaultDeployment = new ShinBucketDeployment(stack, "DefaultDeploy", {
+    sources: [Source.data("default.txt", "default")],
+    destinationBucket: new Bucket(stack, "DefaultDest"),
+    bundling: testBundling(),
+  });
+  const diagnosticDeployment = new ShinBucketDeployment(stack, "DiagnosticDeploy", {
+    sources: [Source.data("diagnostic.txt", "diagnostic")],
+    destinationBucket: new Bucket(stack, "DiagnosticDest"),
+    detailedFailureDiagnostics: true,
+    bundling: testBundling(),
+  });
+
+  expect(defaultDeployment.handlerFunction).not.toBe(diagnosticDeployment.handlerFunction);
+  Template.fromStack(stack).hasResourceProperties("AWS::Lambda::Function", {
+    Environment: {
+      Variables: {
+        RUST_BACKTRACE: "1",
+      },
+    },
+  });
+  Template.fromStack(stack).hasResourceProperties("AWS::Lambda::Function", {
+    Environment: {
+      Variables: {
+        RUST_BACKTRACE: "1",
+        SHIN_DETAILED_FAILURE_DIAGNOSTICS: "true",
+      },
+    },
+  });
 });
 
 test("Source.asset emits an embedded catalog for directory assets", () => {

@@ -16,6 +16,7 @@ export type BenchmarkAggregate = BenchmarkStatistics & {
   readonly implementation: string;
   readonly memoryMb: number | null;
   readonly parallel: number | null;
+  readonly sourceWindowBytes: number | null;
 };
 
 export function quantile(sortedValues: readonly number[], probability: number): number {
@@ -66,9 +67,15 @@ export function aggregateMetric(
     }
     const implementation = implementationLabel(record);
     const parallel = implementation === "aws" ? null : (record.parallel ?? null);
-    const key = [record.profile, record.phase, implementation, record.memoryMb, parallel].join(
-      "\0",
-    );
+    const sourceWindowBytes = implementation === "aws" ? null : (record.sourceWindowBytes ?? null);
+    const key = [
+      record.profile,
+      record.phase,
+      implementation,
+      record.memoryMb,
+      parallel,
+      sourceWindowBytes,
+    ].join("\0");
     const group = groups.get(key) ?? { record, values: [] };
     group.values.push(value);
     groups.set(key, group);
@@ -79,6 +86,8 @@ export function aggregateMetric(
     implementation: implementationLabel(record),
     memoryMb: record.memoryMb ?? null,
     parallel: implementationLabel(record) === "aws" ? null : (record.parallel ?? null),
+    sourceWindowBytes:
+      implementationLabel(record) === "aws" ? null : (record.sourceWindowBytes ?? null),
     ...summarize(values),
   }));
 }
@@ -102,7 +111,9 @@ export function assertCompleteSamples(
 }
 
 export function comparisonGroupKey(
-  row: Pick<BenchmarkAggregate, "memoryMb" | "phase" | "profile">,
+  row: Pick<BenchmarkAggregate, "memoryMb" | "phase" | "profile"> & {
+    readonly sourceWindowBytes?: number | null;
+  },
 ): string {
   return [row.profile, row.phase, row.memoryMb ?? ""].join("\0");
 }

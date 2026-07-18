@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import {
+  aggregateMetric,
   assertCompleteSamples,
   comparisonGroupKey,
   summarize,
@@ -27,18 +28,27 @@ import {
   type BenchmarkResultRecord,
   benchmarkMethodologyVersion,
   isCanonicalBenchmarkRecord,
+  methodologyV2RecordErrors,
+  readBenchmarkResultRecords,
   selectBenchmarkRun,
 } from "../../benchmarks/src/model";
 import { completedSampleIds, upsertBenchmarkRecord } from "../../benchmarks/src/persistence";
 import { createBenchmarkPlan, wallClockCapReached } from "../../benchmarks/src/plan";
 import { openResumeSession } from "../../benchmarks/src/resume";
 import {
+  assertPreexistingStackMayBeRemoved,
+  assertPreservedStackWasRemoved,
   assertProviderRuntimeMetadata,
   benchmarkDeployArgs,
+  benchmarkProviderBuildArgs,
+  benchmarkStackCleanupDisposition,
   benchmarkStackTags,
   failedPhaseEvidencePaths,
   providerLogGroupName,
+  readPreservationManifest,
+  removePreservationManifest,
   runWithFailedDeployEvidence,
+  writePreservationManifest,
 } from "../../benchmarks/src/run-assets-comparison";
 import {
   selectValidatedBenchmarkRun,
@@ -61,9 +71,195 @@ describe("benchmark methodology v2", () => {
 
   test("defaults to five sequential methodology-v2 repetitions", () => {
     const options = parseBenchmarkRunOptions([]);
-    expect(options).toMatchObject({ methodologyVersion: 2, repetitions: 5, concurrency: 1 });
+    expect(options).toMatchObject({
+      methodologyVersion: 2,
+      repetitions: 5,
+      concurrency: 1,
+      preserveOnFailure: false,
+      detailedFailureDiagnostics: true,
+    });
     expect(options.runId).toMatch(/^[0-9a-f-]{36}$/);
     expect(() => assertBenchmarkExecutionAuthorized(options)).toThrow("wall-clock cap");
+  });
+
+  test("parses failed-stack preservation as an execution control", () => {
+    const preserved = parseBenchmarkRunOptions(["--preserve-on-failure", "true"]);
+    expect(preserved.preserveOnFailure).toBe(true);
+    expect(() => parseBenchmarkRunOptions(["--preserve-on-failure", "sometimes"])).toThrow(
+      "true or false",
+    );
+
+    const baseline = parseBenchmarkRunOptions(["--run-id", "00000000-0000-4000-a000-000000000015"]);
+    expect(benchmarkConfigurationSha256({ ...baseline, preserveOnFailure: true })).toBe(
+      benchmarkConfigurationSha256(baseline),
+    );
+  });
+
+  test("allows diagnostics-off only as an explicit methodology-v1 control", () => {
+    const disabled = parseBenchmarkRunOptions([
+      "--methodology-version",
+      "1",
+      "--detailed-failure-diagnostics",
+      "false",
+    ]);
+    expect(disabled.detailedFailureDiagnostics).toBe(false);
+    expect(() => parseBenchmarkRunOptions(["--detailed-failure-diagnostics", "false"])).toThrow(
+      "Methodology-v2 benchmarks require detailed failure diagnostics",
+    );
+    expect(() =>
+      parseBenchmarkRunOptions([
+        "--methodology-version",
+        "1",
+        "--detailed-failure-diagnostics",
+        "sometimes",
+      ]),
+    ).toThrow("true or false");
+
+    const enabled = parseBenchmarkRunOptions([
+      "--methodology-version",
+      "1",
+      "--run-id",
+      "00000000-0000-4000-a000-000000000017",
+    ]);
+    expect(benchmarkConfigurationSha256(disabled)).not.toBe(benchmarkConfigurationSha256(enabled));
+  });
+
+  test("selects clean or current-tree provider provenance by methodology", () => {
+    expect(
+      benchmarkProviderBuildArgs({
+        methodologyVersion: 2,
+        outputFile: "/tmp/methodology-v2.jsonl",
+      }),
+    ).toEqual([
+      "scripts/build-bootstrap.mjs",
+      "--benchmark",
+      "--evidence-output",
+      "/tmp/methodology-v2.jsonl",
+      "arm64",
+    ]);
+    expect(
+      benchmarkProviderBuildArgs({
+        methodologyVersion: 1,
+        outputFile: "/tmp/methodology-v1.jsonl",
+      }),
+    ).toEqual([
+      "scripts/build-bootstrap.mjs",
+      "--benchmark-current-tree",
+      "--evidence-output",
+      "/tmp/methodology-v1.jsonl",
+      "arm64",
+    ]);
+  });
+
+  test("arms, transitions, parses, and removes scratch-only preservation manifests", () => {
+    const dir = mkdtempSync(join(tmpdir(), "shin-benchmark-preservation-"));
+    const manifestFile = join(dir, "preserved-stack.json");
+    const base = {
+      schemaVersion: 1 as const,
+      stackName: "benchmark-stack",
+      region: "eu-central-1",
+      runId: "00000000-0000-4000-a000-000000000001",
+      sampleId: "00000000-0000-5000-a000-000000000001",
+      implementation: "shin" as const,
+      assetProfile: "large-few",
+      memoryMb: 1024,
+      parallel: 32,
+      sourceWindowBytes: null,
+    };
+
+    writePreservationManifest(manifestFile, { ...base, status: "preservation-intent" });
+    expect(readPreservationManifest(manifestFile)).toEqual({
+      ...base,
+      status: "preservation-intent",
+    });
+    writePreservationManifest(manifestFile, {
+      ...base,
+      status: "preserved-after-failure",
+    });
+    expect(readPreservationManifest(manifestFile).status).toBe("preserved-after-failure");
+    expect(() => assertPreexistingStackMayBeRemoved(true, manifestFile)).toThrow(
+      "refusing automatic deletion",
+    );
+    expect(() => assertPreexistingStackMayBeRemoved(false, manifestFile)).not.toThrow();
+
+    removePreservationManifest(manifestFile);
+    expect(existsSync(manifestFile)).toBe(false);
+  });
+
+  test("rejects malformed preservation manifests", () => {
+    const dir = mkdtempSync(join(tmpdir(), "shin-benchmark-preservation-invalid-"));
+    const manifestFile = join(dir, "preserved-stack.json");
+    writeFileSync(
+      manifestFile,
+      JSON.stringify({ schemaVersion: 1, status: "unexpected", stackName: "stack" }),
+    );
+    expect(() => readPreservationManifest(manifestFile)).toThrow("Invalid preserved-stack");
+  });
+
+  test("resume refuses a preserved stack and clears intent only after verified absence", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "shin-benchmark-preservation-resume-"));
+    const manifestFile = join(dir, "preserved-stack.json");
+    writePreservationManifest(manifestFile, {
+      schemaVersion: 1,
+      status: "preservation-intent",
+      stackName: "benchmark-stack",
+      region: "eu-central-1",
+      runId: "run",
+      sampleId: "sample",
+      implementation: "shin",
+      assetProfile: "large-few",
+      memoryMb: 1024,
+      parallel: 32,
+      sourceWindowBytes: 134217728,
+    });
+    const controller = new AbortController();
+    await expect(
+      assertPreservedStackWasRemoved({
+        manifestFile,
+        expectedStackName: "benchmark-stack",
+        expectedRegion: "eu-central-1",
+        signal: controller.signal,
+        describe: async () => 0,
+      }),
+    ).rejects.toThrow("still preserved");
+    expect(existsSync(manifestFile)).toBe(true);
+
+    await expect(
+      assertPreservedStackWasRemoved({
+        manifestFile,
+        expectedStackName: "benchmark-stack",
+        expectedRegion: "eu-central-1",
+        signal: controller.signal,
+        describe: async (_stack, _region, outputFile) => {
+          writeFileSync(outputFile, "verified missing");
+          return 255;
+        },
+        assertNotFound: (outputFile, stackName) => {
+          expect(stackName).toBe("benchmark-stack");
+          expect(readFileSync(outputFile, "utf8")).toBe("verified missing");
+        },
+      }),
+    ).resolves.toBeUndefined();
+    expect(existsSync(manifestFile)).toBe(false);
+  });
+
+  test("missing preservation manifest is a no-op but a preexisting stack fails closed", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "shin-benchmark-preservation-missing-"));
+    const manifestFile = join(dir, "preserved-stack.json");
+    await expect(
+      assertPreservedStackWasRemoved({
+        manifestFile,
+        expectedStackName: "benchmark-stack",
+        expectedRegion: "eu-central-1",
+        signal: new AbortController().signal,
+        describe: async () => {
+          throw new Error("must not describe without a manifest");
+        },
+      }),
+    ).resolves.toBeUndefined();
+    expect(() => assertPreexistingStackMayBeRemoved(true, manifestFile)).toThrow(
+      "refusing automatic deletion",
+    );
   });
 
   test("requires explicit approval for the smoke and repetitions 2-5", () => {
@@ -123,6 +319,18 @@ describe("benchmark methodology v2", () => {
     expect(benchmarkConfigurationSha256({ ...base, phases: [...base.phases].reverse() })).not.toBe(
       digest,
     );
+    expect(
+      benchmarkConfigurationSha256({
+        ...base,
+        lambdaConfigs: [{ memoryMb: 1024, parallel: 32, sourceWindowBytes: null }],
+      }),
+    ).not.toBe(digest);
+    expect(
+      benchmarkConfigurationSha256({
+        ...base,
+        lambdaConfigs: [{ memoryMb: 1024, parallel: 32, sourceWindowBytes: 134217728 }],
+      }),
+    ).not.toBe(digest);
   });
 
   test("rejects benchmark concurrency above one", () => {
@@ -172,6 +380,48 @@ describe("benchmark methodology v2", () => {
     expect(plan.every((run) => /^[0-9a-f-]{36}$/.test(run.sampleId))).toBe(true);
   });
 
+  test("plans adaptive and 128 MiB source windows as distinct Shin samples", () => {
+    const options: BenchmarkRunOptions = {
+      ...parseBenchmarkRunOptions([
+        "--run-id",
+        "00000000-0000-4000-a000-000000000016",
+        "--repetitions",
+        "1",
+      ]),
+      assetProfiles: ["large-few"],
+      lambdaConfigs: [
+        { memoryMb: 1024, parallel: 32, sourceWindowBytes: null },
+        { memoryMb: 1024, parallel: 32, sourceWindowBytes: 134217728 },
+      ],
+      implementations: ["shin", "aws"],
+    };
+
+    const plan = createBenchmarkPlan(options);
+    expect(plan).toHaveLength(3);
+    expect(plan.map((run) => [run.implementation, run.parallel, run.sourceWindowBytes])).toEqual([
+      ["shin", 32, null],
+      ["aws", null, undefined],
+      ["shin", 32, 134217728],
+    ]);
+    expect(new Set(plan.map((run) => run.sampleId)).size).toBe(3);
+
+    const phase = options.phases[0];
+    if (phase === undefined) throw new Error("diagnostic plan requires a cold-create phase");
+    const shinRecords = plan
+      .filter((sample) => sample.implementation === "shin")
+      .map((sample) => canonicalRecord(options, sample, phase));
+    expect(shinRecords.map((record) => record.sourceWindowBytes)).toEqual([null, 134217728]);
+    expect(
+      aggregateMetric(shinRecords, "providerDurationSeconds").map((aggregate) => [
+        aggregate.sourceWindowBytes,
+        aggregate.count,
+      ]),
+    ).toEqual([
+      [null, 1],
+      [134217728, 1],
+    ]);
+  });
+
   test("stops before another stack when the wall-clock cap is reached", () => {
     expect(wallClockCapReached(1_000, 1, 60_999)).toBe(false);
     expect(wallClockCapReached(1_000, 1, 61_000)).toBe(true);
@@ -195,6 +445,27 @@ describe("benchmark methodology v2", () => {
 
   test("retains a failed benchmark stack until telemetry capture and owned cleanup", () => {
     expect(benchmarkDeployArgs("cdk.out", "run", "sample")).toContain("--no-rollback");
+    expect(
+      benchmarkStackCleanupDisposition({
+        stackExists: true,
+        runFailed: true,
+        preserveOnFailure: true,
+      }),
+    ).toBe("preserve");
+    expect(
+      benchmarkStackCleanupDisposition({
+        stackExists: true,
+        runFailed: false,
+        preserveOnFailure: true,
+      }),
+    ).toBe("delete");
+    expect(
+      benchmarkStackCleanupDisposition({
+        stackExists: false,
+        runFailed: true,
+        preserveOnFailure: true,
+      }),
+    ).toBe("verify-absent");
   });
 
   test("enforces exact deployed provider runtime contracts", () => {
@@ -204,6 +475,7 @@ describe("benchmark methodology v2", () => {
       memorySizeMb: 1024,
       executionEnvironmentToken: "run:1:cold-create",
       executionEnvironmentFresh: true,
+      detailedFailureDiagnosticsEnvironment: undefined,
     };
     expect(() =>
       assertProviderRuntimeMetadata({
@@ -211,25 +483,82 @@ describe("benchmark methodology v2", () => {
         memoryMb: 1024,
         executionEnvironmentToken: "run:1:cold-create",
         providerBootstrapArchiveSha256: "a".repeat(64),
+        detailedFailureDiagnostics: true,
         metadata: {
           ...base,
           architecture: "arm64",
           runtime: "provided.al2023",
           handler: "bootstrap",
+          detailedFailureDiagnosticsEnvironment: "true",
         },
       }),
     ).not.toThrow();
+
+    for (const value of [undefined, "false", "TRUE"] as const) {
+      expect(() =>
+        assertProviderRuntimeMetadata({
+          implementation: "shin",
+          memoryMb: 1024,
+          executionEnvironmentToken: "run:1:cold-create",
+          providerBootstrapArchiveSha256: "a".repeat(64),
+          detailedFailureDiagnostics: true,
+          metadata: {
+            ...base,
+            architecture: "arm64",
+            runtime: "provided.al2023",
+            handler: "bootstrap",
+            detailedFailureDiagnosticsEnvironment: value,
+          },
+        }),
+      ).toThrow("detailed failure diagnostics");
+    }
+
+    expect(() =>
+      assertProviderRuntimeMetadata({
+        implementation: "shin",
+        memoryMb: 1024,
+        executionEnvironmentToken: "run:1:cold-create",
+        providerBootstrapArchiveSha256: "a".repeat(64),
+        detailedFailureDiagnostics: false,
+        metadata: {
+          ...base,
+          architecture: "arm64",
+          runtime: "provided.al2023",
+          handler: "bootstrap",
+          detailedFailureDiagnosticsEnvironment: undefined,
+        },
+      }),
+    ).not.toThrow();
+
     expect(() =>
       assertProviderRuntimeMetadata({
         implementation: "aws",
         memoryMb: 1024,
         executionEnvironmentToken: "run:1:cold-create",
         providerBootstrapArchiveSha256: "a".repeat(64),
+        detailedFailureDiagnostics: true,
+        metadata: {
+          ...base,
+          architecture: "x86_64",
+          runtime: "python3.13",
+          handler: "index.handler",
+          detailedFailureDiagnosticsEnvironment: "true",
+        },
+      }),
+    ).toThrow("unexpectedly enables Shin diagnostics");
+    expect(() =>
+      assertProviderRuntimeMetadata({
+        implementation: "aws",
+        memoryMb: 1024,
+        executionEnvironmentToken: "run:1:cold-create",
+        providerBootstrapArchiveSha256: "a".repeat(64),
+        detailedFailureDiagnostics: true,
         metadata: {
           ...base,
           architecture: "arm64",
           runtime: "python3.13",
           handler: "index.handler",
+          detailedFailureDiagnosticsEnvironment: undefined,
         },
       }),
     ).toThrow("upstream provider runtime");
@@ -310,6 +639,8 @@ describe("benchmark methodology v2", () => {
       resources: "/scratch/sample/cold-create.failed.resources.json",
       function: "/scratch/sample/cold-create.failed.function.json",
       report: "/scratch/sample/cold-create.failed.report.json",
+      events: "/scratch/sample/cold-create.failed.events.json",
+      putObjectFailures: "/scratch/sample/cold-create.failed.put-object-failures.json",
       summary: "/scratch/sample/cold-create.failed.summary.json",
     });
   });
@@ -334,9 +665,22 @@ describe("benchmark methodology v2", () => {
   });
 
   test("pairs AWS and Shin independently of parallel", () => {
-    expect(comparisonGroupKey({ profile: "tiny", phase: "cold", memoryMb: 1024 })).toBe(
-      ["tiny", "cold", 1024].join("\0"),
-    );
+    const aws = comparisonGroupKey({ profile: "tiny", phase: "cold", memoryMb: 1024 });
+    const adaptive = comparisonGroupKey({
+      profile: "tiny",
+      phase: "cold",
+      memoryMb: 1024,
+      sourceWindowBytes: null,
+    });
+    const explicit = comparisonGroupKey({
+      profile: "tiny",
+      phase: "cold",
+      memoryMb: 1024,
+      sourceWindowBytes: 134217728,
+    });
+    expect(aws).toBe(["tiny", "cold", 1024].join("\0"));
+    expect(adaptive).toBe(aws);
+    expect(explicit).toBe(aws);
   });
 
   test("treats absent methodology as v1 and only completed v2 as canonical", () => {
@@ -348,6 +692,15 @@ describe("benchmark methodology v2", () => {
     expect(() =>
       validateMethodologyV2Run([canonicalAwsRecord()], parseBenchmarkRunOptions([])),
     ).toThrow("missing planned sample/phase");
+  });
+
+  test("keeps committed methodology-v2 rows without source-window metadata valid", () => {
+    const rows = readBenchmarkResultRecords(
+      join(process.cwd(), "benchmarks", "results.jsonl"),
+    ).filter((record) => record.methodologyVersion === 2);
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.some((record) => !Object.hasOwn(record, "sourceWindowBytes"))).toBe(true);
+    expect(rows.flatMap((record) => methodologyV2RecordErrors(record))).toEqual([]);
   });
 
   test("selects the latest completed run instead of aggregating different runs", () => {
@@ -898,6 +1251,10 @@ function canonicalRecord(
     profile: sample.assetProfile,
     memoryMb: sample.memoryMb,
     parallel: sample.parallel,
+    detailedFailureDiagnostics: shin ? options.detailedFailureDiagnostics : null,
+    ...(Object.hasOwn(sample, "sourceWindowBytes")
+      ? { sourceWindowBytes: sample.sourceWindowBytes ?? null }
+      : {}),
     phase: phase.name,
     state: phase.assetState,
     fileCount: 1,
@@ -920,7 +1277,7 @@ function canonicalRecord(
 function providerSummary(memoryMb: number, parallel: number, create: boolean) {
   return {
     event: "shin_deployment_summary",
-    schemaVersion: 3,
+    schemaVersion: 4,
     requestType: create ? "Create" : "Update",
     deploymentStatus: "success",
     extract: true,
@@ -928,6 +1285,7 @@ function providerSummary(memoryMb: number, parallel: number, create: boolean) {
     deleteStaleObjectsOnDeployment: true,
     availableMemoryMb: memoryMb,
     maxParallelTransfers: parallel,
+    detailedFailureDiagnosticsEnabled: true,
     durationMs: 1,
     phaseMs: zeroFields([
       "plan",
@@ -1015,15 +1373,21 @@ function providerSummary(memoryMb: number, parallel: number, create: boolean) {
       "globalResidentBytesCurrent",
       "globalResidentBytesHighWater",
     ]),
-    putObject: zeroFields([
-      "wireAttempts",
-      "failedAttempts",
-      "retryAttempts",
-      "throttledAttempts",
-      "retryWaitMs",
-      "throttleCooldownWaits",
-      "throttleCooldownWaitMs",
-    ]),
+    putObject: {
+      ...zeroFields([
+        "wireAttempts",
+        "failedAttempts",
+        "retryAttempts",
+        "throttledAttempts",
+        "retryWaitMs",
+        "throttleCooldownWaits",
+        "throttleCooldownWaitMs",
+      ]),
+      failuresBySdkErrorKind: {},
+      failuresByServiceCode: {},
+      failureStates: [],
+      failureStateOverflowAttempts: 0,
+    },
     deleteObject: zeroFields([
       "sdkCalls",
       "failedCalls",

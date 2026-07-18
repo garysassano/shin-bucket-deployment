@@ -237,6 +237,9 @@ function renderScope(records: BenchmarkRecord[]): string {
   const assetProfiles = unique(records.map((record) => record.profile));
   const memoryValues = unique(records.map((record) => record.memoryMb));
   const parallelValues = unique(records.map((record) => record.parallel));
+  const sourceWindowValues = unique(
+    records.map((record) => formatSourceWindow(record.sourceWindowBytes)),
+  );
   const phases = unique(records.map((record) => record.phase));
   const methodologyVersions = unique(records.map(benchmarkMethodologyVersion));
   const runIds = unique(records.map((record) => record.runId));
@@ -261,6 +264,7 @@ function renderScope(records: BenchmarkRecord[]): string {
     `- Asset profiles: ${assetProfiles.join(", ")}`,
     `- Memory MiB: ${memoryValues.join(", ")}`,
     `- Parallel transfers: ${parallelValues.join(", ")}`,
+    `- Source window bytes: ${sourceWindowValues.join(", ")}`,
     `- Phases: ${phases.join(", ")}`,
   ].join("\n");
 }
@@ -295,11 +299,11 @@ function renderMetricSection(
 
 function renderMetricTable(rows: AggregatedRow[], unit: string): string {
   return [
-    `| Asset profile | Phase | Memory MiB | Parallel | Implementation | n | median (${unit}) | Q1 (${unit}) | Q3 (${unit}) | IQR (${unit}) | min (${unit}) | max (${unit}) |`,
-    "| --- | --- | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    `| Asset profile | Phase | Memory MiB | Parallel | Source window bytes | Implementation | n | median (${unit}) | Q1 (${unit}) | Q3 (${unit}) | IQR (${unit}) | min (${unit}) | max (${unit}) |`,
+    "| --- | --- | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ...rows.map(
       (row) =>
-        `| ${row.profile} | ${row.phase} | ${row.memoryMb ?? ""} | ${row.parallel ?? ""} | ${row.implementation} | ${row.count} | ${formatNumber(row.median)} | ${formatNumber(row.q1)} | ${formatNumber(row.q3)} | ${formatNumber(row.iqr)} | ${formatNumber(row.min)} | ${formatNumber(row.max)} |`,
+        `| ${row.profile} | ${row.phase} | ${row.memoryMb ?? ""} | ${row.parallel ?? ""} | ${formatSourceWindow(row.sourceWindowBytes)} | ${row.implementation} | ${row.count} | ${formatNumber(row.median)} | ${formatNumber(row.q1)} | ${formatNumber(row.q3)} | ${formatNumber(row.iqr)} | ${formatNumber(row.min)} | ${formatNumber(row.max)} |`,
     ),
   ].join("\n");
 }
@@ -309,7 +313,7 @@ function renderBarChart(rows: AggregatedRow[], unit: string): string {
   const lines = rows.map((row) => {
     const width = max === 0 ? 0 : Math.max(1, Math.round((row.median / max) * 30));
     const bar = "#".repeat(width);
-    const label = `${row.profile} ${row.phase} ${row.memoryMb ?? ""}/${row.parallel ?? ""} ${row.implementation}`;
+    const label = `${row.profile} ${row.phase} ${row.memoryMb ?? ""}/${row.parallel ?? ""}/${formatSourceWindow(row.sourceWindowBytes)} ${row.implementation}`;
     return `${label.padEnd(48)} | ${bar} ${formatNumber(row.median)} ${unit}`;
   });
 
@@ -323,10 +327,10 @@ function renderComparisonSummaryTable(records: BenchmarkRecord[]): string {
   }
 
   return [
-    "| Asset profile | Phase | Memory MiB | Parallel | Provider duration | Local wall time | CDK deploy time | Max memory |",
-    "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+    "| Asset profile | Phase | Memory MiB | Parallel | Source window bytes | Provider duration | Local wall time | CDK deploy time | Max memory |",
+    "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ...rows.map((row) => {
-      return `| ${row.profile} | ${row.phase} | ${row.memoryMb ?? ""} | ${row.parallel ?? ""} | ${formatOptionalComparisonCell(row.metrics.providerDurationSeconds)} | ${formatOptionalComparisonCell(row.metrics.localWallSeconds)} | ${formatOptionalComparisonCell(row.metrics.cdkDeploySeconds)} | ${formatOptionalMemoryCell(row.metrics.maxMemoryMb)} |`;
+      return `| ${row.profile} | ${row.phase} | ${row.memoryMb ?? ""} | ${row.parallel ?? ""} | ${formatSourceWindow(row.sourceWindowBytes)} | ${formatOptionalComparisonCell(row.metrics.providerDurationSeconds)} | ${formatOptionalComparisonCell(row.metrics.localWallSeconds)} | ${formatOptionalComparisonCell(row.metrics.cdkDeploySeconds)} | ${formatOptionalMemoryCell(row.metrics.maxMemoryMb)} |`;
     }),
   ].join("\n");
 }
@@ -887,6 +891,7 @@ function buildMetricComparisonRows(records: BenchmarkRecord[]): MetricComparison
       phase: pair.phase,
       memoryMb: pair.memoryMb,
       parallel: pair.parallel,
+      sourceWindowBytes: pair.sourceWindowBytes,
       metricName: metric.name,
       metricLabel: metric.label,
       metricIndex,
@@ -909,6 +914,7 @@ function buildPhaseComparisonRows(records: BenchmarkRecord[]): PhaseComparisonRo
       phase: metricRow.phase,
       memoryMb: metricRow.memoryMb,
       parallel: metricRow.parallel,
+      sourceWindowBytes: metricRow.sourceWindowBytes,
       metrics: {},
     };
     row.metrics[metricRow.metricName] = metricRow;
@@ -920,7 +926,8 @@ function buildPhaseComparisonRows(records: BenchmarkRecord[]): PhaseComparisonRo
 function phaseTitle(row: PhaseComparisonRow): string {
   const memory = row.memoryMb === null ? "" : ` at ${row.memoryMb} MiB`;
   const parallel = row.parallel === null ? "" : ` / parallel ${row.parallel}`;
-  return `${row.profile} ${row.phase}${memory}${parallel}`;
+  const sourceWindow = ` / source window ${formatSourceWindow(row.sourceWindowBytes)}`;
+  return `${row.profile} ${row.phase}${memory}${parallel}${sourceWindow}`;
 }
 
 function svgBenchmarkLabel(rows: PhaseComparisonRow[]): string {
@@ -1016,6 +1023,7 @@ function metricPairs(records: BenchmarkRecord[], metric: MetricName): MetricPair
           phase: shin.phase,
           memoryMb: shin.memoryMb,
           parallel: shin.parallel,
+          sourceWindowBytes: shin.sourceWindowBytes,
           shin: shin.median,
           aws: aws.median,
           ratio: aws.median / shin.median,
@@ -1029,6 +1037,7 @@ type MetricComparisonRow = {
   readonly phase: string;
   readonly memoryMb: number | null;
   readonly parallel: number | null;
+  readonly sourceWindowBytes: number | null;
   readonly metricName: MetricName;
   readonly metricLabel: string;
   readonly metricIndex: number;
@@ -1045,6 +1054,7 @@ type PhaseComparisonRow = {
   readonly phase: string;
   readonly memoryMb: number | null;
   readonly parallel: number | null;
+  readonly sourceWindowBytes: number | null;
   readonly metrics: Partial<Record<MetricName, MetricComparisonRow>>;
 };
 
@@ -1054,6 +1064,7 @@ type MetricPair = {
   readonly phase: string;
   readonly memoryMb: number | null;
   readonly parallel: number | null;
+  readonly sourceWindowBytes: number | null;
   readonly shin: number;
   readonly aws: number;
   readonly ratio: number;
@@ -1074,8 +1085,15 @@ function comparisonKey(row: {
   phase: string;
   memoryMb: number | null;
   parallel: number | null;
+  sourceWindowBytes: number | null;
 }): string {
-  return [row.profile, row.phase, row.memoryMb ?? "", row.parallel ?? ""].join("\u0000");
+  return [
+    row.profile,
+    row.phase,
+    row.memoryMb ?? "",
+    row.parallel ?? "",
+    row.sourceWindowBytes ?? "adaptive",
+  ].join("\u0000");
 }
 
 function compareMetricPairs(left: MetricPair, right: MetricPair): number {
@@ -1094,16 +1112,33 @@ function compareAggregatedRows(left: AggregatedRow, right: AggregatedRow): numbe
 }
 
 function comparePhaseGroups(
-  left: { profile: string; phase: string; memoryMb: number | null; parallel: number | null },
-  right: { profile: string; phase: string; memoryMb: number | null; parallel: number | null },
+  left: {
+    profile: string;
+    phase: string;
+    memoryMb: number | null;
+    parallel: number | null;
+    sourceWindowBytes: number | null;
+  },
+  right: {
+    profile: string;
+    phase: string;
+    memoryMb: number | null;
+    parallel: number | null;
+    sourceWindowBytes: number | null;
+  },
 ): number {
   return (
     left.profile.localeCompare(right.profile) ||
     (left.memoryMb ?? 0) - (right.memoryMb ?? 0) ||
     (left.parallel ?? 0) - (right.parallel ?? 0) ||
+    (left.sourceWindowBytes ?? 0) - (right.sourceWindowBytes ?? 0) ||
     phaseRank(left.phase) - phaseRank(right.phase) ||
     left.phase.localeCompare(right.phase)
   );
+}
+
+function formatSourceWindow(value: number | null | undefined): string {
+  return value === null || value === undefined ? "adaptive" : String(value);
 }
 
 function unique<T>(values: Array<T | null | undefined>): T[] {

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { type GeneratedBundle, ensureBenchmarkAssets, verifyBenchmarkAssets } from "./assets";
@@ -46,7 +46,24 @@ type ProviderRuntimeMetadata = {
   readonly handler: string;
   readonly executionEnvironmentToken: string | undefined;
   readonly executionEnvironmentFresh: boolean;
+  readonly detailedFailureDiagnosticsEnvironment: string | undefined;
 };
+
+export type PreservedStackManifest = {
+  readonly schemaVersion: 1;
+  readonly status: "preservation-intent" | "preserved-after-failure";
+  readonly stackName: string;
+  readonly region: string;
+  readonly runId: string;
+  readonly sampleId: string;
+  readonly implementation: BenchmarkImplementation;
+  readonly assetProfile: string;
+  readonly memoryMb: number;
+  readonly parallel: number | null;
+  readonly sourceWindowBytes: number | null;
+};
+
+export type BenchmarkStackCleanupDisposition = "delete" | "preserve" | "verify-absent";
 
 class WallClockCapError extends Error {}
 
@@ -58,16 +75,10 @@ async function main(signal: AbortSignal): Promise<void> {
   console.log(`benchmark scratch root: ${options.scratchRoot}`);
   mkdirSync(options.scratchRoot, { recursive: true });
   const resumeManifestExists = existsSync(join(options.scratchRoot, "benchmark-run-manifest.json"));
-  if (options.methodologyVersion === 2 && options.startRepetition === 1 && !resumeManifestExists) {
+  if (options.startRepetition === 1 && !resumeManifestExists) {
     await runCommand({
       command: "node",
-      args: [
-        "scripts/build-bootstrap.mjs",
-        "--benchmark",
-        "--evidence-output",
-        options.outputFile,
-        "arm64",
-      ],
+      args: benchmarkProviderBuildArgs(options),
       logFile: join(options.scratchRoot, "provider-build.log"),
       quiet: false,
       appendElapsed: false,
@@ -150,6 +161,18 @@ async function main(signal: AbortSignal): Promise<void> {
   }
 }
 
+export function benchmarkProviderBuildArgs(
+  options: Pick<BenchmarkRunOptions, "methodologyVersion" | "outputFile">,
+): string[] {
+  return [
+    "scripts/build-bootstrap.mjs",
+    options.methodologyVersion === 2 ? "--benchmark" : "--benchmark-current-tree",
+    "--evidence-output",
+    options.outputFile,
+    "arm64",
+  ];
+}
+
 async function runBenchmarkStack(args: {
   readonly run: PlannedBenchmarkRun;
   readonly sourceMetadata: BenchmarkSourceMetadata;
@@ -160,7 +183,10 @@ async function runBenchmarkStack(args: {
   readonly startedAtMs: number;
 }): Promise<PhaseEvidence[]> {
   const { sourceMetadata, options, run, resumeSession, bundles, signal, startedAtMs } = args;
-  const label = `${run.implementation}-${run.assetProfile}-${run.memoryMb}-${run.parallel ?? "na"}-r${run.repetition}`;
+  const windowLabel = Object.hasOwn(run, "sourceWindowBytes")
+    ? `-${run.sourceWindowBytes ?? "adaptive"}`
+    : "";
+  const label = `${run.implementation}-${run.assetProfile}-${run.memoryMb}-${run.parallel ?? "na"}${windowLabel}-r${run.repetition}`;
   const stackSuffix = stackSuffixFor({ options, run });
   const stackName = `${
     run.implementation === "shin"
@@ -170,6 +196,13 @@ async function runBenchmarkStack(args: {
   const scratch = join(options.scratchRoot, label);
   const cdkOutput = join(scratch, "cdk.out");
   mkdirSync(scratch, { recursive: true });
+  const preservedStackFile = join(scratch, "preserved-stack.json");
+  await assertPreservedStackWasRemoved({
+    manifestFile: preservedStackFile,
+    expectedStackName: stackName,
+    expectedRegion: options.region,
+    signal,
+  });
   const preexistingStackId = await assertOwnedStackOrAbsent({
     stackName,
     region: options.region,
@@ -179,9 +212,28 @@ async function runBenchmarkStack(args: {
     signal,
   });
   if (preexistingStackId !== null) {
+    assertPreexistingStackMayBeRemoved(options.preserveOnFailure, preservedStackFile);
     console.log(`${label}: removing owned stack left by an interrupted attempt`);
     await deleteOwnedStack(preexistingStackId, options.region, scratch);
     await verifyStackDeleted(stackName, options.region);
+  }
+  const preservationManifest = {
+    schemaVersion: 1,
+    stackName,
+    region: options.region,
+    runId: options.runId,
+    sampleId: run.sampleId,
+    implementation: run.implementation,
+    assetProfile: run.assetProfile,
+    memoryMb: run.memoryMb,
+    parallel: run.parallel,
+    sourceWindowBytes: run.sourceWindowBytes ?? null,
+  } as const;
+  if (options.preserveOnFailure) {
+    writePreservationManifest(preservedStackFile, {
+      ...preservationManifest,
+      status: "preservation-intent",
+    });
   }
 
   const evidence: PhaseEvidence[] = [];
@@ -245,6 +297,7 @@ async function runBenchmarkStack(args: {
         memoryMb: run.memoryMb,
         executionEnvironmentToken: `${options.runToken}:${run.repetition}:${phase.name}`,
         providerBootstrapArchiveSha256: sourceMetadata.providerBootstrapArchiveSha256,
+        detailedFailureDiagnostics: options.detailedFailureDiagnostics,
       });
       await writeLogEvents({
         filterPattern: "REPORT",
@@ -320,6 +373,9 @@ async function runBenchmarkStack(args: {
         assetProfile: run.assetProfile,
         memoryMb: run.memoryMb,
         parallel: run.parallel,
+        sourceWindowBytes: run.sourceWindowBytes ?? null,
+        detailedFailureDiagnostics:
+          run.implementation === "shin" ? options.detailedFailureDiagnostics : null,
         state: phase.assetState,
         cleanup: "benchmark cleanup pending",
         decisionRunId: options.decisionRunId,
@@ -347,9 +403,16 @@ async function runBenchmarkStack(args: {
     }
   } catch (error) {
     runError = error;
+    if (options.preserveOnFailure) {
+      writePreservationManifest(preservedStackFile, {
+        ...preservationManifest,
+        status: "preserved-after-failure",
+      });
+    }
   }
 
   let cleanupError: unknown;
+  let stackPreserved = false;
   try {
     const stackId = await assertOwnedStackOrAbsent({
       stackName,
@@ -358,16 +421,30 @@ async function runBenchmarkStack(args: {
       sampleId: run.sampleId,
       outputFile: join(scratch, "cleanup-stack.json"),
     });
-    if (stackId !== null) {
+    const cleanupDisposition = benchmarkStackCleanupDisposition({
+      stackExists: stackId !== null,
+      runFailed: runError !== undefined,
+      preserveOnFailure: options.preserveOnFailure,
+    });
+    if (cleanupDisposition === "preserve") {
+      stackPreserved = true;
+      console.error(`${label}: failed benchmark stack preserved for manual inspection`);
+      console.error(`${label}: preservation manifest: ${preservedStackFile}`);
+    } else if (cleanupDisposition === "delete") {
+      if (stackId === null) {
+        throw new Error("Benchmark cleanup selected deletion without an existing stack.");
+      }
       console.log(`${label}: destroy`);
       await deleteOwnedStack(stackId, options.region, scratch);
     }
-    await verifyStackDeleted(stackName, options.region);
+    if (cleanupDisposition !== "preserve") {
+      await verifyStackDeleted(stackName, options.region);
+    }
   } catch (error) {
     cleanupError = error;
   }
 
-  if (cleanupError === undefined) {
+  if (cleanupError === undefined && !stackPreserved) {
     await assertSourceUnchanged(sourceMetadata, options);
     for (const bundle of bundles.values()) assertAssetsUnchanged(bundle);
     const qualifiedRecords = evidence.map(({ record }) => ({
@@ -381,10 +458,17 @@ async function runBenchmarkStack(args: {
       }
     }
     resumeSession.persist(qualifiedRecords);
+    removePreservationManifest(preservedStackFile);
   }
   if (runError !== undefined && cleanupError !== undefined) {
     throw new Error(
       `${errorText(runError)}; benchmark cleanup also failed: ${errorText(cleanupError)}`,
+    );
+  }
+  if (runError !== undefined && stackPreserved) {
+    throw new Error(
+      `${errorText(runError)}; failed benchmark stack was preserved for manual inspection; see ${preservedStackFile}`,
+      { cause: runError },
     );
   }
   if (runError !== undefined) {
@@ -394,6 +478,111 @@ async function runBenchmarkStack(args: {
     throw cleanupError;
   }
   return evidence;
+}
+
+export async function assertPreservedStackWasRemoved(args: {
+  readonly manifestFile: string;
+  readonly expectedStackName: string;
+  readonly expectedRegion: string;
+  readonly signal: AbortSignal;
+  readonly describe?: typeof describeStack;
+  readonly assertNotFound?: typeof assertStackNotFoundOutput;
+}): Promise<void> {
+  if (!existsSync(args.manifestFile)) return;
+
+  const manifest = readPreservationManifest(args.manifestFile);
+  if (manifest.stackName !== args.expectedStackName || manifest.region !== args.expectedRegion) {
+    throw new Error(`Invalid preserved-stack manifest at ${args.manifestFile}.`);
+  }
+  const outputFile = `${args.manifestFile}.describe.json`;
+  const status = await (args.describe ?? describeStack)(
+    manifest.stackName,
+    manifest.region,
+    outputFile,
+    args.signal,
+  );
+  if (status === 0) {
+    throw new Error(
+      `A failed benchmark stack is still preserved for manual inspection; clean it up before resuming. See ${args.manifestFile}.`,
+    );
+  }
+  (args.assertNotFound ?? assertStackNotFoundOutput)(outputFile, manifest.stackName);
+  removePreservationManifest(args.manifestFile);
+}
+
+export function writePreservationManifest(path: string, manifest: PreservedStackManifest): void {
+  writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
+}
+
+export function readPreservationManifest(path: string): PreservedStackManifest {
+  const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error(`Invalid preserved-stack manifest at ${path}.`);
+  }
+  const manifest = parsed as Partial<PreservedStackManifest> & Record<string, unknown>;
+  const expectedFields = new Set([
+    "schemaVersion",
+    "status",
+    "stackName",
+    "region",
+    "runId",
+    "sampleId",
+    "implementation",
+    "assetProfile",
+    "memoryMb",
+    "parallel",
+    "sourceWindowBytes",
+  ]);
+  if (
+    Object.keys(manifest).some((field) => !expectedFields.has(field)) ||
+    Object.keys(manifest).length !== expectedFields.size ||
+    manifest.schemaVersion !== 1 ||
+    !(manifest.status === "preservation-intent" || manifest.status === "preserved-after-failure") ||
+    !nonEmptyManifestString(manifest.stackName) ||
+    !nonEmptyManifestString(manifest.region) ||
+    !nonEmptyManifestString(manifest.runId) ||
+    !nonEmptyManifestString(manifest.sampleId) ||
+    !(manifest.implementation === "shin" || manifest.implementation === "aws") ||
+    !nonEmptyManifestString(manifest.assetProfile) ||
+    !positiveSafeInteger(manifest.memoryMb) ||
+    !(manifest.parallel === null || positiveSafeInteger(manifest.parallel)) ||
+    !(manifest.sourceWindowBytes === null || positiveSafeInteger(manifest.sourceWindowBytes))
+  ) {
+    throw new Error(`Invalid preserved-stack manifest at ${path}.`);
+  }
+  return manifest as PreservedStackManifest;
+}
+
+function nonEmptyManifestString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+function positiveSafeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
+export function removePreservationManifest(path: string): void {
+  if (existsSync(path)) unlinkSync(path);
+}
+
+export function assertPreexistingStackMayBeRemoved(
+  preserveOnFailure: boolean,
+  manifestFile: string,
+): void {
+  if (preserveOnFailure) {
+    throw new Error(
+      `An owned benchmark stack already exists while failed-stack preservation is enabled; refusing automatic deletion. Inspect and remove it manually before resuming. Preservation manifest: ${manifestFile}`,
+    );
+  }
+}
+
+export function benchmarkStackCleanupDisposition(args: {
+  readonly stackExists: boolean;
+  readonly runFailed: boolean;
+  readonly preserveOnFailure: boolean;
+}): BenchmarkStackCleanupDisposition {
+  if (!args.stackExists) return "verify-absent";
+  return args.runFailed && args.preserveOnFailure ? "preserve" : "delete";
 }
 
 export function benchmarkDeployArgs(cdkOutput: string, runId: string, sampleId: string): string[] {
@@ -438,6 +627,8 @@ export function failedPhaseEvidencePaths(scratch: string, phaseName: string) {
     resources: `${prefix}.resources.json`,
     function: `${prefix}.function.json`,
     report: `${prefix}.report.json`,
+    events: `${prefix}.events.json`,
+    putObjectFailures: `${prefix}.put-object-failures.json`,
     summary: `${prefix}.summary.json`,
   } as const;
 }
@@ -465,10 +656,20 @@ async function captureFailedDeployTelemetry(args: {
     region: args.region,
     signal: args.signal,
   });
+  // Wait for REPORT first. Once it is visible, take a phase-scoped raw export;
+  // the final deployment summary may be absent after abrupt invocation failure.
+  await writeLogEvents({
+    filterPattern: "REPORT",
+    outputFile: paths.report,
+    region: args.region,
+    logGroup: metadata.logGroup,
+    requireEvents: true,
+    startTimeMs: args.startTimeMs,
+    signal: args.signal,
+  });
   const captures = [
     writeLogEvents({
-      filterPattern: "REPORT",
-      outputFile: paths.report,
+      outputFile: paths.events,
       region: args.region,
       logGroup: metadata.logGroup,
       requireEvents: true,
@@ -479,11 +680,20 @@ async function captureFailedDeployTelemetry(args: {
   if (args.implementation === "shin") {
     captures.push(
       writeLogEvents({
+        filterPattern: "shin_put_object_attempt_failure",
+        outputFile: paths.putObjectFailures,
+        region: args.region,
+        logGroup: metadata.logGroup,
+        requireEvents: false,
+        startTimeMs: args.startTimeMs,
+        signal: args.signal,
+      }),
+      writeLogEvents({
         filterPattern: "shin_deployment_summary",
         outputFile: paths.summary,
         region: args.region,
         logGroup: metadata.logGroup,
-        requireEvents: true,
+        requireEvents: false,
         startTimeMs: args.startTimeMs,
         signal: args.signal,
       }),
@@ -517,6 +727,7 @@ function benchmarkEnv(args: {
     AWS_REGION: options.region,
     SHIN_BENCH_DESTINATION_PREFIX: options.destinationPrefix,
     SHIN_BENCH_IMPLEMENTATION: run.implementation,
+    SHIN_BENCH_DETAILED_FAILURE_DIAGNOSTICS: String(options.detailedFailureDiagnostics),
     SHIN_BENCH_INVOCATION_TOKEN: `${options.runToken}:${run.repetition}:${phase.name}`,
     SHIN_BENCH_EXECUTION_ENVIRONMENT_TOKEN: `${options.runToken}:${run.repetition}:${phase.name}`,
     SHIN_BENCH_RUN_OWNER: options.runId,
@@ -526,6 +737,9 @@ function benchmarkEnv(args: {
     ...(run.parallel === null
       ? {}
       : { SHIN_BENCH_LAMBDA_MAX_PARALLEL_TRANSFERS: String(run.parallel) }),
+    ...(run.sourceWindowBytes === undefined || run.sourceWindowBytes === null
+      ? {}
+      : { SHIN_BENCH_SOURCE_WINDOW_BYTES: String(run.sourceWindowBytes) }),
     SHIN_BENCH_LAMBDA_MEMORY_MB: String(run.memoryMb),
     SHIN_BENCH_ASSET_STATE: phase.assetState,
     SHIN_BENCH_ASSET_PROFILE: run.assetProfile,
@@ -622,6 +836,8 @@ async function providerRuntimeMetadata(args: {
   const architecture = parsed.Architectures?.[0];
   const executionEnvironmentToken =
     parsed.Environment?.Variables?.SHIN_BENCH_EXECUTION_ENVIRONMENT_TOKEN;
+  const detailedFailureDiagnosticsEnvironment =
+    parsed.Environment?.Variables?.SHIN_DETAILED_FAILURE_DIAGNOSTICS;
   const logGroup = providerLogGroupName(parsed);
   if (
     !architecture ||
@@ -641,11 +857,12 @@ async function providerRuntimeMetadata(args: {
     handler: parsed.Handler,
     executionEnvironmentToken,
     executionEnvironmentFresh: executionEnvironmentToken !== undefined,
+    detailedFailureDiagnosticsEnvironment,
   };
 }
 
 async function writeLogEvents(args: {
-  readonly filterPattern: string;
+  readonly filterPattern?: string;
   readonly outputFile: string;
   readonly region: string;
   readonly logGroup: string;
@@ -654,6 +871,8 @@ async function writeLogEvents(args: {
   readonly signal: AbortSignal;
 }): Promise<void> {
   for (let attempt = 1; attempt <= 8; attempt += 1) {
+    const filterArgs =
+      args.filterPattern === undefined ? [] : ["--filter-pattern", args.filterPattern];
     const status = await runCommand({
       command: "aws",
       args: [
@@ -663,8 +882,7 @@ async function writeLogEvents(args: {
         args.region,
         "--log-group-name",
         args.logGroup,
-        "--filter-pattern",
-        args.filterPattern,
+        ...filterArgs,
         "--start-time",
         String(args.startTimeMs),
         "--output",
@@ -684,7 +902,8 @@ async function writeLogEvents(args: {
     }
     await sleep(attempt * 2500, args.signal);
   }
-  throw new Error(`No ${args.filterPattern} log events found for benchmark handler.`);
+  const description = args.filterPattern ?? "phase-scoped";
+  throw new Error(`No ${description} log events found for benchmark handler.`);
 }
 
 export function providerLogGroupName(configuration: {
@@ -815,6 +1034,7 @@ export function assertProviderRuntimeMetadata(args: {
   readonly memoryMb: number;
   readonly executionEnvironmentToken: string;
   readonly providerBootstrapArchiveSha256: string;
+  readonly detailedFailureDiagnostics: boolean;
 }): void {
   const { metadata } = args;
   if (metadata.memorySizeMb !== args.memoryMb) {
@@ -842,12 +1062,20 @@ export function assertProviderRuntimeMetadata(args: {
         "Deployed Shin provider code does not match the benchmark bootstrap archive.",
       );
     }
+    const expectedDiagnosticsEnvironment = args.detailedFailureDiagnostics ? "true" : undefined;
+    if (metadata.detailedFailureDiagnosticsEnvironment !== expectedDiagnosticsEnvironment) {
+      throw new Error(
+        "Deployed Shin provider detailed failure diagnostics do not match the benchmark plan.",
+      );
+    }
   } else if (
     metadata.architecture !== "x86_64" ||
     metadata.runtime !== "python3.13" ||
     metadata.handler !== "index.handler"
   ) {
     throw new Error("Deployed upstream provider runtime metadata is unexpected.");
+  } else if (metadata.detailedFailureDiagnosticsEnvironment !== undefined) {
+    throw new Error("Deployed upstream provider unexpectedly enables Shin diagnostics.");
   }
 }
 
@@ -894,7 +1122,10 @@ function stackSuffixFor(args: {
 }): string {
   const dateToken = safeName(args.options.snapshotDate).replace(/-/g, "");
   const runToken = `${dateToken}-${shortHash(args.options.runToken)}`;
-  return `-${runToken}-${safeName(args.run.assetProfile)}-${args.run.implementation}-${args.run.memoryMb}-${args.run.parallel ?? "na"}-r${args.run.repetition}`;
+  const sourceWindow = Object.hasOwn(args.run, "sourceWindowBytes")
+    ? `-${args.run.sourceWindowBytes ?? "adaptive"}`
+    : "";
+  return `-${runToken}-${safeName(args.run.assetProfile)}-${args.run.implementation}-${args.run.memoryMb}-${args.run.parallel ?? "na"}${sourceWindow}-r${args.run.repetition}`;
 }
 
 function safeName(value: string): string {
