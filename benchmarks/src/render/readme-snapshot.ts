@@ -281,11 +281,11 @@ function findSelections(records: BenchmarkRecord[]): DataSelection[] {
     const awsRecords = records.filter(
       (record) =>
         record.implementation === "aws" &&
+        record.runId === metadataRecord.runId &&
         record.profile === metadataRecord.profile &&
         record.memoryMb === metadataRecord.memoryMb &&
-        (requestedMethodologyVersion === 1
-          ? record.parallel === metadataRecord.parallel
-          : record.parallel === null),
+        (record.parallel === null ||
+          (requestedMethodologyVersion === 1 && record.parallel === metadataRecord.parallel)),
     );
     const runRecords = [...shinRecords, ...awsRecords];
     const phases = new Set(comparablePhases(runRecords));

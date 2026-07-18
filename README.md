@@ -79,7 +79,7 @@ The official `BucketDeployment` is a good default for many stacks, but its provi
 ## Benchmark Snapshots
 
 > [!CAUTION]
-> The embedded charts are historical exploratory snapshots with single-sample methodology. They should not be treated as performance guarantees or used to choose production defaults.
+> The embedded charts are exploratory single-sample snapshots collected on 2026-07-18 from commit `c6a97be`. They should not be treated as performance guarantees or used to choose production defaults.
 
 The five-repetition methodology-v2 Rust module-refactor decision run is documented in [Benchmark](docs/benchmark.md#rust-module-refactor-performance-decision). Default benchmark reports exclude the historical methodology-v1 snapshot rows and focused decision rows unless they are selected explicitly.
 

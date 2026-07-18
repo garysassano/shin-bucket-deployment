@@ -164,14 +164,16 @@ All six Shin rows reported zero source GET retries/errors, destination PUT retri
 ## Current Snapshot
 
 > [!CAUTION]
-> The committed rows use the original single-sample methodology and are retained as historical evidence while the benchmark harness is revalidated. Do not use them to select production defaults.
+> The README charts use exploratory single-sample methodology. Do not use them to select production defaults.
 
 | Field | Value |
 | --- | --- |
-| Snapshot date | 2026-05-15 |
-| Region | `ap-southeast-2` |
+| Snapshot date | 2026-07-18 |
+| Source commit | `c6a97be` |
+| Region | `eu-central-1` |
 | Implementations | `shin` and upstream AWS CDK `BucketDeployment` |
-| Asset profiles | `tiny-many`, `large-few`, `mixed` |
+| Asset profile | `tiny-many` |
+| Lambda configurations | 1024 MiB / 32 Shin transfers; 2048 MiB / 64 Shin transfers |
 | Phases | `cold-create`, `unchanged-update`, `changed-update`, `pruned-update` |
 | Cleanup | All benchmark stacks destroyed after telemetry collection |
 | Raw evidence | Not committed; raw AWS output remains in scratch only |
