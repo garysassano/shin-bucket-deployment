@@ -42,8 +42,8 @@ class CrossBucketChangeStack extends Stack {
             destinationLifecycle: {
               onDeploy: { deleteStaleObjects: false },
               onChange: {
-                deleteObjects: true,
-                fromBucket: previousBucket,
+                deletePreviousObjects: true,
+                previousBucket,
               },
             },
           }

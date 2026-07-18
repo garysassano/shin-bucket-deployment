@@ -441,7 +441,7 @@ test("gives each handler replacement a distinct destination owner", () => {
     new ShinBucketDeployment(stack, "Deploy", {
       sources: [Source.data("index.html", `memory=${memoryLimit}`)],
       destinationBucket,
-      destinationLifecycle: { onDelete: { deleteObjects: true } },
+      destinationLifecycle: { onDelete: { deleteCurrentObjects: true } },
       memoryLimit,
       localProviderBuild: testLocalProviderBuild(),
     });
@@ -853,7 +853,7 @@ test("keeps delete and list permissions scoped when current object deletion is e
     destinationKeyPrefix: "site",
     destinationLifecycle: {
       onDelete: {
-        deleteObjects: true,
+        deleteCurrentObjects: true,
       },
     },
     localProviderBuild: testLocalProviderBuild(),
@@ -954,7 +954,7 @@ test("keeps explicit same-bucket previous cleanup broad and deliberate", () => {
     destinationKeyPrefix: "site/current",
     destinationLifecycle: {
       onDeploy: { deleteStaleObjects: false },
-      onChange: { deleteObjects: true },
+      onChange: { deletePreviousObjects: true },
     },
     localProviderBuild: testLocalProviderBuild(),
   });
@@ -999,8 +999,8 @@ test("limits cross-bucket cleanup authority to the explicitly authorized previou
     destinationLifecycle: {
       onDeploy: { deleteStaleObjects: false },
       onChange: {
-        deleteObjects: true,
-        fromBucket: previousBucket,
+        deletePreviousObjects: true,
+        previousBucket,
       },
     },
     localProviderBuild: testLocalProviderBuild(),

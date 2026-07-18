@@ -104,7 +104,7 @@ The construct follows the upstream `BucketDeployment` API where the behavior map
 | Upstream prop | Use instead |
 | --- | --- |
 | `prune` | `destinationLifecycle.onDeploy.deleteStaleObjects` |
-| `retainOnDelete` | `destinationLifecycle.onChange.deleteObjects` and `destinationLifecycle.onDelete.deleteObjects` |
+| `retainOnDelete` | `destinationLifecycle.onChange.deletePreviousObjects` and `destinationLifecycle.onDelete.deleteCurrentObjects` |
 | `distribution` | `cloudfrontInvalidation.distribution` |
 | `distributionPaths` | `cloudfrontInvalidation.paths` |
 | `waitForDistributionInvalidation` | `cloudfrontInvalidation.waitForCompletion` |
@@ -145,23 +145,23 @@ Previous objects are retained by default. To delete them:
 | `destinationBucket` | `destinationKeyPrefix` | Object-cleanup configuration |
 | --- | --- | --- |
 | Unchanged | Unchanged | None; there is no previous object location. |
-| Unchanged | Changed | Set `deleteObjects: true`. Omit `fromBucket`; Shin uses the current bucket. |
-| Changed | Unchanged | Set `deleteObjects: true` and provide `fromBucket`. |
-| Changed | Changed | Set `deleteObjects: true` and provide `fromBucket`. |
+| Unchanged | Changed | Set `deletePreviousObjects: true`. Omit `previousBucket`; Shin uses the current bucket. |
+| Changed | Unchanged | Set `deletePreviousObjects: true` and provide `previousBucket`. |
+| Changed | Changed | Set `deletePreviousObjects: true` and provide `previousBucket`. |
 
 #### CloudFront Invalidation
 
 | `cloudfrontInvalidation.distribution` | Invalidation configuration |
 | --- | --- |
-| Unchanged | Omit `invalidateDistribution`; any configured current distribution is invalidated normally. |
-| Changed | Provide `invalidateDistribution: previousDistribution` only if the previous distribution should also be invalidated. |
+| Unchanged | Omit `invalidatePreviousDistribution`; any configured current distribution is invalidated normally. |
+| Changed | Provide `invalidatePreviousDistribution: previousDistribution` only if the previous distribution should also be invalidated. |
 
 > [!IMPORTANT]
 > After a one-time destination move succeeds, remove previous-resource references and any `onChange` actions that are no longer needed to drop access to the previous bucket or distribution.
 
 ### Resource Deletion
 
-Set `destinationLifecycle.onDelete.deleteObjects` to `true` only when current destination objects should be removed with the stack or custom resource. Otherwise, omit it.
+Set `destinationLifecycle.onDelete.deleteCurrentObjects` to `true` only when current destination objects should be removed with the stack or custom resource. Otherwise, omit it.
 
 ## How It Works
 

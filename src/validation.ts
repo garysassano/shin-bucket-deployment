@@ -42,12 +42,12 @@ export function validateDeploymentProps(scope: Construct, props: ShinBucketDeplo
         readonly deletePreviousDestinationObjectsOnUpdate?: unknown;
         readonly onDeployment?: unknown;
         readonly onChange?: {
-          readonly deletePreviousObjects?: unknown;
-          readonly previousBucket?: unknown;
-          readonly invalidatePreviousDistribution?: unknown;
+          readonly deleteObjects?: unknown;
+          readonly fromBucket?: unknown;
+          readonly invalidateDistribution?: unknown;
         };
         readonly onDelete?: {
-          readonly deleteCurrentObjects?: unknown;
+          readonly deleteObjects?: unknown;
         };
       }
     | undefined;
@@ -90,7 +90,7 @@ export function validateDeploymentProps(scope: Construct, props: ShinBucketDeplo
   if (maybeUnsupported.retainOnDelete !== undefined) {
     throw new ValidationError(
       "ShinBucketDeploymentRetainOnDeleteUnsupported",
-      "ShinBucketDeployment replaces retainOnDelete with destinationLifecycle.onChange.deleteObjects and destinationLifecycle.onDelete.deleteObjects.",
+      "ShinBucketDeployment replaces retainOnDelete with destinationLifecycle.onChange.deletePreviousObjects and destinationLifecycle.onDelete.deleteCurrentObjects.",
       scope,
     );
   }
@@ -147,24 +147,24 @@ export function validateDeploymentProps(scope: Construct, props: ShinBucketDeplo
     maybeRemovedLifecycle?.deleteDestinationObjectsOnDelete !== undefined ||
     maybeRemovedLifecycle?.deletePreviousDestinationObjectsOnUpdate !== undefined ||
     maybeRemovedLifecycle?.onDeployment !== undefined ||
-    maybeRemovedLifecycle?.onChange?.deletePreviousObjects !== undefined ||
-    maybeRemovedLifecycle?.onChange?.previousBucket !== undefined ||
-    maybeRemovedLifecycle?.onChange?.invalidatePreviousDistribution !== undefined ||
-    maybeRemovedLifecycle?.onDelete?.deleteCurrentObjects !== undefined
+    maybeRemovedLifecycle?.onChange?.deleteObjects !== undefined ||
+    maybeRemovedLifecycle?.onChange?.fromBucket !== undefined ||
+    maybeRemovedLifecycle?.onChange?.invalidateDistribution !== undefined ||
+    maybeRemovedLifecycle?.onDelete?.deleteObjects !== undefined
   ) {
     throw new ValidationError(
       "ShinBucketDeploymentDestinationLifecycleShapeUnsupported",
-      "ShinBucketDeployment destinationLifecycle uses onDeploy.deleteStaleObjects, onChange.deleteObjects/fromBucket/invalidateDistribution, and onDelete.deleteObjects.",
+      "ShinBucketDeployment destinationLifecycle uses onDeploy.deleteStaleObjects, onChange.deletePreviousObjects/previousBucket/invalidatePreviousDistribution, and onDelete.deleteCurrentObjects.",
       scope,
     );
   }
   if (
-    props.destinationLifecycle?.onChange?.fromBucket &&
-    props.destinationLifecycle.onChange.deleteObjects !== true
+    props.destinationLifecycle?.onChange?.previousBucket &&
+    props.destinationLifecycle.onChange.deletePreviousObjects !== true
   ) {
     throw new ValidationError(
-      "ShinBucketDeploymentFromBucketRequiresDeleteObjects",
-      "destinationLifecycle.onChange.fromBucket requires deleteObjects=true.",
+      "ShinBucketDeploymentPreviousBucketRequiresDeletePreviousObjects",
+      "destinationLifecycle.onChange.previousBucket requires deletePreviousObjects=true.",
       scope,
     );
   }

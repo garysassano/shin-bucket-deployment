@@ -350,18 +350,18 @@ export interface ShinBucketDeploymentDestinationLifecycle {
      *
      * @default false
      */
-    readonly deleteObjects?: boolean;
+    readonly deletePreviousObjects?: boolean;
 
     /**
      * Previous destination bucket containing the objects to delete when the
      * destination bucket changes.
      *
      * Omit this for same-bucket prefix changes. Requires
-     * `deleteObjects=true`.
+     * `deletePreviousObjects=true`.
      *
      * @default - the current destination bucket
      */
-    readonly fromBucket?: IBucket;
+    readonly previousBucket?: IBucket;
 
     /**
      * Invalidate the previous CloudFront distribution after its cached content
@@ -372,7 +372,7 @@ export interface ShinBucketDeploymentDestinationLifecycle {
      *
      * @default - no separate previous distribution
      */
-    readonly invalidateDistribution?: IDistributionRef;
+    readonly invalidatePreviousDistribution?: IDistributionRef;
   };
 
   /**
@@ -384,7 +384,7 @@ export interface ShinBucketDeploymentDestinationLifecycle {
      *
      * @default false
      */
-    readonly deleteObjects?: boolean;
+    readonly deleteCurrentObjects?: boolean;
   };
 }
 
@@ -588,13 +588,14 @@ export class ShinBucketDeployment extends Construct {
       this.destinationBucket,
     );
     const deletePreviousObjectsOnChange =
-      props.destinationLifecycle?.onChange?.deleteObjects === true;
+      props.destinationLifecycle?.onChange?.deletePreviousObjects === true;
     const previousBucket = deletePreviousObjectsOnChange
-      ? (props.destinationLifecycle?.onChange?.fromBucket ?? this.destinationBucket)
+      ? (props.destinationLifecycle?.onChange?.previousBucket ?? this.destinationBucket)
       : undefined;
-    const previousDistribution = props.destinationLifecycle?.onChange?.invalidateDistribution;
+    const previousDistribution =
+      props.destinationLifecycle?.onChange?.invalidatePreviousDistribution;
     const deleteCurrentObjectsOnDelete =
-      props.destinationLifecycle?.onDelete?.deleteObjects === true;
+      props.destinationLifecycle?.onDelete?.deleteCurrentObjects === true;
     const deleteStaleObjectsOnDeploy =
       props.destinationLifecycle?.onDeploy?.deleteStaleObjects ?? true;
 

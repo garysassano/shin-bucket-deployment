@@ -187,7 +187,7 @@ describe("ShinBucketDeployment validation and option coverage", () => {
       destinationKeyPrefix: "new-site",
       destinationLifecycle: {
         onChange: {
-          deleteObjects: true,
+          deletePreviousObjects: true,
         },
       },
       localProviderBuild: testLocalProviderBuild(),
@@ -255,12 +255,12 @@ describe("ShinBucketDeployment validation and option coverage", () => {
           deleteStaleObjects: false,
         },
         onChange: {
-          deleteObjects: true,
-          fromBucket: previousBucket,
-          invalidateDistribution: previousDistribution,
+          deletePreviousObjects: true,
+          previousBucket,
+          invalidatePreviousDistribution: previousDistribution,
         },
         onDelete: {
-          deleteObjects: true,
+          deleteCurrentObjects: true,
         },
       },
       localProviderBuild: testLocalProviderBuild(),
@@ -378,7 +378,7 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     ],
     ["expires", { toString: (): string => "tomorrow" }, /does not support expires/],
     ["prune", false, /destinationLifecycle\.onDeploy\.deleteStaleObjects/],
-    ["retainOnDelete", false, /destinationLifecycle\.onChange\.deleteObjects/],
+    ["retainOnDelete", false, /destinationLifecycle\.onChange\.deletePreviousObjects/],
     ["distributionPaths", ["/*"], /cloudfrontInvalidation/],
     ["outputObjectKeys", false, /objectKeys property is accessed/],
     ["shareHandler", false, /ProviderScope/],
@@ -426,10 +426,15 @@ describe("ShinBucketDeployment validation and option coverage", () => {
           deleteDestinationObjectsOnDelete: true,
         },
       } as never);
-    }).toThrow(/onChange\.deleteObjects/);
+    }).toThrow(/onChange\.deletePreviousObjects/);
   });
 
-  test("rejects replaced verbose destination lifecycle action names", () => {
+  test.each([
+    ["onChange.deleteObjects", { onChange: { deleteObjects: true } }],
+    ["onChange.fromBucket", { onChange: { fromBucket: true } }],
+    ["onChange.invalidateDistribution", { onChange: { invalidateDistribution: true } }],
+    ["onDelete.deleteObjects", { onDelete: { deleteObjects: true } }],
+  ] as const)("rejects ambiguous destination lifecycle name %s", (_name, lifecycle) => {
     const stack = new Stack();
     const destinationBucket = new Bucket(stack, "Dest");
 
@@ -437,19 +442,12 @@ describe("ShinBucketDeployment validation and option coverage", () => {
       new ShinBucketDeployment(stack, "Deploy", {
         sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
         destinationBucket,
-        destinationLifecycle: {
-          onChange: {
-            deletePreviousObjects: true,
-          },
-          onDelete: {
-            deleteCurrentObjects: true,
-          },
-        },
+        destinationLifecycle: lifecycle,
       } as never);
-    }).toThrow(/onChange\.deleteObjects/);
+    }).toThrow(/onChange\.deletePreviousObjects/);
   });
 
-  test("rejects fromBucket without deleteObjects", () => {
+  test("rejects previousBucket without deletePreviousObjects", () => {
     const stack = new Stack();
     const destinationBucket = new Bucket(stack, "Dest");
     const previousBucket = new Bucket(stack, "PreviousDest");
@@ -460,11 +458,11 @@ describe("ShinBucketDeployment validation and option coverage", () => {
         destinationBucket,
         destinationLifecycle: {
           onChange: {
-            fromBucket: previousBucket,
+            previousBucket,
           },
         },
       });
-    }).toThrow(/fromBucket requires deleteObjects=true/);
+    }).toThrow(/previousBucket requires deletePreviousObjects=true/);
   });
 
   test("fails synthesis when extract=false is combined with deploy-time markers", () => {

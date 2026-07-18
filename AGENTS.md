@@ -53,12 +53,12 @@ Keep destructive destination behavior under the phase-oriented
 
 - `onDeploy.deleteStaleObjects` controls stale-object deletion on Create
   and Update.
-- `onChange.deleteObjects` controls previous-namespace deletion when destination
-  settings change; `fromBucket` authorizes a changed previous
+- `onChange.deletePreviousObjects` controls previous-namespace deletion when
+  destination settings change; `previousBucket` authorizes a changed previous
   bucket and is omitted for same-bucket prefix changes.
-- `onChange.invalidateDistribution` independently authorizes a changed
+- `onChange.invalidatePreviousDistribution` independently authorizes a changed
   previous CloudFront distribution.
-- `onDelete.deleteObjects` controls current-namespace deletion on
+- `onDelete.deleteCurrentObjects` controls current-namespace deletion on
   custom-resource Delete.
 
 Do not reintroduce the public `prune`, `retainOnDelete`, or flat lifecycle
