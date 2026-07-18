@@ -14,7 +14,7 @@ import {
   phaseRank,
   readBenchmarkResultRecords,
 } from "../model";
-import { selectValidatedBenchmarkRun } from "../validation";
+import { selectValidatedBenchmarkPreview, selectValidatedBenchmarkRun } from "../validation";
 
 type BenchmarkRecord = BenchmarkResultRecord;
 
@@ -40,6 +40,7 @@ type RenderOptions = {
   readonly runId?: string;
   readonly configFile?: string;
   readonly scratchRoot?: string;
+  readonly preview?: boolean;
 };
 
 type ChartThemeName = "signal" | "forge" | "circuit";
@@ -95,6 +96,7 @@ const CLI_OPTIONS = [
   "lambda-memory-mb",
   "methodology-version",
   "output-file",
+  "preview",
   "run-id",
   "scratch-root",
 ] as const;
@@ -163,7 +165,10 @@ function main(): void {
 }
 
 export function renderBenchmarkReport(options: RenderOptions): string {
-  const records = selectValidatedBenchmarkRun({
+  const selectRecords = options.preview
+    ? selectValidatedBenchmarkPreview
+    : selectValidatedBenchmarkRun;
+  const records = selectRecords({
     records: readBenchmarkResultRecords(options.inputFile),
     methodologyVersion: options.methodologyVersion ?? 2,
     runId: options.runId,
@@ -180,6 +185,7 @@ export function renderBenchmarkReport(options: RenderOptions): string {
     );
   const comparisonRows = buildPhaseComparisonRows(
     records.filter((record) => record.phase && record.profile),
+    options.preview ?? false,
   );
   const chartAsset = comparisonRows.length === 0 ? undefined : resolveComparisonChartAsset(options);
   const report = renderReport(records, options, chartAsset?.markdownPath);
@@ -209,25 +215,34 @@ function renderReport(
   return [
     `# Benchmark Report: ${title}`,
     "",
-    renderScope(comparable),
+    ...(options.preview
+      ? [
+          "> [!WARNING]",
+          "> Preliminary preview from an incomplete methodology-v2 run. Do not treat these values as accepted benchmark evidence.",
+          "",
+        ]
+      : []),
+    renderScope(comparable, options.preview ?? false),
     "",
     "## ShinBucketDeployment vs AWS BucketDeployment",
     "",
-    renderComparisonSummaryTable(comparable),
+    renderComparisonSummaryTable(comparable, options.preview ?? false),
     "",
-    ...renderPhaseComparisonTables(comparable),
+    ...renderPhaseComparisonTables(comparable, options.preview ?? false),
     "",
     "## Visual Summary",
     "",
-    ...renderComparisonCharts(comparable, comparisonChartPath),
+    ...renderComparisonCharts(comparable, comparisonChartPath, options.preview ?? false),
     "## Metric Tables",
     "",
-    ...METRICS.flatMap((metric) => renderMetricSection(comparable, metric)),
+    ...METRICS.flatMap((metric) =>
+      renderMetricSection(comparable, metric, options.preview ?? false),
+    ),
     "",
   ].join("\n");
 }
 
-function renderScope(records: BenchmarkRecord[]): string {
+function renderScope(records: BenchmarkRecord[], preview: boolean): string {
   if (records.length === 0) {
     return "No benchmark records matched the selected filters.";
   }
@@ -244,7 +259,7 @@ function renderScope(records: BenchmarkRecord[]): string {
   const methodologyVersions = unique(records.map(benchmarkMethodologyVersion));
   const runIds = unique(records.map((record) => record.runId));
   const sampleCounts = unique(
-    aggregateRows(records, "providerDurationSeconds").map((row) => row.count),
+    aggregateRows(records, "providerDurationSeconds", preview).map((row) => row.count),
   );
   const completeness =
     methodologyVersions.length === 1 && methodologyVersions[0] === 2
@@ -281,8 +296,9 @@ function reportTitle(options: RenderOptions): string {
 function renderMetricSection(
   records: BenchmarkRecord[],
   metric: { name: MetricName; label: string; unit: string },
+  preview: boolean,
 ): string[] {
-  const rows = aggregateRows(records, metric.name);
+  const rows = aggregateRows(records, metric.name, preview);
   if (rows.length === 0) {
     return [];
   }
@@ -320,8 +336,8 @@ function renderBarChart(rows: AggregatedRow[], unit: string): string {
   return ["```text", ...lines, "```"].join("\n");
 }
 
-function renderComparisonSummaryTable(records: BenchmarkRecord[]): string {
-  const rows = buildPhaseComparisonRows(records);
+function renderComparisonSummaryTable(records: BenchmarkRecord[], preview: boolean): string {
+  const rows = buildPhaseComparisonRows(records, preview);
   if (rows.length === 0) {
     return "No shin/aws pairs were available for comparison.";
   }
@@ -335,8 +351,8 @@ function renderComparisonSummaryTable(records: BenchmarkRecord[]): string {
   ].join("\n");
 }
 
-function renderPhaseComparisonTables(records: BenchmarkRecord[]): string[] {
-  const rows = buildPhaseComparisonRows(records);
+function renderPhaseComparisonTables(records: BenchmarkRecord[], preview: boolean): string[] {
+  const rows = buildPhaseComparisonRows(records, preview);
   if (rows.length === 0) {
     return [];
   }
@@ -366,8 +382,9 @@ function renderPhaseComparisonTable(phaseRow: PhaseComparisonRow): string {
 function renderComparisonCharts(
   records: BenchmarkRecord[],
   chartPath: string | undefined,
+  preview: boolean,
 ): string[] {
-  const rows = buildPhaseComparisonRows(records);
+  const rows = buildPhaseComparisonRows(records, preview);
   if (rows.length === 0) {
     return ["No shin/aws pairs were available for visual summaries.", ""];
   }
@@ -884,9 +901,12 @@ function renderDeltaChart(
   return ["```text", ...lines, "```"].join("\n");
 }
 
-function buildMetricComparisonRows(records: BenchmarkRecord[]): MetricComparisonRow[] {
+function buildMetricComparisonRows(
+  records: BenchmarkRecord[],
+  preview: boolean,
+): MetricComparisonRow[] {
   return METRICS.flatMap((metric, metricIndex) => {
-    return metricPairs(records, metric.name).map((pair) => ({
+    return metricPairs(records, metric.name, preview).map((pair) => ({
       profile: pair.profile,
       phase: pair.phase,
       memoryMb: pair.memoryMb,
@@ -905,9 +925,12 @@ function buildMetricComparisonRows(records: BenchmarkRecord[]): MetricComparison
   }).sort(compareMetricComparisonRows);
 }
 
-function buildPhaseComparisonRows(records: BenchmarkRecord[]): PhaseComparisonRow[] {
+function buildPhaseComparisonRows(
+  records: BenchmarkRecord[],
+  preview = false,
+): PhaseComparisonRow[] {
   const rows = new Map<string, PhaseComparisonRow>();
-  for (const metricRow of buildMetricComparisonRows(records)) {
+  for (const metricRow of buildMetricComparisonRows(records, preview)) {
     const key = comparisonKey(metricRow);
     const row = rows.get(key) ?? {
       profile: metricRow.profile,
@@ -999,8 +1022,12 @@ function providerSummaryCount(record: BenchmarkRecord, name: string): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
-function metricPairs(records: BenchmarkRecord[], metric: MetricName): MetricPair[] {
-  const rows = aggregateRows(records, metric);
+function metricPairs(
+  records: BenchmarkRecord[],
+  metric: MetricName,
+  preview: boolean,
+): MetricPair[] {
+  const rows = aggregateRows(records, metric, preview);
   const grouped = new Map<string, AggregatedRow[]>();
   for (const row of rows) {
     const key = comparisonGroupKey(row);
@@ -1072,9 +1099,13 @@ type MetricPair = {
 
 type AggregatedRow = BenchmarkAggregate;
 
-function aggregateRows(records: BenchmarkRecord[], metric: MetricName): AggregatedRow[] {
+function aggregateRows(
+  records: BenchmarkRecord[],
+  metric: MetricName,
+  preview = false,
+): AggregatedRow[] {
   const rows = aggregateMetric(records, metric).sort(compareAggregatedRows);
-  if (records.some((record) => benchmarkMethodologyVersion(record) === 2)) {
+  if (!preview && records.some((record) => benchmarkMethodologyVersion(record) === 2)) {
     assertCompleteSamples(rows);
   }
   return rows;
@@ -1268,11 +1299,19 @@ function parseArgs(args: string[]): RenderOptions {
     memoryMb: parsePositiveInteger(values.get("lambda-memory-mb")),
     parallel: parsePositiveInteger(values.get("lambda-max-parallel-transfers")),
     methodologyVersion: parseMethodologyVersion(values.get("methodology-version")),
+    preview: parseBoolean(values.get("preview")),
     runId: values.get("run-id"),
     configFile: values.get("config"),
     scratchRoot: values.get("scratch-root"),
     assetProfile: values.get("asset-profile"),
   };
+}
+
+function parseBoolean(value: string | undefined): boolean | undefined {
+  if (value === undefined) return undefined;
+  if (value === "true") return true;
+  if (value === "false") return false;
+  usage();
 }
 
 function parseMethodologyVersion(value: string | undefined): 1 | 2 | undefined {
@@ -1315,7 +1354,7 @@ function parseChartTheme(value: string | undefined): ChartThemeName | undefined 
 
 function usage(): never {
   console.error(
-    "Usage: node dist/benchmarks/src/render/comparison-report.js [--input-file benchmarks/results.jsonl] [--output-file benchmarks/report.md] [--chart-output-file <path>] [--chart-reference <markdown-path>] [--chart-layout split|scorecard|cards] [--chart-theme signal|forge|circuit] [--asset-profile <name>] [--lambda-max-parallel-transfers <n>] [--lambda-memory-mb <n>]",
+    "Usage: node dist/benchmarks/src/render/comparison-report.js [--input-file benchmarks/results.jsonl] [--output-file benchmarks/report.md] [--chart-output-file <path>] [--chart-reference <markdown-path>] [--chart-layout split|scorecard|cards] [--chart-theme signal|forge|circuit] [--asset-profile <name>] [--lambda-max-parallel-transfers <n>] [--lambda-memory-mb <n>] [--preview true|false]",
   );
   process.exit(1);
 }

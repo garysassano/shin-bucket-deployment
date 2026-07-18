@@ -51,6 +51,7 @@ import {
   writePreservationManifest,
 } from "../../benchmarks/src/run-assets-comparison";
 import {
+  selectValidatedBenchmarkPreview,
   selectValidatedBenchmarkRun,
   validateMethodologyV2Run,
 } from "../../benchmarks/src/validation";
@@ -1035,7 +1036,7 @@ describe("benchmark methodology v2", () => {
     }
   });
 
-  test("reconstructs canonical validation with the recorded snapshot date", () => {
+  test("reconstructs complete and preview validation from recorded run metadata", () => {
     const runId = "00000000-0000-4000-a000-000000000003";
     const options = parseBenchmarkRunOptions([
       "--config",
@@ -1044,11 +1045,37 @@ describe("benchmark methodology v2", () => {
       runId,
       "--snapshot-date",
       "2026-01-01",
+      "--decision-run-id",
+      "ci-decision",
+      "--comparison-variant",
+      "current",
     ]);
     const records = createBenchmarkPlan(options).flatMap((sample) =>
       options.phases.map((phase) => canonicalRecord(options, sample, phase)),
     );
     expect(selectValidatedBenchmarkRun({ records, methodologyVersion: 2, runId })).toHaveLength(80);
+    const previewRecords = records.filter((record) => record.repetition === 1);
+    expect(
+      selectValidatedBenchmarkPreview({
+        records: previewRecords,
+        methodologyVersion: 2,
+        runId,
+      }),
+    ).toHaveLength(16);
+    expect(() =>
+      selectValidatedBenchmarkRun({
+        records: previewRecords,
+        methodologyVersion: 2,
+        runId,
+      }),
+    ).toThrow("missing planned sample/phase");
+    expect(() =>
+      selectValidatedBenchmarkPreview({
+        records: previewRecords.slice(1),
+        methodologyVersion: 2,
+        runId,
+      }),
+    ).toThrow("incomplete preview sample/phase");
     expect(() =>
       selectValidatedBenchmarkRun({
         records: records.map((record, index) =>
@@ -1084,6 +1111,51 @@ describe("benchmark methodology v2", () => {
         `inconsistent Shin provider field ${field}`,
       );
     }
+  });
+
+  test("accepts a complete canonical ledger backed by its resume manifest", () => {
+    const repositoryRoot = mkdtempSync(join(tmpdir(), "shin-benchmark-complete-publication-"));
+    const outputFile = join(repositoryRoot, "results.jsonl");
+    const scratchRoot = join(repositoryRoot, "scratch");
+    const runId = "00000000-0000-4000-a000-000000000005";
+    const options: BenchmarkRunOptions = {
+      ...parseBenchmarkRunOptions([
+        "--config",
+        "benchmarks/configs/methodology-v2-1024-32.json",
+        "--run-id",
+        runId,
+        "--snapshot-date",
+        "2026-01-01",
+        "--decision-run-id",
+        "ci-decision",
+        "--comparison-variant",
+        "current",
+      ]),
+      outputFile,
+      scratchRoot,
+    };
+    mkdirSync(scratchRoot, { recursive: true });
+    const records = createBenchmarkPlan(options).flatMap((sample) =>
+      options.phases.map((phase) => canonicalRecord(options, sample, phase)),
+    );
+    const session = openResumeSession({
+      options,
+      sourceMetadata: sourceMetadata(),
+      repositoryRoot,
+    });
+    session.persist(records);
+    session.close();
+
+    expect(
+      selectValidatedBenchmarkRun({
+        records: readBenchmarkResultRecords(outputFile),
+        methodologyVersion: 2,
+        runId,
+        configFile: "benchmarks/configs/methodology-v2-1024-32.json",
+        inputFile: outputFile,
+        scratchRoot,
+      }),
+    ).toHaveLength(80);
   });
 });
 
@@ -1206,8 +1278,8 @@ function canonicalRecord(
     runId: options.runId,
     sampleId: sample.sampleId,
     snapshotDate: options.snapshotDate,
-    decisionRunId: null,
-    comparisonVariant: null,
+    decisionRunId: options.decisionRunId ?? null,
+    comparisonVariant: options.comparisonVariant ?? null,
     repetition: sample.repetition,
     benchmarkConfigSha256: benchmarkConfigurationSha256(options),
     assetManifestSha256: assetManifestSha256(sample.assetProfile, phase.assetState),

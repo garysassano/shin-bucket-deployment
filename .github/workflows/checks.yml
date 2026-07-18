@@ -144,10 +144,10 @@ jobs:
         uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
         with:
           cache: true
-          install_args: actionlint ripgrep taplo
+          install_args: actionlint node ripgrep taplo
 
       - name: Lint GitHub Actions workflows
-        run: actionlint
+        run: node scripts/actionlint-parallel.mjs
 
       - name: Verify immutable action references
         run: |

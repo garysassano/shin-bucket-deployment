@@ -8,18 +8,21 @@ import { dirname, resolve } from "node:path";
 import { summarize } from "../aggregate";
 import { parseCliOptions } from "../cli";
 import { type BenchmarkResultRecord, phaseRank, readBenchmarkResultRecords } from "../model";
-import { selectValidatedBenchmarkRun } from "../validation";
+import { selectValidatedBenchmarkPreview, selectValidatedBenchmarkRun } from "../validation";
 
 type ChartVariant = "default" | "aws";
 type HeaderLayout = "two-line" | "three-line";
 const CLI_OPTIONS = [
   "asset-profile",
   "config",
+  "filename-prefix",
   "header",
   "input-file",
   "lambda-max-parallel-transfers",
   "lambda-memory-mb",
   "methodology-version",
+  "output-directory",
+  "preview",
   "run-id",
   "scratch-root",
   "variant",
@@ -60,6 +63,14 @@ function parseNumberArg(argv: string[], name: string): number | undefined {
   return parsed;
 }
 
+function parseBooleanArg(argv: string[], name: string): boolean | undefined {
+  const value = parseStringArg(argv, name);
+  if (value === undefined) return undefined;
+  if (value === "true") return true;
+  if (value === "false") return false;
+  throw new Error(`Invalid ${name} value "${value}". Use true or false.`);
+}
+
 function parseHeaderLayout(argv: string[]): HeaderLayout {
   const requestedHeader = parseStringArg(argv, "--header");
   if (requestedHeader === undefined || requestedHeader === "three-line") {
@@ -80,6 +91,12 @@ const requestedMethodologyVersion = parseNumberArg(cliArgs, "--methodology-versi
 const requestedRunId = parseStringArg(cliArgs, "--run-id");
 const requestedConfigFile = parseStringArg(cliArgs, "--config");
 const requestedScratchRoot = parseStringArg(cliArgs, "--scratch-root");
+const requestedOutputDirectory = parseStringArg(cliArgs, "--output-directory");
+const requestedFilenamePrefix = parseStringArg(cliArgs, "--filename-prefix") ?? "";
+const requestedPreview = parseBooleanArg(cliArgs, "--preview") ?? false;
+if (!/^[a-z0-9-]*$/.test(requestedFilenamePrefix)) {
+  throw new Error("--filename-prefix may contain only lowercase letters, digits, and hyphens");
+}
 if (requestedMethodologyVersion !== 1 && requestedMethodologyVersion !== 2) {
   throw new Error("--methodology-version must be 1 or 2");
 }
@@ -175,7 +192,7 @@ function parseSnapshotArgs(argv: string[]): Map<string, string> {
 
 function usage(): never {
   console.error(
-    "Usage: node dist/benchmarks/src/render/readme-snapshot.js [--input-file benchmarks/results.jsonl] [--asset-profile <name>] [--lambda-memory-mb <n>] [--lambda-max-parallel-transfers <n>] [--variant default|aws] [--header three-line|two-line]",
+    "Usage: node dist/benchmarks/src/render/readme-snapshot.js [--input-file benchmarks/results.jsonl] [--output-directory <path>] [--filename-prefix <prefix>] [--asset-profile <name>] [--lambda-memory-mb <n>] [--lambda-max-parallel-transfers <n>] [--variant default|aws] [--header three-line|two-line] [--preview true|false]",
   );
   process.exit(1);
 }
@@ -382,11 +399,16 @@ function simulateAwsWins(rows: Row[]): Row[] {
   }));
 }
 
-const subtitlePrefix = chartVariant === "aws" ? "AWS win simulation" : "vs AWS BucketDeployment";
+const subtitlePrefix = [
+  requestedPreview ? "PRELIMINARY" : undefined,
+  chartVariant === "aws" ? "AWS win simulation" : "vs AWS BucketDeployment",
+]
+  .filter((part) => part !== undefined)
+  .join(" · ");
 const outFileSuffix = `${chartVariant === "aws" ? "-aws" : ""}${headerLayout === "two-line" ? "-two-line" : ""}`;
 
 function snapshotFileName(benchmarkData: BenchmarkData): string {
-  return `${safeFileToken(benchmarkData.profile)}-${benchmarkData.memoryMb}mib-${benchmarkData.parallel}${outFileSuffix}.svg`;
+  return `${requestedFilenamePrefix}${safeFileToken(benchmarkData.profile)}-${benchmarkData.memoryMb}mib-${benchmarkData.parallel}${outFileSuffix}.svg`;
 }
 
 function safeFileToken(value: string): string {
@@ -595,8 +617,11 @@ ${renderHeader(benchmarkData)}
 }
 
 // ═══ OUTPUT ═══
+const selectRecords = requestedPreview
+  ? selectValidatedBenchmarkPreview
+  : selectValidatedBenchmarkRun;
 const benchmarkDataItems = findSelections(
-  selectValidatedBenchmarkRun({
+  selectRecords({
     records: readBenchmarkResultRecords(inputFile),
     methodologyVersion: requestedMethodologyVersion,
     runId: requestedRunId,
@@ -610,9 +635,7 @@ if (benchmarkDataItems.length === 0) {
 }
 for (const benchmarkData of benchmarkDataItems) {
   const outPath = resolve(
-    process.cwd(),
-    "benchmarks",
-    "snapshots",
+    requestedOutputDirectory ?? resolve(process.cwd(), "benchmarks", "snapshots"),
     snapshotFileName(benchmarkData),
   );
   mkdirSync(dirname(outPath), { recursive: true });

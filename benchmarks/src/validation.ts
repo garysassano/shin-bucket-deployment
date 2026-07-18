@@ -13,14 +13,29 @@ import { assertBenchmarkLedgerMatchesManifest } from "./resume";
 
 export const CANONICAL_BENCHMARK_CONFIG = "benchmarks/configs/methodology-v2-1024-32.json";
 
-export function selectValidatedBenchmarkRun(args: {
+type BenchmarkSelectionArgs = {
   readonly records: readonly BenchmarkResultRecord[];
   readonly methodologyVersion: 1 | 2;
   readonly runId?: string;
   readonly configFile?: string;
   readonly inputFile?: string;
   readonly scratchRoot?: string;
-}): BenchmarkResultRecord[] {
+};
+
+export function selectValidatedBenchmarkRun(args: BenchmarkSelectionArgs): BenchmarkResultRecord[] {
+  return selectValidatedRecords(args, true);
+}
+
+export function selectValidatedBenchmarkPreview(
+  args: BenchmarkSelectionArgs,
+): BenchmarkResultRecord[] {
+  return selectValidatedRecords(args, false);
+}
+
+function selectValidatedRecords(
+  args: BenchmarkSelectionArgs,
+  requireCompleteRun: boolean,
+): BenchmarkResultRecord[] {
   const methodologyRecords = args.records.filter(
     (record) => benchmarkMethodologyVersion(record) === args.methodologyVersion,
   );
@@ -41,9 +56,17 @@ export function selectValidatedBenchmarkRun(args: {
       });
     }
     const runId = selected[0]?.runId;
-    if (!runId) throw new Error("A complete methodology-v2 run UUID is required.");
+    if (!runId) throw new Error("A methodology-v2 run UUID is required.");
     const snapshotDate = selected[0]?.snapshotDate;
-    if (!snapshotDate) throw new Error("A complete methodology-v2 snapshot date is required.");
+    if (!snapshotDate) throw new Error("A methodology-v2 snapshot date is required.");
+    const implementations = ["shin", "aws"].filter((implementation) =>
+      selected.some((record) => implementationLabel(record) === implementation),
+    );
+    if (implementations.length === 0) {
+      throw new Error("At least one methodology-v2 implementation is required.");
+    }
+    const decisionRunId = selected[0]?.decisionRunId;
+    const comparisonVariant = selected[0]?.comparisonVariant;
     const options = parseBenchmarkRunOptions([
       "--config",
       args.configFile ?? CANONICAL_BENCHMARK_CONFIG,
@@ -55,8 +78,12 @@ export function selectValidatedBenchmarkRun(args: {
       "1",
       "--repetitions",
       "5",
+      "--implementations",
+      implementations.join(","),
+      ...(decisionRunId ? ["--decision-run-id", decisionRunId] : []),
+      ...(comparisonVariant ? ["--comparison-variant", comparisonVariant] : []),
     ]);
-    validateMethodologyV2Run(selected, options);
+    validateMethodologyV2Records(selected, options, requireCompleteRun);
     const v2RunIds = new Set(
       methodologyRecords.map((record) => record.runId).filter((runId) => runId !== null),
     );
@@ -72,6 +99,14 @@ export function selectValidatedBenchmarkRun(args: {
 export function validateMethodologyV2Run(
   records: readonly BenchmarkResultRecord[],
   options: BenchmarkRunOptions,
+): void {
+  validateMethodologyV2Records(records, options, true);
+}
+
+function validateMethodologyV2Records(
+  records: readonly BenchmarkResultRecord[],
+  options: BenchmarkRunOptions,
+  requireCompleteRun: boolean,
 ): void {
   if (records.length === 0) {
     throw new Error("No methodology-v2 records were available for canonical rendering.");
@@ -143,9 +178,21 @@ export function validateMethodologyV2Run(
     }
     workloadIdentity.set(workloadKey, identityValue);
   }
-  for (const identity of expected.keys()) {
-    if (!observed.has(identity))
-      errors.push(`missing planned sample/phase ${identity.replace("\0", "/")}`);
+  if (requireCompleteRun) {
+    for (const identity of expected.keys()) {
+      if (!observed.has(identity))
+        errors.push(`missing planned sample/phase ${identity.replace("\0", "/")}`);
+    }
+  } else {
+    const sampleIds = new Set(records.map((record) => record.sampleId).filter(Boolean));
+    for (const sampleId of sampleIds) {
+      for (const phase of options.phases) {
+        const identity = `${sampleId}\0${phase.name}`;
+        if (!observed.has(identity)) {
+          errors.push(`incomplete preview sample/phase ${identity.replace("\0", "/")}`);
+        }
+      }
+    }
   }
   for (const field of [
     "snapshotDate",
@@ -198,6 +245,7 @@ export function validateMethodologyV2Run(
     const implementationRecords = records.filter(
       (record) => implementationLabel(record) === implementation,
     );
+    if (implementationRecords.length === 0) continue;
     for (const field of [
       "providerPackageName",
       "providerPackageVersion",

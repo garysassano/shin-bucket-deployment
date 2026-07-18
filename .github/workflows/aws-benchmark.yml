@@ -45,6 +45,11 @@ on:
         description: Required for continue; workflow run ID containing smoke state
         required: false
         type: string
+      publish_results:
+        description: Publish a complete continuation run to main
+        required: true
+        default: true
+        type: boolean
 
 concurrency:
   group: aws-test-account
@@ -210,7 +215,6 @@ jobs:
             --comparison-variant "$COMPARISON_VARIANT"
 
       - name: Stage sanitized resume state
-        if: ${{ success() }}
         run: |
           resume="$RUNNER_TEMP/benchmark-resume-upload"
           mkdir -p "$resume"
@@ -220,10 +224,248 @@ jobs:
           cp assets/bootstrap-arm64/build-provenance.json "$resume/build-provenance.json"
 
       - name: Upload sanitized benchmark state
-        if: ${{ success() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: benchmark-resume-${{ inputs.run_id }}
           path: ${{ runner.temp }}/benchmark-resume-upload
           if-no-files-found: error
           retention-days: 14
+
+      - name: Checkout reporting revision
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Install reporting dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build reporting tools
+        run: pnpm build
+
+      - name: Prepare benchmark report paths
+        env:
+          BENCHMARK_MODE: ${{ inputs.mode }}
+          RUN_ID: ${{ inputs.run_id }}
+        run: |
+          report_root="$RUNNER_TEMP/benchmark-report-$RUN_ID"
+          if [[ "$BENCHMARK_MODE" == "smoke" ]]; then
+            report_preview=true
+            snapshot_prefix=preview-
+          else
+            report_preview=false
+            snapshot_prefix=
+          fi
+          {
+            echo "REPORT_ROOT=$report_root"
+            echo "REPORT_PREVIEW=$report_preview"
+            echo "SNAPSHOT_PREFIX=$snapshot_prefix"
+          } >>"$GITHUB_ENV"
+          mkdir -p "$report_root/snapshots"
+          cp "$RESULTS_FILE" "$report_root/results.jsonl"
+
+      - parallel:
+          - name: Render Actions summary
+            run: |
+              node dist/benchmarks/src/render/ci-summary.js \
+                --config benchmarks/configs/methodology-v2-1024-32.json \
+                --input-file "$RESULTS_FILE" \
+                --output-file "$REPORT_ROOT/summary.md" \
+                --run-id "${{ inputs.run_id }}" \
+                --scratch-root "$SCRATCH_ROOT" \
+                --preview "$REPORT_PREVIEW"
+              cat "$REPORT_ROOT/summary.md" >>"$GITHUB_STEP_SUMMARY"
+
+          - name: Render comparison report
+            run: |
+              node dist/benchmarks/src/render/comparison-report.js \
+                --config benchmarks/configs/methodology-v2-1024-32.json \
+                --input-file "$RESULTS_FILE" \
+                --output-file "$REPORT_ROOT/report.md" \
+                --chart-output-file "$REPORT_ROOT/snapshots/comparison.svg" \
+                --chart-reference snapshots/comparison.svg \
+                --run-id "${{ inputs.run_id }}" \
+                --scratch-root "$SCRATCH_ROOT" \
+                --preview "$REPORT_PREVIEW"
+
+          - name: Render provider telemetry
+            run: |
+              node dist/benchmarks/src/render/telemetry-table.js \
+                --config benchmarks/configs/methodology-v2-1024-32.json \
+                --input-file "$RESULTS_FILE" \
+                --output-file "$REPORT_ROOT/telemetry.md" \
+                --run-id "${{ inputs.run_id }}" \
+                --scratch-root "$SCRATCH_ROOT" \
+                --preview "$REPORT_PREVIEW"
+
+          - name: Render profile snapshots
+            if: ${{ inputs.implementations == 'shin,aws' }}
+            run: |
+              node dist/benchmarks/src/render/readme-snapshot.js \
+                --config benchmarks/configs/methodology-v2-1024-32.json \
+                --input-file "$RESULTS_FILE" \
+                --output-directory "$REPORT_ROOT/snapshots" \
+                --filename-prefix "$SNAPSHOT_PREFIX" \
+                --run-id "${{ inputs.run_id }}" \
+                --scratch-root "$SCRATCH_ROOT" \
+                --preview "$REPORT_PREVIEW"
+
+      - name: Package benchmark report
+        env:
+          RUN_ID: ${{ inputs.run_id }}
+        run: |
+          archive="$RUNNER_TEMP/benchmark-report-$RUN_ID.zip"
+          (cd "$REPORT_ROOT" && zip -q -r "$archive" .)
+          cp "$archive" "$REPORT_ROOT/benchmark-report.zip"
+
+      - name: Upload benchmark report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: benchmark-report-${{ inputs.run_id }}
+          path: ${{ env.REPORT_ROOT }}
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish complete benchmark
+    if: ${{ inputs.mode == 'continue' && inputs.implementations == 'shin,aws' && inputs.publish_results }}
+    needs: benchmark
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Guard reporting revision and measured source
+        env:
+          REPORTING_REF: ${{ github.sha }}
+          SOURCE_REF: ${{ inputs.source_ref }}
+        run: |
+          [[ "$SOURCE_REF" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$REPORTING_REF" =~ ^[0-9a-f]{40}$ ]]
+          git fetch --no-tags origin main
+          test "$(git rev-parse HEAD)" = "$REPORTING_REF"
+          test "$(git rev-parse origin/main)" = "$REPORTING_REF"
+          git cat-file -e "$SOURCE_REF^{commit}"
+          git merge-base --is-ancestor "$SOURCE_REF" "$REPORTING_REF"
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Install Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24.18.0
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Download complete benchmark state
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: benchmark-resume-${{ inputs.run_id }}
+          path: ${{ runner.temp }}/benchmark-resume
+
+      - name: Restore publication evidence paths
+        env:
+          RUN_ID: ${{ inputs.run_id }}
+        run: |
+          evidence_root="${GITHUB_WORKSPACE%/*}/shin-benchmark-evidence/$RUN_ID"
+          {
+            echo "EVIDENCE_ROOT=$evidence_root"
+            echo "RESULTS_FILE=$evidence_root/results.jsonl"
+            echo "SCRATCH_ROOT=$evidence_root/scratch"
+          } >>"$GITHUB_ENV"
+          mkdir -p "$evidence_root/scratch"
+          cp "$RUNNER_TEMP/benchmark-resume/results.jsonl" "$evidence_root/results.jsonl"
+          cp "$RUNNER_TEMP/benchmark-resume/benchmark-run-manifest.json" "$evidence_root/scratch/benchmark-run-manifest.json"
+
+      - name: Build reporting tools
+        run: pnpm build
+
+      - name: Merge validated structured evidence
+        run: |
+          node dist/benchmarks/src/publish-results.js \
+            --config benchmarks/configs/methodology-v2-1024-32.json \
+            --input-file "$RESULTS_FILE" \
+            --output-file benchmarks/results.jsonl \
+            --run-id "${{ inputs.run_id }}" \
+            --scratch-root "$SCRATCH_ROOT"
+
+      - parallel:
+          - name: Render committed comparison report
+            run: |
+              node dist/benchmarks/src/render/comparison-report.js \
+                --config benchmarks/configs/methodology-v2-1024-32.json \
+                --input-file "$RESULTS_FILE" \
+                --output-file benchmarks/ci-report.md \
+                --chart-output-file benchmarks/ci-report-assets/shin-vs-aws-duration-memory.svg \
+                --run-id "${{ inputs.run_id }}" \
+                --scratch-root "$SCRATCH_ROOT"
+
+          - name: Render committed provider telemetry
+            run: |
+              node dist/benchmarks/src/render/telemetry-table.js \
+                --config benchmarks/configs/methodology-v2-1024-32.json \
+                --input-file "$RESULTS_FILE" \
+                --output-file benchmarks/ci-telemetry.md \
+                --run-id "${{ inputs.run_id }}" \
+                --scratch-root "$SCRATCH_ROOT"
+
+          - name: Render committed profile snapshots
+            run: |
+              node dist/benchmarks/src/render/readme-snapshot.js \
+                --config benchmarks/configs/methodology-v2-1024-32.json \
+                --input-file "$RESULTS_FILE" \
+                --output-directory benchmarks/snapshots \
+                --filename-prefix ci- \
+                --run-id "${{ inputs.run_id }}" \
+                --scratch-root "$SCRATCH_ROOT"
+
+          - name: Update generated benchmark documentation
+            run: |
+              node dist/benchmarks/src/render/update-ci-docs.js \
+                --config benchmarks/configs/methodology-v2-1024-32.json \
+                --input-file "$RESULTS_FILE" \
+                --run-id "${{ inputs.run_id }}" \
+                --scratch-root "$SCRATCH_ROOT" \
+                --docs-file docs/benchmark.md \
+                --benchmark-readme benchmarks/README.md
+
+      - name: Validate publication diff
+        run: |
+          test -s benchmarks/ci-report.md
+          test -s benchmarks/ci-report-assets/shin-vs-aws-duration-memory.svg
+          test -s benchmarks/ci-telemetry.md
+          test -s benchmarks/snapshots/ci-tiny-many-1024mib-32.svg
+          test -s benchmarks/snapshots/ci-large-few-1024mib-32.svg
+          git diff --check
+          git add \
+            benchmarks/results.jsonl \
+            benchmarks/ci-report.md \
+            benchmarks/ci-report-assets/shin-vs-aws-duration-memory.svg \
+            benchmarks/ci-telemetry.md \
+            benchmarks/snapshots/ci-tiny-many-1024mib-32.svg \
+            benchmarks/snapshots/ci-large-few-1024mib-32.svg \
+            benchmarks/README.md \
+            docs/benchmark.md
+          unexpected="$(git status --porcelain --untracked-files=all | sed -E 's/^.. //;' | rg -v '^(benchmarks/results\.jsonl|benchmarks/ci-report\.md|benchmarks/ci-report-assets/shin-vs-aws-duration-memory\.svg|benchmarks/ci-telemetry\.md|benchmarks/snapshots/ci-(tiny-many|large-few)-1024mib-32\.svg|benchmarks/README\.md|docs/benchmark\.md)$' || true)"
+          test -z "$unexpected"
+
+      - name: Commit and push benchmark publication
+        env:
+          REPORTING_REF: ${{ github.sha }}
+          SNAPSHOT_DATE: ${{ inputs.snapshot_date }}
+        run: |
+          git fetch --no-tags origin main
+          test "$(git rev-parse origin/main)" = "$REPORTING_REF"
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git commit -m "docs: publish benchmark $SNAPSHOT_DATE [skip ci]"
+          git push origin HEAD:main

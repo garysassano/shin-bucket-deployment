@@ -7,7 +7,7 @@ import {
   phaseRank,
   readBenchmarkResultRows,
 } from "../model";
-import { selectValidatedBenchmarkRun } from "../validation";
+import { selectValidatedBenchmarkPreview, selectValidatedBenchmarkRun } from "../validation";
 
 type RenderOptions = {
   readonly inputFile: string;
@@ -16,6 +16,7 @@ type RenderOptions = {
   readonly runId?: string;
   readonly configFile?: string;
   readonly scratchRoot?: string;
+  readonly preview?: boolean;
 };
 
 type TelemetryRow = {
@@ -41,6 +42,7 @@ const CLI_OPTIONS = [
   "input-file",
   "methodology-version",
   "output-file",
+  "preview",
   "run-id",
   "scratch-root",
 ] as const;
@@ -278,9 +280,10 @@ export function renderBenchmarkResultsTable(options: RenderOptions): string {
     options.runId,
     options.configFile,
     options.scratchRoot,
+    options.preview ?? false,
   );
   const groups = buildGroups(rows);
-  const report = renderResultsMarkdown(rows, groups, options.inputFile);
+  const report = renderResultsMarkdown(rows, groups, options.inputFile, options.preview ?? false);
   mkdirSync(dirname(options.outputFile), { recursive: true });
   writeFileSync(options.outputFile, report);
   return report;
@@ -290,10 +293,18 @@ function renderResultsMarkdown(
   rows: TelemetryRow[],
   groups: TelemetryGroup[],
   inputFile: string,
+  preview: boolean,
 ): string {
   return [
     "# Shin Provider Benchmark Telemetry",
     "",
+    ...(preview
+      ? [
+          "> [!WARNING]",
+          "> Preliminary preview from an incomplete methodology-v2 run. Do not treat these values as accepted benchmark evidence.",
+          "",
+        ]
+      : []),
     `Generated from Shin rows in \`${basename(inputFile)}\`. Raw benchmark evidence stays outside the repo.`,
     "",
     "## Summary",
@@ -432,10 +443,12 @@ function readTelemetryRows(
   requestedRunId: string | undefined,
   configFile: string | undefined,
   scratchRoot: string | undefined,
+  preview: boolean,
 ): TelemetryRow[] {
   const allRows = readBenchmarkResultRows(filePath);
+  const selectRecords = preview ? selectValidatedBenchmarkPreview : selectValidatedBenchmarkRun;
   const selectedRecords = new Set(
-    selectValidatedBenchmarkRun({
+    selectRecords({
       records: allRows.map(({ record }) => record),
       methodologyVersion,
       runId: requestedRunId,
@@ -490,7 +503,15 @@ function parseArgs(args: string[]): RenderOptions {
     runId: values.get("run-id"),
     configFile: values.get("config"),
     scratchRoot: values.get("scratch-root"),
+    preview: parseBoolean(values.get("preview")),
   };
+}
+
+function parseBoolean(value: string | undefined): boolean | undefined {
+  if (value === undefined) return undefined;
+  if (value === "true") return true;
+  if (value === "false") return false;
+  usage();
 }
 
 function parseMethodologyVersion(value: string | undefined): 1 | 2 | undefined {
@@ -502,7 +523,7 @@ function parseMethodologyVersion(value: string | undefined): 1 | 2 | undefined {
 
 function usage(): never {
   console.error(
-    "Usage: node dist/benchmarks/src/render/telemetry-table.js [--input-file benchmarks/results.jsonl] [--output-file benchmarks/telemetry.md]",
+    "Usage: node dist/benchmarks/src/render/telemetry-table.js [--input-file benchmarks/results.jsonl] [--output-file benchmarks/telemetry.md] [--preview true|false]",
   );
   process.exit(1);
 }
