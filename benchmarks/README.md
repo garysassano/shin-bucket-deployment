@@ -36,6 +36,25 @@ README benchmark snapshots use sanitized tiny-many records from `benchmarks/resu
 
 Only README-linked snapshot SVGs are committed under `benchmarks/snapshots`. Temporary alternate layouts can be regenerated locally with `benchmarks/src/render/readme-snapshot.ts`, but should not be kept as committed design history. Generated report charts live beside the report output by default.
 
+
+<!-- benchmark-ci:start -->
+## Latest Methodology-v2 CI Benchmark
+
+GitHub Actions last published a complete five-repetition canonical run dated 2026-07-18 (run `035f539d-6995-4d10-98a0-b4e9a7c5749e`).
+
+- [Comparison report](ci-report.md)
+- [Shin provider telemetry](ci-telemetry.md)
+- [Sanitized structured results](results.jsonl)
+
+### tiny-many / 1024 MiB / 32 transfers
+
+![Latest tiny-many CI benchmark](snapshots/ci-tiny-many-1024mib-32.svg)
+
+### large-few / 1024 MiB / 32 transfers
+
+![Latest large-few CI benchmark](snapshots/ci-large-few-1024mib-32.svg)
+<!-- benchmark-ci:end -->
+
 ## Shin Provider Telemetry
 
 - In-depth Shin provider telemetry: [`telemetry.md`](telemetry.md)

@@ -4,6 +4,37 @@ This page is the compact benchmark index for `ShinBucketDeployment`. Benchmarks 
 
 Runbooks, evidence collection rules, schema guidance, and sanitization rules live in `.agents/skills/shin-benchmark/SKILL.md`.
 
+
+<!-- benchmark-ci:start -->
+## Latest CI benchmark
+
+The latest complete canonical methodology-v2 run was collected by GitHub Actions on 2026-07-18 from source commit `35f7383`. It contains five sequential repetitions of both canonical profiles across all four phases. The sanitized run UUID is `035f539d-6995-4d10-98a0-b4e9a7c5749e`; raw AWS output remains outside git.
+
+| Field | Value |
+| --- | --- |
+| Region | `eu-central-1` |
+| Lambda configuration | 1024 MiB / 32 Shin transfers |
+| Sanitized rows | 80 |
+| Cleanup | all benchmark stacks destroyed |
+
+| Profile | Phase | n | Provider s, Shin / AWS | AWS/Shin | Local wall s, Shin / AWS | Max MiB, Shin / AWS |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| `large-few` | `cold-create` | 5 | 2.484 / 9.169 | 3.691x | 73.637 / 78.814 | 121 / 435 |
+| `large-few` | `unchanged-update` | 5 | 0.32 / 9.231 | 28.847x | 35.53 / 46.286 | 34 / 435 |
+| `large-few` | `changed-update` | 5 | 0.523 / 9.085 | 17.371x | 37.006 / 47.137 | 38 / 434 |
+| `large-few` | `pruned-update` | 5 | 0.762 / 8.86 | 11.627x | 36.402 / 52.421 | 54 / 407 |
+| `tiny-many` | `cold-create` | 5 | 2.629 / 25.648 | 9.756x | 73.078 / 100.336 | 47 / 218 |
+| `tiny-many` | `unchanged-update` | 5 | 0.512 / 26.881 | 52.502x | 35.425 / 62.866 | 36 / 209 |
+| `tiny-many` | `changed-update` | 5 | 0.657 / 26.665 | 40.586x | 36.015 / 68.314 | 36 / 212 |
+| `tiny-many` | `pruned-update` | 5 | 2.978 / 26.204 | 8.799x | 41.753 / 64.044 | 36 / 207 |
+
+The [complete generated report](../benchmarks/ci-report.md) includes quartiles, end-to-end timings, per-phase deltas, and a comparison chart. [Provider telemetry](../benchmarks/ci-telemetry.md) contains the sanitized Shin diagnostic tables.
+
+![Latest tiny-many CI benchmark](../benchmarks/snapshots/ci-tiny-many-1024mib-32.svg)
+
+![Latest large-few CI benchmark](../benchmarks/snapshots/ci-large-few-1024mib-32.svg)
+<!-- benchmark-ci:end -->
+
 ## Methodology v2 status
 
 The local methodology-v2 harness is implemented. The Rust module-refactor section below records a complete five-repetition decision run. Existing snapshots remain methodology-v1 historical evidence. Default report generation excludes historical and decision rows; use explicit selectors to inspect or regenerate them.

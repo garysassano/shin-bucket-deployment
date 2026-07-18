@@ -1,0 +1,188 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="798" viewBox="0 0 1180 798" role="img" aria-labelledby="title desc">
+<title id="title">ShinBucketDeployment vs AWS BucketDeployment benchmark comparison</title>
+<desc id="desc">Gaming hardware style benchmark chart comparing Lambda handler duration and max memory usage. Lower values are better.</desc>
+<defs>
+<linearGradient id="bg" x1="0" x2="1" y1="0" y2="1"><stop offset="0" stop-color="#081018"/><stop offset="1" stop-color="#101923"/></linearGradient>
+<linearGradient id="shin" x1="0" x2="1"><stop offset="0" stop-color="#12e29c"/><stop offset="0.55" stop-color="#19c8ff"/><stop offset="1" stop-color="#8bffdb"/></linearGradient>
+<linearGradient id="aws" x1="0" x2="1"><stop offset="0" stop-color="#f04452"/><stop offset="0.55" stop-color="#ff6b1a"/><stop offset="1" stop-color="#ff9f1c"/></linearGradient>
+<filter id="shadow" x="-20%" y="-40%" width="140%" height="180%"><feDropShadow dx="0" dy="8" stdDeviation="8" flood-color="#000" flood-opacity="0.35"/></filter>
+<filter id="textShadow"><feDropShadow dx="0" dy="2" stdDeviation="2" flood-color="#00111f" flood-opacity="0.85"/></filter>
+</defs>
+<rect width="1180" height="798" fill="#dfe6e9"/>
+<rect width="1180" height="176" fill="url(#bg)"/>
+<g filter="url(#textShadow)" fill="#f8fbfd">
+<text x="32" y="55" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="38" font-weight="700">ShinBucketDeployment</text>
+<text x="32" y="92" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="22" font-weight="600">vs AWS BucketDeployment - 1024 MiB, parallel 32 Lambda benchmark</text>
+<text x="32" y="122" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="16" opacity="0.9">Lower bars are better; medians from benchmark result rows.</text>
+</g>
+<g transform="translate(674 28)" font-family="Liberation Sans, Arial, Helvetica, sans-serif">
+<rect x="0" y="0" width="138" height="26" rx="5" fill="#081018" opacity="0.64"/>
+<text x="9" y="11" font-size="8" font-weight="900" fill="#f8fbfd" opacity="0.68">Asset profile</text>
+<text x="9" y="22" font-size="11" font-weight="900" fill="#f8fbfd">tiny-many/large-few</text>
+<rect x="152" y="0" width="138" height="26" rx="5" fill="#081018" opacity="0.64"/>
+<text x="161" y="11" font-size="8" font-weight="900" fill="#f8fbfd" opacity="0.68">Objects</text>
+<text x="161" y="22" font-size="11" font-weight="900" fill="#f8fbfd">2,584</text>
+<rect x="304" y="0" width="138" height="26" rx="5" fill="#081018" opacity="0.64"/>
+<text x="313" y="11" font-size="8" font-weight="900" fill="#f8fbfd" opacity="0.68">Bundle</text>
+<text x="313" y="22" font-size="11" font-weight="900" fill="#f8fbfd">7.8 MiB</text>
+<rect x="0" y="34" width="138" height="26" rx="5" fill="#081018" opacity="0.64"/>
+<text x="9" y="45" font-size="8" font-weight="900" fill="#f8fbfd" opacity="0.68">Best</text>
+<text x="9" y="56" font-size="11" font-weight="900" fill="#f8fbfd">52.5x faster</text>
+<rect x="152" y="34" width="138" height="26" rx="5" fill="#081018" opacity="0.64"/>
+<text x="161" y="45" font-size="8" font-weight="900" fill="#f8fbfd" opacity="0.68">Memory saved</text>
+<text x="161" y="56" font-size="11" font-weight="900" fill="#f8fbfd">401 MiB</text>
+</g>
+<g font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="13" font-weight="800" fill="#f8fbfd">
+<rect x="660" y="108" width="356" height="38" rx="6" fill="#081018" opacity="0.6"/>
+<rect x="674" y="118" width="16" height="10" rx="2" fill="url(#shin)"/><text x="698" y="127">ShinBucketDeployment</text>
+<rect x="864" y="118" width="16" height="10" rx="2" fill="url(#aws)"/><text x="888" y="127">AWS BucketDeployment</text>
+</g>
+<rect x="28" y="198" width="550" height="580" rx="8" fill="#f7fafb" stroke="#c9d4da" filter="url(#shadow)"/>
+<rect x="602" y="198" width="550" height="580" rx="8" fill="#f7fafb" stroke="#c9d4da" filter="url(#shadow)"/>
+<text x="50" y="232" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="22" font-weight="800" fill="#111820">Lambda Handler Duration</text>
+<text x="50" y="283" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="14" font-weight="800" fill="#111820">cold-create</text>
+<rect x="232" y="264" width="222" height="17" rx="3" fill="#d9e2e7"/>
+<rect x="232" y="264" width="20.514" height="17" rx="3" fill="url(#shin)"/>
+<text x="258.514" y="277" text-anchor="start" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="12" font-weight="800" fill="#111820">2.484 s</text>
+<rect x="232" y="290" width="222" height="17" rx="3" fill="#d9e2e7"/>
+<rect x="232" y="290" width="75.723" height="17" rx="3" fill="url(#aws)"/>
+<text x="299.723" y="303" text-anchor="end" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="12" font-weight="800" fill="#351006">9.169 s</text>
+<rect x="464" y="268" width="88" height="28" rx="4" fill="#12212d"/>
+<text x="508" y="286" text-anchor="middle" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="9" font-weight="800" fill="#f8fbfd">3.69x faster</text>
+<text x="50" y="345" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="14" font-weight="800" fill="#111820">unchanged-update</text>
+<rect x="232" y="326" width="222" height="17" rx="3" fill="#d9e2e7"/>
+<rect x="232" y="326" width="2.643" height="17" rx="3" fill="url(#shin)"/>
+<text x="240.643" y="339" text-anchor="start" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="12" font-weight="800" fill="#111820">0.32 s</text>
+<rect x="232" y="352" width="222" height="17" rx="3" fill="#d9e2e7"/>
+<rect x="232" y="352" width="76.235" height="17" rx="3" fill="url(#aws)"/>
+<text x="300.235" y="365" text-anchor="end" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="12" font-weight="800" fill="#351006">9.231 s</text>
+<rect x="464" y="330" width="88" height="28" rx="4" fill="#12212d"/>
+<text x="508" y="348" text-anchor="middle" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="9" font-weight="800" fill="#f8fbfd">28.8x faster</text>
+<text x="50" y="407" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="14" font-weight="800" fill="#111820">changed-update</text>
+<rect x="232" y="388" width="222" height="17" rx="3" fill="#d9e2e7"/>
+<rect x="232" y="388" width="4.319" height="17" rx="3" fill="url(#shin)"/>
+<text x="242.319" y="401" text-anchor="start" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="12" font-weight="800" fill="#111820">0.523 s</text>
+<rect x="232" y="414" width="222" height="17" rx="3" fill="#d9e2e7"/>
+<rect x="232" y="414" width="75.03" height="17" rx="3" fill="url(#aws)"/>
+<text x="299.03" y="427" text-anchor="end" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="12" font-weight="800" fill="#351006">9.085 s</text>
+<rect x="464" y="392" width="88" height="28" rx="4" fill="#12212d"/>
+<text x="508" y="410" text-anchor="middle" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="9" font-weight="800" fill="#f8fbfd">17.4x faster</text>
+<text x="50" y="469" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="14" font-weight="800" fill="#111820">pruned-update</text>
+<rect x="232" y="450" width="222" height="17" rx="3" fill="#d9e2e7"/>
+<rect x="232" y="450" width="6.293" height="17" rx="3" fill="url(#shin)"/>
+<text x="244.293" y="463" text-anchor="start" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="12" font-weight="800" fill="#111820">0.762 s</text>
+<rect x="232" y="476" width="222" height="17" rx="3" fill="#d9e2e7"/>
+<rect x="232" y="476" width="73.171" height="17" rx="3" fill="url(#aws)"/>
+<text x="311.171" y="489" text-anchor="start" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="12" font-weight="800" fill="#111820">8.86 s</text>
+<rect x="464" y="454" width="88" height="28" rx="4" fill="#12212d"/>
+<text x="508" y="472" text-anchor="middle" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="9" font-weight="800" fill="#f8fbfd">11.6x faster</text>
+<text x="50" y="531" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="14" font-weight="800" fill="#111820">cold-create</text>
+<rect x="232" y="512" width="222" height="17" rx="3" fill="#d9e2e7"/>
+<rect x="232" y="512" width="21.712" height="17" rx="3" fill="url(#shin)"/>
+<text x="259.712" y="525" text-anchor="start" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="12" font-weight="800" fill="#111820">2.629 s</text>
+<rect x="232" y="538" width="222" height="17" rx="3" fill="#d9e2e7"/>
+<rect x="232" y="538" width="211.817" height="17" rx="3" fill="url(#aws)"/>
+<text x="435.817" y="551" text-anchor="end" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="12" font-weight="800" fill="#351006">25.648 s</text>
+<rect x="464" y="516" width="88" height="28" rx="4" fill="#12212d"/>
+<text x="508" y="534" text-anchor="middle" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="9" font-weight="800" fill="#f8fbfd">9.76x faster</text>
+<text x="50" y="593" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="14" font-weight="800" fill="#111820">unchanged-update</text>
+<rect x="232" y="574" width="222" height="17" rx="3" fill="#d9e2e7"/>
+<rect x="232" y="574" width="4.228" height="17" rx="3" fill="url(#shin)"/>
+<text x="242.228" y="587" text-anchor="start" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="12" font-weight="800" fill="#111820">0.512 s</text>
+<rect x="232" y="600" width="222" height="17" rx="3" fill="#d9e2e7"/>
+<rect x="232" y="600" width="222" height="17" rx="3" fill="url(#aws)"/>
+<text x="446" y="613" text-anchor="end" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="12" font-weight="800" fill="#351006">26.881 s</text>
+<rect x="464" y="578" width="88" height="28" rx="4" fill="#12212d"/>
+<text x="508" y="596" text-anchor="middle" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="9" font-weight="800" fill="#f8fbfd">52.5x faster</text>
+<text x="50" y="655" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="14" font-weight="800" fill="#111820">changed-update</text>
+<rect x="232" y="636" width="222" height="17" rx="3" fill="#d9e2e7"/>
+<rect x="232" y="636" width="5.426" height="17" rx="3" fill="url(#shin)"/>
+<text x="243.426" y="649" text-anchor="start" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="12" font-weight="800" fill="#111820">0.657 s</text>
+<rect x="232" y="662" width="222" height="17" rx="3" fill="#d9e2e7"/>
+<rect x="232" y="662" width="220.216" height="17" rx="3" fill="url(#aws)"/>
+<text x="444.216" y="675" text-anchor="end" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="12" font-weight="800" fill="#351006">26.665 s</text>
+<rect x="464" y="640" width="88" height="28" rx="4" fill="#12212d"/>
+<text x="508" y="658" text-anchor="middle" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="9" font-weight="800" fill="#f8fbfd">40.6x faster</text>
+<text x="50" y="717" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="14" font-weight="800" fill="#111820">pruned-update</text>
+<rect x="232" y="698" width="222" height="17" rx="3" fill="#d9e2e7"/>
+<rect x="232" y="698" width="24.594" height="17" rx="3" fill="url(#shin)"/>
+<text x="262.594" y="711" text-anchor="start" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="12" font-weight="800" fill="#111820">2.978 s</text>
+<rect x="232" y="724" width="222" height="17" rx="3" fill="#d9e2e7"/>
+<rect x="232" y="724" width="216.409" height="17" rx="3" fill="url(#aws)"/>
+<text x="440.409" y="737" text-anchor="end" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="12" font-weight="800" fill="#351006">26.204 s</text>
+<rect x="464" y="702" width="88" height="28" rx="4" fill="#12212d"/>
+<text x="508" y="720" text-anchor="middle" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="9" font-weight="800" fill="#f8fbfd">8.8x faster</text>
+<text x="624" y="232" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="22" font-weight="800" fill="#111820">Max Memory Used</text>
+<text x="624" y="283" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="14" font-weight="800" fill="#111820">cold-create</text>
+<rect x="806" y="264" width="222" height="17" rx="3" fill="#d9e2e7"/>
+<rect x="806" y="264" width="61.752" height="17" rx="3" fill="url(#shin)"/>
+<text x="873.752" y="277" text-anchor="start" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="12" font-weight="800" fill="#111820">121 MiB</text>
+<rect x="806" y="290" width="222" height="17" rx="3" fill="#d9e2e7"/>
+<rect x="806" y="290" width="222" height="17" rx="3" fill="url(#aws)"/>
+<text x="1020" y="303" text-anchor="end" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="12" font-weight="800" fill="#351006">435 MiB</text>
+<rect x="1038" y="268" width="88" height="28" rx="4" fill="#12212d"/>
+<text x="1082" y="286" text-anchor="middle" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="9" font-weight="800" fill="#f8fbfd">72.2% lower</text>
+<text x="624" y="345" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="14" font-weight="800" fill="#111820">unchanged-update</text>
+<rect x="806" y="326" width="222" height="17" rx="3" fill="#d9e2e7"/>
+<rect x="806" y="326" width="17.352" height="17" rx="3" fill="url(#shin)"/>
+<text x="829.352" y="339" text-anchor="start" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="12" font-weight="800" fill="#111820">34 MiB</text>
+<rect x="806" y="352" width="222" height="17" rx="3" fill="#d9e2e7"/>
+<rect x="806" y="352" width="222" height="17" rx="3" fill="url(#aws)"/>
+<text x="1020" y="365" text-anchor="end" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="12" font-weight="800" fill="#351006">435 MiB</text>
+<rect x="1038" y="330" width="88" height="28" rx="4" fill="#12212d"/>
+<text x="1082" y="348" text-anchor="middle" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="9" font-weight="800" fill="#f8fbfd">92.2% lower</text>
+<text x="624" y="407" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="14" font-weight="800" fill="#111820">changed-update</text>
+<rect x="806" y="388" width="222" height="17" rx="3" fill="#d9e2e7"/>
+<rect x="806" y="388" width="19.393" height="17" rx="3" fill="url(#shin)"/>
+<text x="831.393" y="401" text-anchor="start" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="12" font-weight="800" fill="#111820">38 MiB</text>
+<rect x="806" y="414" width="222" height="17" rx="3" fill="#d9e2e7"/>
+<rect x="806" y="414" width="221.49" height="17" rx="3" fill="url(#aws)"/>
+<text x="1019.49" y="427" text-anchor="end" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="12" font-weight="800" fill="#351006">434 MiB</text>
+<rect x="1038" y="392" width="88" height="28" rx="4" fill="#12212d"/>
+<text x="1082" y="410" text-anchor="middle" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="9" font-weight="800" fill="#f8fbfd">91.2% lower</text>
+<text x="624" y="469" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="14" font-weight="800" fill="#111820">pruned-update</text>
+<rect x="806" y="450" width="222" height="17" rx="3" fill="#d9e2e7"/>
+<rect x="806" y="450" width="27.559" height="17" rx="3" fill="url(#shin)"/>
+<text x="839.559" y="463" text-anchor="start" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="12" font-weight="800" fill="#111820">54 MiB</text>
+<rect x="806" y="476" width="222" height="17" rx="3" fill="#d9e2e7"/>
+<rect x="806" y="476" width="207.71" height="17" rx="3" fill="url(#aws)"/>
+<text x="1005.71" y="489" text-anchor="end" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="12" font-weight="800" fill="#351006">407 MiB</text>
+<rect x="1038" y="454" width="88" height="28" rx="4" fill="#12212d"/>
+<text x="1082" y="472" text-anchor="middle" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="9" font-weight="800" fill="#f8fbfd">86.7% lower</text>
+<text x="624" y="531" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="14" font-weight="800" fill="#111820">cold-create</text>
+<rect x="806" y="512" width="222" height="17" rx="3" fill="#d9e2e7"/>
+<rect x="806" y="512" width="23.986" height="17" rx="3" fill="url(#shin)"/>
+<text x="835.986" y="525" text-anchor="start" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="12" font-weight="800" fill="#111820">47 MiB</text>
+<rect x="806" y="538" width="222" height="17" rx="3" fill="#d9e2e7"/>
+<rect x="806" y="538" width="111.255" height="17" rx="3" fill="url(#aws)"/>
+<text x="909.255" y="551" text-anchor="end" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="12" font-weight="800" fill="#351006">218 MiB</text>
+<rect x="1038" y="516" width="88" height="28" rx="4" fill="#12212d"/>
+<text x="1082" y="534" text-anchor="middle" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="9" font-weight="800" fill="#f8fbfd">78.4% lower</text>
+<text x="624" y="593" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="14" font-weight="800" fill="#111820">unchanged-update</text>
+<rect x="806" y="574" width="222" height="17" rx="3" fill="#d9e2e7"/>
+<rect x="806" y="574" width="18.372" height="17" rx="3" fill="url(#shin)"/>
+<text x="830.372" y="587" text-anchor="start" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="12" font-weight="800" fill="#111820">36 MiB</text>
+<rect x="806" y="600" width="222" height="17" rx="3" fill="#d9e2e7"/>
+<rect x="806" y="600" width="106.662" height="17" rx="3" fill="url(#aws)"/>
+<text x="904.662" y="613" text-anchor="end" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="12" font-weight="800" fill="#351006">209 MiB</text>
+<rect x="1038" y="578" width="88" height="28" rx="4" fill="#12212d"/>
+<text x="1082" y="596" text-anchor="middle" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="9" font-weight="800" fill="#f8fbfd">82.8% lower</text>
+<text x="624" y="655" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="14" font-weight="800" fill="#111820">changed-update</text>
+<rect x="806" y="636" width="222" height="17" rx="3" fill="#d9e2e7"/>
+<rect x="806" y="636" width="18.372" height="17" rx="3" fill="url(#shin)"/>
+<text x="830.372" y="649" text-anchor="start" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="12" font-weight="800" fill="#111820">36 MiB</text>
+<rect x="806" y="662" width="222" height="17" rx="3" fill="#d9e2e7"/>
+<rect x="806" y="662" width="108.193" height="17" rx="3" fill="url(#aws)"/>
+<text x="906.193" y="675" text-anchor="end" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="12" font-weight="800" fill="#351006">212 MiB</text>
+<rect x="1038" y="640" width="88" height="28" rx="4" fill="#12212d"/>
+<text x="1082" y="658" text-anchor="middle" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="9" font-weight="800" fill="#f8fbfd">83% lower</text>
+<text x="624" y="717" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="14" font-weight="800" fill="#111820">pruned-update</text>
+<rect x="806" y="698" width="222" height="17" rx="3" fill="#d9e2e7"/>
+<rect x="806" y="698" width="18.372" height="17" rx="3" fill="url(#shin)"/>
+<text x="830.372" y="711" text-anchor="start" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="12" font-weight="800" fill="#111820">36 MiB</text>
+<rect x="806" y="724" width="222" height="17" rx="3" fill="#d9e2e7"/>
+<rect x="806" y="724" width="105.641" height="17" rx="3" fill="url(#aws)"/>
+<text x="903.641" y="737" text-anchor="end" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="12" font-weight="800" fill="#351006">207 MiB</text>
+<rect x="1038" y="702" width="88" height="28" rx="4" fill="#12212d"/>
+<text x="1082" y="720" text-anchor="middle" font-family="Liberation Sans, Arial, Helvetica, sans-serif" font-size="9" font-weight="800" fill="#f8fbfd">82.6% lower</text>
+</svg>
