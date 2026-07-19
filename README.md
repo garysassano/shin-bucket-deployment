@@ -45,7 +45,7 @@ Migration usually starts with this import change:
 +import { ShinBucketDeployment, Source } from "shin-bucket-deployment";
 ```
 
-See the [full property mapping](#bucketdeployment-property-mapping) for supported replacements and unsupported options.
+See the [full property mapping](#bucketdeployment-property-mapping) for replaced and unsupported properties.
 
 ## Why Build This
 
