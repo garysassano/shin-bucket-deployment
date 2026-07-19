@@ -73,13 +73,9 @@ The official `BucketDeployment` is a good default for many stacks, but its provi
 
 ## Construct API
 
-The root props contain seven domain components. Configuration groups are plain values; they do not create additional CDK construct scopes or resources.
-
 ### Supported Properties
 
 Only `sources` and `destination` are required. Sources accept any upstream CDK `ISource`; Shin also provides `Source.asset`, `Source.bucket`, `Source.data`, `Source.jsonData`, and `Source.yamlData` helpers.
-
-The complete construct configuration shape is:
 
 ```ts
 interface ShinBucketDeploymentProps {
