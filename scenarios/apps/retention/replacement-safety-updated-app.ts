@@ -13,14 +13,18 @@ class ReplacementSafetyShinBucketDeploymentStack extends Stack {
 
     new ShinBucketDeployment(this, "DeployWebsite", {
       sources: [Source.data("runtime/replacement.txt", "phase=updated\n")],
-      destinationBucket: websiteBucket,
-      destinationKeyPrefix: "replacement-safe",
+      destination: {
+        bucket: websiteBucket,
+        keyPrefix: "replacement-safe",
+      },
       destinationLifecycle: {
         onDelete: {
           deleteCurrentObjects: true,
         },
       },
-      memoryLimit: 2048,
+      providerLambda: {
+        memorySize: 2048,
+      },
     });
 
     new CfnOutput(this, "BucketName", {

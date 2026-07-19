@@ -24,8 +24,10 @@ class KmsDestinationShinBucketDeploymentStack extends Stack {
         Source.asset("test/fixtures/my-website"),
         Source.data("runtime/kms.txt", "encrypted-by-bucket-default-kms-key\n"),
       ],
-      destinationBucket: websiteBucket,
-      destinationKeyPrefix: "kms-site",
+      destination: {
+        bucket: websiteBucket,
+        keyPrefix: "kms-site",
+      },
     });
 
     new CfnOutput(this, "BucketName", {

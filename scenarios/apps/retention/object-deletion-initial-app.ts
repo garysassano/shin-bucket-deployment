@@ -13,8 +13,10 @@ class ObjectDeletionShinBucketDeploymentStack extends Stack {
 
     new ShinBucketDeployment(this, "DeployWebsite", {
       sources: [Source.data("runtime/current.txt", "phase=initial\n")],
-      destinationBucket: websiteBucket,
-      destinationKeyPrefix: "cleanup",
+      destination: {
+        bucket: websiteBucket,
+        keyPrefix: "cleanup",
+      },
       destinationLifecycle: {
         onDelete: {
           deleteCurrentObjects: true,

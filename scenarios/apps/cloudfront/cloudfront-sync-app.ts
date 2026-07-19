@@ -67,8 +67,10 @@ class CloudFrontSyncShinBucketDeploymentStack extends Stack {
           { escape: true },
         ),
       ],
-      destinationBucket: websiteBucket,
-      destinationKeyPrefix: "site",
+      destination: {
+        bucket: websiteBucket,
+        keyPrefix: "site",
+      },
       cloudfrontInvalidation: {
         distribution,
         paths: ["/site/index.html", "/site/app.js", "/site/runtime/cache-probe.json"],

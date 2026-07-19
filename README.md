@@ -1,8 +1,8 @@
 # ShinBucketDeployment
 
-Rust-backed alternative to AWS CDK's official [`BucketDeployment`](https://docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.aws_s3_deployment.BucketDeployment.html) construct.
+Rust-backed AWS CDK construct for performance-sensitive S3 asset deployment.
 
-`ShinBucketDeployment` is a focused replacement for the common static-asset subset of `BucketDeployment`, intended for S3 deployment when you want a purpose-built Rust provider and fewer full-archive extraction costs than the upstream construct.
+`ShinBucketDeployment` is a focused alternative to AWS CDK's official [`BucketDeployment`](https://docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.aws_s3_deployment.BucketDeployment.html), intended for static assets when you want a purpose-built Rust provider and fewer full-archive extraction costs. It accepts upstream CDK `ISource` implementations while owning its configuration API directly.
 
 The published package ships prebuilt Rust provider binaries for both Lambda architectures (`arm64` and `x86_64`), so consumers do not need a Rust toolchain.
 
@@ -18,8 +18,6 @@ npm install shin-bucket-deployment
 
 ```ts
 import { Stack } from "aws-cdk-lib";
-import { Distribution } from "aws-cdk-lib/aws-cloudfront";
-import { S3BucketOrigin } from "aws-cdk-lib/aws-cloudfront-origins";
 import { Bucket } from "aws-cdk-lib/aws-s3";
 import { Construct } from "constructs";
 import { ShinBucketDeployment, Source } from "shin-bucket-deployment";
@@ -29,17 +27,10 @@ export class DemoStack extends Stack {
     super(scope, id);
 
     const bucket = new Bucket(this, "WebsiteBucket");
-    const distribution = new Distribution(this, "Distribution", {
-      defaultRootObject: "index.html",
-      defaultBehavior: {
-        origin: S3BucketOrigin.withOriginAccessControl(bucket),
-      },
-    });
 
     new ShinBucketDeployment(this, "DeployWebsite", {
       sources: [Source.asset("site")],
-      destinationBucket: bucket,
-      cloudfrontInvalidation: { distribution },
+      destination: { bucket },
     });
   }
 }
@@ -47,18 +38,18 @@ export class DemoStack extends Stack {
 
 ### Migrating from `BucketDeployment`
 
-Migration usually starts with this import change:
+Migration starts with the construct import and an intentional property mapping:
 
 ```diff
 -import { BucketDeployment, Source } from "aws-cdk-lib/aws-s3-deployment";
-+import { ShinBucketDeployment as BucketDeployment, Source } from "shin-bucket-deployment";
++import { ShinBucketDeployment, Source } from "shin-bucket-deployment";
 ```
 
-See [Construct Properties](#construct-properties) for required replacements and unsupported properties.
+Shin does not provide compatibility aliases for either `BucketDeployment` props or its former flat API. See the complete [Migration Guide](docs/migration.md) for mechanical mappings and before/after examples.
 
 ## Why Build This
 
-The official `BucketDeployment` is a good default for many stacks, but its provider is built around AWS CLI copy/sync orchestration. This construct keeps the familiar CDK surface while using a purpose-built Rust Lambda function for static asset deployment.
+The official `BucketDeployment` is a good default for many stacks, but its provider is built around AWS CLI copy/sync orchestration. Shin uses a purpose-built Rust Lambda function and a configuration model that exposes provider identity separately from request-scoped transfer controls.
 
 | Advantage                   | What changes                                                                                                                                                                                                                                                                                                                                                |
 | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -66,7 +57,7 @@ The official `BucketDeployment` is a good default for many stacks, but its provi
 | Direct AWS SDK operations   | S3 copy, upload, and delete work is executed through Rust SDK calls instead of the upstream provider's `aws s3 cp`, `aws s3 sync`, and `aws s3 rm` subprocesses.                                                                                                                                                                                               |
 | Archive-aware planning      | For extracted assets, the provider plans directly from the zip archive instead of extracting the whole archive to a working directory before syncing.                                                                                                                                                                                                       |
 | Invocation-wide memory cap  | Central-directory planning and every source archive share a source-memory budget capped at half the provider's actual Lambda memory by default; destination cleanup retains at most manifest metadata plus one S3 page.                                                                                                                                                  |
-| Bounded fail-fast transfers | Transfer concurrency is capped by `maxParallelTransfers`. The first observed failure or panic stops admission and drains outstanding work before cleanup or invalidation can continue.                                                                                                                                                                                                   |
+| Bounded fail-fast transfers | Transfer concurrency is capped by `transfer.maxParallelTransfers`. The first observed failure or panic stops admission and drains outstanding work before cleanup or invalidation can continue.                                                                                                                                                                                          |
 | Encryption-aware writes     | SSE-S3 destinations use the cheap single-part MD5/`ETag` path; KMS and DSSE destinations store full-object SHA-256 only where encrypted `ETag`s cannot prove content identity.                                                                                                                                                                                  |
 | Bounded marker replacement  | Marker-free entries stream directly. Marker entries use deterministic simultaneous replacement with one exact-length planning pass and a second retryable streaming pass only when upload is required; neither pass retains the complete entry or output.                                                                                                  |
 | Safer destination moves     | Opt-in cleanup deploys new content first, infers the previous prefix, and preserves overlapping current namespaces. See [Destination Lifecycle](#destination-lifecycle).                                                                                                                                                                                    |
@@ -82,22 +73,41 @@ The official `BucketDeployment` is a good default for many stacks, but its provi
 
 ## Construct Properties
 
-The construct follows the upstream `BucketDeployment` API where the behavior maps cleanly to the Rust provider.
+The root props contain seven domain components. Configuration groups are plain values; they do not create additional CDK construct scopes or resources.
 
 ### Supported Properties
 
-| Area                 | Supported                                                                                                                                      |
-| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| Sources              | `sources`, `Source.asset`, `Source.bucket`, `Source.data`, `Source.jsonData`, `Source.yamlData`, `embeddedCatalog`                             |
-| Destination          | `destinationBucket`, `destinationKeyPrefix`                                                                                                    |
-| Filtering            | `include`, `exclude`                                                                                                                           |
-| Deployment mode      | `extract`                                                                                                                                      |
-| Lifecycle            | `destinationLifecycle`                                                                                                                         |
-| CloudFront           | `cloudfrontInvalidation`                                                                                                                       |
-| Provider Lambda      | `architecture`, `failureDiagnostics`, `logGroup`, `memoryLimit`, `providerScope`, `role`, `securityGroups`, `vpc`, `vpcSubnets`              |
-| Provider build       | `localProviderBuild`                                                                                                                           |
-| Runtime tuning       | `maxParallelTransfers`, `advancedRuntimeTuning`                                                                                                |
-| Outputs and response | `deployedBucket`, `objectKeys`, `handlerRole`, `handlerFunction`                                                                               |
+| Component | Supported |
+| --- | --- |
+| `sources` | Ordered upstream `ISource` values plus Shin's `Source.asset`, `Source.bucket`, `Source.data`, `Source.jsonData`, and `Source.yamlData` helpers. |
+| `destination` | Required `bucket` and optional `keyPrefix`. |
+| `sourceProcessing` | `extract`, `include`, and `exclude`. Exclusions also constrain stale-object deletion. |
+| `providerLambda` | `sharing`, `architecture`, `memorySize`, `failureDiagnostics`, `role`, `logGroup`, `vpc`, `vpcSubnets`, `securityGroups`, and `localBuild`. |
+| `transfer` | `maxParallelTransfers` and experimental `advancedTuning`. These settings are request-scoped and do not split a compatible shared handler. |
+| `cloudfrontInvalidation` | `distribution`, `paths`, and `waitForCompletion`. |
+| `destinationLifecycle` | Explicit `onDeploy`, `onChange`, and `onDelete` destructive policy. |
+| Outputs | `deployedBucket`, `objectKeys`, `handlerRole`, and `handlerFunction`. |
+
+### Focused Advanced Example
+
+```ts
+import { ProviderScope, ShinBucketDeployment, Source } from "shin-bucket-deployment";
+
+new ShinBucketDeployment(this, "DeployWebsite", {
+  sources: [Source.asset("site")],
+  destination: {
+    bucket,
+    keyPrefix: "site",
+  },
+  providerLambda: {
+    sharing: ProviderScope.DEPLOYMENT,
+    memorySize: 2048,
+  },
+  transfer: {
+    maxParallelTransfers: 64,
+  },
+});
+```
 
 ### Replaced Properties
 
@@ -109,8 +119,8 @@ The construct follows the upstream `BucketDeployment` API where the behavior map
 | `distributionPaths` | `cloudfrontInvalidation.paths` |
 | `waitForDistributionInvalidation` | `cloudfrontInvalidation.waitForCompletion` |
 | `outputObjectKeys` | `objectKeys`; Shin returns the key list only when this property is accessed. |
-| `logRetention` | `logGroup` |
-| `serverSideEncryption`, `serverSideEncryptionAwsKmsKeyId` | Default encryption on `destinationBucket` |
+| `logRetention` | `providerLambda.logGroup` |
+| `serverSideEncryption`, `serverSideEncryptionAwsKmsKeyId` | Default encryption on `destination.bucket` |
 
 `retainOnDelete` has inverse polarity: upstream `false` maps to setting both deletion actions to `true`; Shin lets you configure them independently.
 
@@ -136,13 +146,13 @@ Most deployments should omit `destinationLifecycle`. By default, Shin removes st
 
 ### Destination Change
 
-`onChange` applies only when an update changes `destinationKeyPrefix`, `destinationBucket`, or `cloudfrontInvalidation.distribution` and you want to act on the previous location. Use the relevant table for each action and combine the settings when both are needed.
+`onChange` applies only when an update changes `destination.keyPrefix`, `destination.bucket`, or `cloudfrontInvalidation.distribution` and you want to act on the previous location. Use the relevant table for each action and combine the settings when both are needed.
 
 #### Object Cleanup
 
 Previous objects are retained by default. To delete them:
 
-| `destinationBucket` | `destinationKeyPrefix` | Object-cleanup configuration |
+| `destination.bucket` | `destination.keyPrefix` | Object-cleanup configuration |
 | --- | --- | --- |
 | Unchanged | Unchanged | None; there is no previous object location. |
 | Unchanged | Changed | Set `deletePreviousObjects: true`. Omit `previousBucket`; Shin uses the current bucket. |

@@ -19,8 +19,10 @@ class StaleObjectCleanupShinBucketDeploymentStack extends Stack {
           [`stack=${Aws.STACK_NAME}`, "phase=updated", "state=legacy-should-be-deleted"].join("\n"),
         ),
       ],
-      destinationBucket: websiteBucket,
-      destinationKeyPrefix: "stale-cleanup-site",
+      destination: {
+        bucket: websiteBucket,
+        keyPrefix: "stale-cleanup-site",
+      },
     });
 
     new CfnOutput(this, "BucketName", {

@@ -7,6 +7,7 @@ import { Bucket } from "aws-cdk-lib/aws-s3";
 import { describe, expect, test } from "vitest";
 import {
   DestinationWriteRetryJitter,
+  ProviderScope,
   ShinBucketDeployment,
   type ShinBucketDeploymentProps,
   Source,
@@ -39,9 +40,13 @@ describe("ShinBucketDeployment validation and option coverage", () => {
       () =>
         new ShinBucketDeployment(stack, "Deploy", {
           sources: [Source.data("index.html", "ok")],
-          destinationBucket,
-          providerScope: "shared" as never,
-          localProviderBuild: testLocalProviderBuild(),
+          destination: {
+            bucket: destinationBucket,
+          },
+          providerLambda: {
+            sharing: "shared" as never,
+            localBuild: testLocalProviderBuild(),
+          },
         }),
     ).toThrow(/ProviderScope\.STACK or ProviderScope\.DEPLOYMENT/);
   });
@@ -54,9 +59,13 @@ describe("ShinBucketDeployment validation and option coverage", () => {
       () =>
         new ShinBucketDeployment(stack, "Deploy", {
           sources: [Source.data("index.html", "ok")],
-          destinationBucket,
-          failureDiagnostics: "full" as never,
-          localProviderBuild: testLocalProviderBuild(),
+          destination: {
+            bucket: destinationBucket,
+          },
+          providerLambda: {
+            failureDiagnostics: "full" as never,
+            localBuild: testLocalProviderBuild(),
+          },
         }),
     ).toThrow(/FailureDiagnostics\.STANDARD or FailureDiagnostics\.DETAILED/);
   });
@@ -67,8 +76,12 @@ describe("ShinBucketDeployment validation and option coverage", () => {
 
     new ShinBucketDeployment(stack, "Deploy", {
       sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
-      destinationBucket,
-      localProviderBuild: testLocalProviderBuild(),
+      destination: {
+        bucket: destinationBucket,
+      },
+      providerLambda: {
+        localBuild: testLocalProviderBuild(),
+      },
     });
 
     const properties = customResourceProperties(stack);
@@ -94,9 +107,13 @@ describe("ShinBucketDeployment validation and option coverage", () => {
 
     new ShinBucketDeployment(stack, "Deploy", {
       sources: [Source.data("index.html", "ok")],
-      destinationBucket,
-      destinationKeyPrefix: "/",
-      localProviderBuild: testLocalProviderBuild(),
+      destination: {
+        bucket: destinationBucket,
+        keyPrefix: "/",
+      },
+      providerLambda: {
+        localBuild: testLocalProviderBuild(),
+      },
     });
 
     const properties = customResourceProperties(stack);
@@ -118,9 +135,13 @@ describe("ShinBucketDeployment validation and option coverage", () => {
 
     new ShinBucketDeployment(stack, "Deploy", {
       sources: [Source.data("index.html", "ok")],
-      destinationBucket,
-      destinationKeyPrefix: prefix,
-      localProviderBuild: testLocalProviderBuild(),
+      destination: {
+        bucket: destinationBucket,
+        keyPrefix: prefix,
+      },
+      providerLambda: {
+        localBuild: testLocalProviderBuild(),
+      },
     });
 
     const properties = customResourceProperties(stack);
@@ -141,14 +162,18 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     expect(() => {
       new ShinBucketDeployment(stack, "Deploy", {
         sources: [Source.data("index.html", "ok")],
-        destinationBucket,
-        destinationKeyPrefix: "a".repeat(103),
-        localProviderBuild: testLocalProviderBuild(),
+        destination: {
+          bucket: destinationBucket,
+          keyPrefix: "a".repeat(103),
+        },
+        providerLambda: {
+          localBuild: testLocalProviderBuild(),
+        },
       });
     }).toThrowError(
       expect.objectContaining({
         code: "ShinBucketDeploymentDestinationKeyPrefixTooLong",
-        message: "destinationKeyPrefix must be <=102 characters.",
+        message: "destination.keyPrefix must be <=102 characters.",
       }) as ValidationError,
     );
   });
@@ -161,15 +186,19 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     expect(() => {
       new ShinBucketDeployment(stack, "Deploy", {
         sources: [Source.data("index.html", "ok")],
-        destinationBucket,
-        destinationKeyPrefix: prefix,
-        localProviderBuild: testLocalProviderBuild(),
+        destination: {
+          bucket: destinationBucket,
+          keyPrefix: prefix,
+        },
+        providerLambda: {
+          localBuild: testLocalProviderBuild(),
+        },
       });
     }).toThrowError(
       expect.objectContaining({
         code: "ShinBucketDeploymentDestinationKeyPrefixUnresolved",
         message:
-          "destinationKeyPrefix must be a concrete string so destination ownership can be validated.",
+          "destination.keyPrefix must be a concrete string so destination ownership can be validated.",
       }) as ValidationError,
     );
     expect(stack.node.findAll().some((construct) => construct.node.id === "CustomResource")).toBe(
@@ -183,14 +212,18 @@ describe("ShinBucketDeployment validation and option coverage", () => {
 
     new ShinBucketDeployment(stack, "Deploy", {
       sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
-      destinationBucket,
-      destinationKeyPrefix: "new-site",
+      destination: {
+        bucket: destinationBucket,
+        keyPrefix: "new-site",
+      },
       destinationLifecycle: {
         onChange: {
           deletePreviousObjects: true,
         },
       },
-      localProviderBuild: testLocalProviderBuild(),
+      providerLambda: {
+        localBuild: testLocalProviderBuild(),
+      },
     });
 
     const previousDestinationAuthorization = customResourceProperties(stack)
@@ -248,8 +281,10 @@ describe("ShinBucketDeployment validation and option coverage", () => {
 
     new ShinBucketDeployment(stack, "Deploy", {
       sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
-      destinationBucket,
-      destinationKeyPrefix: "new-site",
+      destination: {
+        bucket: destinationBucket,
+        keyPrefix: "new-site",
+      },
       destinationLifecycle: {
         onDeploy: {
           deleteStaleObjects: false,
@@ -263,7 +298,9 @@ describe("ShinBucketDeployment validation and option coverage", () => {
           deleteCurrentObjects: true,
         },
       },
-      localProviderBuild: testLocalProviderBuild(),
+      providerLambda: {
+        localBuild: testLocalProviderBuild(),
+      },
     });
 
     const previousDestinationAuthorization = customResourceProperties(stack)
@@ -326,7 +363,9 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     expect(() => {
       new ShinBucketDeployment(stack, "Deploy", {
         sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
-        destinationBucket,
+        destination: {
+          bucket: destinationBucket,
+        },
         cloudfrontInvalidation: { paths: ["/index.html"] } as never,
       });
     }).toThrow(/cloudfrontInvalidation\.distribution is required/);
@@ -346,7 +385,9 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     expect(() => {
       new ShinBucketDeployment(stack, "Deploy", {
         sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
-        destinationBucket,
+        destination: {
+          bucket: destinationBucket,
+        },
         cloudfrontInvalidation: {
           distribution,
           paths: ["index.html"],
@@ -369,7 +410,7 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     ["websiteRedirectLocation", "/index.html", /does not support websiteRedirectLocation/],
     ["useEfs", true, /does not support useEfs/],
     ["signContent", true, /does not support signContent/],
-    ["logRetention", 7, /legacy logRetention prop/],
+    ["logRetention", 7, /providerLambda\.logGroup/],
     ["ephemeralStorageSize", {}, /does not support ephemeralStorageSize/],
     [
       "serverSideEncryptionCustomerAlgorithm",
@@ -381,10 +422,10 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     ["retainOnDelete", false, /destinationLifecycle\.onChange\.deletePreviousObjects/],
     ["distributionPaths", ["/*"], /cloudfrontInvalidation/],
     ["outputObjectKeys", false, /objectKeys property is accessed/],
-    ["shareHandler", false, /ProviderScope/],
-    ["detailedFailureDiagnostics", true, /FailureDiagnostics/],
-    ["rustProjectPath", "/tmp/rust", /localProviderBuild/],
-    ["bundling", {}, /localProviderBuild/],
+    ["shareHandler", false, /providerLambda\.sharing/],
+    ["detailedFailureDiagnostics", true, /providerLambda\.failureDiagnostics/],
+    ["rustProjectPath", "/tmp/rust", /providerLambda\.localBuild/],
+    ["bundling", {}, /providerLambda\.localBuild/],
   ] as const)("rejects unsupported prop %s", (propName, value, pattern) => {
     const stack = new Stack();
     const destinationBucket = new Bucket(stack, "Dest");
@@ -392,26 +433,179 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     expect(() => {
       new ShinBucketDeployment(stack, "Deploy", {
         sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
-        destinationBucket,
+        destination: {
+          bucket: destinationBucket,
+        },
         [propName]: value,
       } as never);
     }).toThrow(pattern);
   });
 
-  test("rejects replaced advanced runtime tuning names", () => {
+  test.each([
+    ["destinationBucket", "destination.bucket"],
+    ["destinationKeyPrefix", "destination.keyPrefix"],
+    ["extract", "sourceProcessing.extract"],
+    ["include", "sourceProcessing.include"],
+    ["exclude", "sourceProcessing.exclude"],
+    ["providerScope", "providerLambda.sharing"],
+    ["architecture", "providerLambda.architecture"],
+    ["memoryLimit", "providerLambda.memorySize"],
+    ["failureDiagnostics", "providerLambda.failureDiagnostics"],
+    ["role", "providerLambda.role"],
+    ["logGroup", "providerLambda.logGroup"],
+    ["vpc", "providerLambda.vpc"],
+    ["vpcSubnets", "providerLambda.vpcSubnets"],
+    ["securityGroups", "providerLambda.securityGroups"],
+    ["localProviderBuild", "providerLambda.localBuild"],
+    ["maxParallelTransfers", "transfer.maxParallelTransfers"],
+    ["advancedRuntimeTuning", "transfer.advancedTuning"],
+  ] as const)("rejects former root property %s with exact migration guidance", (former, next) => {
+    const stack = new Stack();
+    const destinationBucket = new Bucket(stack, "Dest");
+
+    expect(() => {
+      new ShinBucketDeployment(stack, "Deploy", {
+        sources: [Source.data("index.html", "ok")],
+        destination: { bucket: destinationBucket },
+        [former]: undefined,
+      } as never);
+    }).toThrow(new RegExp(`${former} has moved to ${next.replaceAll(".", "\\.")}\\.`));
+    expect(
+      stack.node
+        .findAll()
+        .some((construct) => construct.node.id.startsWith("ShinBucketDeploymentHandler")),
+    ).toBe(false);
+  });
+
+  test("rejects malformed required objects before provider creation", () => {
+    const stack = new Stack();
+    const destinationBucket = new Bucket(stack, "Dest");
+    const invalidInputs: ReadonlyArray<readonly [unknown, RegExp]> = [
+      [undefined, /props must be an object/],
+      [{ destination: { bucket: destinationBucket } }, /sources must be an array/],
+      [{ sources: {}, destination: { bucket: destinationBucket } }, /sources must be an array/],
+      [{ sources: [] }, /destination must be an object/],
+      [{ sources: [], destination: null }, /destination must be an object/],
+      [{ sources: [], destination: [] }, /destination must be an object/],
+      [{ sources: [], destination: {} }, /destination\.bucket is required/],
+    ];
+
+    for (const [index, [input, expected]] of invalidInputs.entries()) {
+      expect(() => {
+        new ShinBucketDeployment(stack, `Invalid${index}`, input as never);
+      }).toThrow(expected);
+    }
+    expect(
+      stack.node
+        .findAll()
+        .some((construct) => construct.node.id.startsWith("ShinBucketDeploymentHandler")),
+    ).toBe(false);
+  });
+
+  test("rejects unknown keys in every configuration group", () => {
+    const stack = new Stack();
+    const destinationBucket = new Bucket(stack, "Dest");
+    const invalidGroups: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
+      ["props.sorces", { sorces: [] }],
+      [
+        "destination.keyPreffix",
+        { destination: { bucket: destinationBucket, keyPreffix: "site" } },
+      ],
+      ["sourceProcessing.extrcat", { sourceProcessing: { extrcat: true } }],
+      ["providerLambda.memmorySize", { providerLambda: { memmorySize: 2048 } }],
+      [
+        "providerLambda.localBuild.projectPat",
+        { providerLambda: { localBuild: { projectPat: "/tmp/rust" } } },
+      ],
+      [
+        "providerLambda.localBuild.bundling.profille",
+        { providerLambda: { localBuild: { bundling: { profille: "release" } } } },
+      ],
+      [
+        "providerLambda.localBuild.bundling.dockerOptions.netwrok",
+        {
+          providerLambda: {
+            localBuild: { bundling: { dockerOptions: { netwrok: "host" } } },
+          },
+        },
+      ],
+      [
+        "providerLambda.localBuild.bundling.commandHooks.beforeBundle",
+        {
+          providerLambda: {
+            localBuild: { bundling: { commandHooks: { beforeBundle: () => [] } } },
+          },
+        },
+      ],
+      ["transfer.maxParallelTransfer", { transfer: { maxParallelTransfer: 4 } }],
+      [
+        "transfer.advancedTuning.sourceBlockByte",
+        { transfer: { advancedTuning: { sourceBlockByte: 1024 } } },
+      ],
+      [
+        "transfer.advancedTuning.destinationWriteRetry.maxAttempt",
+        {
+          transfer: { advancedTuning: { destinationWriteRetry: { maxAttempt: 4 } } },
+        },
+      ],
+      ["cloudfrontInvalidation.pathz", { cloudfrontInvalidation: { pathz: ["/*"] } }],
+      ["destinationLifecycle.onDeply", { destinationLifecycle: { onDeply: {} } }],
+      [
+        "destinationLifecycle.onDeploy.deleteStaleObject",
+        { destinationLifecycle: { onDeploy: { deleteStaleObject: false } } },
+      ],
+      [
+        "destinationLifecycle.onChange.previousBukket",
+        { destinationLifecycle: { onChange: { previousBukket: destinationBucket } } },
+      ],
+      [
+        "destinationLifecycle.onDelete.deleteCurrentObject",
+        { destinationLifecycle: { onDelete: { deleteCurrentObject: true } } },
+      ],
+    ];
+
+    for (const [index, [path, invalid]] of invalidGroups.entries()) {
+      expect(() => {
+        new ShinBucketDeployment(stack, `Unknown${index}`, {
+          sources: [Source.data("index.html", "ok")],
+          destination: { bucket: destinationBucket },
+          ...invalid,
+        } as never);
+      }).toThrow(
+        new RegExp(`Unknown ShinBucketDeployment property ${path.replaceAll(".", "\\.")}`),
+      );
+    }
+  });
+
+  test.each([
+    [
+      "providerLambda.scope",
+      { providerLambda: { scope: ProviderScope.STACK } },
+      /providerLambda\.sharing/,
+    ],
+    [
+      "transfer.advancedTuning.putObjectRetry",
+      { transfer: { advancedTuning: { putObjectRetry: { maxAttempts: 4 } } } },
+      /destinationWriteRetry/,
+    ],
+    [
+      "transfer.advancedTuning.sourceWindowMemoryBudgetMb",
+      { transfer: { advancedTuning: { sourceWindowMemoryBudgetMb: 256 } } },
+      /sourceWindowMemoryBudgetMiB/,
+    ],
+  ] as const)("rejects replaced nested property %s", (_path, invalid, expected) => {
     const stack = new Stack();
     const destinationBucket = new Bucket(stack, "Dest");
 
     expect(() => {
       new ShinBucketDeployment(stack, "Deploy", {
         sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
-        destinationBucket,
-        advancedRuntimeTuning: {
-          sourceWindowMemoryBudgetMb: 256,
-          putObjectRetry: { maxAttempts: 4 },
+        destination: {
+          bucket: destinationBucket,
         },
+        ...invalid,
       } as never);
-    }).toThrow(/destinationWriteRetry and sourceWindowMemoryBudgetMiB/);
+    }).toThrow(expected);
   });
 
   test("rejects the obsolete flat destination lifecycle shape", () => {
@@ -421,30 +615,38 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     expect(() => {
       new ShinBucketDeployment(stack, "Deploy", {
         sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
-        destinationBucket,
+        destination: {
+          bucket: destinationBucket,
+        },
         destinationLifecycle: {
           deleteDestinationObjectsOnDelete: true,
         },
       } as never);
-    }).toThrow(/onChange\.deletePreviousObjects/);
+    }).toThrow(/onDelete\.deleteCurrentObjects/);
   });
 
   test.each([
-    ["onChange.deleteObjects", { onChange: { deleteObjects: true } }],
-    ["onChange.fromBucket", { onChange: { fromBucket: true } }],
-    ["onChange.invalidateDistribution", { onChange: { invalidateDistribution: true } }],
-    ["onDelete.deleteObjects", { onDelete: { deleteObjects: true } }],
-  ] as const)("rejects ambiguous destination lifecycle name %s", (_name, lifecycle) => {
+    ["onChange.deleteObjects", { onChange: { deleteObjects: true } }, /deletePreviousObjects/],
+    ["onChange.fromBucket", { onChange: { fromBucket: true } }, /previousBucket/],
+    [
+      "onChange.invalidateDistribution",
+      { onChange: { invalidateDistribution: true } },
+      /invalidatePreviousDistribution/,
+    ],
+    ["onDelete.deleteObjects", { onDelete: { deleteObjects: true } }, /deleteCurrentObjects/],
+  ] as const)("rejects ambiguous destination lifecycle name %s", (_name, lifecycle, expected) => {
     const stack = new Stack();
     const destinationBucket = new Bucket(stack, "Dest");
 
     expect(() => {
       new ShinBucketDeployment(stack, "Deploy", {
         sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
-        destinationBucket,
+        destination: {
+          bucket: destinationBucket,
+        },
         destinationLifecycle: lifecycle,
       } as never);
-    }).toThrow(/onChange\.deletePreviousObjects/);
+    }).toThrow(expected);
   });
 
   test("rejects previousBucket without deletePreviousObjects", () => {
@@ -455,7 +657,9 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     expect(() => {
       new ShinBucketDeployment(stack, "Deploy", {
         sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
-        destinationBucket,
+        destination: {
+          bucket: destinationBucket,
+        },
         destinationLifecycle: {
           onChange: {
             previousBucket,
@@ -472,9 +676,15 @@ describe("ShinBucketDeployment validation and option coverage", () => {
 
     new ShinBucketDeployment(stack, "Deploy", {
       sources: [Source.data("runtime/plain.txt", `region=${Aws.REGION}`)],
-      destinationBucket,
-      extract: false,
-      localProviderBuild: testLocalProviderBuild(),
+      destination: {
+        bucket: destinationBucket,
+      },
+      sourceProcessing: {
+        extract: false,
+      },
+      providerLambda: {
+        localBuild: testLocalProviderBuild(),
+      },
     });
 
     expect(() => app.synth()).toThrow(/marker replacement requires extraction/);
@@ -493,13 +703,17 @@ describe("ShinBucketDeployment validation and option coverage", () => {
 
     new ShinBucketDeployment(stack, "Deploy", {
       sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
-      destinationBucket,
+      destination: {
+        bucket: destinationBucket,
+      },
       cloudfrontInvalidation: {
         distribution,
         paths: ["/site/index.html", "/site/app.js"],
         waitForCompletion: false,
       },
-      localProviderBuild: testLocalProviderBuild(),
+      providerLambda: {
+        localBuild: testLocalProviderBuild(),
+      },
     });
 
     const template = Template.fromStack(stack);
@@ -532,8 +746,12 @@ describe("ShinBucketDeployment validation and option coverage", () => {
 
     new ShinBucketDeployment(stack, "Deploy", {
       sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
-      destinationBucket,
-      localProviderBuild: testLocalProviderBuild(),
+      destination: {
+        bucket: destinationBucket,
+      },
+      providerLambda: {
+        localBuild: testLocalProviderBuild(),
+      },
     });
 
     expect(customResourceProperties(stack).OutputObjectKeys).toBe(false);
@@ -545,8 +763,12 @@ describe("ShinBucketDeployment validation and option coverage", () => {
 
     const deployment = new ShinBucketDeployment(stack, "Deploy", {
       sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
-      destinationBucket,
-      localProviderBuild: testLocalProviderBuild(),
+      destination: {
+        bucket: destinationBucket,
+      },
+      providerLambda: {
+        localBuild: testLocalProviderBuild(),
+      },
     });
 
     void deployment.objectKeys;
@@ -560,25 +782,31 @@ describe("ShinBucketDeployment validation and option coverage", () => {
 
     new ShinBucketDeployment(stack, "Deploy", {
       sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
-      destinationBucket,
-      memoryLimit: 1024,
-      maxParallelTransfers: 7,
-      advancedRuntimeTuning: {
-        sourceBlockBytes: 4 * 1024 * 1024,
-        sourceBlockMergeGapBytes: 64 * 1024,
-        sourceGetConcurrency: 3,
-        sourceWindowBytes: 32 * 1024 * 1024,
-        sourceWindowMemoryBudgetMiB: 512,
-        destinationWriteRetry: {
-          maxAttempts: 4,
-          baseDelayMs: 100,
-          maxDelayMs: 1_000,
-          slowdownBaseDelayMs: 2_000,
-          slowdownMaxDelayMs: 20_000,
-          jitter: DestinationWriteRetryJitter.NONE,
+      destination: {
+        bucket: destinationBucket,
+      },
+      providerLambda: {
+        memorySize: 1024,
+        localBuild: testLocalProviderBuild(),
+      },
+      transfer: {
+        maxParallelTransfers: 7,
+        advancedTuning: {
+          sourceBlockBytes: 4 * 1024 * 1024,
+          sourceBlockMergeGapBytes: 64 * 1024,
+          sourceGetConcurrency: 3,
+          sourceWindowBytes: 32 * 1024 * 1024,
+          sourceWindowMemoryBudgetMiB: 512,
+          destinationWriteRetry: {
+            maxAttempts: 4,
+            baseDelayMs: 100,
+            maxDelayMs: 1_000,
+            slowdownBaseDelayMs: 2_000,
+            slowdownMaxDelayMs: 20_000,
+            jitter: DestinationWriteRetryJitter.NONE,
+          },
         },
       },
-      localProviderBuild: testLocalProviderBuild(),
     });
 
     expect(customResourceProperties(stack)).toMatchObject({
@@ -605,12 +833,18 @@ describe("ShinBucketDeployment validation and option coverage", () => {
 
     new ShinBucketDeployment(stack, "Deploy", {
       sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
-      destinationBucket,
-      memoryLimit: memory.valueAsNumber,
-      advancedRuntimeTuning: {
-        sourceBlockBytes: block.valueAsNumber,
+      destination: {
+        bucket: destinationBucket,
       },
-      localProviderBuild: testLocalProviderBuild(),
+      providerLambda: {
+        memorySize: memory.valueAsNumber,
+        localBuild: testLocalProviderBuild(),
+      },
+      transfer: {
+        advancedTuning: {
+          sourceBlockBytes: block.valueAsNumber,
+        },
+      },
     });
 
     expect(customResourceProperties(stack).SourceBlockBytes).toEqual({ Ref: "Block" });
@@ -623,9 +857,13 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     expect(() => {
       new ShinBucketDeployment(stack, "Deploy", {
         sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
-        destinationBucket,
-        advancedRuntimeTuning: {
-          sourceGetConcurrency: 0,
+        destination: {
+          bucket: destinationBucket,
+        },
+        transfer: {
+          advancedTuning: {
+            sourceGetConcurrency: 0,
+          },
         },
       });
     }).toThrow(/sourceGetConcurrency/);
@@ -633,11 +871,15 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     expect(() => {
       new ShinBucketDeployment(stack, "BadRetryDelay", {
         sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
-        destinationBucket,
-        advancedRuntimeTuning: {
-          destinationWriteRetry: {
-            baseDelayMs: 2_000,
-            maxDelayMs: 1_000,
+        destination: {
+          bucket: destinationBucket,
+        },
+        transfer: {
+          advancedTuning: {
+            destinationWriteRetry: {
+              baseDelayMs: 2_000,
+              maxDelayMs: 1_000,
+            },
           },
         },
       });
@@ -646,11 +888,15 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     expect(() => {
       new ShinBucketDeployment(stack, "BadSlowdownRetryDelay", {
         sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
-        destinationBucket,
-        advancedRuntimeTuning: {
-          destinationWriteRetry: {
-            slowdownBaseDelayMs: 2_000,
-            slowdownMaxDelayMs: 1_000,
+        destination: {
+          bucket: destinationBucket,
+        },
+        transfer: {
+          advancedTuning: {
+            destinationWriteRetry: {
+              slowdownBaseDelayMs: 2_000,
+              slowdownMaxDelayMs: 1_000,
+            },
           },
         },
       });
@@ -659,10 +905,14 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     expect(() => {
       new ShinBucketDeployment(stack, "BadRetryJitter", {
         sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
-        destinationBucket,
-        advancedRuntimeTuning: {
-          destinationWriteRetry: {
-            jitter: "equal" as never,
+        destination: {
+          bucket: destinationBucket,
+        },
+        transfer: {
+          advancedTuning: {
+            destinationWriteRetry: {
+              jitter: "equal" as never,
+            },
           },
         },
       });
@@ -671,9 +921,13 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     expect(() => {
       new ShinBucketDeployment(stack, "SmallSourceBlock", {
         sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
-        destinationBucket,
-        advancedRuntimeTuning: {
-          sourceBlockBytes: 29,
+        destination: {
+          bucket: destinationBucket,
+        },
+        transfer: {
+          advancedTuning: {
+            sourceBlockBytes: 29,
+          },
         },
       });
     }).toThrow(/sourceBlockBytes must be a safe integer.*30/);
@@ -685,51 +939,63 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     }> = [
       {
         id: "TooManyTransfers",
-        props: { maxParallelTransfers: 257 },
+        props: { transfer: { maxParallelTransfers: 257 } },
         message: /maxParallelTransfers.*256/,
       },
       {
         id: "TooManySourceGets",
-        props: { advancedRuntimeTuning: { sourceGetConcurrency: 65 } },
+        props: { transfer: { advancedTuning: { sourceGetConcurrency: 65 } } },
         message: /sourceGetConcurrency.*64/,
       },
       {
         id: "TooManyDestinationWriteAttempts",
-        props: { advancedRuntimeTuning: { destinationWriteRetry: { maxAttempts: 11 } } },
+        props: {
+          transfer: { advancedTuning: { destinationWriteRetry: { maxAttempts: 11 } } },
+        },
         message: /maxAttempts.*10/,
       },
       {
         id: "LongRetryDelay",
-        props: { advancedRuntimeTuning: { destinationWriteRetry: { maxDelayMs: 60_001 } } },
+        props: {
+          transfer: {
+            advancedTuning: { destinationWriteRetry: { maxDelayMs: 60_001 } },
+          },
+        },
         message: /maxDelayMs.*60000/,
       },
       {
         id: "BudgetAboveHalf",
         props: {
-          memoryLimit: 1024,
-          advancedRuntimeTuning: { sourceWindowMemoryBudgetMiB: 513 },
+          providerLambda: { memorySize: 1024 },
+          transfer: { advancedTuning: { sourceWindowMemoryBudgetMiB: 513 } },
         },
         message: /must not exceed 50%/,
       },
       {
         id: "WindowBelowBlock",
-        props: { advancedRuntimeTuning: { sourceWindowBytes: 4 * 1024 * 1024 } },
-        message: /sourceWindowBytes must be greater than or equal to sourceBlockBytes/,
+        props: {
+          transfer: { advancedTuning: { sourceWindowBytes: 4 * 1024 * 1024 } },
+        },
+        message: /sourceWindowBytes must be greater than or equal to .*sourceBlockBytes/,
       },
       {
         id: "ConcurrentBlocksAboveBudget",
         props: {
-          advancedRuntimeTuning: {
-            sourceBlockBytes: 128 * 1024 * 1024,
-            sourceGetConcurrency: 5,
+          transfer: {
+            advancedTuning: {
+              sourceBlockBytes: 128 * 1024 * 1024,
+              sourceGetConcurrency: 5,
+            },
           },
         },
-        message: /sourceBlockBytes \* sourceGetConcurrency/,
+        message: /sourceBlockBytes \* .*sourceGetConcurrency/,
       },
       {
         id: "UnsafeInteger",
         props: {
-          advancedRuntimeTuning: { sourceBlockMergeGapBytes: Number.MAX_SAFE_INTEGER + 1 },
+          transfer: {
+            advancedTuning: { sourceBlockMergeGapBytes: Number.MAX_SAFE_INTEGER + 1 },
+          },
         },
         message: /sourceBlockMergeGapBytes must be a safe integer/,
       },
@@ -739,7 +1005,9 @@ describe("ShinBucketDeployment validation and option coverage", () => {
       expect(() => {
         new ShinBucketDeployment(stack, invalid.id, {
           sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
-          destinationBucket,
+          destination: {
+            bucket: destinationBucket,
+          },
           ...invalid.props,
         });
       }).toThrow(invalid.message);
@@ -751,8 +1019,12 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     const destinationBucket = new Bucket(stack, "Dest");
     const deployment = new ShinBucketDeployment(stack, "Deploy", {
       sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
-      destinationBucket,
-      localProviderBuild: testLocalProviderBuild(),
+      destination: {
+        bucket: destinationBucket,
+      },
+      providerLambda: {
+        localBuild: testLocalProviderBuild(),
+      },
     });
 
     void deployment.deployedBucket.bucketArn;

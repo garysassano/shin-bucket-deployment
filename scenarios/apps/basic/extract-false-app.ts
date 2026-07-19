@@ -13,9 +13,13 @@ class ExtractFalseShinBucketDeploymentStack extends Stack {
 
     const deployment = new ShinBucketDeployment(this, "DeployArchive", {
       sources: [Source.asset("test/fixtures/my-website")],
-      destinationBucket: websiteBucket,
-      destinationKeyPrefix: "archive",
-      extract: false,
+      destination: {
+        bucket: websiteBucket,
+        keyPrefix: "archive",
+      },
+      sourceProcessing: {
+        extract: false,
+      },
     });
 
     new CfnOutput(this, "BucketName", {

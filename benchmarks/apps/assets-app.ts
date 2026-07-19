@@ -79,7 +79,7 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
       removalPolicy: RemovalPolicy.DESTROY,
     });
 
-    const deploymentProps = {
+    const upstreamDeploymentProps = {
       destinationBucket: websiteBucket,
       destinationKeyPrefix: destinationPrefix,
       memoryLimit: memoryLimitMb,
@@ -89,10 +89,17 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
     let deployment: Construct;
     if (implementation === "shin") {
       deployment = new ShinBucketDeployment(this, "DeployBenchmarkAssets", {
-        ...deploymentProps,
-        failureDiagnostics: detailedFailureDiagnostics
-          ? FailureDiagnostics.DETAILED
-          : FailureDiagnostics.STANDARD,
+        destination: {
+          bucket: websiteBucket,
+          keyPrefix: destinationPrefix,
+        },
+        providerLambda: {
+          memorySize: memoryLimitMb,
+          logGroup: providerLogGroup,
+          failureDiagnostics: detailedFailureDiagnostics
+            ? FailureDiagnostics.DETAILED
+            : FailureDiagnostics.STANDARD,
+        },
         destinationLifecycle: {
           onDeploy: {
             deleteStaleObjects,
@@ -105,10 +112,16 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
                 },
               }),
         },
-        ...(maxParallelTransfers === undefined ? {} : { maxParallelTransfers }),
-        ...(sourceWindowBytes === undefined
+        ...(maxParallelTransfers === undefined && sourceWindowBytes === undefined
           ? {}
-          : { advancedRuntimeTuning: { sourceWindowBytes } }),
+          : {
+              transfer: {
+                ...(maxParallelTransfers === undefined ? {} : { maxParallelTransfers }),
+                ...(sourceWindowBytes === undefined
+                  ? {}
+                  : { advancedTuning: { sourceWindowBytes } }),
+              },
+            }),
         sources: [
           ...bundle.sourceRoots.map((root) => ShinSource.asset(root)),
           ...(markerPayload === undefined
@@ -118,7 +131,7 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
       });
     } else {
       deployment = new AwsBucketDeployment(this, "DeployBenchmarkAssets", {
-        ...deploymentProps,
+        ...upstreamDeploymentProps,
         waitForDistributionInvalidation: process.env.SHIN_BENCH_WAIT_FOR_CLOUDFRONT === "true",
         prune: deleteStaleObjects,
         ...(deleteCurrentObjectsOnDelete === undefined

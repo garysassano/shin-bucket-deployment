@@ -22,8 +22,10 @@ class StaleObjectRetentionShinBucketDeploymentStack extends Stack {
         ),
         Source.data("runtime/retained-stale.txt", "this remains after the updated phase\n"),
       ],
-      destinationBucket: websiteBucket,
-      destinationKeyPrefix: "stale-retention-site",
+      destination: {
+        bucket: websiteBucket,
+        keyPrefix: "stale-retention-site",
+      },
       destinationLifecycle: {
         onDeploy: {
           deleteStaleObjects: false,

@@ -22,13 +22,17 @@ class ExternalZipsShinBucketDeploymentStack extends Stack {
 
     new ShinBucketDeployment(this, "DeployInfoZip", {
       sources: [Source.bucket(infoZip.bucket, infoZip.s3ObjectKey)],
-      destinationBucket: websiteBucket,
-      destinationKeyPrefix: "external/info-zip",
+      destination: {
+        bucket: websiteBucket,
+        keyPrefix: "external/info-zip",
+      },
     });
     new ShinBucketDeployment(this, "DeployPythonForceZip64", {
       sources: [Source.bucket(forceZip64.bucket, forceZip64.s3ObjectKey)],
-      destinationBucket: websiteBucket,
-      destinationKeyPrefix: "external/python-force-zip64",
+      destination: {
+        bucket: websiteBucket,
+        keyPrefix: "external/python-force-zip64",
+      },
     });
 
     new CfnOutput(this, "BucketName", {

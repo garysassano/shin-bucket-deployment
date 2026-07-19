@@ -16,7 +16,9 @@ class RootPrefixShinBucketDeploymentStack extends Stack {
         Source.asset("test/fixtures/my-website"),
         Source.data("runtime/root-prefix.txt", "deployed-without-destination-prefix\n"),
       ],
-      destinationBucket: websiteBucket,
+      destination: {
+        bucket: websiteBucket,
+      },
     });
 
     new CfnOutput(this, "BucketName", {

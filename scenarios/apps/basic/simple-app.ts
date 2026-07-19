@@ -13,8 +13,10 @@ class SimpleShinBucketDeploymentStack extends Stack {
 
     const deployment = new ShinBucketDeployment(this, "DeployWebsite", {
       sources: [Source.asset("test/fixtures/my-website")],
-      destinationBucket: websiteBucket,
-      destinationKeyPrefix: "site",
+      destination: {
+        bucket: websiteBucket,
+        keyPrefix: "site",
+      },
     });
 
     new CfnOutput(this, "BucketName", {

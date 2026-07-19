@@ -4,7 +4,11 @@ This document is the source of truth for the current `ShinBucketDeployment` prov
 
 ## Runtime Shape
 
-`ShinBucketDeployment` is a Rust-backed CDK custom resource for S3 static asset deployment. It keeps the familiar `BucketDeployment`-style construct API while replacing the upstream AWS CLI sync path with direct AWS SDK operations.
+`ShinBucketDeployment` is a Rust-backed CDK custom resource for S3 static asset deployment. It accepts upstream CDK `ISource` implementations while using a Shin-owned grouped configuration API and direct AWS SDK operations instead of the upstream AWS CLI sync path.
+
+The public configuration has seven root components: `sources`, `destination`, `sourceProcessing`, `providerLambda`, `transfer`, `cloudfrontInvalidation`, and `destinationLifecycle`. These groups are plain configuration values. They do not create constructs, scopes, child IDs, Lambda functions, or protocol objects.
+
+`providerLambda` is the resource-identity boundary. Its architecture, memory, diagnostics, role, log group, networking, security groups, and build identity configure or select the backing Lambda. `providerLambda.sharing` chooses compatible stack sharing or deployment isolation. `transfer` is request-scoped: concurrency, source-window tuning, and destination-write retry values are serialized on each custom resource and may differ between deployments sharing one compatible handler.
 
 The provider Lambda:
 
@@ -23,22 +27,22 @@ Runtime tuning defaults:
 
 | Setting | Default | Purpose |
 | --- | ---: | --- |
-| `maxParallelTransfers` | 32 | Bounds the continuously drained set of copy, hash, upload, and related logical object tasks; valid range 1–256. |
-| `memoryLimit` | 1024 MiB | Sizes the Lambda. The provider reads the actual value from the Lambda runtime environment. |
+| `transfer.maxParallelTransfers` | 32 | Bounds the continuously drained set of copy, hash, upload, and related logical object tasks; valid range 1–256. |
+| `providerLambda.memorySize` | 1024 MiB | Sizes the Lambda. The provider reads the actual value from the Lambda runtime environment. |
 
-Most deployments should tune only `memoryLimit` and, when needed, `maxParallelTransfers`. The experimental `advancedRuntimeTuning` object keeps source block/window and destination-write retry settings available as support and benchmark escape hatches:
+Most deployments should tune only `providerLambda.memorySize` and, when needed, `transfer.maxParallelTransfers`. The experimental `transfer.advancedTuning` object keeps source block/window and destination-write retry settings available as support and benchmark escape hatches:
 
 | Advanced setting | Default | Purpose |
 | --- | ---: | --- |
-| `advancedRuntimeTuning.sourceBlockBytes` | 8 MiB | Source range block size for ZIP entry reads. Valid range 30 bytes through JavaScript's maximum safe integer; it must fit the global budget. |
-| `advancedRuntimeTuning.sourceBlockMergeGapBytes` | 256 KiB | Maximum gap for coalescing adjacent source spans. Valid range 0 through JavaScript's maximum safe integer. |
-| `advancedRuntimeTuning.sourceGetConcurrency` | derived from actual Lambda memory, 1 to 8 | Maximum concurrent source ranged `GetObject` block fetches per archive; explicit valid range 1–64. Block size times concurrency must fit the global budget. |
-| `advancedRuntimeTuning.sourceWindowBytes` | derived from the global budget and ZIP file count | Per-archive source block window. It must be at least one block and no greater than the invocation-global budget. |
-| `advancedRuntimeTuning.sourceWindowMemoryBudgetMiB` | 50% of actual Lambda memory | Optional lower invocation-global source block budget. It cannot raise the 50% cap. |
-| `advancedRuntimeTuning.destinationWriteRetry.maxAttempts` | 6 | Maximum provider-owned `PutObject` or `CopyObject` attempts; valid range 1–10. |
-| `advancedRuntimeTuning.destinationWriteRetry.baseDelayMs` / `maxDelayMs` | 250 / 5000 | Non-throttling destination-write retry delays; each is 0–60000 ms and base cannot exceed max. |
-| `advancedRuntimeTuning.destinationWriteRetry.slowdownBaseDelayMs` / `slowdownMaxDelayMs` | 1000 / 30000 | Throttling destination-write retry delays; each is 0–60000 ms and base cannot exceed max. |
-| `advancedRuntimeTuning.destinationWriteRetry.jitter` | `full` | Jitter mode for computed destination-write retry delays; `none` is also supported. |
+| `transfer.advancedTuning.sourceBlockBytes` | 8 MiB | Source range block size for ZIP entry reads. Valid range 30 bytes through JavaScript's maximum safe integer; it must fit the global budget. |
+| `transfer.advancedTuning.sourceBlockMergeGapBytes` | 256 KiB | Maximum gap for coalescing adjacent source spans. Valid range 0 through JavaScript's maximum safe integer. |
+| `transfer.advancedTuning.sourceGetConcurrency` | derived from actual Lambda memory, 1 to 8 | Maximum concurrent source ranged `GetObject` block fetches per archive; explicit valid range 1–64. Block size times concurrency must fit the global budget. |
+| `transfer.advancedTuning.sourceWindowBytes` | derived from the global budget and ZIP file count | Per-archive source block window. It must be at least one block and no greater than the invocation-global budget. |
+| `transfer.advancedTuning.sourceWindowMemoryBudgetMiB` | 50% of actual Lambda memory | Optional lower invocation-global source block budget. It cannot raise the 50% cap. |
+| `transfer.advancedTuning.destinationWriteRetry.maxAttempts` | 6 | Maximum provider-owned `PutObject` or `CopyObject` attempts; valid range 1–10. |
+| `transfer.advancedTuning.destinationWriteRetry.baseDelayMs` / `maxDelayMs` | 250 / 5000 | Non-throttling destination-write retry delays; each is 0–60000 ms and base cannot exceed max. |
+| `transfer.advancedTuning.destinationWriteRetry.slowdownBaseDelayMs` / `slowdownMaxDelayMs` | 1000 / 30000 | Throttling destination-write retry delays; each is 0–60000 ms and base cannot exceed max. |
+| `transfer.advancedTuning.destinationWriteRetry.jitter` | `full` | Jitter mode for computed destination-write retry delays; `none` is also supported. |
 
 Numeric tuning values must be safe integers. Synthesis validates resolved values and their cross-field memory relationships; unresolved CloudFormation tokens are validated by the Rust provider with checked conversions and arithmetic. Invalid zeroes, extremes, inverted delays, and budget overcommit fail explicitly rather than being clamped or replaced by defaults.
 
@@ -91,7 +95,7 @@ sourceWindowBytes = max(sourceWindowBytes, min(sourceBlockBytes, sourceZipBytes)
 sum(resident source block bytes across archives) <= globalSourceBudgetBytes
 ```
 
-`advancedRuntimeTuning.sourceWindowMemoryBudgetMiB` can lower `globalSourceBudgetBytes`; it cannot raise the half-memory cap. The final local-window `max` ensures at least one validated source block can be admitted, while the `min(sourceZipBytes)` clamp avoids planning a larger local window than the archive can contain. The global semaphore, not the sum of local-window values, is the aggregate bound.
+`transfer.advancedTuning.sourceWindowMemoryBudgetMiB` can lower `globalSourceBudgetBytes`; it cannot raise the half-memory cap. The final local-window `max` ensures at least one validated source block can be admitted, while the `min(sourceZipBytes)` clamp avoids planning a larger local window than the archive can contain. The global semaphore, not the sum of local-window values, is the aggregate bound.
 
 ## Supported Scenarios
 
@@ -110,7 +114,7 @@ Verification deploy/destroy can run independent scenario chains concurrently wit
 | Scenario | File | Purpose |
 | --- | --- | --- |
 | `simple` | `scenarios/apps/basic/simple-app.ts` | Plain deployment under a destination prefix. |
-| `root-prefix` | `scenarios/apps/basic/root-prefix-app.ts` | Deployment without `destinationKeyPrefix`, writing at bucket root. |
+| `root-prefix` | `scenarios/apps/basic/root-prefix-app.ts` | Deployment without `destination.keyPrefix`, writing at bucket root. |
 | `marker-replacement` | `scenarios/apps/content/marker-replacement-app.ts` | Deploy-time marker replacement across asset, data, JSON, and YAML sources. |
 | `filters` | `scenarios/apps/content/filters-app.ts` | Include/exclude filter behavior. |
 | `source-overwrite-order` | `scenarios/apps/content/source-overwrite-order-app.ts` | Duplicate source keys where later sources win. |
@@ -177,9 +181,9 @@ flowchart TD
 
 By default, compatible deployments create a stack-scoped handler whose construct ID hashes its Lambda settings and source identity. Prebuilt source identity includes the package version, architecture, and exact bootstrap archive SHA-256. Local compilation includes the package version and manifest path, while normalized bundling settings remain part of the complete handler identity. Distinct installed package/provider copies therefore cannot silently bind different request shapes to whichever shared handler was created first. Package or provider identity changes replace the shared handler by design; the release introducing this identity performs that handoff once for each legacy shared handler.
 
-Deployments sharing a handler also share its role, which accumulates permissions from every source, destination, KMS key, lifecycle transition, and CloudFront distribution used by those deployments. `advancedRuntimeTuning` remains request-scoped and can differ between deployments using the same compatible handler.
+Deployments sharing a handler also share its role, which accumulates permissions from every source, destination, KMS key, lifecycle transition, and CloudFront distribution used by those deployments. Every `transfer` field remains request-scoped and can differ between deployments using the same compatible handler.
 
-`providerScope: ProviderScope.DEPLOYMENT` instead creates a stable handler child beneath that deployment construct. Construct-generated roles and log destinations are consequently deployment-scoped, and the provider policy receives only that deployment's source, destination, lifecycle, KMS, and CloudFront grants. Explicit `role` or `logGroup` values remain caller-owned and may intentionally be reused. Isolation trades more functions, roles, log resources, and independent cold starts for smaller permission and mutation blast radii; operational cost follows their separate invocations, logs, and any caller-configured provisioned concurrency.
+`providerLambda.sharing: ProviderScope.DEPLOYMENT` instead creates a stable handler child beneath that deployment construct. Construct-generated roles and log destinations are consequently deployment-scoped, and the provider policy receives only that deployment's source, destination, lifecycle, KMS, and CloudFront grants. Explicit `providerLambda.role` or `providerLambda.logGroup` values remain caller-owned and may intentionally be reused. Isolation trades more functions, roles, log resources, and independent cold starts for smaller permission and mutation blast radii; operational cost follows their separate invocations, logs, and any caller-configured provisioned concurrency.
 
 The construct uses the modeled `AWS::CloudFormation::CustomResource` type and includes the handler identity in the custom resource's logical identity. A changed shared Lambda service token therefore creates a replacement instead of attempting the unsupported in-place token update. Isolated handler settings update the stable deployment-scoped function in place. Each custom-resource generation receives a distinct destination-owner identity, while retries of the same generation return the same deterministic physical resource ID. During replacement, the destination bucket's ownership tag is updated before the previous generation is deleted; the previous handler sees the replacement as an overlapping owner and retains the live namespace. A genuine bucket or prefix change still receives a distinct physical ID and follows the configured cleanup semantics. The package-aware identity transition is therefore safe even when `onDelete.deleteCurrentObjects` is enabled. The provider accepts the former custom-named resource type on Delete during migration.
 
@@ -189,7 +193,7 @@ The construct uses the modeled `AWS::CloudFormation::CustomResource` type and in
 
 `onDeploy.deleteStaleObjects` removes only objects in the current namespace that are absent from the deployment plan and match the active include/exclude filters. Before deletion, the provider reads the bucket's Shin ownership tags. An overlapping owner from another deployment retains stale objects rather than risking co-tenant deletion; this can conservatively retain unrelated stale keys in the same pass. Prefixes must be concrete and at most 102 characters so the complete ownership-tag key is validated during synthesis. `"/"` and an omitted prefix use the same canonical root owner, matching runtime normalization.
 
-For previous-object deletion, omitting `onChange.previousBucket` reuses the current `destinationBucket`; an explicit `previousBucket` authorizes a changed previous bucket. An unchanged current distribution is invalidated automatically. A changed previous distribution must be passed to `onChange.invalidatePreviousDistribution` so CDK can grant distribution-specific invalidation permissions and synthesize its dependency. Object deletion and previous-distribution invalidation remain independent actions: omitting the latter does not block requested object deletion, and the provider logs that it skipped an unauthorized previous-distribution invalidation.
+For previous-object deletion, omitting `onChange.previousBucket` reuses the current `destination.bucket`; an explicit `previousBucket` authorizes a changed previous bucket. An unchanged current distribution is invalidated automatically. A changed previous distribution must be passed to `onChange.invalidatePreviousDistribution` so CDK can grant distribution-specific invalidation permissions and synthesize its dependency. Object deletion and previous-distribution invalidation remain independent actions: omitting the latter does not block requested object deletion, and the provider logs that it skipped an unauthorized previous-distribution invalidation.
 
 ### Update Ordering and Namespace Safety
 
@@ -250,7 +254,7 @@ For `extract=true`:
 14. Stream every marker-bearing entry through a deterministic planning pass. Simultaneous replacements use leftmost-longest matching, lexicographic token order for equal-length ties, and never rescan replacement bytes. The pass validates source size/CRC/catalog MD5, enforces the expanded size limit, determines exact `Content-Length`, and calculates final MD5 only for SSE-S3 destinations.
 15. Skip an unchanged SSE-S3 marker object after that planning pass. Otherwise reopen the entry for a retryable streaming upload pass; each consumed retry body repeats only that bounded upload pass. Hold back the final output frame until source validation and the planning-pass length/digest checks succeed.
 16. Set inferred `Content-Type` on every PUT. SSE-S3 uploads retain streamed MD5 for ambiguous-write reconciliation without storing another checksum. KMS/DSSE uploads request stored full-object SHA-256 and calculate the independent expected digest while streaming.
-17. Admit at most `maxParallelTransfers` logical object tasks, continuously drain completed joins, and stop admission on the first observed error or panic. Abort and drain outstanding work before stale deletion or invalidation can run.
+17. Admit at most `transfer.maxParallelTransfers` logical object tasks, continuously drain completed joins, and stop admission on the first observed error or panic. Abort and drain outstanding work before stale deletion or invalidation can run.
 18. When stale deletion is enabled and the comparison list found a stale candidate, list the destination again after successful transfers and delete non-manifest keys from each page before requesting the next page.
 
 For `extract=false`:
@@ -353,7 +357,7 @@ The normal SSE-S3 path performs no Shin SHA-256 pass and disables optional SDK c
 
 The source ZIP ranged-read path still uses source `If-Match` when the source object has an `ETag`; that protects a single deployment from reading a source archive that changes while it is being streamed. Shin owns the complete three-total-attempt ranged-read policy. Every attempt disables AWS SDK retries, retries only typed transient/throttling failures or incomplete bodies, and never replays permanent 4xx responses, request construction failures, or local range validation errors.
 
-Transfer scheduling is bounded by `maxParallelTransfers`, including comparison/hash work as well as upload or copy work. Completed joins are removed while new objects are admitted, so task-handle memory is O(configured concurrency), not O(object count). The first observed transfer error or panic closes admission, aborts and drains outstanding transfer tasks, cancels source schedulers, wakes source-block and capacity waiters, and leaves later stale deletion and CloudFront invalidation unreachable. Retryable ZIP bodies share an attempt counter across application and SDK clones but do not start a decompressor, activate a source reader, or add replay claims until the body is first polled.
+Transfer scheduling is bounded by `transfer.maxParallelTransfers`, including comparison/hash work as well as upload or copy work. Completed joins are removed while new objects are admitted, so task-handle memory is O(configured concurrency), not O(object count). The first observed transfer error or panic closes admission, aborts and drains outstanding transfer tasks, cancels source schedulers, wakes source-block and capacity waiters, and leaves later stale deletion and CloudFront invalidation unreachable. Retryable ZIP bodies share an attempt counter across application and SDK clones but do not start a decompressor, activate a source reader, or add replay claims until the body is first polled.
 
 `extract=false` remains on the `CopyObject` path. SSE-S3 skip decisions use `ETag`; KMS/DSSE copies do not use encrypted destination `ETag`s as plaintext identity. Each copy atomically replaces metadata with the inferred content type plus an opaque `shin-copy-identity` SHA-256 token bound to the source bucket/key/ETag/length and destination bucket/key. A conditional conflict or final ambiguous response uses ordinary `HeadObject` and succeeds only when that exact token and length match. This proves the intended operation without downloading the source, relying on encryption-sensitive destination `ETag`s, or requesting a checksum that normal copies do not consume. A concurrent or unrelated destination value lacks the token and fails closed.
 
@@ -371,7 +375,7 @@ The callback target is parsed and shape-validated before request processing can 
 
 ## IAM Shape
 
-The provider role uses source grants from each bound CDK source and destination grants from the target bucket. Destination `GetObject`/`PutObject` access and `ListBucket` are scoped to `destinationKeyPrefix`; unresolved prefixes are rejected before provider resources are created. `DeleteObject` and `GetBucketTagging` are added only when `onDeploy.deleteStaleObjects` or `onDelete.deleteCurrentObjects` can delete from the current namespace. Customer KMS keys receive only the CDK grants needed for `Decrypt` and `GenerateDataKey`; no legal-hold, retention, object-tagging, multipart-abort, KMS describe, encrypt, or re-encrypt action is part of the provider contract. Every handler also receives an AWS-managed S3 KMS statement limited by key ARN, `alias/aws/s3`, and `kms:ViaService`; it is inert for other keys/services and preserves `GenerateDataKey`/`Decrypt` authorization across a late transition to the managed key. Reconciliation does not require `GetObjectAcl` or `GetBucketAcl`. A root prefix requires bucket-wide object/list scope.
+The provider role uses source grants from each bound CDK source and destination grants from the target bucket. Destination `GetObject`/`PutObject` access and `ListBucket` are scoped to `destination.keyPrefix`; unresolved prefixes are rejected before provider resources are created. `DeleteObject` and `GetBucketTagging` are added only when `onDeploy.deleteStaleObjects` or `onDelete.deleteCurrentObjects` can delete from the current namespace. Customer KMS keys receive only the CDK grants needed for `Decrypt` and `GenerateDataKey`; no legal-hold, retention, object-tagging, multipart-abort, KMS describe, encrypt, or re-encrypt action is part of the provider contract. Every handler also receives an AWS-managed S3 KMS statement limited by key ARN, `alias/aws/s3`, and `kms:ViaService`; it is inert for other keys/services and preserves `GenerateDataKey`/`Decrypt` authorization across a late transition to the managed key. Reconciliation does not require `GetObjectAcl` or `GetBucketAcl`. A root prefix requires bucket-wide object/list scope.
 
 `onChange.deletePreviousObjects` deliberately grants `ListBucket`, `DeleteObject`, and `GetBucketTagging` across the selected previous bucket because `OldResourceProperties` does not reveal the previous prefix until runtime. This breadth is also required for same-bucket prefix changes and is inherited by deployments that share the handler role. The provider derives the actual prefix from the Update event and validates the selected bucket before using the grant. Omitting `previousBucket` reuses the current bucket; a changed previous bucket must be passed explicitly. Remove the option after a one-time transition if that broader authority is no longer needed. Current CloudFront permissions cover an unchanged distribution, while `onChange.invalidatePreviousDistribution` grants distribution-specific invalidation access independently of object deletion.
 
@@ -591,11 +595,11 @@ CloudFormation callback diagnostics field reference:
 - Source ZIP archives and marker-expanded entries do not need to fit in Lambda memory or ephemeral storage; both stream in bounded chunks.
 - Each extracted ZIP entry, including marker-expanded output, must be no larger than 5 GiB because uploads currently use single-request `PutObject`, not multipart upload.
 - Final destination keys must fit S3's 1024-byte UTF-8 limit.
-- `destinationKeyPrefix` must be a concrete string no longer than 102 characters. `"/"` and an omitted prefix both select the bucket root and share the same canonical ownership namespace.
-- `maxParallelTransfers` is 1–256, explicit source GET concurrency is 1–64, and provider-owned destination write attempts are 1–10.
-- `advancedRuntimeTuning.sourceBlockBytes` must be at least 30 bytes so ZIP local file headers can fit in one source block. Block size, block size times source GET concurrency, and any explicit local window must fit the invocation-global source budget.
+- `destination.keyPrefix` must be a concrete string no longer than 102 characters. `"/"` and an omitted prefix both select the bucket root and share the same canonical ownership namespace.
+- `transfer.maxParallelTransfers` is 1–256, explicit source GET concurrency is 1–64, and provider-owned destination write attempts are 1–10.
+- `transfer.advancedTuning.sourceBlockBytes` must be at least 30 bytes so ZIP local file headers can fit in one source block. Block size, block size times source GET concurrency, and any explicit local window must fit the invocation-global source budget.
 - Retry delays are 0–60000 ms and each base delay must not exceed its corresponding maximum.
-- `advancedRuntimeTuning.sourceWindowMemoryBudgetMiB` can only lower the default half-memory source cap. Very small Lambda memory settings can therefore make otherwise valid tuning combinations fail explicitly.
+- `transfer.advancedTuning.sourceWindowMemoryBudgetMiB` can only lower the default half-memory source cap. Very small Lambda memory settings can therefore make otherwise valid tuning combinations fail explicitly.
 - Cataloged asset packaging requires CDK staging and rejects bundled directory assets, symlinks, and non-regular files.
 - Deployments are not transactional: valid object writes may finish before a later object fails, but stale deletion and CloudFront invalidation do not run after a transfer failure.
 - The provider is a static asset deployment engine, not a general-purpose sync engine with byte-range diffs or persistent manifests.

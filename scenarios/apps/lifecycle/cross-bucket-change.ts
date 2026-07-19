@@ -35,8 +35,10 @@ class CrossBucketChangeStack extends Stack {
             Source.data("current.txt", "bucket=previous\n"),
             Source.data("obsolete.txt", "state=obsolete\n"),
           ],
-      destinationBucket: updated ? currentBucket : previousBucket,
-      destinationKeyPrefix: updated ? "site/current" : "site/previous",
+      destination: {
+        bucket: updated ? currentBucket : previousBucket,
+        keyPrefix: updated ? "site/current" : "site/previous",
+      },
       ...(updated
         ? {
             destinationLifecycle: {

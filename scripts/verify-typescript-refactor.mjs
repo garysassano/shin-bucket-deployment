@@ -17,6 +17,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = join(__dirname, "..");
 const baselineRef = optionValue("--baseline-ref") ?? mergeBase();
+const assembliesOnly = process.argv.includes("--assemblies-only");
 const scratchRoot = mkdtempSync(join(tmpdir(), "shin-typescript-contract-"));
 const baselineRoot = join(scratchRoot, "baseline");
 const createdCurrentArchives = [];
@@ -30,16 +31,22 @@ try {
   buildContract(baselineRoot);
   buildContract(repositoryRoot);
 
-  const declarationCount = comparePublicDeclarations();
   const verificationTemplateCount = compareAssemblyTrees(".verification-assets/cdk.out");
   const benchmarkTemplateCount = compareAssemblyTrees(".benchmark-assets/cdk.out");
-  await compareRuntimeExports();
-  comparePackageEntrypoints();
-
-  console.log(
-    `TypeScript refactor contract matches ${baselineRef}: ${declarationCount} declarations, ` +
-      `${verificationTemplateCount} verification templates, ${benchmarkTemplateCount} benchmark templates.`,
-  );
+  if (assembliesOnly) {
+    console.log(
+      `Synthesis contract matches ${baselineRef}: ${verificationTemplateCount} verification templates, ` +
+        `${benchmarkTemplateCount} benchmark templates.`,
+    );
+  } else {
+    const declarationCount = comparePublicDeclarations();
+    await compareRuntimeExports();
+    comparePackageEntrypoints();
+    console.log(
+      `TypeScript refactor contract matches ${baselineRef}: ${declarationCount} declarations, ` +
+        `${verificationTemplateCount} verification templates, ${benchmarkTemplateCount} benchmark templates.`,
+    );
+  }
 } finally {
   run("git", ["worktree", "remove", "--force", baselineRoot], repositoryRoot, true);
   rmSync(scratchRoot, { recursive: true, force: true });

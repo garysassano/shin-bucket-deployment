@@ -41,8 +41,12 @@ test("renders plain markers for Source.data", () => {
         `region=${Aws.REGION}\nstack=${Aws.STACK_NAME}\nregion-again=${Aws.REGION}`,
       ),
     ],
-    destinationBucket,
-    localProviderBuild: testLocalProviderBuild(),
+    destination: {
+      bucket: destinationBucket,
+    },
+    providerLambda: {
+      localBuild: testLocalProviderBuild(),
+    },
   });
 
   const properties = customResourceProperties(stack);
@@ -64,8 +68,12 @@ test("renders plain markers for Source.yamlData", () => {
         region: Aws.REGION,
       }),
     ],
-    destinationBucket,
-    localProviderBuild: testLocalProviderBuild(),
+    destination: {
+      bucket: destinationBucket,
+    },
+    providerLambda: {
+      localBuild: testLocalProviderBuild(),
+    },
   });
 
   const properties = customResourceProperties(stack);
@@ -86,8 +94,12 @@ test("renders jsonEscape config for Source.data markers", () => {
         jsonEscape: true,
       }),
     ],
-    destinationBucket,
-    localProviderBuild: testLocalProviderBuild(),
+    destination: {
+      bucket: destinationBucket,
+    },
+    providerLambda: {
+      localBuild: testLocalProviderBuild(),
+    },
   });
 
   const properties = customResourceProperties(stack);
@@ -111,8 +123,12 @@ test("renders source markers for jsonData sources with escape enabled", () => {
         { escape: true },
       ),
     ],
-    destinationBucket,
-    localProviderBuild: testLocalProviderBuild(),
+    destination: {
+      bucket: destinationBucket,
+    },
+    providerLambda: {
+      localBuild: testLocalProviderBuild(),
+    },
   });
 
   const properties = customResourceProperties(stack);
@@ -135,8 +151,12 @@ test("keeps jsonData without escape on the plain replacement path", () => {
         { escape: false },
       ),
     ],
-    destinationBucket,
-    localProviderBuild: testLocalProviderBuild(),
+    destination: {
+      bucket: destinationBucket,
+    },
+    providerLambda: {
+      localBuild: testLocalProviderBuild(),
+    },
   });
 
   const properties = customResourceProperties(stack);
@@ -173,8 +193,12 @@ test("keeps source marker config aligned across mixed source types", () => {
         stackName: Aws.STACK_NAME,
       }),
     ],
-    destinationBucket,
-    localProviderBuild: testLocalProviderBuild(),
+    destination: {
+      bucket: destinationBucket,
+    },
+    providerLambda: {
+      localBuild: testLocalProviderBuild(),
+    },
   });
 
   const properties = customResourceProperties(stack);

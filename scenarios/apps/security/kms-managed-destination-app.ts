@@ -14,8 +14,10 @@ class KmsManagedDestinationShinBucketDeploymentStack extends Stack {
 
     new ShinBucketDeployment(this, "DeployWebsite", {
       sources: [Source.data("runtime/kms-managed.txt", "encrypted-by-aws-managed-s3-key\n")],
-      destinationBucket: websiteBucket,
-      destinationKeyPrefix: "kms-managed-site",
+      destination: {
+        bucket: websiteBucket,
+        keyPrefix: "kms-managed-site",
+      },
     });
 
     new CfnOutput(this, "BucketName", { value: websiteBucket.bucketName });

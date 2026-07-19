@@ -72,12 +72,16 @@ class LifecycleSafetyStack extends Stack {
   private addCoTenantDeployments(destinationBucket: Bucket, updated: boolean): void {
     const tenantDeployment = new ShinBucketDeployment(this, "DeployTenant", {
       sources: [Source.data("protected.txt", "tenant=protected\n")],
-      destinationBucket,
-      destinationKeyPrefix: "tenant",
+      destination: {
+        bucket: destinationBucket,
+        keyPrefix: "tenant",
+      },
     });
     const rootDeployment = new ShinBucketDeployment(this, "DeployRoot", {
       sources: [Source.data("root.txt", `phase=${updated ? "updated" : "initial"}\n`)],
-      destinationBucket,
+      destination: {
+        bucket: destinationBucket,
+      },
     });
     rootDeployment.node.addDependency(tenantDeployment);
 
@@ -107,8 +111,10 @@ class LifecycleSafetyStack extends Stack {
 
     new ShinBucketDeployment(this, "DeployWebsite", {
       sources,
-      destinationBucket,
-      destinationKeyPrefix,
+      destination: {
+        bucket: destinationBucket,
+        keyPrefix: destinationKeyPrefix,
+      },
       ...(updated && cleanupAuthorized
         ? {
             destinationLifecycle: {

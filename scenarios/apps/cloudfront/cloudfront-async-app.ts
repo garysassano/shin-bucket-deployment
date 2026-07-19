@@ -67,8 +67,10 @@ class CloudFrontAsyncShinBucketDeploymentStack extends Stack {
           { escape: true },
         ),
       ],
-      destinationBucket: websiteBucket,
-      destinationKeyPrefix: "site",
+      destination: {
+        bucket: websiteBucket,
+        keyPrefix: "site",
+      },
       cloudfrontInvalidation: {
         distribution,
         waitForCompletion: false,

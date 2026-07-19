@@ -19,10 +19,14 @@ class FiltersShinBucketDeploymentStack extends Stack {
           [`stack=${Aws.STACK_NAME}`, `region=${Aws.REGION}`, "mode=include-exclude"].join("\n"),
         ),
       ],
-      destinationBucket: websiteBucket,
-      destinationKeyPrefix: "filtered-site",
-      exclude: ["**/*.js"],
-      include: ["**/*.html", "runtime/**"],
+      destination: {
+        bucket: websiteBucket,
+        keyPrefix: "filtered-site",
+      },
+      sourceProcessing: {
+        exclude: ["**/*.js"],
+        include: ["**/*.html", "runtime/**"],
+      },
     });
 
     new CfnOutput(this, "BucketName", { value: websiteBucket.bucketName });
