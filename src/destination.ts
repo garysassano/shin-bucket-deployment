@@ -9,7 +9,7 @@ export function inspectableDestinationBucketResource(scope: Construct, bucket: B
   if (!CfnBucket.isCfnBucket(resource)) {
     throw new ValidationError(
       "ShinBucketDeploymentDestinationBucketInspectable",
-      "destinationBucket must be a CDK-created Bucket whose CfnBucket encryption configuration can be inspected.",
+      "destination.bucket must be a CDK-created Bucket whose CfnBucket encryption configuration can be inspected.",
       scope,
     );
   }
@@ -82,7 +82,7 @@ function validateDestinationKmsKey(
 function unsupportedDestinationKmsKey(scope: Construct): ValidationError {
   return new ValidationError(
     "ShinBucketDeploymentDestinationKmsKeyUnsupported",
-    "destinationBucket KMSMasterKeyID must be omitted for the AWS-managed S3 key or match destinationBucket.encryptionKey so CDK can grant the provider access.",
+    "destination.bucket KMSMasterKeyID must be omitted for the AWS-managed S3 key or match destination.bucket.encryptionKey so CDK can grant the provider access.",
     scope,
   );
 }
@@ -90,7 +90,7 @@ function unsupportedDestinationKmsKey(scope: Construct): ValidationError {
 function unsupportedDestinationEncryption(scope: Construct): ValidationError {
   return new ValidationError(
     "ShinBucketDeploymentDestinationEncryptionUnsupported",
-    "destinationBucket must synthesize one inspectable default encryption rule using AES256, aws:kms, or aws:kms:dsse.",
+    "destination.bucket must synthesize one inspectable default encryption rule using AES256, aws:kms, or aws:kms:dsse.",
     scope,
   );
 }

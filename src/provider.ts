@@ -2,23 +2,21 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Duration, Stack } from "aws-cdk-lib";
-import {
-  type Architecture,
-  Code,
-  Function as LambdaFunction,
-  Runtime,
-} from "aws-cdk-lib/aws-lambda";
+import type { ISecurityGroup, IVpc, SubnetSelection } from "aws-cdk-lib/aws-ec2";
+import type { IRole } from "aws-cdk-lib/aws-iam";
+import { Architecture, Code, Function as LambdaFunction, Runtime } from "aws-cdk-lib/aws-lambda";
+import type { ILogGroupRef } from "aws-cdk-lib/aws-logs";
 import type { Construct } from "constructs";
+import { DEFAULT_FAILURE_DIAGNOSTICS, DEFAULT_PROVIDER_LAMBDA_MEMORY_SIZE_MIB } from "./defaults";
 import { FailureDiagnostics, ProviderScope } from "./enums";
 import { ValidationError } from "./errors";
-import type { ShinBucketDeploymentProps } from "./shin-bucket-deployment";
+import type { ShinBucketDeploymentLocalBuildOptions } from "./shin-bucket-deployment";
 import { normalizeSingletonValue, stableStringify } from "./stable-json";
 
 const HANDLER_BINARY_NAME = "shin-bucket-deployment-handler";
 const PACKAGE_NAME = "shin-bucket-deployment";
 const SHARED_HANDLER_ID_PREFIX = "ShinBucketDeploymentHandler";
 const ISOLATED_HANDLER_ID = "ShinBucketDeploymentHandler";
-const DEFAULT_MEMORY_LIMIT_MB = 1024;
 const fileSha256Cache = new Map<string, string>();
 let packageVersionCache: string | undefined;
 
@@ -28,42 +26,53 @@ interface HandlerOptions {
   readonly architecture: Architecture;
   readonly timeout: Duration;
   readonly memorySize: number;
-  readonly role: ShinBucketDeploymentProps["role"];
-  readonly vpc: ShinBucketDeploymentProps["vpc"];
-  readonly vpcSubnets: ShinBucketDeploymentProps["vpcSubnets"];
-  readonly securityGroups: ShinBucketDeploymentProps["securityGroups"];
+  readonly role?: IRole;
+  readonly vpc?: IVpc;
+  readonly vpcSubnets?: SubnetSelection;
+  readonly securityGroups?: ISecurityGroup[];
   readonly environment: Record<string, string>;
-  readonly logGroup: ShinBucketDeploymentProps["logGroup"];
+  readonly logGroup?: ILogGroupRef;
 }
 
-export function getOrCreateHandler(
-  scope: Construct,
-  props: ShinBucketDeploymentProps,
-  architecture: Architecture,
-): LambdaFunction {
-  const stack = Stack.of(scope);
+/** Provider-only internal configuration used for handler selection and creation. */
+export interface ProviderLambdaConfig {
+  readonly sharing?: ProviderScope;
+  readonly architecture?: Architecture;
+  readonly memorySize?: number;
+  readonly failureDiagnostics?: FailureDiagnostics;
+  readonly role?: IRole;
+  readonly logGroup?: ILogGroupRef;
+  readonly vpc?: IVpc;
+  readonly vpcSubnets?: SubnetSelection;
+  readonly securityGroups?: ISecurityGroup[];
+  readonly localBuild?: ShinBucketDeploymentLocalBuildOptions;
+}
 
-  // A developer opts into local compilation through localProviderBuild;
+export function getOrCreateHandler(scope: Construct, config: ProviderLambdaConfig): LambdaFunction {
+  const stack = Stack.of(scope);
+  const architecture = config.architecture ?? Architecture.ARM_64;
+
+  // A developer opts into local compilation through providerLambda.localBuild;
   // otherwise prefer a prebuilt binary so consumers do not need a Rust
   // toolchain. When neither a prebuilt binary nor an explicit compile request is
   // available (e.g. a local checkout before prebuild), fall back to the local
   // cargo-lambda compile path.
-  const wantsCompile = props.localProviderBuild !== undefined;
+  const wantsCompile = config.localBuild !== undefined;
   const prebuiltBootstrapArchive = wantsCompile
     ? undefined
     : resolvePrebuiltBootstrapArchive(architecture);
   const useCompilePath = wantsCompile || prebuiltBootstrapArchive === undefined;
 
   const rustProjectPath = useCompilePath
-    ? (props.localProviderBuild?.projectPath ?? resolveDefaultRustProjectPath(scope))
+    ? (config.localBuild?.projectPath ?? resolveDefaultRustProjectPath(scope))
     : undefined;
   const manifestPath =
     rustProjectPath !== undefined ? join(rustProjectPath, "Cargo.toml") : undefined;
-  const stackScoped = (props.providerScope ?? ProviderScope.STACK) === ProviderScope.STACK;
+  const stackScoped = (config.sharing ?? ProviderScope.STACK) === ProviderScope.STACK;
   const handlerId = stackScoped
     ? `${SHARED_HANDLER_ID_PREFIX}${renderHandlerConfigHash(
         stack,
-        props,
+        config,
         architecture,
         sharedHandlerSourceIdentity(scope, architecture, manifestPath, prebuiltBootstrapArchive),
       )}`
@@ -85,26 +94,26 @@ export function getOrCreateHandler(
   const handlerOptions: HandlerOptions = {
     architecture,
     timeout: PROVIDER_TIMEOUT,
-    memorySize: props.memoryLimit ?? DEFAULT_MEMORY_LIMIT_MB,
-    role: props.role,
-    vpc: props.vpc,
-    vpcSubnets: props.vpcSubnets,
+    memorySize: config.memorySize ?? DEFAULT_PROVIDER_LAMBDA_MEMORY_SIZE_MIB,
+    role: config.role,
+    vpc: config.vpc,
+    vpcSubnets: config.vpcSubnets,
     securityGroups:
-      props.securityGroups && props.securityGroups.length > 0 ? props.securityGroups : undefined,
+      config.securityGroups && config.securityGroups.length > 0 ? config.securityGroups : undefined,
     environment: {
       RUST_BACKTRACE: "1",
-      ...(props.failureDiagnostics === FailureDiagnostics.DETAILED
+      ...(config.failureDiagnostics === FailureDiagnostics.DETAILED
         ? { SHIN_DETAILED_FAILURE_DIAGNOSTICS: "true" }
         : {}),
     },
-    logGroup: props.logGroup,
+    logGroup: config.logGroup,
   };
 
   if (useCompilePath) {
     return createCompiledHandler(
       handlerScope,
       handlerId,
-      props,
+      config.localBuild,
       handlerOptions,
       manifestPath as string,
     );
@@ -199,7 +208,7 @@ function resolveDefaultRustProjectPath(scope: Construct): string {
   }
   throw new ValidationError(
     "ShinBucketDeploymentLocalProviderBuildProjectPath",
-    "Unable to locate rust/Cargo.toml. Pass localProviderBuild.projectPath explicitly.",
+    "Unable to locate rust/Cargo.toml. Pass providerLambda.localBuild.projectPath explicitly.",
     scope,
   );
 }
@@ -244,7 +253,7 @@ function createPrebuiltHandler(
 function createCompiledHandler(
   scope: Construct,
   handlerId: string,
-  props: ShinBucketDeploymentProps,
+  localBuild: ShinBucketDeploymentLocalBuildOptions | undefined,
   options: HandlerOptions,
   manifestPath: string,
 ): LambdaFunction {
@@ -257,7 +266,7 @@ function createCompiledHandler(
     architecture: options.architecture,
     binaryName: HANDLER_BINARY_NAME,
     manifestPath,
-    bundling: props.localProviderBuild?.bundling,
+    bundling: localBuild?.bundling,
     timeout: options.timeout,
     memorySize: options.memorySize,
     role: options.role,
@@ -276,7 +285,7 @@ function loadCargoLambdaCdk(scope: Construct): typeof import("cargo-lambda-cdk")
     throw new ValidationError(
       "ShinBucketDeploymentCargoLambdaMissing",
       "The local Rust compile path requires the optional 'cargo-lambda-cdk' dependency. " +
-        "Install it as a devDependency, or omit 'localProviderBuild' to use the " +
+        "Install it as a devDependency, or omit 'providerLambda.localBuild' to use the " +
         `prebuilt provider binary. Underlying error: ${(error as Error).message}`,
       scope,
     );
@@ -285,27 +294,44 @@ function loadCargoLambdaCdk(scope: Construct): typeof import("cargo-lambda-cdk")
 
 function renderHandlerConfigHash(
   stack: Stack,
-  props: ShinBucketDeploymentProps,
+  config: ProviderLambdaConfig,
   architecture: Architecture,
   handlerSource: Record<string, string>,
 ): string {
-  const config = {
+  return createHash("sha256")
+    .update(renderHandlerConfigHashInput(stack, config, architecture, handlerSource))
+    .digest("hex")
+    .slice(0, 16);
+}
+
+/** Exact canonical serialization hashed for a compatible stack-scoped handler. */
+export function renderHandlerConfigHashInput(
+  stack: Stack,
+  config: ProviderLambdaConfig,
+  architecture: Architecture,
+  handlerSource: Record<string, string>,
+): string {
+  const hashInput = {
     architecture: architecture.name,
-    bundling: normalizeSingletonValue(props.localProviderBuild?.bundling),
-    failureDiagnostics: props.failureDiagnostics ?? FailureDiagnostics.STANDARD,
+    bundling: normalizeSingletonValue(config.localBuild?.bundling),
+    failureDiagnostics: config.failureDiagnostics ?? DEFAULT_FAILURE_DIAGNOSTICS,
     handlerSource,
-    logGroup: normalizeSingletonValue(props.logGroup),
-    memoryLimit: normalizeSingletonValue(props.memoryLimit ?? DEFAULT_MEMORY_LIMIT_MB),
-    role: normalizeSingletonValue(props.role),
+    logGroup: normalizeSingletonValue(config.logGroup),
+    // Keep this stable semantic key even though the public property is now
+    // providerLambda.memorySize. Public nesting must not split handler identity.
+    memoryLimit: normalizeSingletonValue(
+      config.memorySize ?? DEFAULT_PROVIDER_LAMBDA_MEMORY_SIZE_MIB,
+    ),
+    role: normalizeSingletonValue(config.role),
     securityGroups:
-      props.securityGroups && props.securityGroups.length > 0
-        ? [...props.securityGroups]
+      config.securityGroups && config.securityGroups.length > 0
+        ? [...config.securityGroups]
             .map((securityGroup) => normalizeSingletonValue(securityGroup))
             .sort()
         : undefined,
     stack: stack.node.addr,
-    vpc: normalizeSingletonValue(props.vpc),
-    vpcSubnets: normalizeSingletonValue(props.vpcSubnets),
+    vpc: normalizeSingletonValue(config.vpc),
+    vpcSubnets: normalizeSingletonValue(config.vpcSubnets),
   };
-  return createHash("sha256").update(stableStringify(config)).digest("hex").slice(0, 16);
+  return stableStringify(hashInput);
 }

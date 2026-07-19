@@ -2,7 +2,7 @@
 
 Most CDK apps should use the published npm package as-is. It ships prebuilt Rust Lambda archives for both supported Lambda architectures, and the npm tarball intentionally excludes the `rust/` source tree.
 
-Use this page when you want to change the Rust provider, audit or rebuild the provider artifacts yourself, or make a CDK app compile a local Rust provider with `localProviderBuild`.
+Use this page when you want to change the Rust provider, audit or rebuild the provider artifacts yourself, or make a CDK app compile a local Rust provider with `providerLambda.localBuild`.
 
 ## Rebuild packaged provider binaries
 
@@ -46,7 +46,7 @@ The aggregate check covers TypeScript build, package output, strict type checkin
 
 ## Compile a local provider from a CDK app
 
-The construct uses the prebuilt provider by default. Passing `localProviderBuild` opts into compiling the Rust provider during CDK asset bundling instead.
+The construct uses the prebuilt provider by default. Passing `providerLambda.localBuild` opts into compiling the Rust provider during CDK asset bundling instead.
 
 Install the optional compile dependency in the CDK app:
 
@@ -54,16 +54,18 @@ Install the optional compile dependency in the CDK app:
 pnpm add -D cargo-lambda-cdk
 ```
 
-Then point `localProviderBuild.projectPath` at a source checkout that contains `rust/Cargo.toml`:
+Then point `providerLambda.localBuild.projectPath` at a source checkout that contains `rust/Cargo.toml`:
 
 ```ts
 new ShinBucketDeployment(this, "DeployWebsite", {
   sources: [Source.asset("site")],
-  destinationBucket: bucket,
-  localProviderBuild: {
-    projectPath: "/absolute/path/to/shin-bucket-deployment/rust",
+  destination: { bucket },
+  providerLambda: {
+    localBuild: {
+      projectPath: "/absolute/path/to/shin-bucket-deployment/rust",
+    },
   },
 });
 ```
 
-When using the published npm package, provide `projectPath` explicitly. The published package includes the prebuilt `assets/bootstrap-*` directories, not the `rust/` source directory. Additional cargo-lambda options belong under `localProviderBuild.bundling`; the top-level `architecture` property remains the single architecture setting for both the build and Lambda function.
+When using the published npm package, provide `projectPath` explicitly. The published package includes the prebuilt `assets/bootstrap-*` directories, not the `rust/` source directory. Additional cargo-lambda options belong under `providerLambda.localBuild.bundling`; `providerLambda.architecture` remains the single architecture setting for both the build and Lambda function.

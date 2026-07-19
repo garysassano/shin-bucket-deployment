@@ -218,7 +218,7 @@ export class Source {
   /**
    * Deploy one UTF-8 string object, including deploy-time CDK token values.
    *
-   * @param objectKey Destination key relative to `destinationKeyPrefix`.
+   * @param objectKey Destination key relative to `destination.keyPrefix`.
    * @param data Object contents.
    * @param markersConfig Marker replacement options.
    */
@@ -229,7 +229,7 @@ export class Source {
   /**
    * Serialize and deploy one JSON object, including deploy-time CDK token values.
    *
-   * @param objectKey Destination key relative to `destinationKeyPrefix`.
+   * @param objectKey Destination key relative to `destination.keyPrefix`.
    * @param obj JSON-serializable value.
    * @param jsonProcessingOptions JSON token-processing options.
    */
@@ -244,7 +244,7 @@ export class Source {
   /**
    * Serialize and deploy one YAML object, including deploy-time CDK token values.
    *
-   * @param objectKey Destination key relative to `destinationKeyPrefix`.
+   * @param objectKey Destination key relative to `destination.keyPrefix`.
    * @param obj JSON-serializable value to format as YAML.
    */
   public static yamlData(objectKey: string, obj: unknown): ISource {

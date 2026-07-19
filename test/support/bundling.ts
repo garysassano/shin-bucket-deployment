@@ -1,10 +1,8 @@
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { ShinBucketDeploymentProps } from "../../src";
+import type { ShinBucketDeploymentLocalBuildOptions } from "../../src";
 
-export function testLocalProviderBuild(): NonNullable<
-  ShinBucketDeploymentProps["localProviderBuild"]
-> {
+export function testLocalProviderBuild(): ShinBucketDeploymentLocalBuildOptions {
   return {
     bundling: {
       forcedDockerBundling: false,

@@ -79,8 +79,10 @@ class MarkerReplacementShinBucketDeploymentStack extends Stack {
           repeatedRegion: Aws.REGION,
         }),
       ],
-      destinationBucket: websiteBucket,
-      destinationKeyPrefix: "site",
+      destination: {
+        bucket: websiteBucket,
+        keyPrefix: "site",
+      },
     });
 
     new CfnOutput(this, "BucketName", {

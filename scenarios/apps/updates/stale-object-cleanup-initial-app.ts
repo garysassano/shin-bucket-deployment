@@ -20,8 +20,10 @@ class StaleObjectCleanupShinBucketDeploymentStack extends Stack {
         ),
         Source.data("runtime/legacy.txt", "remove this by deploying stale-object-cleanup-updated"),
       ],
-      destinationBucket: websiteBucket,
-      destinationKeyPrefix: "stale-cleanup-site",
+      destination: {
+        bucket: websiteBucket,
+        keyPrefix: "stale-cleanup-site",
+      },
     });
 
     new CfnOutput(this, "BucketName", {

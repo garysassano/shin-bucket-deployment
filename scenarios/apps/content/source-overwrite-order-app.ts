@@ -16,8 +16,10 @@ class SourceOverwriteOrderShinBucketDeploymentStack extends Stack {
         Source.data("runtime/overlap.txt", "first-source\n"),
         Source.data("runtime/overlap.txt", "second-source\n"),
       ],
-      destinationBucket: websiteBucket,
-      destinationKeyPrefix: "multi-source",
+      destination: {
+        bucket: websiteBucket,
+        keyPrefix: "multi-source",
+      },
     });
 
     new CfnOutput(this, "BucketName", {

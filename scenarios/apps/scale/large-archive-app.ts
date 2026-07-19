@@ -18,8 +18,10 @@ class LargeArchiveShinBucketDeploymentStack extends Stack {
 
     new ShinBucketDeployment(this, "DeployLargeArchive", {
       sources: [Source.asset(assetRoot)],
-      destinationBucket: websiteBucket,
-      destinationKeyPrefix: "large-archive",
+      destination: {
+        bucket: websiteBucket,
+        keyPrefix: "large-archive",
+      },
     });
 
     new CfnOutput(this, "BucketName", {

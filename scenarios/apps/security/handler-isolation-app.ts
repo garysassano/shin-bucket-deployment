@@ -17,8 +17,10 @@ class HandlerIsolationStack extends Stack {
     ] as const) {
       new ShinBucketDeployment(this, `DeployShared${idSuffix}`, {
         sources: [Source.data("value.txt", `${prefix}\n`)],
-        destinationBucket,
-        destinationKeyPrefix: prefix,
+        destination: {
+          bucket: destinationBucket,
+          keyPrefix: prefix,
+        },
       });
     }
 
@@ -28,9 +30,13 @@ class HandlerIsolationStack extends Stack {
     ] as const) {
       new ShinBucketDeployment(this, `DeployIsolated${idSuffix}`, {
         sources: [Source.data("value.txt", `${prefix}\n`)],
-        destinationBucket,
-        destinationKeyPrefix: prefix,
-        providerScope: ProviderScope.DEPLOYMENT,
+        destination: {
+          bucket: destinationBucket,
+          keyPrefix: prefix,
+        },
+        providerLambda: {
+          sharing: ProviderScope.DEPLOYMENT,
+        },
       });
     }
 

@@ -14,8 +14,10 @@ class DsseManagedDestinationShinBucketDeploymentStack extends Stack {
 
     new ShinBucketDeployment(this, "DeployWebsite", {
       sources: [Source.data("runtime/dsse-managed.txt", "encrypted-by-managed-dsse\n")],
-      destinationBucket: websiteBucket,
-      destinationKeyPrefix: "dsse-managed-site",
+      destination: {
+        bucket: websiteBucket,
+        keyPrefix: "dsse-managed-site",
+      },
     });
 
     new CfnOutput(this, "BucketName", { value: websiteBucket.bucketName });

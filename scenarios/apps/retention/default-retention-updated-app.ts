@@ -18,8 +18,10 @@ class DefaultRetentionShinBucketDeploymentStack extends Stack {
           "phase=updated\nstate=retain-previous-prefix-and-delete",
         ),
       ],
-      destinationBucket: websiteBucket,
-      destinationKeyPrefix: "retain-updated",
+      destination: {
+        bucket: websiteBucket,
+        keyPrefix: "retain-updated",
+      },
     });
 
     new CfnOutput(this, "BucketName", {

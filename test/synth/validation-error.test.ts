@@ -12,7 +12,9 @@ describe("ValidationError", () => {
     try {
       new ShinBucketDeployment(stack, "Deploy", {
         sources: [Source.data("index.txt", "ok")],
-        destinationBucket,
+        destination: {
+          bucket: destinationBucket,
+        },
         cloudfrontInvalidation: { paths: ["/*"] } as never,
       });
     } catch (error) {

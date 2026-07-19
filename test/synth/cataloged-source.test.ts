@@ -121,8 +121,12 @@ function synthesizeCatalog(
   const destinationBucket = new Bucket(stack, "Destination");
   new ShinBucketDeployment(stack, "Deploy", {
     sources: [Source.asset(sourceDirectory, options)],
-    destinationBucket,
-    localProviderBuild: testLocalProviderBuild(),
+    destination: {
+      bucket: destinationBucket,
+    },
+    providerLambda: {
+      localBuild: testLocalProviderBuild(),
+    },
     ...deploymentProps,
   });
   const assembly = app.synth();
@@ -413,8 +417,12 @@ describe("cataloged directory assets", () => {
       () =>
         new ShinBucketDeployment(stack, "Deploy", {
           sources: [Source.asset(source)],
-          destinationBucket,
-          localProviderBuild: testLocalProviderBuild(),
+          destination: {
+            bucket: destinationBucket,
+          },
+          providerLambda: {
+            localBuild: testLocalProviderBuild(),
+          },
         }),
     ).toThrow(/requires CDK asset staging/);
     expect(scratchDirectories()).toEqual(before);
@@ -426,8 +434,12 @@ describe("cataloged directory assets", () => {
       const stack = new Stack();
       return new ShinBucketDeployment(stack, "Deploy", {
         sources: [Source.asset(source, sourceOptions)],
-        destinationBucket: new Bucket(stack, "Destination"),
-        localProviderBuild: testLocalProviderBuild(),
+        destination: {
+          bucket: new Bucket(stack, "Destination"),
+        },
+        providerLambda: {
+          localBuild: testLocalProviderBuild(),
+        },
       });
     };
 
@@ -449,8 +461,12 @@ describe("cataloged directory assets", () => {
     const destinationBucket = new Bucket(stack, "Destination");
     const deployment = new ShinBucketDeployment(stack, "Deploy", {
       sources: [Source.bucket(sourceBucket, "plain.zip"), Source.asset(trustedSource)],
-      destinationBucket,
-      localProviderBuild: testLocalProviderBuild(),
+      destination: {
+        bucket: destinationBucket,
+      },
+      providerLambda: {
+        localBuild: testLocalProviderBuild(),
+      },
     });
     deployment.addSource(Source.data("generated.txt", "generated"));
 
@@ -468,17 +484,27 @@ describe("cataloged directory assets", () => {
     const untrustedStack = new Stack();
     new ShinBucketDeployment(untrustedStack, "Deploy", {
       sources: [Source.bucket(new Bucket(untrustedStack, "Source"), "plain.zip")],
-      destinationBucket: new Bucket(untrustedStack, "Destination"),
-      localProviderBuild: testLocalProviderBuild(),
+      destination: {
+        bucket: new Bucket(untrustedStack, "Destination"),
+      },
+      providerLambda: {
+        localBuild: testLocalProviderBuild(),
+      },
     });
     expect(customResourceProperties(untrustedStack).SourceCatalogs).toBeUndefined();
 
     const copyStack = new Stack();
     new ShinBucketDeployment(copyStack, "Deploy", {
       sources: [Source.asset(trustedSource)],
-      destinationBucket: new Bucket(copyStack, "Destination"),
-      extract: false,
-      localProviderBuild: testLocalProviderBuild(),
+      destination: {
+        bucket: new Bucket(copyStack, "Destination"),
+      },
+      sourceProcessing: {
+        extract: false,
+      },
+      providerLambda: {
+        localBuild: testLocalProviderBuild(),
+      },
     });
     expect(customResourceProperties(copyStack).SourceCatalogs).toBeUndefined();
   });
@@ -489,8 +515,12 @@ describe("cataloged directory assets", () => {
     const stack = new Stack();
     const deployment = new ShinBucketDeployment(stack, "Deploy", {
       sources: [Source.asset(first, { assetHash: "shared", assetHashType: AssetHashType.CUSTOM })],
-      destinationBucket: new Bucket(stack, "Destination"),
-      localProviderBuild: testLocalProviderBuild(),
+      destination: {
+        bucket: new Bucket(stack, "Destination"),
+      },
+      providerLambda: {
+        localBuild: testLocalProviderBuild(),
+      },
     });
     deployment.addSource(
       Source.asset(second, { assetHash: "shared", assetHashType: AssetHashType.CUSTOM }),
@@ -508,8 +538,12 @@ describe("cataloged directory assets", () => {
     const stack = new Stack();
     new ShinBucketDeployment(stack, "Deploy", {
       sources: [Source.asset(source, { embeddedCatalog: false })],
-      destinationBucket: new Bucket(stack, "Destination"),
-      localProviderBuild: testLocalProviderBuild(),
+      destination: {
+        bucket: new Bucket(stack, "Destination"),
+      },
+      providerLambda: {
+        localBuild: testLocalProviderBuild(),
+      },
     });
 
     expect(customResourceProperties(stack).SourceCatalogs).toBeUndefined();
@@ -536,8 +570,12 @@ describe("cataloged directory assets", () => {
           sourceKMSKey: sourceKmsKey,
         }),
       ],
-      destinationBucket: new Bucket(stack, "Destination"),
-      localProviderBuild: testLocalProviderBuild(),
+      destination: {
+        bucket: new Bucket(stack, "Destination"),
+      },
+      providerLambda: {
+        localBuild: testLocalProviderBuild(),
+      },
     });
     app.synth();
 
