@@ -73,8 +73,6 @@ The official `BucketDeployment` is a good default for many stacks, but its provi
 
 ## Construct API
 
-### Supported Properties
-
 Only `sources` and `destination` are required. Sources accept any upstream CDK `ISource`; Shin also provides `Source.asset`, `Source.bucket`, `Source.data`, `Source.jsonData`, and `Source.yamlData` helpers.
 
 ```ts
