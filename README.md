@@ -38,7 +38,7 @@ export class DemoStack extends Stack {
 
 ### Migrating from `BucketDeployment`
 
-Migration starts with the construct import and an intentional property mapping:
+Migration starts by replacing the construct import:
 
 ```diff
 -import { BucketDeployment, Source } from "aws-cdk-lib/aws-s3-deployment";
