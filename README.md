@@ -45,7 +45,7 @@ Migration starts with the construct import and an intentional property mapping:
 +import { ShinBucketDeployment, Source } from "shin-bucket-deployment";
 ```
 
-Shin does not provide compatibility aliases for either `BucketDeployment` props or its former flat API. See the complete [Migration Guide](docs/migration.md) for mechanical mappings and before/after examples.
+See the [full property mapping](#bucketdeployment-property-mapping) for supported replacements and unsupported options.
 
 ## Why Build This
 
@@ -162,9 +162,9 @@ interface ShinBucketDeploymentProps {
 
 Most consumers should omit `providerLambda.localBuild` and use the packaged provider. See [Building from source](docs/building-from-source.md) when you need to compile it yourself.
 
-### Instance Members
+### Outputs and Methods
 
-The constructed deployment exposes these properties and methods; they are not input props.
+The constructed deployment exposes these values and methods; these are construct members, not CloudFormation outputs or input props.
 
 | Member | Description |
 | --- | --- |
@@ -174,7 +174,9 @@ The constructed deployment exposes these properties and methods; they are not in
 | `deployment.handlerFunction` | Backing provider Lambda function. |
 | `deployment.addSource(source)` | Adds another ordered source after construction. |
 
-## `BucketDeployment` Compatibility
+## `BucketDeployment` Property Mapping
+
+`ShinBucketDeployment` accepts the same upstream CDK `ISource` implementations, but uses its own grouped configuration API. Keep `sources`, move the destination into `destination`, and then map only the behavior your deployment needs.
 
 ### Replaced Properties
 
@@ -188,8 +190,6 @@ The constructed deployment exposes these properties and methods; they are not in
 | `outputObjectKeys` | `objectKeys`; Shin returns the key list only when this property is accessed. |
 | `logRetention` | `providerLambda.logGroup` |
 | `serverSideEncryption`, `serverSideEncryptionAwsKmsKeyId` | Default encryption on `destination.bucket` |
-
-`retainOnDelete` has inverse polarity: upstream `false` maps to setting both deletion actions to `true`; Shin lets you configure them independently.
 
 ### Unsupported Properties
 
