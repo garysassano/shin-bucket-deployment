@@ -4,7 +4,7 @@ import type { Bucket } from "aws-cdk-lib/aws-s3";
 import {
   FailureDiagnostics,
   type ISource,
-  ProviderScope,
+  ProviderSharing,
   type ShinBucketDeploymentAdvancedTransferTuning,
   type ShinBucketDeploymentDestination,
   type ShinBucketDeploymentLocalBuildOptions,
@@ -26,7 +26,7 @@ const sourceProcessing: ShinBucketDeploymentSourceProcessingOptions = {
 };
 const localBuild: ShinBucketDeploymentLocalBuildOptions = { projectPath: "rust" };
 const providerLambda: ShinBucketDeploymentProviderLambdaOptions = {
-  sharing: ProviderScope.DEPLOYMENT,
+  sharing: ProviderSharing.DEPLOYMENT,
   architecture: Architecture.X86_64,
   memorySize: 2048,
   failureDiagnostics: FailureDiagnostics.DETAILED,
@@ -37,7 +37,7 @@ const advancedTuning: ShinBucketDeploymentAdvancedTransferTuning = {
   destinationWriteRetry: { maxAttempts: 4 },
 };
 const transfer: ShinBucketDeploymentTransferOptions = {
-  maxParallelTransfers: 16,
+  maxConcurrency: 16,
   advancedTuning,
 };
 

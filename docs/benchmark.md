@@ -93,7 +93,7 @@ The complete matrix therefore accepts the structural refactor as having no detec
 
 ## PR #12 Performance Decision Run
 
-PR #12's encryption-aware change was accepted from a controlled three-repetition AWS run on 2026-07-12. The run used the configured test profile in `eu-central-1`, serialized stacks (`concurrency=1`), 2048 MiB Lambda memory, 32 parallel transfers, identical deterministic assets, and the same four ordered phases for each implementation. Values below are medians from CloudWatch `REPORT` records; memory is peak Lambda memory for the same phase.
+PR #12's encryption-aware change was accepted from a controlled three-repetition AWS run on 2026-07-12. The run used the configured test profile in `eu-central-1`, serialized stacks (`concurrency=1`), 2048 MiB Lambda memory, max concurrency 32, identical deterministic assets, and the same four ordered phases for each implementation. Values below are medians from CloudWatch `REPORT` records; memory is peak Lambda memory for the same phase.
 
 The `before` implementation is `8134576`, the universal-checksum PR #12 candidate. The current SSE-S3 implementation is `3bcd033`; the managed-KMS measurements use the provider fix captured by `7a910f4`. Upstream is AWS CDK 2.260.0 `BucketDeployment`. The KMS provider binary was rebuilt from `7a910f4` and staged into the otherwise identical benchmark app.
 
@@ -127,7 +127,7 @@ These rows are decision evidence for the checksum redesign, not a replacement fo
 
 ## Transfer scheduler performance decision
 
-The 2026-07-13 transfer-scheduler decision run completed five `before` repetitions, five `current` repetitions, and four `upstream` repetitions before the maintainer stopped the final upstream repetition to cap time and cost. The maintainer accepted the completed evidence as sufficient to proceed to PR review. The 112 sanitized phase rows are retained in `benchmarks/results.jsonl` under decision-run ID `transfer-scheduler-2026-07-13`. Each repetition contains `tiny-many` and `large-few` at 2048 MiB / 32 transfers across the four ordered phases, with stacks serialized at concurrency 1 in `eu-central-1`.
+The 2026-07-13 transfer-scheduler decision run completed five `before` repetitions, five `current` repetitions, and four `upstream` repetitions before the maintainer stopped the final upstream repetition to cap time and cost. The maintainer accepted the completed evidence as sufficient to proceed to PR review. The 112 sanitized phase rows are retained in `benchmarks/results.jsonl` under decision-run ID `transfer-scheduler-2026-07-13`. Each repetition contains `tiny-many` and `large-few` at 2048 MiB with max concurrency 32 across the four ordered phases, with stacks serialized at concurrency 1 in `eu-central-1`.
 
 The benchmark app uses a benchmark-only per-phase custom-resource token so `unchanged-update` always invokes the provider without changing the asset, destination, or provider algorithm. Decision rows include `decisionRunId`, `comparisonVariant`, and `repetition`; these fields are part of the upsert identity so repeated samples cannot replace one another. Canonical snapshot renderers exclude decision rows by default, while the JSONL remains available for later aggregate analysis.
 
@@ -150,7 +150,7 @@ The interrupted fifth upstream repetition is not represented as complete evidenc
 
 ## Marker replacement performance decision
 
-The 2026-07-14 corrected marker-replacement decision run completed one `before`, one `current`, and one `upstream` repetition, as requested for this confirmation. Its nine sanitized rows are retained in `benchmarks/results.jsonl` under decision-run ID `marker-replacement-stable-2026-07-14`. Every variant used the `marker-heavy` profile, a stable 16 MiB marker-bearing object plus four small ordinary files, 2048 MiB Lambda memory, 32 parallel transfers, serialized stacks, and the same create/unchanged/changed phase order in `eu-central-1`.
+The 2026-07-14 corrected marker-replacement decision run completed one `before`, one `current`, and one `upstream` repetition, as requested for this confirmation. Its nine sanitized rows are retained in `benchmarks/results.jsonl` under decision-run ID `marker-replacement-stable-2026-07-14`. Every variant used the `marker-heavy` profile, a stable 16 MiB marker-bearing object plus four small ordinary files, 2048 MiB Lambda memory, max concurrency 32, serialized stacks, and the same create/unchanged/changed phase order in `eu-central-1`.
 
 The earlier five-repetition fixture padded around unresolved CDK token text. Placeholder lengths could change between syntheses, shifting the resolved marker body by 16 to 32 bytes and causing spurious unchanged uploads: its `before` rows alternated between zero and one marker upload, while its `current` rows alternated in the opposite pattern. The corrected fixture pads against fixed resolved parameter defaults. Both corrected Shin unchanged phases uploaded zero objects and skipped all six. The flawed 45 rows were removed from current-result data.
 
@@ -178,7 +178,7 @@ Raw AWS output remains outside git. Every repetition captured provider telemetry
 
 ## Invocation memory planning performance decision
 
-The corrected 2026-07-14 invocation-memory decision run completed one `before`, one `current`, and one `upstream` repetition. Its nine sanitized rows are retained in `benchmarks/results.jsonl` under decision-run ID `memory-planning-gated-2026-07-14`. Every variant used the `multi-source-prune` profile at 1024 MiB / 32 transfers, serialized stacks, and the same create, unchanged, and prune phases in `eu-central-1`. Values are single CloudWatch `REPORT` records, not multi-sample medians.
+The corrected 2026-07-14 invocation-memory decision run completed one `before`, one `current`, and one `upstream` repetition. Its nine sanitized rows are retained in `benchmarks/results.jsonl` under decision-run ID `memory-planning-gated-2026-07-14`. Every variant used the `multi-source-prune` profile at 1024 MiB with max concurrency 32, serialized stacks, and the same create, unchanged, and prune phases in `eu-central-1`. Values are single CloudWatch `REPORT` records, not multi-sample medians.
 
 The `before` provider is benchmark-harness commit `add1c20`, whose provider source matches PR #14's merged baseline. The current provider is `af7873d`. Upstream is AWS CDK 2.260.0 `BucketDeployment`. The earlier PR #15 candidate and its unconditional post-transfer destination scan were rejected; its stale rows and claims are not retained.
 
@@ -222,7 +222,7 @@ pnpm benchmark:telemetry-table -- --methodology-version 1
 Generate filtered comparison reports with:
 
 ```bash
-pnpm benchmark:comparison-report -- --methodology-version 1 --asset-profile tiny-many --lambda-memory-mb 2048 --lambda-max-parallel-transfers 64
+pnpm benchmark:comparison-report -- --methodology-version 1 --asset-profile tiny-many --lambda-memory-mb 2048 --transfer-max-concurrency 64
 ```
 
 ## Methodology Summary

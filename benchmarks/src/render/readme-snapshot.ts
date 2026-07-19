@@ -18,7 +18,7 @@ const CLI_OPTIONS = [
   "filename-prefix",
   "header",
   "input-file",
-  "lambda-max-parallel-transfers",
+  "transfer-max-concurrency",
   "lambda-memory-mb",
   "methodology-version",
   "output-directory",
@@ -86,7 +86,7 @@ function parseHeaderLayout(argv: string[]): HeaderLayout {
 const headerLayout = parseHeaderLayout(cliArgs);
 const requestedProfile = parseStringArg(cliArgs, "--asset-profile");
 const requestedMemoryMb = parseNumberArg(cliArgs, "--lambda-memory-mb");
-const requestedShinParallel = parseNumberArg(cliArgs, "--lambda-max-parallel-transfers");
+const requestedShinMaxConcurrency = parseNumberArg(cliArgs, "--transfer-max-concurrency");
 const requestedMethodologyVersion = parseNumberArg(cliArgs, "--methodology-version") ?? 2;
 const requestedRunId = parseStringArg(cliArgs, "--run-id");
 const requestedConfigFile = parseStringArg(cliArgs, "--config");
@@ -192,7 +192,7 @@ function parseSnapshotArgs(argv: string[]): Map<string, string> {
 
 function usage(): never {
   console.error(
-    "Usage: node dist/benchmarks/src/render/readme-snapshot.js [--input-file benchmarks/results.jsonl] [--output-directory <path>] [--filename-prefix <prefix>] [--asset-profile <name>] [--lambda-memory-mb <n>] [--lambda-max-parallel-transfers <n>] [--variant default|aws] [--header three-line|two-line] [--preview true|false]",
+    "Usage: node dist/benchmarks/src/render/readme-snapshot.js [--input-file benchmarks/results.jsonl] [--output-directory <path>] [--filename-prefix <prefix>] [--asset-profile <name>] [--lambda-memory-mb <n>] [--transfer-max-concurrency <n>] [--variant default|aws] [--header three-line|two-line] [--preview true|false]",
   );
   process.exit(1);
 }
@@ -276,7 +276,10 @@ function findSelections(records: BenchmarkRecord[]): DataSelection[] {
     if (requestedMemoryMb !== undefined && record.memoryMb !== requestedMemoryMb) {
       continue;
     }
-    if (requestedShinParallel !== undefined && record.parallel !== requestedShinParallel) {
+    if (
+      requestedShinMaxConcurrency !== undefined &&
+      record.parallel !== requestedShinMaxConcurrency
+    ) {
       continue;
     }
     const key = [record.profile, record.memoryMb, record.parallel].join("\u0000");
@@ -338,7 +341,7 @@ function buildBenchmarkData(selection: DataSelection): BenchmarkData {
     .sort((left, right) => phaseRank(left) - phaseRank(right));
   if (phases.length === 0) {
     throw new Error(
-      `No paired AWS rows match profile=${selection.profile}, memory=${selection.memoryMb}, parallel=${selection.parallel}`,
+      `No paired AWS rows match profile=${selection.profile}, memory=${selection.memoryMb}, maxConcurrency=${selection.parallel}`,
     );
   }
 
@@ -364,10 +367,10 @@ function buildBenchmarkData(selection: DataSelection): BenchmarkData {
   const metadataRecord = selection.shinRecords.values().next().value ?? selection.runRecords[0];
   if (metadataRecord === undefined) {
     throw new Error(
-      `No benchmark metadata row found for profile=${selection.profile}, memory=${selection.memoryMb}, parallel=${selection.parallel}`,
+      `No benchmark metadata row found for profile=${selection.profile}, memory=${selection.memoryMb}, maxConcurrency=${selection.parallel}`,
     );
   }
-  const lambdaConfig = `Lambda: ${selection.memoryMb} MiB / ${selection.parallel} parallel`;
+  const lambdaConfig = `Lambda: ${selection.memoryMb} MiB / Max concurrency: ${selection.parallel}`;
   const metadataParts = [
     metadataRecord.profile === null || metadataRecord.profile === undefined
       ? undefined

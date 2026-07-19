@@ -1,6 +1,6 @@
 import { App, CfnOutput, RemovalPolicy, Stack, type StackProps } from "aws-cdk-lib";
 import { Bucket } from "aws-cdk-lib/aws-s3";
-import { ProviderScope, ShinBucketDeployment, Source } from "../../../src";
+import { ProviderSharing, ShinBucketDeployment, Source } from "../../../src";
 
 class HandlerIsolationStack extends Stack {
   constructor(scope: App, id: string, props?: StackProps) {
@@ -35,7 +35,7 @@ class HandlerIsolationStack extends Stack {
           keyPrefix: prefix,
         },
         providerLambda: {
-          sharing: ProviderScope.DEPLOYMENT,
+          sharing: ProviderSharing.DEPLOYMENT,
         },
       });
     }

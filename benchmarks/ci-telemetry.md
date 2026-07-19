@@ -12,11 +12,11 @@ Generated from Shin rows in `results.jsonl`. Raw benchmark evidence stays outsid
 | Regions | eu-central-1 |
 | Profiles | tiny-many, large-few |
 
-## large-few / 1024 MiB / parallel 32
+## large-few / 1024 MiB / max concurrency 32
 
 ### Runtime
 
-| Phase | State | Request | Deployment work | Files | Bytes | CDK deploy s | Local wall s | CloudWatch provider s | Summary duration ms | Billed s | Init s | Max memory MiB | Available MiB | Max transfers | Checksum strategy | Row |
+| Phase | State | Request | Deployment work | Files | Bytes | CDK deploy s | Local wall s | CloudWatch provider s | Summary duration ms | Billed s | Init s | Max memory MiB | Available MiB | Max concurrency | Checksum strategy | Row |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | cold-create | baseline | Create | success | 32 | 144167470 | 55.83 | 69.126 | 2.395 | 2392 | 2.527 | 0.132 | 133 | 1024 | 32 | sse-s3-etag | 9 |
 | cold-create | baseline | Create | success | 32 | 144167470 | 57.5 | 73.298 | 2.147 | 2144 | 2.276 | 0.129 | 125 | 1024 | 32 | sse-s3-etag | 25 |
@@ -264,11 +264,11 @@ Generated from Shin rows in `results.jsonl`. Raw benchmark evidence stays outsid
 | pruned-update | 1 | 0 | 0 | 1 |
 | pruned-update | 1 | 0 | 0 | 1 |
 
-## tiny-many / 1024 MiB / parallel 32
+## tiny-many / 1024 MiB / max concurrency 32
 
 ### Runtime
 
-| Phase | State | Request | Deployment work | Files | Bytes | CDK deploy s | Local wall s | CloudWatch provider s | Summary duration ms | Billed s | Init s | Max memory MiB | Available MiB | Max transfers | Checksum strategy | Row |
+| Phase | State | Request | Deployment work | Files | Bytes | CDK deploy s | Local wall s | CloudWatch provider s | Summary duration ms | Billed s | Init s | Max memory MiB | Available MiB | Max concurrency | Checksum strategy | Row |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | cold-create | baseline | Create | success | 2584 | 8178618 | 55.28 | 70.234 | 2.461 | 2457 | 2.616 | 0.155 | 45 | 1024 | 32 | sse-s3-etag | 1 |
 | cold-create | baseline | Create | success | 2584 | 8178618 | 57.53 | 73.506 | 2.564 | 2560 | 2.716 | 0.151 | 47 | 1024 | 32 | sse-s3-etag | 17 |

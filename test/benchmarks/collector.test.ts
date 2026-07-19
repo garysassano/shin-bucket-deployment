@@ -27,7 +27,7 @@ describe("benchmark result collector", () => {
         "Stack.BenchmarkAssetProfile = mixed",
         "Stack.BenchmarkImplementation = shin",
         "Stack.BenchmarkMemoryLimitMb = 512",
-        "Stack.BenchmarkMaxParallelTransfers = 32",
+        "Stack.BenchmarkTransferMaxConcurrency = 32",
         "Stack.BenchmarkState = baseline",
         "Stack.BenchmarkTotalBytes = 52904649",
         "real 57.72",
@@ -92,7 +92,7 @@ describe("benchmark result collector", () => {
         "Stack.BenchmarkAssetProfile = tiny-many",
         "Stack.BenchmarkImplementation = shin",
         "Stack.BenchmarkMemoryLimitMb = 2048",
-        "Stack.BenchmarkMaxParallelTransfers = 32",
+        "Stack.BenchmarkTransferMaxConcurrency = 32",
         "Stack.BenchmarkState = baseline",
         "",
       ].join("\n"),
@@ -602,10 +602,10 @@ describe("benchmark result collector", () => {
       "| mixed | cold-create | 1024 | 8 | 134217728 | 4 s vs 8 s (2x faster) | 100 s vs 120 s (1.2x faster) | 70 s vs 90 s (1.286x faster) | 100 MiB vs 180 MiB (44.444% lower) |",
     );
     expect(report).toContain(
-      "### mixed cold-create at 1024 MiB / parallel 8 / source window adaptive",
+      "### mixed cold-create at 1024 MiB / max concurrency 8 / source window adaptive",
     );
     expect(report).toContain(
-      "### mixed cold-create at 1024 MiB / parallel 8 / source window 134217728",
+      "### mixed cold-create at 1024 MiB / max concurrency 8 / source window 134217728",
     );
     expect(report).toContain("| Provider duration | 2 s | 8 s | +6 s | 4x | +300% |");
     expect(report).toContain("| Init duration | 0.1 s | 0.2 s | +0.1 s | 2x | +100% |");
@@ -709,7 +709,7 @@ describe("benchmark result collector", () => {
 
     expect(readFileSync(outputFile, "utf8")).toEqual(table);
     expect(table).toContain("# Shin Provider Benchmark Telemetry");
-    expect(table).toContain("## tiny-many / 1024 MiB / parallel 32");
+    expect(table).toContain("## tiny-many / 1024 MiB / max concurrency 32");
     expect(table).toContain("### Runtime");
     expect(table).toContain(
       "| cold-create | baseline | Create | success | 2584 | 8178618 | 66.1 | 120.069 | 3.261 | 3207 | 3.386 | 0.124 | 97 | null | null | sse-s3-etag | 1 |",

@@ -1,7 +1,7 @@
 import { Token } from "aws-cdk-lib";
 import type { Construct } from "constructs";
 import { DEFAULT_PROVIDER_LAMBDA_MEMORY_SIZE_MIB } from "./defaults";
-import { DestinationWriteRetryJitter, FailureDiagnostics, ProviderScope } from "./enums";
+import { DestinationWriteRetryJitter, FailureDiagnostics, ProviderSharing } from "./enums";
 import { ValidationError } from "./errors";
 import type {
   ShinBucketDeploymentAdvancedTransferTuning,
@@ -11,7 +11,7 @@ import type {
 
 const MIN_SOURCE_BLOCK_BYTES = 30;
 const DEFAULT_SOURCE_BLOCK_BYTES = 8 * 1024 * 1024;
-const MAX_PARALLEL_TRANSFERS = 256;
+const MAX_CONCURRENCY = 256;
 const MAX_SOURCE_GET_CONCURRENCY = 64;
 const MAX_DESTINATION_WRITE_ATTEMPTS = 10;
 const MAX_RETRY_DELAY_MS = 60_000;
@@ -48,7 +48,7 @@ const LEGACY_ROOT_PROPERTY_MIGRATIONS = {
   vpcSubnets: "providerLambda.vpcSubnets",
   securityGroups: "providerLambda.securityGroups",
   localProviderBuild: "providerLambda.localBuild",
-  maxParallelTransfers: "transfer.maxParallelTransfers",
+  maxParallelTransfers: "transfer.maxConcurrency",
   advancedRuntimeTuning: "transfer.advancedTuning",
 } as const;
 
@@ -153,10 +153,13 @@ export function validateDeploymentProps(scope: Construct, props: ShinBucketDeplo
     ["beforeBundling", "afterBundling"],
   );
 
-  const transfer = optionalObjectGroup(scope, rawProps.transfer, "transfer", [
-    "maxParallelTransfers",
-    "advancedTuning",
-  ]);
+  const transfer = optionalObjectGroup(
+    scope,
+    rawProps.transfer,
+    "transfer",
+    ["maxConcurrency", "advancedTuning"],
+    { maxParallelTransfers: "maxConcurrency" },
+  );
   const advancedTuning = optionalObjectGroup(
     scope,
     transfer?.advancedTuning,
@@ -228,11 +231,11 @@ export function validateDeploymentProps(scope: Construct, props: ShinBucketDeplo
 
   if (
     props.providerLambda?.sharing !== undefined &&
-    !Object.values(ProviderScope).includes(props.providerLambda.sharing)
+    !Object.values(ProviderSharing).includes(props.providerLambda.sharing)
   ) {
     throw new ValidationError(
       "ShinBucketDeploymentInvalidProviderLambdaSharing",
-      "providerLambda.sharing must be ProviderScope.STACK or ProviderScope.DEPLOYMENT.",
+      "providerLambda.sharing must be ProviderSharing.STACK or ProviderSharing.DEPLOYMENT.",
       scope,
     );
   }
@@ -284,14 +287,7 @@ export function validateDeploymentProps(scope: Construct, props: ShinBucketDeplo
   const transferOptions = props.transfer ?? {};
   const advancedTransferTuning = transferOptions.advancedTuning ?? {};
   const destinationWriteRetryTuning = advancedTransferTuning.destinationWriteRetry ?? {};
-  validateIntegerProps(
-    scope,
-    transferOptions,
-    ["maxParallelTransfers"],
-    1,
-    "transfer.",
-    MAX_PARALLEL_TRANSFERS,
-  );
+  validateIntegerProps(scope, transferOptions, ["maxConcurrency"], 1, "transfer.", MAX_CONCURRENCY);
   validateIntegerProps(
     scope,
     advancedTransferTuning,

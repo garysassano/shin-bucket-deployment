@@ -65,7 +65,7 @@ const RUNTIME_COLUMNS: Array<Column<TelemetryRow>> = [
   { header: "Init s", value: (row) => row.record.initDurationSeconds },
   { header: "Max memory MiB", value: (row) => row.record.maxMemoryMb },
   { header: "Available MiB", value: (row) => row.summary.availableMemoryMb },
-  { header: "Max transfers", value: (row) => row.summary.maxParallelTransfers },
+  { header: "Max concurrency", value: (row) => row.summary.maxParallelTransfers },
   { header: "Checksum strategy", value: (row) => row.summary.destinationChecksumStrategy },
   { header: "Row", value: (row) => row.line },
 ];
@@ -328,7 +328,7 @@ function renderResultsMarkdown(
 }
 
 function renderGroup(group: TelemetryGroup): string[] {
-  const title = `${group.profile} / ${formatCell(group.memoryMb)} MiB / parallel ${formatCell(group.parallel)}`;
+  const title = `${group.profile} / ${formatCell(group.memoryMb)} MiB / max concurrency ${formatCell(group.parallel)}`;
   return [
     `## ${title}`,
     "",

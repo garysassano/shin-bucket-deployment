@@ -139,7 +139,7 @@ function benchmarkScenario(name: string | undefined): ScenarioEntry {
 function benchmarkConfigs(options: ReadonlyMap<string, string>): BenchmarkConfig[] {
   const assetProfiles = listOption(options, "asset-profiles", [undefined]);
   const implementations = listOption(options, "implementations", ["shin"]);
-  const parallelValues = listOption(options, "lambda-max-parallel-transfers", [undefined]);
+  const parallelValues = listOption(options, "transfer-max-concurrency", [undefined]);
   const memoryValues = listOption(options, "lambda-memory-mb", [undefined]);
   const configs: BenchmarkConfig[] = [];
 
@@ -190,7 +190,7 @@ function benchmarkEnv(
     SHIN_BENCH_IMPLEMENTATION: config.implementation,
     ...(config.parallel === undefined
       ? {}
-      : { SHIN_BENCH_LAMBDA_MAX_PARALLEL_TRANSFERS: config.parallel }),
+      : { SHIN_BENCH_TRANSFER_MAX_CONCURRENCY: config.parallel }),
     ...(config.memoryMb === undefined ? {} : { SHIN_BENCH_LAMBDA_MEMORY_MB: config.memoryMb }),
     ...(environment.SHIN_BENCH_STACK_SUFFIX !== undefined || configCount === 1
       ? {}
@@ -270,7 +270,7 @@ function benchmarkCleanupCommand(
     config.implementation,
     ...(config.assetProfile === undefined ? [] : ["--asset-profiles", config.assetProfile]),
     ...(config.memoryMb === undefined ? [] : ["--lambda-memory-mb", config.memoryMb]),
-    ...(config.parallel === undefined ? [] : ["--lambda-max-parallel-transfers", config.parallel]),
+    ...(config.parallel === undefined ? [] : ["--transfer-max-concurrency", config.parallel]),
   ];
   return `${envPrefix}pnpm benchmark destroy ${shellQuote(name)} ${options
     .map(shellQuote)

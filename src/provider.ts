@@ -8,7 +8,7 @@ import { Architecture, Code, Function as LambdaFunction, Runtime } from "aws-cdk
 import type { ILogGroupRef } from "aws-cdk-lib/aws-logs";
 import type { Construct } from "constructs";
 import { DEFAULT_FAILURE_DIAGNOSTICS, DEFAULT_PROVIDER_LAMBDA_MEMORY_SIZE_MIB } from "./defaults";
-import { FailureDiagnostics, ProviderScope } from "./enums";
+import { FailureDiagnostics, ProviderSharing } from "./enums";
 import { ValidationError } from "./errors";
 import type { ShinBucketDeploymentLocalBuildOptions } from "./shin-bucket-deployment";
 import { normalizeSingletonValue, stableStringify } from "./stable-json";
@@ -36,7 +36,7 @@ interface HandlerOptions {
 
 /** Provider-only internal configuration used for handler selection and creation. */
 export interface ProviderLambdaConfig {
-  readonly sharing?: ProviderScope;
+  readonly sharing?: ProviderSharing;
   readonly architecture?: Architecture;
   readonly memorySize?: number;
   readonly failureDiagnostics?: FailureDiagnostics;
@@ -68,7 +68,7 @@ export function getOrCreateHandler(scope: Construct, config: ProviderLambdaConfi
     : undefined;
   const manifestPath =
     rustProjectPath !== undefined ? join(rustProjectPath, "Cargo.toml") : undefined;
-  const stackScoped = (config.sharing ?? ProviderScope.STACK) === ProviderScope.STACK;
+  const stackScoped = (config.sharing ?? ProviderSharing.STACK) === ProviderSharing.STACK;
   const handlerId = stackScoped
     ? `${SHARED_HANDLER_ID_PREFIX}${renderHandlerConfigHash(
         stack,

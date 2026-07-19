@@ -61,7 +61,7 @@ Committed benchmark records may include:
 - region
 - commit SHA and subject
 - scenario, asset profile, state, implementation, and phase names
-- selected config values such as memory and `maxParallelTransfers`
+- selected config values such as memory and `maxConcurrency`
 - sanitized durations and memory
 - sanitized aggregate counters
 - cleanup status
@@ -75,7 +75,7 @@ Benchmark mode runs only the selected benchmark scenario and expands the request
 pnpm benchmark deploy assets \
   --asset-profiles tiny-many,mixed \
   --implementations shin,aws \
-  --lambda-max-parallel-transfers 8,32 \
+  --transfer-max-concurrency 8,32 \
   --lambda-memory-mb 1024,2048
 ```
 
@@ -83,7 +83,7 @@ Supported runner options:
 
 - `--asset-profiles`: benchmark asset profiles such as `tiny-many`, `mixed`, or `large-few`.
 - `--implementations`: `shin`, `aws`, or both.
-- `--lambda-max-parallel-transfers`: Shin `maxParallelTransfers` values.
+- `--transfer-max-concurrency`: Shin `maxConcurrency` values.
 - `--lambda-memory-mb`: provider Lambda memory values.
 
 When the matrix has multiple Lambda configs and `SHIN_BENCH_STACK_SUFFIX` is not already set, the runner adds a deterministic suffix per config so stacks can coexist.
@@ -102,7 +102,7 @@ pnpm benchmark:run-assets -- \
   --max-wall-clock-minutes <approved-smoke-cap>
 ```
 
-The config file defines the asset profiles, Lambda configs, implementations, phases, region, output file, repetitions, and sequential execution policy. Prefer adding or editing a committed JSON config under `benchmarks/configs/` over building long CLI invocations. Use `assetProfiles` in JSON files and `--asset-profiles <name>` for CLI overrides. Use `lambdaConfigs` in JSON files and `--lambda-configs <memory>:<parallel>` for Lambda config CLI overrides. The runner deploys each stack through the configured phases, captures CloudWatch `REPORT` events and Shin `shin_deployment_summary` events before cleanup, destroys the stack, verifies cleanup, and writes sanitized result rows incrementally. Methodology v2 requires `concurrency: 1`; do not run multiple benchmark stacks in parallel. Preserve the printed run UUID and its external scratch resume manifest. Resume only with the same source/bootstrap, normalized config, phases, destination, and planned matrix. The wall-clock cap is checked between phases at external-command granularity; signals terminate the active process group, and both paths must attempt cleanup of the active stack.
+The config file defines the asset profiles, Lambda configs, implementations, phases, region, output file, repetitions, and sequential execution policy. Prefer adding or editing a committed JSON config under `benchmarks/configs/` over building long CLI invocations. Use `assetProfiles` in JSON files and `--asset-profiles <name>` for CLI overrides. Use `lambdaConfigs` in JSON files and `--lambda-configs <memory>:<max-concurrency>` for Lambda config CLI overrides. The runner deploys each stack through the configured phases, captures CloudWatch `REPORT` events and Shin `shin_deployment_summary` events before cleanup, destroys the stack, verifies cleanup, and writes sanitized result rows incrementally. Methodology v2 requires `concurrency: 1`; do not run multiple benchmark stacks in parallel. Preserve the printed run UUID and its external scratch resume manifest. Resume only with the same source/bootstrap, normalized config, phases, destination, and planned matrix. The wall-clock cap is checked between phases at external-command granularity; signals terminate the active process group, and both paths must attempt cleanup of the active stack.
 
 Choose benchmark configs deliberately. Paired Shin vs AWS comparisons should use:
 
@@ -111,7 +111,7 @@ Choose benchmark configs deliberately. Paired Shin vs AWS comparisons should use
 - same states and phase sequence
 - same destination prefix
 - same memory setting
-- the selected Shin parallel setting, recorded for Shin and stored as `null` for upstream AWS
+- the selected Shin max-concurrency setting, recorded for Shin and stored as `null` for upstream AWS
 - same repetition count
 - same stack suffix pattern
 
@@ -123,7 +123,7 @@ Map `deleteCurrentObjectsOnDelete` to Shin
 upstream `retainOnDelete`. Keep the upstream prop names only at the adapter
 boundary; do not expose them as Shin configuration names.
 
-For parameter sweeps, keep all non-swept inputs identical and encode the swept value in the row identity. For `maxParallelTransfers` sweeps, include the top-level `parallel` field and the provider summary field `maxParallelTransfers`; distinct phase names such as `cold-create-parallel-8` are acceptable when the phase itself represents the sweep point. Use `--run-token` only for scratch paths and stack suffixes, not as committed result identity.
+For parameter sweeps, keep all non-swept inputs identical and encode the swept value in the row identity. For `maxConcurrency` sweeps, include the top-level `parallel` field and the provider summary field `maxParallelTransfers`; those evidence fields retain their historical schema names. Distinct phase names such as `cold-create-parallel-8` are acceptable when the phase itself represents the sweep point. Use `--run-token` only for scratch paths and stack suffixes, not as committed result identity.
 
 Always collect telemetry first, then destroy benchmark stacks, then verify they are absent before finalizing records.
 
@@ -173,7 +173,7 @@ pnpm benchmark:collect -- \
   --implementation shin \
   --asset-profile <benchmark-profile> \
   --asset-state <state> \
-  --lambda-max-parallel-transfers <parallel> \
+  --transfer-max-concurrency <parallel> \
   --lambda-memory-mb <memory> \
   --cleanup "all benchmark stacks destroyed" \
   --notes "<sanitized note>"
@@ -242,7 +242,7 @@ Do not infer S3 throttling from local source block counters alone:
 - Source S3 pressure requires source `getRetries` or `getErrors` evidence.
 - Destination S3 throttling requires `putObject.throttledAttempts` or retry evidence.
 
-For parameter sweeps, report both performance and pressure counters. For `maxParallelTransfers` sweeps, include at least provider duration, billed duration, max memory, CDK deploy time, local wall time, source fetched bytes, block waits split by reason when available, block refetches, replay claims after release, active reader high-water, resident bytes high-water, and PutObject retry/throttle counters.
+For parameter sweeps, report both performance and pressure counters. For `maxConcurrency` sweeps, include at least provider duration, billed duration, max memory, CDK deploy time, local wall time, source fetched bytes, block waits split by reason when available, block refetches, replay claims after release, active reader high-water, resident bytes high-water, and PutObject retry/throttle counters.
 
 For checksum/encryption-path changes, record `destinationChecksumStrategy` and
 keep SSE-S3 and KMS/DSSE results separate. Include the transferred/skipped object
@@ -273,7 +273,7 @@ The comparison table should show, per phase and metric:
 Generate reports with:
 
 ```bash
-pnpm benchmark:comparison-report -- --input-file benchmarks/results.jsonl --asset-profile tiny-many --lambda-memory-mb 2048 --lambda-max-parallel-transfers 64
+pnpm benchmark:comparison-report -- --input-file benchmarks/results.jsonl --asset-profile tiny-many --lambda-memory-mb 2048 --transfer-max-concurrency 64
 ```
 
 ## Final Checks

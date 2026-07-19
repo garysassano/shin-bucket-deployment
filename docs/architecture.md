@@ -27,10 +27,10 @@ Runtime tuning defaults:
 
 | Setting | Default | Purpose |
 | --- | ---: | --- |
-| `transfer.maxParallelTransfers` | 32 | Bounds the continuously drained set of copy, hash, upload, and related logical object tasks; valid range 1–256. |
+| `transfer.maxConcurrency` | 32 | Bounds the continuously drained set of copy, hash, upload, and related logical object tasks; valid range 1–256. |
 | `providerLambda.memorySize` | 1024 MiB | Sizes the Lambda. The provider reads the actual value from the Lambda runtime environment. |
 
-Most deployments should tune only `providerLambda.memorySize` and, when needed, `transfer.maxParallelTransfers`. The experimental `transfer.advancedTuning` object keeps source block/window and destination-write retry settings available as support and benchmark escape hatches:
+Most deployments should tune only `providerLambda.memorySize` and, when needed, `transfer.maxConcurrency`. The experimental `transfer.advancedTuning` object keeps source block/window and destination-write retry settings available as support and benchmark escape hatches:
 
 | Advanced setting | Default | Purpose |
 | --- | ---: | --- |
@@ -80,7 +80,7 @@ sourceGetConcurrency = clamp(actualMemoryMiB / 256, 1, 8)
 
 reservedBytes =
   64 MiB
-  + (maxParallelTransfers * 12 MiB)
+  + (maxConcurrency * 12 MiB)
   + (zipFileCount * 2 KiB)
   + (sourceGetConcurrency * sourceBlockBytes)
 
@@ -106,7 +106,7 @@ pnpm verify list
 pnpm verify synth
 pnpm verify deploy --concurrency 4
 pnpm verify deploy cloudfront-sync
-pnpm benchmark deploy assets --asset-profiles tiny-many --implementations shin,aws --lambda-max-parallel-transfers 32 --lambda-memory-mb 1024
+pnpm benchmark deploy assets --asset-profiles tiny-many --implementations shin,aws --transfer-max-concurrency 32 --lambda-memory-mb 1024
 ```
 
 Verification deploy/destroy can run independent scenario chains concurrently with `--concurrency`; ordered update chains still run in sequence within each chain.
@@ -183,7 +183,7 @@ By default, compatible deployments create a stack-scoped handler whose construct
 
 Deployments sharing a handler also share its role, which accumulates permissions from every source, destination, KMS key, lifecycle transition, and CloudFront distribution used by those deployments. Every `transfer` field remains request-scoped and can differ between deployments using the same compatible handler.
 
-`providerLambda.sharing: ProviderScope.DEPLOYMENT` instead creates a stable handler child beneath that deployment construct. Construct-generated roles and log destinations are consequently deployment-scoped, and the provider policy receives only that deployment's source, destination, lifecycle, KMS, and CloudFront grants. Explicit `providerLambda.role` or `providerLambda.logGroup` values remain caller-owned and may intentionally be reused. Isolation trades more functions, roles, log resources, and independent cold starts for smaller permission and mutation blast radii; operational cost follows their separate invocations, logs, and any caller-configured provisioned concurrency.
+`providerLambda.sharing: ProviderSharing.DEPLOYMENT` instead creates a stable handler child beneath that deployment construct. Construct-generated roles and log destinations are consequently deployment-scoped, and the provider policy receives only that deployment's source, destination, lifecycle, KMS, and CloudFront grants. Explicit `providerLambda.role` or `providerLambda.logGroup` values remain caller-owned and may intentionally be reused. Isolation trades more functions, roles, log resources, and independent cold starts for smaller permission and mutation blast radii; operational cost follows their separate invocations, logs, and any caller-configured provisioned concurrency.
 
 The construct uses the modeled `AWS::CloudFormation::CustomResource` type and includes the handler identity in the custom resource's logical identity. A changed shared Lambda service token therefore creates a replacement instead of attempting the unsupported in-place token update. Isolated handler settings update the stable deployment-scoped function in place. Each custom-resource generation receives a distinct destination-owner identity, while retries of the same generation return the same deterministic physical resource ID. During replacement, the destination bucket's ownership tag is updated before the previous generation is deleted; the previous handler sees the replacement as an overlapping owner and retains the live namespace. A genuine bucket or prefix change still receives a distinct physical ID and follows the configured cleanup semantics. The package-aware identity transition is therefore safe even when `onDelete.deleteCurrentObjects` is enabled. The provider accepts the former custom-named resource type on Delete during migration.
 
@@ -254,7 +254,7 @@ For `extract=true`:
 14. Stream every marker-bearing entry through a deterministic planning pass. Simultaneous replacements use leftmost-longest matching, lexicographic token order for equal-length ties, and never rescan replacement bytes. The pass validates source size/CRC/catalog MD5, enforces the expanded size limit, determines exact `Content-Length`, and calculates final MD5 only for SSE-S3 destinations.
 15. Skip an unchanged SSE-S3 marker object after that planning pass. Otherwise reopen the entry for a retryable streaming upload pass; each consumed retry body repeats only that bounded upload pass. Hold back the final output frame until source validation and the planning-pass length/digest checks succeed.
 16. Set inferred `Content-Type` on every PUT. SSE-S3 uploads retain streamed MD5 for ambiguous-write reconciliation without storing another checksum. KMS/DSSE uploads request stored full-object SHA-256 and calculate the independent expected digest while streaming.
-17. Admit at most `transfer.maxParallelTransfers` logical object tasks, continuously drain completed joins, and stop admission on the first observed error or panic. Abort and drain outstanding work before stale deletion or invalidation can run.
+17. Admit at most `transfer.maxConcurrency` logical object tasks, continuously drain completed joins, and stop admission on the first observed error or panic. Abort and drain outstanding work before stale deletion or invalidation can run.
 18. When stale deletion is enabled and the comparison list found a stale candidate, list the destination again after successful transfers and delete non-manifest keys from each page before requesting the next page.
 
 For `extract=false`:
@@ -357,7 +357,7 @@ The normal SSE-S3 path performs no Shin SHA-256 pass and disables optional SDK c
 
 The source ZIP ranged-read path still uses source `If-Match` when the source object has an `ETag`; that protects a single deployment from reading a source archive that changes while it is being streamed. Shin owns the complete three-total-attempt ranged-read policy. Every attempt disables AWS SDK retries, retries only typed transient/throttling failures or incomplete bodies, and never replays permanent 4xx responses, request construction failures, or local range validation errors.
 
-Transfer scheduling is bounded by `transfer.maxParallelTransfers`, including comparison/hash work as well as upload or copy work. Completed joins are removed while new objects are admitted, so task-handle memory is O(configured concurrency), not O(object count). The first observed transfer error or panic closes admission, aborts and drains outstanding transfer tasks, cancels source schedulers, wakes source-block and capacity waiters, and leaves later stale deletion and CloudFront invalidation unreachable. Retryable ZIP bodies share an attempt counter across application and SDK clones but do not start a decompressor, activate a source reader, or add replay claims until the body is first polled.
+Transfer scheduling is bounded by `transfer.maxConcurrency`, including comparison/hash work as well as upload or copy work. Completed joins are removed while new objects are admitted, so task-handle memory is O(configured concurrency), not O(object count). The first observed transfer error or panic closes admission, aborts and drains outstanding transfer tasks, cancels source schedulers, wakes source-block and capacity waiters, and leaves later stale deletion and CloudFront invalidation unreachable. Retryable ZIP bodies share an attempt counter across application and SDK clones but do not start a decompressor, activate a source reader, or add replay claims until the body is first polled.
 
 `extract=false` remains on the `CopyObject` path. SSE-S3 skip decisions use `ETag`; KMS/DSSE copies do not use encrypted destination `ETag`s as plaintext identity. Each copy atomically replaces metadata with the inferred content type plus an opaque `shin-copy-identity` SHA-256 token bound to the source bucket/key/ETag/length and destination bucket/key. A conditional conflict or final ambiguous response uses ordinary `HeadObject` and succeeds only when that exact token and length match. This proves the intended operation without downloading the source, relying on encryption-sensitive destination `ETag`s, or requesting a checksum that normal copies do not consume. A concurrent or unrelated destination value lacks the token and fails closed.
 
@@ -440,7 +440,7 @@ Transfer scheduler diagnostics field reference:
 | `failedObjects` | Logical object tasks that returned an error or panicked. | Identify the failure that stopped further admission. |
 | `cancelledObjects` | Outstanding logical object tasks aborted during fail-fast or deadline cleanup. | Confirm outstanding writes were cancelled and drained. |
 | `panickedObjects` | Failed logical object tasks whose future panicked. | Distinguish runtime panics from ordinary transfer errors. |
-| `inFlightHighWater` | Peak admitted object tasks retained by the scheduler. | Verify the task set stayed within `maxParallelTransfers`. |
+| `inFlightHighWater` | Peak admitted object tasks retained by the scheduler. | Verify the task set stayed within `maxConcurrency`. |
 
 Marker replacement diagnostics field reference:
 
@@ -596,7 +596,7 @@ CloudFormation callback diagnostics field reference:
 - Each extracted ZIP entry, including marker-expanded output, must be no larger than 5 GiB because uploads currently use single-request `PutObject`, not multipart upload.
 - Final destination keys must fit S3's 1024-byte UTF-8 limit.
 - `destination.keyPrefix` must be a concrete string no longer than 102 characters. `"/"` and an omitted prefix both select the bucket root and share the same canonical ownership namespace.
-- `transfer.maxParallelTransfers` is 1–256, explicit source GET concurrency is 1–64, and provider-owned destination write attempts are 1–10.
+- `transfer.maxConcurrency` is 1–256, explicit source GET concurrency is 1–64, and provider-owned destination write attempts are 1–10.
 - `transfer.advancedTuning.sourceBlockBytes` must be at least 30 bytes so ZIP local file headers can fit in one source block. Block size, block size times source GET concurrency, and any explicit local window must fit the invocation-global source budget.
 - Retry delays are 0–60000 ms and each base delay must not exceed its corresponding maximum.
 - `transfer.advancedTuning.sourceWindowMemoryBudgetMiB` can only lower the default half-memory source cap. Very small Lambda memory settings can therefore make otherwise valid tuning combinations fail explicitly.

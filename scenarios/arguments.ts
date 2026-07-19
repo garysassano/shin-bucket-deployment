@@ -4,7 +4,7 @@ const VERIFY_OPTIONS = new Set(["concurrency"]);
 const BENCHMARK_OPTIONS = new Set([
   "asset-profiles",
   "implementations",
-  "lambda-max-parallel-transfers",
+  "transfer-max-concurrency",
   "lambda-memory-mb",
 ]);
 

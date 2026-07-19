@@ -1,7 +1,7 @@
 /**
- * Scope of the provider Lambda used by a deployment.
+ * Sharing boundary of the provider Lambda used by a deployment.
  */
-export enum ProviderScope {
+export enum ProviderSharing {
   /**
    * Reuse a compatible provider Lambda within the stack.
    */

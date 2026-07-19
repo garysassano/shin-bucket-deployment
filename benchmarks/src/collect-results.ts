@@ -138,7 +138,7 @@ const CLI_OPTIONS = [
   "decision-run-id",
   "file-count",
   "implementation",
-  "lambda-max-parallel-transfers",
+  "transfer-max-concurrency",
   "lambda-memory-mb",
   "source-window-bytes",
   "log-file",
@@ -261,7 +261,7 @@ export function collectBenchmarkResult(options: CollectBenchmarkOptions): Benchm
       strictEvidence && implementation === "aws"
         ? null
         : options.parallel === undefined
-          ? outputNumber(logText, "BenchmarkMaxParallelTransfers")
+          ? outputNumber(logText, "BenchmarkTransferMaxConcurrency")
           : options.parallel,
     sourceWindowBytes:
       options.sourceWindowBytes === undefined
@@ -351,7 +351,7 @@ function parseArgs(args: string[]): CollectBenchmarkOptions {
     memoryMb: optionalNumber(values, "lambda-memory-mb"),
     notes: values.get("notes"),
     outputFile,
-    parallel: optionalNumber(values, "lambda-max-parallel-transfers"),
+    parallel: optionalNumber(values, "transfer-max-concurrency"),
     sourceWindowBytes: optionalNullablePositiveInteger(values.get("source-window-bytes")),
     phase,
     region: values.get("region"),
@@ -411,7 +411,7 @@ function optionalPositiveInteger(values: Map<string, string>, name: string): num
 
 function usage(): never {
   console.error(
-    "Usage: node dist/benchmarks/src/collect-results.js --log-file <path> --phase <name> [--snapshot-date <YYYY-MM-DD>] [--decision-run-id <id>] [--comparison-variant <name>] [--repetition <n>] [--report-file <path>] [--summary-file <path>] [--output-file benchmarks/results.jsonl] [--asset-profile <name>] [--asset-state <name>] [--implementation <shin|aws>] [--lambda-max-parallel-transfers <n>] [--lambda-memory-mb <n>]",
+    "Usage: node dist/benchmarks/src/collect-results.js --log-file <path> --phase <name> [--snapshot-date <YYYY-MM-DD>] [--decision-run-id <id>] [--comparison-variant <name>] [--repetition <n>] [--report-file <path>] [--summary-file <path>] [--output-file benchmarks/results.jsonl] [--asset-profile <name>] [--asset-state <name>] [--implementation <shin|aws>] [--transfer-max-concurrency <n>] [--lambda-memory-mb <n>]",
   );
   process.exit(1);
 }
@@ -621,7 +621,7 @@ function assertObservedOutputs(
     ["BenchmarkSourceCount", options.sourceCount],
   ];
   if (implementation === "shin") {
-    checks.push(["BenchmarkMaxParallelTransfers", options.parallel]);
+    checks.push(["BenchmarkTransferMaxConcurrency", options.parallel]);
     const expectedSourceWindow = options.sourceWindowBytes ?? "adaptive";
     checks.push(["BenchmarkSourceWindowBytes", expectedSourceWindow]);
     checks.push(["BenchmarkDetailedFailureDiagnostics", "true"]);

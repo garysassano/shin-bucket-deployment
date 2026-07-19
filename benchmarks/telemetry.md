@@ -12,11 +12,11 @@ Generated from Shin rows in `benchmarks/results.jsonl`. Raw benchmark evidence s
 | Regions | ap-southeast-2 |
 | Profiles | tiny-many, large-few, mixed |
 
-## large-few / 2048 MiB / parallel 32
+## large-few / 2048 MiB / max concurrency 32
 
 ### Runtime
 
-| Phase | State | Request | Status | Files | Bytes | CDK deploy s | Local wall s | CloudWatch provider s | Summary duration ms | Billed s | Init s | Max memory MiB | Available MiB | Max transfers | Checksum strategy | Row |
+| Phase | State | Request | Status | Files | Bytes | CDK deploy s | Local wall s | CloudWatch provider s | Summary duration ms | Billed s | Init s | Max memory MiB | Available MiB | Max concurrency | Checksum strategy | Row |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | cold-create | baseline | Create | success | 32 | 144167470 | 58.34 | 109.234 | 1.006 | 961 | 1.17 | 0.164 | 244 | 2048 | 32 | null | 49 |
 | unchanged-update | baseline | Update | success | 32 | 144167470 | 14.1 | 56.202 | 0.205 | 160 | 0.206 | null | 244 | 2048 | 32 | null | 50 |
@@ -77,11 +77,11 @@ Generated from Shin rows in `benchmarks/results.jsonl`. Raw benchmark evidence s
 | changed-update | null | 0 | 0 | 0 | 0 | 0 | 0 |
 | pruned-update | null | 0 | 0 | 0 | 0 | 0 | 0 |
 
-## large-few / 4096 MiB / parallel 64
+## large-few / 4096 MiB / max concurrency 64
 
 ### Runtime
 
-| Phase | State | Request | Status | Files | Bytes | CDK deploy s | Local wall s | CloudWatch provider s | Summary duration ms | Billed s | Init s | Max memory MiB | Available MiB | Max transfers | Checksum strategy | Row |
+| Phase | State | Request | Status | Files | Bytes | CDK deploy s | Local wall s | CloudWatch provider s | Summary duration ms | Billed s | Init s | Max memory MiB | Available MiB | Max concurrency | Checksum strategy | Row |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | cold-create | baseline | Create | success | 32 | 144167470 | 58.39 | 104.986 | 0.761 | 711 | 0.889 | 0.127 | 245 | 4096 | 64 | null | 41 |
 | unchanged-update | baseline | Update | success | 32 | 144167470 | 14.07 | 56.206 | 0.194 | 147 | 0.195 | null | 245 | 4096 | 64 | null | 42 |
@@ -142,11 +142,11 @@ Generated from Shin rows in `benchmarks/results.jsonl`. Raw benchmark evidence s
 | changed-update | null | 0 | 0 | 0 | 0 | 0 | 0 |
 | pruned-update | null | 0 | 0 | 0 | 0 | 0 | 0 |
 
-## mixed / 5120 MiB / parallel 256
+## mixed / 5120 MiB / max concurrency 256
 
 ### Runtime
 
-| Phase | State | Request | Status | Files | Bytes | CDK deploy s | Local wall s | CloudWatch provider s | Summary duration ms | Billed s | Init s | Max memory MiB | Available MiB | Max transfers | Checksum strategy | Row |
+| Phase | State | Request | Status | Files | Bytes | CDK deploy s | Local wall s | CloudWatch provider s | Summary duration ms | Billed s | Init s | Max memory MiB | Available MiB | Max concurrency | Checksum strategy | Row |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | cold-create | baseline | Create | success | 442 | 52904649 | 74.4 | 278.612 | 1.016 | 974 | 1.149 | 0.132 | 384 | 5120 | 256 | null | 93 |
 | unchanged-update | baseline | Update | success | 442 | 52904649 | 31.07 | 117.369 | 0.244 | 196 | 0.245 | null | 441 | 5120 | 256 | null | 94 |
@@ -207,11 +207,11 @@ Generated from Shin rows in `benchmarks/results.jsonl`. Raw benchmark evidence s
 | changed-update | null | 0 | 0 | 0 | 0 | 0 | 0 |
 | pruned-update | null | 0 | 0 | 0 | 0 | 0 | 0 |
 
-## mixed / 6144 MiB / parallel 256
+## mixed / 6144 MiB / max concurrency 256
 
 ### Runtime
 
-| Phase | State | Request | Status | Files | Bytes | CDK deploy s | Local wall s | CloudWatch provider s | Summary duration ms | Billed s | Init s | Max memory MiB | Available MiB | Max transfers | Checksum strategy | Row |
+| Phase | State | Request | Status | Files | Bytes | CDK deploy s | Local wall s | CloudWatch provider s | Summary duration ms | Billed s | Init s | Max memory MiB | Available MiB | Max concurrency | Checksum strategy | Row |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | cold-create | baseline | Create | success | 442 | 52904649 | 70.42 | 302.637 | 0.981 | 932 | 1.148 | 0.167 | 378 | 6144 | 256 | null | 89 |
 | unchanged-update | baseline | Update | success | 442 | 52904649 | 33.32 | 133.789 | 0.252 | 203 | 0.253 | null | 449 | 6144 | 256 | null | 90 |
@@ -272,11 +272,11 @@ Generated from Shin rows in `benchmarks/results.jsonl`. Raw benchmark evidence s
 | changed-update | null | 0 | 0 | 0 | 0 | 0 | 0 |
 | pruned-update | null | 0 | 0 | 0 | 0 | 0 | 0 |
 
-## tiny-many / 1024 MiB / parallel 16
+## tiny-many / 1024 MiB / max concurrency 16
 
 ### Runtime
 
-| Phase | State | Request | Status | Files | Bytes | CDK deploy s | Local wall s | CloudWatch provider s | Summary duration ms | Billed s | Init s | Max memory MiB | Available MiB | Max transfers | Checksum strategy | Row |
+| Phase | State | Request | Status | Files | Bytes | CDK deploy s | Local wall s | CloudWatch provider s | Summary duration ms | Billed s | Init s | Max memory MiB | Available MiB | Max concurrency | Checksum strategy | Row |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | cold-create | baseline | Create | success | 2584 | 8178618 | 65.95 | 120.229 | 5.429 | 5380 | 5.558 | 0.129 | 83 | 1024 | 16 | null | 29 |
 | unchanged-update | baseline | Update | success | 2584 | 8178618 | 14.09 | 65.379 | 0.441 | 398 | 0.442 | null | 107 | 1024 | 16 | null | 30 |
@@ -337,11 +337,11 @@ Generated from Shin rows in `benchmarks/results.jsonl`. Raw benchmark evidence s
 | changed-update | null | 0 | 0 | 0 | 0 | 0 | 0 |
 | pruned-update | null | 0 | 0 | 0 | 0 | 0 | 0 |
 
-## tiny-many / 1024 MiB / parallel 32
+## tiny-many / 1024 MiB / max concurrency 32
 
 ### Runtime
 
-| Phase | State | Request | Status | Files | Bytes | CDK deploy s | Local wall s | CloudWatch provider s | Summary duration ms | Billed s | Init s | Max memory MiB | Available MiB | Max transfers | Checksum strategy | Row |
+| Phase | State | Request | Status | Files | Bytes | CDK deploy s | Local wall s | CloudWatch provider s | Summary duration ms | Billed s | Init s | Max memory MiB | Available MiB | Max concurrency | Checksum strategy | Row |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | cold-create | baseline | Create | success | 2584 | 8178618 | 66.1 | 120.069 | 3.261 | 3207 | 3.386 | 0.124 | 97 | 1024 | 32 | null | 25 |
 | unchanged-update | baseline | Update | success | 2584 | 8178618 | 14.15 | 55.952 | 0.427 | 377 | 0.427 | null | 117 | 1024 | 32 | null | 26 |
@@ -402,11 +402,11 @@ Generated from Shin rows in `benchmarks/results.jsonl`. Raw benchmark evidence s
 | changed-update | null | 0 | 0 | 0 | 0 | 0 | 0 |
 | pruned-update | null | 0 | 0 | 0 | 0 | 0 | 0 |
 
-## tiny-many / 2048 MiB / parallel 32
+## tiny-many / 2048 MiB / max concurrency 32
 
 ### Runtime
 
-| Phase | State | Request | Status | Files | Bytes | CDK deploy s | Local wall s | CloudWatch provider s | Summary duration ms | Billed s | Init s | Max memory MiB | Available MiB | Max transfers | Checksum strategy | Row |
+| Phase | State | Request | Status | Files | Bytes | CDK deploy s | Local wall s | CloudWatch provider s | Summary duration ms | Billed s | Init s | Max memory MiB | Available MiB | Max concurrency | Checksum strategy | Row |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | cold-create | baseline | Create | success | 2584 | 8178618 | 76.21 | 197.621 | 2.847 | 2796 | 3.015 | 0.167 | 94 | 2048 | 32 | null | 65 |
 | unchanged-update | baseline | Update | success | 2584 | 8178618 | 30.45 | 159.842 | 0.472 | 433 | 0.473 | null | 114 | 2048 | 32 | null | 66 |
@@ -467,11 +467,11 @@ Generated from Shin rows in `benchmarks/results.jsonl`. Raw benchmark evidence s
 | changed-update | null | 0 | 0 | 0 | 0 | 0 | 0 |
 | pruned-update | null | 0 | 0 | 0 | 0 | 0 | 0 |
 
-## tiny-many / 2048 MiB / parallel 64
+## tiny-many / 2048 MiB / max concurrency 64
 
 ### Runtime
 
-| Phase | State | Request | Status | Files | Bytes | CDK deploy s | Local wall s | CloudWatch provider s | Summary duration ms | Billed s | Init s | Max memory MiB | Available MiB | Max transfers | Checksum strategy | Row |
+| Phase | State | Request | Status | Files | Bytes | CDK deploy s | Local wall s | CloudWatch provider s | Summary duration ms | Billed s | Init s | Max memory MiB | Available MiB | Max concurrency | Checksum strategy | Row |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | cold-create | baseline | Create | success | 2584 | 8178618 | 73.33 | 131.105 | 2.074 | 2029 | 2.243 | 0.168 | 122 | 2048 | 64 | null | 1 |
 | unchanged-update | baseline | Update | success | 2584 | 8178618 | 15.75 | 59.36 | 0.416 | 371 | 0.416 | null | 150 | 2048 | 64 | null | 2 |
@@ -532,11 +532,11 @@ Generated from Shin rows in `benchmarks/results.jsonl`. Raw benchmark evidence s
 | changed-update | null | 0 | 0 | 0 | 0 | 0 | 0 |
 | pruned-update | null | 0 | 0 | 0 | 0 | 0 | 0 |
 
-## tiny-many / 4096 MiB / parallel 64
+## tiny-many / 4096 MiB / max concurrency 64
 
 ### Runtime
 
-| Phase | State | Request | Status | Files | Bytes | CDK deploy s | Local wall s | CloudWatch provider s | Summary duration ms | Billed s | Init s | Max memory MiB | Available MiB | Max transfers | Checksum strategy | Row |
+| Phase | State | Request | Status | Files | Bytes | CDK deploy s | Local wall s | CloudWatch provider s | Summary duration ms | Billed s | Init s | Max memory MiB | Available MiB | Max concurrency | Checksum strategy | Row |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | cold-create | baseline | Create | success | 2584 | 8178618 | 64.33 | 119.549 | 1.889 | 1836 | 2.054 | 0.165 | 119 | 4096 | 64 | null | 57 |
 | unchanged-update | baseline | Update | success | 2584 | 8178618 | 14.13 | 55.431 | 0.406 | 359 | 0.406 | null | 121 | 4096 | 64 | null | 58 |
@@ -597,11 +597,11 @@ Generated from Shin rows in `benchmarks/results.jsonl`. Raw benchmark evidence s
 | changed-update | null | 0 | 0 | 0 | 0 | 0 | 0 |
 | pruned-update | null | 0 | 0 | 0 | 0 | 0 | 0 |
 
-## tiny-many / 4096 MiB / parallel 128
+## tiny-many / 4096 MiB / max concurrency 128
 
 ### Runtime
 
-| Phase | State | Request | Status | Files | Bytes | CDK deploy s | Local wall s | CloudWatch provider s | Summary duration ms | Billed s | Init s | Max memory MiB | Available MiB | Max transfers | Checksum strategy | Row |
+| Phase | State | Request | Status | Files | Bytes | CDK deploy s | Local wall s | CloudWatch provider s | Summary duration ms | Billed s | Init s | Max memory MiB | Available MiB | Max concurrency | Checksum strategy | Row |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | cold-create | baseline | Create | success | 2584 | 8178618 | 67.55 | 130.051 | 1.37 | 1319 | 1.502 | 0.132 | 169 | 4096 | 128 | null | 9 |
 | unchanged-update | baseline | Update | success | 2584 | 8178618 | 17.73 | 67.21 | 0.424 | 379 | 0.425 | null | 177 | 4096 | 128 | null | 10 |
@@ -662,11 +662,11 @@ Generated from Shin rows in `benchmarks/results.jsonl`. Raw benchmark evidence s
 | changed-update | null | 0 | 0 | 0 | 0 | 0 | 0 |
 | pruned-update | null | 0 | 0 | 0 | 0 | 0 | 0 |
 
-## tiny-many / 5120 MiB / parallel 256
+## tiny-many / 5120 MiB / max concurrency 256
 
 ### Runtime
 
-| Phase | State | Request | Status | Files | Bytes | CDK deploy s | Local wall s | CloudWatch provider s | Summary duration ms | Billed s | Init s | Max memory MiB | Available MiB | Max transfers | Checksum strategy | Row |
+| Phase | State | Request | Status | Files | Bytes | CDK deploy s | Local wall s | CloudWatch provider s | Summary duration ms | Billed s | Init s | Max memory MiB | Available MiB | Max concurrency | Checksum strategy | Row |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | cold-create | baseline | Create | success | 2584 | 8178618 | 82.19 | 149.125 | 1.394 | 1353 | 1.528 | 0.133 | 265 | 5120 | 256 | null | 77 |
 | unchanged-update | baseline | Update | success | 2584 | 8178618 | 34.72 | 116.075 | 0.384 | 323 | 0.385 | null | 332 | 5120 | 256 | null | 78 |
@@ -727,11 +727,11 @@ Generated from Shin rows in `benchmarks/results.jsonl`. Raw benchmark evidence s
 | changed-update | null | 0 | 0 | 0 | 0 | 0 | 0 |
 | pruned-update | null | 0 | 0 | 0 | 0 | 0 | 0 |
 
-## tiny-many / 6144 MiB / parallel 256
+## tiny-many / 6144 MiB / max concurrency 256
 
 ### Runtime
 
-| Phase | State | Request | Status | Files | Bytes | CDK deploy s | Local wall s | CloudWatch provider s | Summary duration ms | Billed s | Init s | Max memory MiB | Available MiB | Max transfers | Checksum strategy | Row |
+| Phase | State | Request | Status | Files | Bytes | CDK deploy s | Local wall s | CloudWatch provider s | Summary duration ms | Billed s | Init s | Max memory MiB | Available MiB | Max concurrency | Checksum strategy | Row |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | cold-create | baseline | Create | success | 2584 | 8178618 | 73.08 | 152.468 | 1.501 | 1387 | 1.672 | 0.171 | 265 | 6144 | 256 | null | 73 |
 | unchanged-update | baseline | Update | success | 2584 | 8178618 | 32.54 | 109.784 | 0.371 | 326 | 0.371 | null | 321 | 6144 | 256 | null | 74 |
@@ -792,11 +792,11 @@ Generated from Shin rows in `benchmarks/results.jsonl`. Raw benchmark evidence s
 | changed-update | null | 0 | 0 | 0 | 0 | 0 | 0 |
 | pruned-update | null | 0 | 0 | 0 | 0 | 0 | 0 |
 
-## tiny-many / 10240 MiB / parallel 320
+## tiny-many / 10240 MiB / max concurrency 320
 
 ### Runtime
 
-| Phase | State | Request | Status | Files | Bytes | CDK deploy s | Local wall s | CloudWatch provider s | Summary duration ms | Billed s | Init s | Max memory MiB | Available MiB | Max transfers | Checksum strategy | Row |
+| Phase | State | Request | Status | Files | Bytes | CDK deploy s | Local wall s | CloudWatch provider s | Summary duration ms | Billed s | Init s | Max memory MiB | Available MiB | Max concurrency | Checksum strategy | Row |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | cold-create | baseline | Create | success | 2584 | 8178618 | 60.11 | 113.222 | 1.283 | 1242 | 1.458 | 0.174 | 315 | 10240 | 320 | null | 17 |
 | unchanged-update | baseline | Update | success | 2584 | 8178618 | 14.14 | 75.757 | 0.389 | 338 | 0.39 | null | 377 | 10240 | 320 | null | 18 |
