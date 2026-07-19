@@ -38,14 +38,14 @@ export class DemoStack extends Stack {
 
 ### Migrating from `BucketDeployment`
 
-Migration starts with the construct import and an intentional property mapping:
+Migration usually starts with this import change:
 
 ```diff
 -import { BucketDeployment, Source } from "aws-cdk-lib/aws-s3-deployment";
 +import { ShinBucketDeployment, Source } from "shin-bucket-deployment";
 ```
 
-See the [full property mapping](#bucketdeployment-property-mapping) for supported replacements and unsupported options.
+See the [full property mapping](#bucketdeployment-property-mapping) for replaced and unsupported properties.
 
 ## Why Build This
 
@@ -73,13 +73,7 @@ The official `BucketDeployment` is a good default for many stacks, but its provi
 
 ## Construct API
 
-The root props contain seven domain components. Configuration groups are plain values; they do not create additional CDK construct scopes or resources.
-
-### Supported Properties
-
 Only `sources` and `destination` are required. Sources accept any upstream CDK `ISource`; Shin also provides `Source.asset`, `Source.bucket`, `Source.data`, `Source.jsonData`, and `Source.yamlData` helpers.
-
-The complete construct configuration shape is:
 
 ```ts
 interface ShinBucketDeploymentProps {
