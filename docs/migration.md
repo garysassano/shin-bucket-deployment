@@ -22,7 +22,7 @@
 | `vpcSubnets` | `providerLambda.vpcSubnets` |
 | `securityGroups` | `providerLambda.securityGroups` |
 | `localProviderBuild` | `providerLambda.localBuild` |
-| `maxParallelTransfers` | `transfer.maxParallelTransfers` |
+| `maxParallelTransfers` | `transfer.maxConcurrency` |
 | `advancedRuntimeTuning` | `transfer.advancedTuning` |
 | `cloudfrontInvalidation` | `cloudfrontInvalidation` |
 | `destinationLifecycle` | `destinationLifecycle` |
@@ -77,7 +77,7 @@ new ShinBucketDeployment(this, "DeployWebsite", {
   sources,
   destination: { bucket },
   providerLambda: {
-    sharing: ProviderScope.DEPLOYMENT,
+    sharing: ProviderSharing.DEPLOYMENT,
     architecture: Architecture.X86_64,
     memorySize: 2048,
     failureDiagnostics: FailureDiagnostics.DETAILED,
@@ -91,7 +91,7 @@ new ShinBucketDeployment(this, "DeployWebsite", {
 });
 ```
 
-`providerLambda` values configure or identify the Lambda resource. `sharing` deliberately avoids the CDK-overloaded name `scope`; it still uses the existing `ProviderScope` enum.
+`providerLambda` values configure or identify the Lambda resource. `sharing` deliberately avoids the CDK-overloaded name `scope`, and the former `ProviderScope` enum is now `ProviderSharing`.
 
 ### Source processing and transfer tuning
 
@@ -124,7 +124,7 @@ new ShinBucketDeployment(this, "DeployWebsite", {
     exclude: ["*.map"],
   },
   transfer: {
-    maxParallelTransfers: 64,
+    maxConcurrency: 64,
     advancedTuning: {
       sourceGetConcurrency: 8,
       destinationWriteRetry: { maxAttempts: 4 },

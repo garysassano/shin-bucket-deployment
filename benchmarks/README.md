@@ -8,7 +8,7 @@ Every Shin benchmark sets `failureDiagnostics: FailureDiagnostics.DETAILED`; ups
 
 An intentional methodology-v1 overhead control may pass `--detailed-failure-diagnostics false`. The runner records this as part of benchmark configuration identity, omits the Lambda diagnostics environment variable, verifies the deployed runtime state, and records `detailedFailureDiagnostics: false`. Methodology v2 rejects this override and remains diagnostics-on.
 
-`configs/methodology-v2-1024-32.json` is the canonical approval-gated matrix: five sequential repetitions of `tiny-many` and `large-few` at 1024 MiB / 32 Shin transfers against one deduplicated upstream baseline per profile. Start with one repetition, report elapsed time and preliminary results, then resume repetitions 2–5 only after the maintainer approves an explicit wall-clock cap. Before a new methodology-v2 run, the runner builds the measured provider from the clean evidence-source commit in a detached worktree, equivalent to `node scripts/build-bootstrap.mjs --benchmark arm64`. The generated local provenance binds the ignored archive to that commit, its complete source-tree identity, clean build state, build environment, and Cargo, Rust, cargo-lambda, and Zig versions. The runner records a unique run/sample identity, exact source and deployed-provider identity, phase-local memory scope, and cleanup state. Upstream rows use `parallel: null` because that setting does not apply to AWS CDK `BucketDeployment`.
+`configs/methodology-v2-1024-32.json` is the canonical approval-gated matrix: five sequential repetitions of `tiny-many` and `large-few` at 1024 MiB with max concurrency 32 against one deduplicated upstream baseline per profile. Start with one repetition, report elapsed time and preliminary results, then resume repetitions 2–5 only after the maintainer approves an explicit wall-clock cap. Before a new methodology-v2 run, the runner builds the measured provider from the clean evidence-source commit in a detached worktree, equivalent to `node scripts/build-bootstrap.mjs --benchmark arm64`. The generated local provenance binds the ignored archive to that commit, its complete source-tree identity, clean build state, build environment, and Cargo, Rust, cargo-lambda, and Zig versions. The runner records a unique run/sample identity, exact source and deployed-provider identity, phase-local memory scope, and cleanup state. Upstream rows use `parallel: null` because that setting does not apply to AWS CDK `BucketDeployment`.
 
 Methodology-v1 diagnostics may intentionally measure a stable uncommitted worktree before a review commit exists. For a new run, the runner uses `node scripts/build-bootstrap.mjs --benchmark-current-tree arm64`; this rebuilds the application and provider from that exact tree and binds the archive to its dirty-state flag, complete source-tree digest, application-build digest, and toolchain. Source drift remains forbidden after the run starts. Dirty methodology-v1 diagnostics are investigative evidence and do not satisfy the clean, comparable methodology-v2 performance-acceptance requirement.
 
@@ -16,11 +16,11 @@ Methodology-v2 run IDs are opaque UUIDs. The scratch directory contains a resume
 
 `--preserve-on-failure true` is an opt-in execution control and does not change benchmark configuration identity. Before deployment the runner arms a scratch-only `preserved-stack.json` intent manifest. A caught deployment failure marks it `preserved-after-failure` and leaves the tagged stack and provider log group intact for inspection; retained resources can incur AWS cost. A subsequent resume fails closed while that stack exists. Remove the stack manually, then rerun: after verified absence the runner removes the manifest and may continue. When preservation is enabled, a preexisting owned stack is never deleted automatically, even if no manifest is present, because it may contain failure evidence. A successful run still destroys and verifies the stack before removing the intent manifest. Abrupt process termination can leave the intent state armed; the same fail-closed resume check applies.
 
-`configs/transfer-scheduler-2048-32.json` is the serialized 2048 MiB / 32-transfer decision matrix for the bounded scheduler: `tiny-many` and `large-few`, Shin and upstream, and the four ordered lifecycle phases. Repeat it with unique scratch roots and output files when collecting a multi-sample decision run; raw per-repetition evidence remains outside git.
+`configs/transfer-scheduler-2048-32.json` is the serialized 2048 MiB / max-concurrency-32 decision matrix for the bounded scheduler: `tiny-many` and `large-few`, Shin and upstream, and the four ordered lifecycle phases. Repeat it with unique scratch roots and output files when collecting a multi-sample decision run; raw per-repetition evidence remains outside git.
 
 `configs/marker-replacement-2048-32.json` is the comparable marker-path matrix. Its `marker-heavy` profile deploys one 16 MiB marker-bearing object plus four small ordinary files through Shin and upstream across create, unchanged, and changed phases. The fixture pads against fixed resolved parameter defaults so synthesized token placeholder lengths cannot change the deployed payload. Marker decision results and interpretation live in [`docs/benchmark.md`](../docs/benchmark.md#marker-replacement-performance-decision).
 
-`configs/large-few-source-window-diagnostic-1024-32.json` is a one-repetition, Shin-only failure diagnostic. It runs `large-few` cold-create sequentially at 1024 MiB and `maxParallelTransfers=32`, first with the adaptive local source window and then with an explicit 128 MiB window (`sourceWindowBytes: 134217728`). `sourceWindowBytes` is a first-class configuration, sample-identity, deployed-environment, result-metadata, aggregation, and report dimension; `null` means adaptive. Run this comparison with `--preserve-on-failure true` only after local gates pass and the maintainer reconfirms the cost-incurring region/profile inputs. Stop after any preserved failure and inspect/capture it before manual cleanup or another sample. Do not interpret this diagnostic as performance acceptance without comparable before/after Shin and upstream evidence.
+`configs/large-few-source-window-diagnostic-1024-32.json` is a one-repetition, Shin-only failure diagnostic. It runs `large-few` cold-create sequentially at 1024 MiB and `maxConcurrency=32`, first with the adaptive local source window and then with an explicit 128 MiB window (`sourceWindowBytes: 134217728`). `sourceWindowBytes` is a first-class configuration, sample-identity, deployed-environment, result-metadata, aggregation, and report dimension; `null` means adaptive. Run this comparison with `--preserve-on-failure true` only after local gates pass and the maintainer reconfirms the cost-incurring region/profile inputs. Stop after any preserved failure and inspect/capture it before manual cleanup or another sample. Do not interpret this diagnostic as performance acceptance without comparable before/after Shin and upstream evidence.
 
 The runner adds a benchmark-only invocation token to the deployment custom resource for every phase. This guarantees that `unchanged-update` measures an actual provider invocation even when the deterministic asset and all functional deployment properties are unchanged; the token does not change the asset, destination, or provider algorithm.
 
@@ -32,7 +32,7 @@ Before expanding an AWS benchmark to multiple repetitions, run one smoke repetit
 
 Resume the printed smoke UUID with `--run-id <uuid> --start-repetition 2 --repetitions 4` and the same config, snapshot date, scratch location, destination, and approved cap. Asking for repetitions outside 1–5 is rejected.
 
-README benchmark snapshots use sanitized tiny-many records from `benchmarks/results.jsonl`. Snapshot filenames follow `<profile>-<memory>mib-<parallel>.svg`, for example `tiny-many-1024mib-32.svg`.
+README benchmark snapshots use sanitized tiny-many records from `benchmarks/results.jsonl`. Snapshot filenames follow `<profile>-<memory>mib-<max-concurrency>.svg`, for example `tiny-many-1024mib-32.svg`.
 
 Only README-linked snapshot SVGs are committed under `benchmarks/snapshots`. Temporary alternate layouts can be regenerated locally with `benchmarks/src/render/readme-snapshot.ts`, but should not be kept as committed design history.
 
@@ -46,11 +46,11 @@ GitHub Actions last published a complete five-repetition canonical run dated 202
 - [Shin provider telemetry](ci-telemetry.md)
 - [Sanitized structured results](results.jsonl)
 
-### tiny-many / 1024 MiB / 32 transfers
+### tiny-many / 1024 MiB / max concurrency 32
 
 ![Latest tiny-many CI benchmark](snapshots/ci-tiny-many-1024mib-32.svg)
 
-### large-few / 1024 MiB / 32 transfers
+### large-few / 1024 MiB / max concurrency 32
 
 ![Latest large-few CI benchmark](snapshots/ci-large-few-1024mib-32.svg)
 <!-- benchmark-ci:end -->
@@ -66,24 +66,24 @@ For failed deploys, the runner waits until the phase's Lambda `REPORT` event is 
 
 ## 1024 MiB / 16 Snapshot
 
-Four-phase snapshot using the latest tiny-many 1024 MiB Shin `maxParallelTransfers=16` rows.
+Four-phase snapshot using the latest tiny-many 1024 MiB Shin `maxConcurrency=16` rows.
 
-![1024 MiB parallel 16 benchmark chart](snapshots/tiny-many-1024mib-16.svg)
+![1024 MiB max concurrency 16 benchmark chart](snapshots/tiny-many-1024mib-16.svg)
 
 ## 1024 MiB / 32 Snapshot
 
-Four-phase snapshot using the latest tiny-many 1024 MiB Shin `maxParallelTransfers=32` rows.
+Four-phase snapshot using the latest tiny-many 1024 MiB Shin `maxConcurrency=32` rows.
 
-![1024 MiB parallel 32 benchmark chart](snapshots/tiny-many-1024mib-32.svg)
+![1024 MiB max concurrency 32 benchmark chart](snapshots/tiny-many-1024mib-32.svg)
 
 ## 2048 MiB / 64 Snapshot
 
-Four-phase snapshot using the latest tiny-many 2048 MiB Shin `maxParallelTransfers=64` rows.
+Four-phase snapshot using the latest tiny-many 2048 MiB Shin `maxConcurrency=64` rows.
 
-![2048 MiB parallel 64 benchmark chart](snapshots/tiny-many-2048mib-64.svg)
+![2048 MiB max concurrency 64 benchmark chart](snapshots/tiny-many-2048mib-64.svg)
 
 ## 10240 MiB / 320 Snapshot
 
-Four-phase snapshot using the latest tiny-many 10240 MiB Shin `maxParallelTransfers=320` rows.
+Four-phase snapshot using the latest tiny-many 10240 MiB Shin `maxConcurrency=320` rows.
 
-![10240 MiB parallel 320 benchmark chart](snapshots/tiny-many-10240mib-320.svg)
+![10240 MiB max concurrency 320 benchmark chart](snapshots/tiny-many-10240mib-320.svg)

@@ -734,9 +734,7 @@ function benchmarkEnv(args: {
     SHIN_BENCH_SAMPLE_OWNER: run.sampleId,
     SHIN_BENCH_TRUST_ASSETS: "true",
     SHIN_BENCH_VERIFY_ASSETS_ONLY: "false",
-    ...(run.parallel === null
-      ? {}
-      : { SHIN_BENCH_LAMBDA_MAX_PARALLEL_TRANSFERS: String(run.parallel) }),
+    ...(run.parallel === null ? {} : { SHIN_BENCH_TRANSFER_MAX_CONCURRENCY: String(run.parallel) }),
     ...(run.sourceWindowBytes === undefined || run.sourceWindowBytes === null
       ? {}
       : { SHIN_BENCH_SOURCE_WINDOW_BYTES: String(run.sourceWindowBytes) }),

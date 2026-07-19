@@ -30,7 +30,7 @@ The lifecycle safety chains cover a root deployment sharing a bucket with a chil
 `pnpm benchmark` runs only the named benchmark scenario and expands the requested config matrix:
 
 ```bash
-pnpm benchmark deploy assets --asset-profiles tiny-many --implementations shin,aws --lambda-max-parallel-transfers 32 --lambda-memory-mb 1024
+pnpm benchmark deploy assets --asset-profiles tiny-many --implementations shin,aws --transfer-max-concurrency 32 --lambda-memory-mb 1024
 ```
 
 Verification evidence is summarized in `docs/verification.md`. Benchmark result rows and render tooling live in `benchmarks/`.

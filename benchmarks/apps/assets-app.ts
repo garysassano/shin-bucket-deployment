@@ -35,9 +35,7 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
     });
     const destinationPrefix = process.env.SHIN_BENCH_DESTINATION_PREFIX ?? "benchmark-site";
     const memoryLimitMb = parseOptionalPositiveIntegerEnv("SHIN_BENCH_LAMBDA_MEMORY_MB") ?? 1024;
-    const maxParallelTransfers = parseOptionalPositiveIntegerEnv(
-      "SHIN_BENCH_LAMBDA_MAX_PARALLEL_TRANSFERS",
-    );
+    const maxConcurrency = parseOptionalPositiveIntegerEnv("SHIN_BENCH_TRANSFER_MAX_CONCURRENCY");
     const sourceWindowBytes = parseOptionalPositiveIntegerEnv("SHIN_BENCH_SOURCE_WINDOW_BYTES");
     const detailedFailureDiagnostics =
       parseOptionalBooleanEnv("SHIN_BENCH_DETAILED_FAILURE_DIAGNOSTICS") ?? true;
@@ -112,11 +110,11 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
                 },
               }),
         },
-        ...(maxParallelTransfers === undefined && sourceWindowBytes === undefined
+        ...(maxConcurrency === undefined && sourceWindowBytes === undefined
           ? {}
           : {
               transfer: {
-                ...(maxParallelTransfers === undefined ? {} : { maxParallelTransfers }),
+                ...(maxConcurrency === undefined ? {} : { maxConcurrency }),
                 ...(sourceWindowBytes === undefined
                   ? {}
                   : { advancedTuning: { sourceWindowBytes } }),
@@ -184,8 +182,8 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
       value: String(memoryLimitMb),
     });
 
-    new CfnOutput(this, "BenchmarkMaxParallelTransfers", {
-      value: String(maxParallelTransfers ?? 32),
+    new CfnOutput(this, "BenchmarkTransferMaxConcurrency", {
+      value: String(maxConcurrency ?? 32),
     });
 
     new CfnOutput(this, "BenchmarkSourceWindowBytes", {

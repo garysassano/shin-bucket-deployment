@@ -7,7 +7,7 @@ import { Bucket } from "aws-cdk-lib/aws-s3";
 import { describe, expect, test } from "vitest";
 import {
   DestinationWriteRetryJitter,
-  ProviderScope,
+  ProviderSharing,
   ShinBucketDeployment,
   type ShinBucketDeploymentProps,
   Source,
@@ -32,7 +32,7 @@ function customResourceProperties(stack: Stack) {
 }
 
 describe("ShinBucketDeployment validation and option coverage", () => {
-  test("rejects an invalid provider scope", () => {
+  test("rejects an invalid provider sharing value", () => {
     const stack = new Stack();
     const destinationBucket = new Bucket(stack, "Dest");
 
@@ -48,7 +48,7 @@ describe("ShinBucketDeployment validation and option coverage", () => {
             localBuild: testLocalProviderBuild(),
           },
         }),
-    ).toThrow(/ProviderScope\.STACK or ProviderScope\.DEPLOYMENT/);
+    ).toThrow(/ProviderSharing\.STACK or ProviderSharing\.DEPLOYMENT/);
   });
 
   test("rejects an invalid failure diagnostics mode", () => {
@@ -457,7 +457,7 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     ["vpcSubnets", "providerLambda.vpcSubnets"],
     ["securityGroups", "providerLambda.securityGroups"],
     ["localProviderBuild", "providerLambda.localBuild"],
-    ["maxParallelTransfers", "transfer.maxParallelTransfers"],
+    ["maxParallelTransfers", "transfer.maxConcurrency"],
     ["advancedRuntimeTuning", "transfer.advancedTuning"],
   ] as const)("rejects former root property %s with exact migration guidance", (former, next) => {
     const stack = new Stack();
@@ -580,8 +580,13 @@ describe("ShinBucketDeployment validation and option coverage", () => {
   test.each([
     [
       "providerLambda.scope",
-      { providerLambda: { scope: ProviderScope.STACK } },
+      { providerLambda: { scope: ProviderSharing.STACK } },
       /providerLambda\.sharing/,
+    ],
+    [
+      "transfer.maxParallelTransfers",
+      { transfer: { maxParallelTransfers: 8 } },
+      /transfer\.maxConcurrency/,
     ],
     [
       "transfer.advancedTuning.putObjectRetry",
@@ -790,7 +795,7 @@ describe("ShinBucketDeployment validation and option coverage", () => {
         localBuild: testLocalProviderBuild(),
       },
       transfer: {
-        maxParallelTransfers: 7,
+        maxConcurrency: 7,
         advancedTuning: {
           sourceBlockBytes: 4 * 1024 * 1024,
           sourceBlockMergeGapBytes: 64 * 1024,
@@ -938,9 +943,9 @@ describe("ShinBucketDeployment validation and option coverage", () => {
       readonly message: RegExp;
     }> = [
       {
-        id: "TooManyTransfers",
-        props: { transfer: { maxParallelTransfers: 257 } },
-        message: /maxParallelTransfers.*256/,
+        id: "TooMuchConcurrency",
+        props: { transfer: { maxConcurrency: 257 } },
+        message: /maxConcurrency.*256/,
       },
       {
         id: "TooManySourceGets",

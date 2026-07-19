@@ -352,7 +352,7 @@ describe("benchmark methodology v2", () => {
     );
   });
 
-  test("plans repetitions sequentially and deduplicates AWS across Shin parallel settings", () => {
+  test("plans repetitions sequentially and deduplicates AWS across Shin concurrency settings", () => {
     const options: BenchmarkRunOptions = {
       ...parseBenchmarkRunOptions([
         "--run-id",

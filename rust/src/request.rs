@@ -6,8 +6,8 @@ use globset::{Glob, GlobMatcher};
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::s3::{
-    DEFAULT_MAX_PARALLEL_TRANSFERS, DEFAULT_SOURCE_BLOCK_BYTES,
-    DEFAULT_SOURCE_BLOCK_MERGE_GAP_BYTES, PUT_OBJECT_MAX_ATTEMPTS, PUT_OBJECT_RETRY_BASE_DELAY_MS,
+    DEFAULT_SOURCE_BLOCK_BYTES, DEFAULT_SOURCE_BLOCK_MERGE_GAP_BYTES,
+    DEFAULT_TRANSFER_MAX_CONCURRENCY, PUT_OBJECT_MAX_ATTEMPTS, PUT_OBJECT_RETRY_BASE_DELAY_MS,
     PUT_OBJECT_RETRY_MAX_DELAY_MS, PUT_OBJECT_SLOWDOWN_RETRY_BASE_DELAY_MS,
     PUT_OBJECT_SLOWDOWN_RETRY_MAX_DELAY_MS, adaptive_source_get_concurrency,
 };
@@ -297,7 +297,7 @@ fn runtime_options_with_memory(
 
     let max_parallel_transfers = raw
         .max_parallel_transfers
-        .unwrap_or(DEFAULT_MAX_PARALLEL_TRANSFERS);
+        .unwrap_or(DEFAULT_TRANSFER_MAX_CONCURRENCY);
     validate_usize_range(
         "MaxParallelTransfers",
         max_parallel_transfers,

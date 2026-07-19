@@ -57,7 +57,7 @@ The official `BucketDeployment` is a good default for many stacks, but its provi
 | Direct AWS SDK operations   | S3 copy, upload, and delete work is executed through Rust SDK calls instead of the upstream provider's `aws s3 cp`, `aws s3 sync`, and `aws s3 rm` subprocesses.                                                                                                                                                                                               |
 | Archive-aware planning      | For extracted assets, the provider plans directly from the zip archive instead of extracting the whole archive to a working directory before syncing.                                                                                                                                                                                                       |
 | Invocation-wide memory cap  | Central-directory planning and every source archive share a source-memory budget capped at half the provider's actual Lambda memory by default; destination cleanup retains at most manifest metadata plus one S3 page.                                                                                                                                                  |
-| Bounded fail-fast transfers | Transfer concurrency is capped by `transfer.maxParallelTransfers`. The first observed failure or panic stops admission and drains outstanding work before cleanup or invalidation can continue.                                                                                                                                                                                          |
+| Bounded fail-fast transfers | Transfer concurrency is capped by `transfer.maxConcurrency`. The first observed failure or panic stops admission and drains outstanding work before cleanup or invalidation can continue.                                                                                                                                                                                                  |
 | Encryption-aware writes     | SSE-S3 destinations use the cheap single-part MD5/`ETag` path; KMS and DSSE destinations store full-object SHA-256 only where encrypted `ETag`s cannot prove content identity.                                                                                                                                                                                  |
 | Bounded marker replacement  | Marker-free entries stream directly. Marker entries use deterministic simultaneous replacement with one exact-length planning pass and a second retryable streaming pass only when upload is required; neither pass retains the complete entry or output.                                                                                                  |
 | Safer destination moves     | Opt-in cleanup deploys new content first, infers the previous prefix, and preserves overlapping current namespaces. See [Destination Lifecycle](#destination-lifecycle).                                                                                                                                                                                    |
@@ -67,47 +67,114 @@ The official `BucketDeployment` is a good default for many stacks, but its provi
 > [!CAUTION]
 > These charts are illustrative, not performance guarantees or guidance for production defaults. See [Benchmark](docs/benchmark.md) for the supporting evidence.
 
-<img src="https://raw.githubusercontent.com/garysassano/shin-bucket-deployment/main/benchmarks/snapshots/tiny-many-1024mib-32.svg" alt="ShinBucketDeployment tiny-many 1024 MiB parallel 32 benchmark" width="100%">
+<img src="https://raw.githubusercontent.com/garysassano/shin-bucket-deployment/main/benchmarks/snapshots/tiny-many-1024mib-32.svg" alt="ShinBucketDeployment tiny-many 1024 MiB max concurrency 32 benchmark" width="100%">
 
-<img src="https://raw.githubusercontent.com/garysassano/shin-bucket-deployment/main/benchmarks/snapshots/tiny-many-2048mib-64.svg" alt="ShinBucketDeployment tiny-many 2048 MiB parallel 64 benchmark" width="100%">
+<img src="https://raw.githubusercontent.com/garysassano/shin-bucket-deployment/main/benchmarks/snapshots/tiny-many-2048mib-64.svg" alt="ShinBucketDeployment tiny-many 2048 MiB max concurrency 64 benchmark" width="100%">
 
-## Construct Properties
+## Construct API
 
 The root props contain seven domain components. Configuration groups are plain values; they do not create additional CDK construct scopes or resources.
 
 ### Supported Properties
 
-| Component | Supported |
-| --- | --- |
-| `sources` | Ordered upstream `ISource` values plus Shin's `Source.asset`, `Source.bucket`, `Source.data`, `Source.jsonData`, and `Source.yamlData` helpers. |
-| `destination` | Required `bucket` and optional `keyPrefix`. |
-| `sourceProcessing` | `extract`, `include`, and `exclude`. Exclusions also constrain stale-object deletion. |
-| `providerLambda` | `sharing`, `architecture`, `memorySize`, `failureDiagnostics`, `role`, `logGroup`, `vpc`, `vpcSubnets`, `securityGroups`, and `localBuild`. |
-| `transfer` | `maxParallelTransfers` and experimental `advancedTuning`. These settings are request-scoped and do not split a compatible shared handler. |
-| `cloudfrontInvalidation` | `distribution`, `paths`, and `waitForCompletion`. |
-| `destinationLifecycle` | Explicit `onDeploy`, `onChange`, and `onDelete` destructive policy. |
-| Outputs | `deployedBucket`, `objectKeys`, `handlerRole`, and `handlerFunction`. |
+Only `sources` and `destination` are required. Sources accept any upstream CDK `ISource`; Shin also provides `Source.asset`, `Source.bucket`, `Source.data`, `Source.jsonData`, and `Source.yamlData` helpers.
 
-### Focused Advanced Example
+The complete construct configuration shape is:
 
 ```ts
-import { ProviderScope, ShinBucketDeployment, Source } from "shin-bucket-deployment";
+interface ShinBucketDeploymentProps {
+  // Ordered upstream ISource values. Later sources overwrite earlier sources.
+  readonly sources: ISource[];
 
-new ShinBucketDeployment(this, "DeployWebsite", {
-  sources: [Source.asset("site")],
-  destination: {
-    bucket,
-    keyPrefix: "site",
-  },
-  providerLambda: {
-    sharing: ProviderScope.DEPLOYMENT,
-    memorySize: 2048,
-  },
-  transfer: {
-    maxParallelTransfers: 64,
-  },
-});
+  // Bound source-archive handling and object selection. Exclusions constrain stale deletion.
+  readonly sourceProcessing?: {
+    readonly extract?: boolean; // Default: true
+    readonly include?: string[]; // Default: include every non-excluded path
+    readonly exclude?: string[]; // Default: exclude nothing
+  };
+
+  // Current S3 destination location.
+  readonly destination: {
+    readonly bucket: Bucket;
+    readonly keyPrefix?: string; // Default: bucket root
+  };
+
+  // Explicit destructive behavior by CloudFormation lifecycle phase.
+  readonly destinationLifecycle?: {
+    readonly onDeploy?: {
+      readonly deleteStaleObjects?: boolean; // Default: true
+    };
+    readonly onChange?: {
+      readonly deletePreviousObjects?: boolean; // Default: false
+      readonly previousBucket?: IBucket; // Required to delete from a changed bucket
+      readonly invalidatePreviousDistribution?: IDistributionRef; // Required to invalidate a changed distribution
+    };
+    readonly onDelete?: {
+      readonly deleteCurrentObjects?: boolean; // Default: false
+    };
+  };
+
+  // Optional cache invalidation after successful destination work.
+  readonly cloudfrontInvalidation?: {
+    readonly distribution: IDistributionRef;
+    readonly paths?: string[]; // Default: the destination prefix followed by "*"
+    readonly waitForCompletion?: boolean; // Default: true
+  };
+
+  // Lambda resource, identity, sharing, networking, and build configuration.
+  readonly providerLambda?: {
+    readonly sharing?: ProviderSharing; // Default: ProviderSharing.STACK
+    readonly architecture?: Architecture; // Default: Architecture.ARM_64
+    readonly memorySize?: number; // Default: 1024 MiB
+    readonly failureDiagnostics?: FailureDiagnostics; // Default: STANDARD
+    readonly role?: IRole; // Default: create a shared provider role
+    readonly logGroup?: ILogGroupRef; // Default: Lambda-managed log group
+    readonly vpc?: IVpc; // Default: no VPC
+    readonly vpcSubnets?: SubnetSelection; // Default: VPC default selection
+    readonly securityGroups?: ISecurityGroup[]; // Default: dedicated group in a VPC
+    readonly localBuild?: {
+      readonly projectPath?: string;
+      readonly bundling?: ShinBucketDeploymentBundlingOptions;
+    }; // Default: use the packaged prebuilt provider
+  };
+
+  // Request-scoped controls; these do not split a compatible shared handler.
+  readonly transfer?: {
+    readonly maxConcurrency?: number; // Default: 32
+    readonly advancedTuning?: {
+      readonly sourceBlockBytes?: number; // Default: 8 MiB
+      readonly sourceBlockMergeGapBytes?: number; // Default: 256 KiB
+      readonly sourceGetConcurrency?: number; // Default: derived from Lambda memory
+      readonly sourceWindowBytes?: number; // Default: derived from memory and source shape
+      readonly sourceWindowMemoryBudgetMiB?: number; // Default: 50% of Lambda memory
+      readonly destinationWriteRetry?: {
+        readonly maxAttempts?: number; // Default: 6
+        readonly baseDelayMs?: number; // Default: 250
+        readonly maxDelayMs?: number; // Default: 5000
+        readonly slowdownBaseDelayMs?: number; // Default: 1000
+        readonly slowdownMaxDelayMs?: number; // Default: 30000
+        readonly jitter?: DestinationWriteRetryJitter; // Default: FULL
+      };
+    };
+  };
+}
 ```
+
+Most consumers should omit `providerLambda.localBuild` and use the packaged provider. See [Building from source](docs/building-from-source.md) when you need to compile it yourself.
+
+### Instance Members
+
+The constructed deployment exposes these properties and methods; they are not input props.
+
+| Member | Description |
+| --- | --- |
+| `deployment.deployedBucket` | Destination bucket reconstructed lazily from the custom-resource response. |
+| `deployment.objectKeys` | Deployed object keys requested lazily from the custom-resource response. |
+| `deployment.handlerRole` | Execution role used by the backing provider Lambda. |
+| `deployment.handlerFunction` | Backing provider Lambda function. |
+| `deployment.addSource(source)` | Adds another ordered source after construction. |
+
+## `BucketDeployment` Compatibility
 
 ### Replaced Properties
 
@@ -179,8 +246,4 @@ Shin plans extracted assets directly from ranged S3 reads without staging comple
 
 Content checks and write reconciliation adapt to the destination bucket's encryption. Transfer failures stop later cleanup and invalidation, and structured diagnostics are emitted without resource identifiers or presigned URLs.
 
-See [Architecture](docs/architecture.md) for the handler flow, archive planning, memory model, retry and write-safety rules, marker replacement, lifecycle behavior, compatibility tradeoffs, limits, and diagnostics field reference.
-
-## Development
-
-To rebuild the Rust provider binaries or use a local checkout in your CDK app, see [Building from source](docs/building-from-source.md). The latest correctness snapshot is recorded in [Verification](docs/verification.md).
+See [Architecture](docs/architecture.md) for the handler flow, archive planning, memory model, retry and write-safety rules, marker replacement, lifecycle behavior, compatibility tradeoffs, limits, and diagnostics field reference. The latest correctness snapshot is recorded in [Verification](docs/verification.md).

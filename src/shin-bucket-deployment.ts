@@ -20,7 +20,7 @@ import { Bucket, type IBucket } from "aws-cdk-lib/aws-s3";
 import type { ISource, SourceConfig } from "aws-cdk-lib/aws-s3-deployment";
 import { Construct } from "constructs";
 import { destinationChecksumStrategy, inspectableDestinationBucketResource } from "./destination";
-import type { DestinationWriteRetryJitter, FailureDiagnostics, ProviderScope } from "./enums";
+import type { DestinationWriteRetryJitter, FailureDiagnostics, ProviderSharing } from "./enums";
 import { ValidationError } from "./errors";
 import { grantDestinationPermissions } from "./iam";
 import { PROVIDER_TIMEOUT, type ProviderLambdaConfig, getOrCreateHandler } from "./provider";
@@ -243,7 +243,7 @@ export interface ShinBucketDeploymentDestinationWriteRetryTuning {
  *
  * @experimental These settings may change as the provider's adaptive defaults
  * evolve. Most deployments should use `providerLambda.memorySize` and
- * `transfer.maxParallelTransfers` instead.
+ * `transfer.maxConcurrency` instead.
  */
 export interface ShinBucketDeploymentAdvancedTransferTuning {
   /**
@@ -349,8 +349,8 @@ export interface ShinBucketDeploymentProviderLambdaOptions {
   /**
    * Sharing and isolation behavior for the provider Lambda.
    *
-   * `ProviderScope.STACK` reuses one Lambda for deployments with the same
-   * provider configuration. `ProviderScope.DEPLOYMENT` creates a
+   * `ProviderSharing.STACK` reuses one Lambda for deployments with the same
+   * provider configuration. `ProviderSharing.DEPLOYMENT` creates a
    * deployment-scoped function and generated role, preventing permissions from
    * other deployments from accumulating on them. Explicit `role` and
    * `logGroup` values remain caller-owned and can still be shared intentionally.
@@ -358,9 +358,9 @@ export interface ShinBucketDeploymentProviderLambdaOptions {
    * Isolation creates more Lambda, role, and log resources and gives each
    * deployment an independent cold-start lifecycle.
    *
-   * @default ProviderScope.STACK
+   * @default ProviderSharing.STACK
    */
-  readonly sharing?: ProviderScope;
+  readonly sharing?: ProviderSharing;
 
   /**
    * Lambda architecture for the Rust provider.
@@ -403,7 +403,7 @@ export interface ShinBucketDeploymentProviderLambdaOptions {
    * Deployments with the same provider configuration share a handler and role
    * by default. Source, destination, KMS, and CloudFront permissions from every
    * sharing deployment accumulate on that role. A caller-supplied role remains
-   * caller-owned even with `sharing: ProviderScope.DEPLOYMENT`.
+   * caller-owned even with `sharing: ProviderSharing.DEPLOYMENT`.
    *
    * @default - a role is created for the provider
    */
@@ -451,14 +451,14 @@ export interface ShinBucketDeploymentTransferOptions {
    * Maximum concurrent logical object transfers run by the provider.
    * Must be in the inclusive range 1..256.
    *
-   * @default DEFAULT_MAX_PARALLEL_TRANSFERS (32)
+   * @default DEFAULT_TRANSFER_MAX_CONCURRENCY (32)
    */
-  readonly maxParallelTransfers?: number;
+  readonly maxConcurrency?: number;
 
   /**
    * Low-level request-scoped controls intended for measured tuning and support.
    * Most deployments should leave this unset and use
-   * `providerLambda.memorySize` plus `maxParallelTransfers` as the public
+   * `providerLambda.memorySize` plus `maxConcurrency` as the public
    * controls.
    *
    * @experimental These settings may change as adaptive defaults evolve.
@@ -636,7 +636,7 @@ export interface ShinBucketDeploymentProps {
  * deployments. `providerLambda` settings and the package/provider identity
  * participate in shared identity; request-level `transfer` settings do not and
  * can differ between sharing deployments. Set
- * `providerLambda.sharing: ProviderScope.DEPLOYMENT` for a deployment-scoped
+ * `providerLambda.sharing: ProviderSharing.DEPLOYMENT` for a deployment-scoped
  * function and generated role.
  */
 export class ShinBucketDeployment extends Construct {
@@ -660,7 +660,7 @@ export class ShinBucketDeployment extends Construct {
    * The backing Rust Lambda function.
    *
    * This is shared by default and deployment-scoped when
-   * `providerLambda.sharing` is `ProviderScope.DEPLOYMENT`.
+   * `providerLambda.sharing` is `ProviderSharing.DEPLOYMENT`.
    */
   public readonly handlerFunction: LambdaFunction;
 
@@ -806,7 +806,7 @@ export class ShinBucketDeployment extends Construct {
           produce: () =>
             this.requestDestinationArn ? this.destinationBucket.bucketArn : undefined,
         }),
-        MaxParallelTransfers: transfer.maxParallelTransfers,
+        MaxParallelTransfers: transfer.maxConcurrency,
         SourceBlockBytes: advancedTuning.sourceBlockBytes,
         SourceBlockMergeGapBytes: advancedTuning.sourceBlockMergeGapBytes,
         SourceGetConcurrency: advancedTuning.sourceGetConcurrency,

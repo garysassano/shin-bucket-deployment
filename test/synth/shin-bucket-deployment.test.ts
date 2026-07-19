@@ -12,7 +12,7 @@ import { LogGroup } from "aws-cdk-lib/aws-logs";
 import { Bucket, BucketEncryption, BucketNamespace, CfnBucket } from "aws-cdk-lib/aws-s3";
 import type { IConstruct } from "constructs";
 import { expect, test } from "vitest";
-import { FailureDiagnostics, ProviderScope, ShinBucketDeployment, Source } from "../../src";
+import { FailureDiagnostics, ProviderSharing, ShinBucketDeployment, Source } from "../../src";
 import { renderHandlerConfigHashInput } from "../../src/provider";
 import { stableStringify } from "../../src/stable-json";
 import { testLocalProviderBuild } from "../support/bundling";
@@ -185,7 +185,7 @@ test("reuses a shared prebuilt handler for compatible deployments", () => {
         bucket: secondBucket,
       },
       providerLambda: {
-        sharing: ProviderScope.STACK,
+        sharing: ProviderSharing.STACK,
       },
     });
 
@@ -427,7 +427,7 @@ test("keeps every transfer setting request-scoped while sharing one handler", ()
     destination: { bucket: new Bucket(stack, "FirstDest") },
     providerLambda: { localBuild: testLocalProviderBuild() },
     transfer: {
-      maxParallelTransfers: 3,
+      maxConcurrency: 3,
       advancedTuning: { sourceBlockBytes: 4 * 1024 * 1024 },
     },
   });
@@ -436,7 +436,7 @@ test("keeps every transfer setting request-scoped while sharing one handler", ()
     destination: { bucket: new Bucket(stack, "SecondDest") },
     providerLambda: { localBuild: testLocalProviderBuild() },
     transfer: {
-      maxParallelTransfers: 9,
+      maxConcurrency: 9,
       advancedTuning: { sourceBlockBytes: 8 * 1024 * 1024 },
     },
   });
@@ -449,18 +449,18 @@ test("keeps every transfer setting request-scoped while sharing one handler", ()
   const requestSettings = Object.values(resources)
     .filter((resource) => resource.Type === "AWS::CloudFormation::CustomResource")
     .map((resource) => ({
-      maxParallelTransfers: resource.Properties.MaxParallelTransfers,
+      maxConcurrency: resource.Properties.MaxParallelTransfers,
       sourceBlockBytes: resource.Properties.SourceBlockBytes,
     }))
-    .sort((left, right) => Number(left.maxParallelTransfers) - Number(right.maxParallelTransfers));
+    .sort((left, right) => Number(left.maxConcurrency) - Number(right.maxConcurrency));
   expect(requestSettings).toEqual([
-    { maxParallelTransfers: 3, sourceBlockBytes: 4 * 1024 * 1024 },
-    { maxParallelTransfers: 9, sourceBlockBytes: 8 * 1024 * 1024 },
+    { maxConcurrency: 3, sourceBlockBytes: 4 * 1024 * 1024 },
+    { maxConcurrency: 9, sourceBlockBytes: 8 * 1024 * 1024 },
   ]);
 });
 
 test("keeps omitted and explicit stack-scoped provider templates identical", () => {
-  function synth(sharing: ProviderScope.STACK | undefined): Record<string, unknown> {
+  function synth(sharing: ProviderSharing.STACK | undefined): Record<string, unknown> {
     const stack = new Stack();
     const destinationBucket = new Bucket(stack, "Dest");
     new ShinBucketDeployment(stack, "Deploy", {
@@ -476,7 +476,7 @@ test("keeps omitted and explicit stack-scoped provider templates identical", () 
     return Template.fromStack(stack).toJSON();
   }
 
-  expect(synth(ProviderScope.STACK)).toEqual(synth(undefined));
+  expect(synth(ProviderSharing.STACK)).toEqual(synth(undefined));
 });
 
 test("treats an empty providerLambda group as exact omission", () => {
@@ -561,7 +561,7 @@ test("isolates functions, generated roles, and destination policies per deployme
       bucket: sharedSecondBucket,
     },
     providerLambda: {
-      sharing: ProviderScope.STACK,
+      sharing: ProviderSharing.STACK,
       localBuild: testLocalProviderBuild(),
     },
   });
@@ -571,7 +571,7 @@ test("isolates functions, generated roles, and destination policies per deployme
       bucket: isolatedFirstBucket,
     },
     providerLambda: {
-      sharing: ProviderScope.DEPLOYMENT,
+      sharing: ProviderSharing.DEPLOYMENT,
       localBuild: testLocalProviderBuild(),
     },
   });
@@ -581,7 +581,7 @@ test("isolates functions, generated roles, and destination policies per deployme
       bucket: isolatedSecondBucket,
     },
     providerLambda: {
-      sharing: ProviderScope.DEPLOYMENT,
+      sharing: ProviderSharing.DEPLOYMENT,
       localBuild: testLocalProviderBuild(),
     },
   });
@@ -698,7 +698,7 @@ test("keeps an isolated handler and service token stable across configuration up
         bucket: destinationBucket,
       },
       providerLambda: {
-        sharing: ProviderScope.DEPLOYMENT,
+        sharing: ProviderSharing.DEPLOYMENT,
         memorySize: memoryLimit,
         localBuild: testLocalProviderBuild(),
       },

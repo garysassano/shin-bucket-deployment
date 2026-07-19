@@ -3,8 +3,8 @@ import { join } from "node:path";
 import { expect, test } from "vitest";
 import {
   DEFAULT_FAILURE_DIAGNOSTICS,
-  DEFAULT_MAX_PARALLEL_TRANSFERS,
   DEFAULT_PROVIDER_LAMBDA_MEMORY_SIZE_MIB,
+  DEFAULT_TRANSFER_MAX_CONCURRENCY,
   FailureDiagnostics,
 } from "../../src";
 
@@ -23,7 +23,7 @@ test("keeps public JSDoc defaults bound to the exported source constants", () =>
     `@default DEFAULT_PROVIDER_LAMBDA_MEMORY_SIZE_MIB (${DEFAULT_PROVIDER_LAMBDA_MEMORY_SIZE_MIB})`,
   );
   expect(publicSource).toContain(
-    `@default DEFAULT_MAX_PARALLEL_TRANSFERS (${DEFAULT_MAX_PARALLEL_TRANSFERS})`,
+    `@default DEFAULT_TRANSFER_MAX_CONCURRENCY (${DEFAULT_TRANSFER_MAX_CONCURRENCY})`,
   );
   expect(publicSource).toContain(
     "@default DEFAULT_FAILURE_DIAGNOSTICS (FailureDiagnostics.STANDARD)",
@@ -31,7 +31,7 @@ test("keeps public JSDoc defaults bound to the exported source constants", () =>
   expect(providerSource).toContain("config.memorySize ?? DEFAULT_PROVIDER_LAMBDA_MEMORY_SIZE_MIB");
   expect(providerSource).toContain("config.failureDiagnostics ?? DEFAULT_FAILURE_DIAGNOSTICS");
   expect(rustSource).toContain(
-    `DEFAULT_MAX_PARALLEL_TRANSFERS: usize = ${DEFAULT_MAX_PARALLEL_TRANSFERS};`,
+    `DEFAULT_TRANSFER_MAX_CONCURRENCY: usize = ${DEFAULT_TRANSFER_MAX_CONCURRENCY};`,
   );
   expect(DEFAULT_FAILURE_DIAGNOSTICS).toBe(FailureDiagnostics.STANDARD);
 });

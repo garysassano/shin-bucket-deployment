@@ -52,7 +52,7 @@ const CLI_OPTIONS = [
   "asset-profile",
   "config",
   "input-file",
-  "lambda-max-parallel-transfers",
+  "transfer-max-concurrency",
   "lambda-memory-mb",
   "methodology-version",
   "output-file",
@@ -160,7 +160,7 @@ function renderScope(records: BenchmarkRecord[], preview: boolean): string {
     `- Implementations: ${implementations.join(", ")}`,
     `- Asset profiles: ${assetProfiles.join(", ")}`,
     `- Memory MiB: ${memoryValues.join(", ")}`,
-    `- Parallel transfers: ${parallelValues.join(", ")}`,
+    `- Max concurrency: ${parallelValues.join(", ")}`,
     `- Source window bytes: ${sourceWindowValues.join(", ")}`,
     `- Phases: ${phases.join(", ")}`,
   ].join("\n");
@@ -170,7 +170,7 @@ function reportTitle(options: RenderOptions): string {
   const filters = [
     options.assetProfile,
     options.memoryMb === undefined ? undefined : `${options.memoryMb} MiB`,
-    options.parallel === undefined ? undefined : `parallel ${options.parallel}`,
+    options.parallel === undefined ? undefined : `max concurrency ${options.parallel}`,
   ].filter((value) => value !== undefined);
   return filters.length === 0 ? "benchmark results" : filters.join(" / ");
 }
@@ -197,7 +197,7 @@ function renderMetricSection(
 
 function renderMetricTable(rows: AggregatedRow[], unit: string): string {
   return [
-    `| Asset profile | Phase | Memory MiB | Parallel | Source window bytes | Implementation | n | median (${unit}) | Q1 (${unit}) | Q3 (${unit}) | IQR (${unit}) | min (${unit}) | max (${unit}) |`,
+    `| Asset profile | Phase | Memory MiB | Max concurrency | Source window bytes | Implementation | n | median (${unit}) | Q1 (${unit}) | Q3 (${unit}) | IQR (${unit}) | min (${unit}) | max (${unit}) |`,
     "| --- | --- | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ...rows.map(
       (row) =>
@@ -225,7 +225,7 @@ function renderComparisonSummaryTable(records: BenchmarkRecord[], preview: boole
   }
 
   return [
-    "| Asset profile | Phase | Memory MiB | Parallel | Source window bytes | Provider duration | Local wall time | CDK deploy time | Max memory |",
+    "| Asset profile | Phase | Memory MiB | Max concurrency | Source window bytes | Provider duration | Local wall time | CDK deploy time | Max memory |",
     "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ...rows.map((row) => {
       return `| ${row.profile} | ${row.phase} | ${row.memoryMb ?? ""} | ${row.parallel ?? ""} | ${formatSourceWindow(row.sourceWindowBytes)} | ${formatOptionalComparisonCell(row.metrics.providerDurationSeconds)} | ${formatOptionalComparisonCell(row.metrics.localWallSeconds)} | ${formatOptionalComparisonCell(row.metrics.cdkDeploySeconds)} | ${formatOptionalMemoryCell(row.metrics.maxMemoryMb)} |`;
@@ -308,7 +308,7 @@ function buildPhaseComparisonRows(
 
 function phaseTitle(row: PhaseComparisonRow): string {
   const memory = row.memoryMb === null ? "" : ` at ${row.memoryMb} MiB`;
-  const parallel = row.parallel === null ? "" : ` / parallel ${row.parallel}`;
+  const parallel = row.parallel === null ? "" : ` / max concurrency ${row.parallel}`;
   const sourceWindow = ` / source window ${formatSourceWindow(row.sourceWindowBytes)}`;
   return `${row.profile} ${row.phase}${memory}${parallel}${sourceWindow}`;
 }
@@ -525,7 +525,7 @@ function parseArgs(args: string[]): RenderOptions {
     inputFile: values.get("input-file") ?? "benchmarks/results.jsonl",
     outputFile: values.get("output-file") ?? "benchmarks/report.md",
     memoryMb: parsePositiveInteger(values.get("lambda-memory-mb")),
-    parallel: parsePositiveInteger(values.get("lambda-max-parallel-transfers")),
+    parallel: parsePositiveInteger(values.get("transfer-max-concurrency")),
     methodologyVersion: parseMethodologyVersion(values.get("methodology-version")),
     preview: parseBoolean(values.get("preview")),
     runId: values.get("run-id"),
@@ -562,7 +562,7 @@ function parsePositiveInteger(value: string | undefined): number | undefined {
 
 function usage(): never {
   console.error(
-    "Usage: node dist/benchmarks/src/render/comparison-report.js [--input-file benchmarks/results.jsonl] [--output-file benchmarks/report.md] [--asset-profile <name>] [--lambda-max-parallel-transfers <n>] [--lambda-memory-mb <n>] [--preview true|false]",
+    "Usage: node dist/benchmarks/src/render/comparison-report.js [--input-file benchmarks/results.jsonl] [--output-file benchmarks/report.md] [--asset-profile <name>] [--transfer-max-concurrency <n>] [--lambda-memory-mb <n>] [--preview true|false]",
   );
   process.exit(1);
 }

@@ -9,13 +9,13 @@
 - Implementations: shin, aws
 - Asset profiles: tiny-many, large-few
 - Memory MiB: 1024
-- Parallel transfers: 32
+- Max concurrency: 32
 - Source window bytes: adaptive
 - Phases: cold-create, unchanged-update, changed-update, pruned-update
 
 ## ShinBucketDeployment vs AWS BucketDeployment
 
-| Asset profile | Phase | Memory MiB | Parallel | Source window bytes | Provider duration | Local wall time | CDK deploy time | Max memory |
+| Asset profile | Phase | Memory MiB | Max concurrency | Source window bytes | Provider duration | Local wall time | CDK deploy time | Max memory |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | large-few | cold-create | 1024 | 32 | adaptive | 2.484 s vs 9.169 s (3.691x faster) | 73.637 s vs 78.814 s (1.07x faster) | 57.69 s vs 63.03 s (1.093x faster) | 121 MiB vs 435 MiB (72.184% lower) |
 | large-few | unchanged-update | 1024 | 32 | adaptive | 0.32 s vs 9.231 s (28.847x faster) | 35.53 s vs 46.286 s (1.303x faster) | 19.31 s vs 30.32 s (1.57x faster) | 34 MiB vs 435 MiB (92.184% lower) |
@@ -26,7 +26,7 @@
 | tiny-many | changed-update | 1024 | 32 | adaptive | 0.657 s vs 26.665 s (40.586x faster) | 36.015 s vs 68.314 s (1.897x faster) | 19.24 s vs 46.79 s (2.432x faster) | 36 MiB vs 212 MiB (83.019% lower) |
 | tiny-many | pruned-update | 1024 | 32 | adaptive | 2.978 s vs 26.204 s (8.799x faster) | 41.753 s vs 64.044 s (1.534x faster) | 25.12 s vs 47.17 s (1.878x faster) | 36 MiB vs 207 MiB (82.609% lower) |
 
-### large-few cold-create at 1024 MiB / parallel 32 / source window adaptive
+### large-few cold-create at 1024 MiB / max concurrency 32 / source window adaptive
 
 | Metric | ShinBucketDeployment | AWS BucketDeployment | Difference | AWS/Shin | AWS delta % |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -37,7 +37,7 @@
 | CDK deploy time | 57.69 s | 63.03 s | +5.34 s | 1.093x | +9.256% |
 | Max memory | 121 MiB | 435 MiB | +314 MiB | 3.595x | +259.504% |
 
-### large-few unchanged-update at 1024 MiB / parallel 32 / source window adaptive
+### large-few unchanged-update at 1024 MiB / max concurrency 32 / source window adaptive
 
 | Metric | ShinBucketDeployment | AWS BucketDeployment | Difference | AWS/Shin | AWS delta % |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -48,7 +48,7 @@
 | CDK deploy time | 19.31 s | 30.32 s | +11.01 s | 1.57x | +57.017% |
 | Max memory | 34 MiB | 435 MiB | +401 MiB | 12.794x | +1179.412% |
 
-### large-few changed-update at 1024 MiB / parallel 32 / source window adaptive
+### large-few changed-update at 1024 MiB / max concurrency 32 / source window adaptive
 
 | Metric | ShinBucketDeployment | AWS BucketDeployment | Difference | AWS/Shin | AWS delta % |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -59,7 +59,7 @@
 | CDK deploy time | 19.32 s | 30.28 s | +10.96 s | 1.567x | +56.729% |
 | Max memory | 38 MiB | 434 MiB | +396 MiB | 11.421x | +1042.105% |
 
-### large-few pruned-update at 1024 MiB / parallel 32 / source window adaptive
+### large-few pruned-update at 1024 MiB / max concurrency 32 / source window adaptive
 
 | Metric | ShinBucketDeployment | AWS BucketDeployment | Difference | AWS/Shin | AWS delta % |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -70,7 +70,7 @@
 | CDK deploy time | 19.46 s | 30.58 s | +11.12 s | 1.571x | +57.143% |
 | Max memory | 54 MiB | 407 MiB | +353 MiB | 7.537x | +653.704% |
 
-### tiny-many cold-create at 1024 MiB / parallel 32 / source window adaptive
+### tiny-many cold-create at 1024 MiB / max concurrency 32 / source window adaptive
 
 | Metric | ShinBucketDeployment | AWS BucketDeployment | Difference | AWS/Shin | AWS delta % |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -81,7 +81,7 @@
 | CDK deploy time | 57.55 s | 84.98 s | +27.43 s | 1.477x | +47.663% |
 | Max memory | 47 MiB | 218 MiB | +171 MiB | 4.638x | +363.83% |
 
-### tiny-many unchanged-update at 1024 MiB / parallel 32 / source window adaptive
+### tiny-many unchanged-update at 1024 MiB / max concurrency 32 / source window adaptive
 
 | Metric | ShinBucketDeployment | AWS BucketDeployment | Difference | AWS/Shin | AWS delta % |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -92,7 +92,7 @@
 | CDK deploy time | 19.32 s | 46.88 s | +27.56 s | 2.427x | +142.65% |
 | Max memory | 36 MiB | 209 MiB | +173 MiB | 5.806x | +480.556% |
 
-### tiny-many changed-update at 1024 MiB / parallel 32 / source window adaptive
+### tiny-many changed-update at 1024 MiB / max concurrency 32 / source window adaptive
 
 | Metric | ShinBucketDeployment | AWS BucketDeployment | Difference | AWS/Shin | AWS delta % |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -103,7 +103,7 @@
 | CDK deploy time | 19.24 s | 46.79 s | +27.55 s | 2.432x | +143.191% |
 | Max memory | 36 MiB | 212 MiB | +176 MiB | 5.889x | +488.889% |
 
-### tiny-many pruned-update at 1024 MiB / parallel 32 / source window adaptive
+### tiny-many pruned-update at 1024 MiB / max concurrency 32 / source window adaptive
 
 | Metric | ShinBucketDeployment | AWS BucketDeployment | Difference | AWS/Shin | AWS delta % |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -118,7 +118,7 @@
 
 ### Provider duration
 
-| Asset profile | Phase | Memory MiB | Parallel | Source window bytes | Implementation | n | median (s) | Q1 (s) | Q3 (s) | IQR (s) | min (s) | max (s) |
+| Asset profile | Phase | Memory MiB | Max concurrency | Source window bytes | Implementation | n | median (s) | Q1 (s) | Q3 (s) | IQR (s) | min (s) | max (s) |
 | --- | --- | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | large-few | cold-create | 1024 |  | adaptive | aws | 5 | 9.169 | 9.034 | 9.25 | 0.216 | 8.236 | 9.373 |
 | large-few | unchanged-update | 1024 |  | adaptive | aws | 5 | 9.231 | 9.11 | 9.283 | 0.173 | 8.991 | 9.321 |
@@ -158,7 +158,7 @@ tiny-many pruned-update 1024/32/adaptive shin    | ### 2.978 s
 
 ### Billed duration
 
-| Asset profile | Phase | Memory MiB | Parallel | Source window bytes | Implementation | n | median (s) | Q1 (s) | Q3 (s) | IQR (s) | min (s) | max (s) |
+| Asset profile | Phase | Memory MiB | Max concurrency | Source window bytes | Implementation | n | median (s) | Q1 (s) | Q3 (s) | IQR (s) | min (s) | max (s) |
 | --- | --- | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | large-few | cold-create | 1024 |  | adaptive | aws | 5 | 9.702 | 9.567 | 9.778 | 0.211 | 8.719 | 9.918 |
 | large-few | unchanged-update | 1024 |  | adaptive | aws | 5 | 9.757 | 9.662 | 9.85 | 0.188 | 9.515 | 10.071 |
@@ -198,7 +198,7 @@ tiny-many pruned-update 1024/32/adaptive shin    | ### 3.129 s
 
 ### Init duration
 
-| Asset profile | Phase | Memory MiB | Parallel | Source window bytes | Implementation | n | median (s) | Q1 (s) | Q3 (s) | IQR (s) | min (s) | max (s) |
+| Asset profile | Phase | Memory MiB | Max concurrency | Source window bytes | Implementation | n | median (s) | Q1 (s) | Q3 (s) | IQR (s) | min (s) | max (s) |
 | --- | --- | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | large-few | cold-create | 1024 |  | adaptive | aws | 5 | 0.533 | 0.527 | 0.533 | 0.006 | 0.483 | 0.545 |
 | large-few | unchanged-update | 1024 |  | adaptive | aws | 5 | 0.529 | 0.525 | 0.551 | 0.026 | 0.524 | 0.787 |
@@ -238,7 +238,7 @@ tiny-many pruned-update 1024/32/adaptive shin    | ###### 0.127 s
 
 ### Local wall time
 
-| Asset profile | Phase | Memory MiB | Parallel | Source window bytes | Implementation | n | median (s) | Q1 (s) | Q3 (s) | IQR (s) | min (s) | max (s) |
+| Asset profile | Phase | Memory MiB | Max concurrency | Source window bytes | Implementation | n | median (s) | Q1 (s) | Q3 (s) | IQR (s) | min (s) | max (s) |
 | --- | --- | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | large-few | cold-create | 1024 |  | adaptive | aws | 5 | 78.814 | 78.727 | 78.862 | 0.135 | 73.737 | 78.937 |
 | large-few | unchanged-update | 1024 |  | adaptive | aws | 5 | 46.286 | 46.082 | 46.305 | 0.223 | 41.937 | 46.319 |
@@ -278,7 +278,7 @@ tiny-many pruned-update 1024/32/adaptive shin    | ############ 41.753 s
 
 ### CDK deploy time
 
-| Asset profile | Phase | Memory MiB | Parallel | Source window bytes | Implementation | n | median (s) | Q1 (s) | Q3 (s) | IQR (s) | min (s) | max (s) |
+| Asset profile | Phase | Memory MiB | Max concurrency | Source window bytes | Implementation | n | median (s) | Q1 (s) | Q3 (s) | IQR (s) | min (s) | max (s) |
 | --- | --- | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | large-few | cold-create | 1024 |  | adaptive | aws | 5 | 63.03 | 63.02 | 63.05 | 0.03 | 60.84 | 63.05 |
 | large-few | unchanged-update | 1024 |  | adaptive | aws | 5 | 30.32 | 30.31 | 30.33 | 0.02 | 28.71 | 30.39 |
@@ -318,7 +318,7 @@ tiny-many pruned-update 1024/32/adaptive shin    | ######### 25.12 s
 
 ### Max memory
 
-| Asset profile | Phase | Memory MiB | Parallel | Source window bytes | Implementation | n | median (MiB) | Q1 (MiB) | Q3 (MiB) | IQR (MiB) | min (MiB) | max (MiB) |
+| Asset profile | Phase | Memory MiB | Max concurrency | Source window bytes | Implementation | n | median (MiB) | Q1 (MiB) | Q3 (MiB) | IQR (MiB) | min (MiB) | max (MiB) |
 | --- | --- | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | large-few | cold-create | 1024 |  | adaptive | aws | 5 | 435 | 435 | 435 | 0 | 435 | 435 |
 | large-few | unchanged-update | 1024 |  | adaptive | aws | 5 | 435 | 435 | 435 | 0 | 435 | 435 |
