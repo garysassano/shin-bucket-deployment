@@ -37,9 +37,7 @@ Never commit:
 - raw CloudWatch log exports
 - profile names
 
-Treat a maintainer-supplied AWS profile name as a local-only command input. In
-committed docs, PR text, evidence summaries, and final reports, refer to it only
-as the configured test profile.
+Treat a maintainer-supplied AWS profile name as a local-only command input. In committed docs, PR text, evidence summaries, and final reports, refer to it only as the configured test profile.
 
 Committed verification docs may include:
 
@@ -94,10 +92,7 @@ pnpm verify deploy --concurrency 4
 pnpm verify destroy --concurrency 4
 ```
 
-The runner preserves ordered update chains such as `*-initial` before
-`*-updated`, while running independent chains concurrently. Scenario phases use
-these suffixes rather than release-like `v1`/`v2` or `alpha`/`beta` labels. Use
-`--concurrency 1` for serial debugging.
+The runner preserves ordered update chains such as `*-initial` before `*-updated`, while running independent chains concurrently. Scenario phases use these suffixes rather than release-like `v1`/`v2` or `alpha`/`beta` labels. Use `--concurrency 1` for serial debugging.
 
 The default suite includes:
 
@@ -115,19 +110,11 @@ The default suite includes:
 - customer-managed KMS, AWS-managed KMS, and managed DSSE destination buckets
 - CloudFront sync/async invalidation with explicit and default invalidation paths
 
-Lifecycle scenarios and assertions must use the public phase names
-`onDeploy`, `onChange`, and `onDelete`. Use `deleteStaleObjects`,
-`onChange.deletePreviousObjects`, `onChange.previousBucket`,
-`onChange.invalidatePreviousDistribution`, and
-`onDelete.deleteCurrentObjects` for the actions and cross-bucket target. Do not
-describe the public behavior as `prune` or `retainOnDelete`.
+Lifecycle scenarios and assertions must use the public phase names `onDeploy`, `onChange`, and `onDelete`. Use `deleteStaleObjects`, `onChange.deletePreviousObjects`, `onChange.previousBucket`, `onChange.invalidatePreviousDistribution`, and `onDelete.deleteCurrentObjects` for the actions and cross-bucket target. Do not describe the public behavior as `prune` or `retainOnDelete`.
 
 ### Destination-Move Revalidation Boundary
 
-Keep the destination-move protocol tests and scenario synthesis in the normal
-local and CI gates. Rerun the targeted `replacement-safety-initial` /
-`replacement-safety-updated` AWS chain when a change can affect any of these
-boundaries:
+Keep the destination-move protocol tests and scenario synthesis in the normal local and CI gates. Rerun the targeted `replacement-safety-initial` / `replacement-safety-updated` AWS chain when a change can affect any of these boundaries:
 
 - CloudFormation request handling, callback responses, or physical resource IDs
 - destination lifecycle mapping, update ordering, or previous/current cleanup
@@ -136,11 +123,7 @@ boundaries:
 - handler identity, service-token changes, or custom-resource replacement
 - the destination-move scenarios, verifier, or scenario runner
 
-Changes outside those boundaries do not require this targeted matrix merely
-because they share a release. Before a release, require a current successful
-destination-move AWS run only if one of the boundaries changed after the latest
-recorded successful run. Record the sanitized result and confirmed cleanup in
-`docs/verification.md`.
+Changes outside those boundaries do not require this targeted matrix merely because they share a release. Before a release, require a current successful destination-move AWS run only if one of the boundaries changed after the latest recorded successful run. Record the sanitized result and confirmed cleanup in `docs/verification.md`.
 
 Always destroy AWS verification stacks and verify they are absent before finalizing `docs/verification.md`. Raw AWS logs and resource identifiers stay in scratch only.
 

@@ -14,19 +14,9 @@ description: |
 
 This skill is for performance and efficiency evidence only. It does not establish correctness verification status for `ShinBucketDeployment`.
 
-Performance is a primary product constraint for this repository. Shin is
-expected to materially outperform upstream AWS CDK `BucketDeployment` on its
-target workloads. For a provider data-path change, treat any new per-byte or
-per-object pass, digest, S3 request, payload copy, allocation, or whole-entry
-materialization as a regression risk that requires evidence. Prefer designs
-that reuse bytes, listings, validation, and digests already produced by the
-transfer path.
+Performance is a primary product constraint for this repository. Shin is expected to materially outperform upstream AWS CDK `BucketDeployment` on its target workloads. For a provider data-path change, treat any new per-byte or per-object pass, digest, S3 request, payload copy, allocation, or whole-entry materialization as a regression risk that requires evidence. Prefer designs that reuse bytes, listings, validation, and digests already produced by the transfer path.
 
-Do not mark a performance-relevant change ready to merge or release from local
-correctness gates alone. Collect comparable before/after Shin results plus the
-upstream AWS CDK baseline and the telemetry needed to explain the result. If
-those measurements have not run, record the performance decision as pending;
-do not substitute verification evidence for benchmark evidence.
+Do not mark a performance-relevant change ready to merge or release from local correctness gates alone. Collect comparable before/after Shin results plus the upstream AWS CDK baseline and the telemetry needed to explain the result. If those measurements have not run, record the performance decision as pending; do not substitute verification evidence for benchmark evidence.
 
 ## Source Of Truth
 
@@ -52,9 +42,7 @@ Never commit:
 - raw CloudWatch log exports
 - profile names
 
-Treat a maintainer-supplied AWS profile name as a local-only command input. In
-committed docs, PR text, evidence summaries, and final reports, refer to it only
-as the configured test profile.
+Treat a maintainer-supplied AWS profile name as a local-only command input. In committed docs, PR text, evidence summaries, and final reports, refer to it only as the configured test profile.
 
 Committed benchmark records may include:
 
@@ -115,13 +103,7 @@ Choose benchmark configs deliberately. Paired Shin vs AWS comparisons should use
 - same repetition count
 - same stack suffix pattern
 
-Benchmark configuration uses behavior-oriented names even when comparing with
-upstream AWS CDK. Map `deleteStaleObjects` to Shin
-`destinationLifecycle.onDeploy.deleteStaleObjects` and upstream `prune`.
-Map `deleteCurrentObjectsOnDelete` to Shin
-`destinationLifecycle.onDelete.deleteCurrentObjects` and the inverse of
-upstream `retainOnDelete`. Keep the upstream prop names only at the adapter
-boundary; do not expose them as Shin configuration names.
+Benchmark configuration uses behavior-oriented names even when comparing with upstream AWS CDK. Map `deleteStaleObjects` to Shin `destinationLifecycle.onDeploy.deleteStaleObjects` and upstream `prune`. Map `deleteCurrentObjectsOnDelete` to Shin `destinationLifecycle.onDelete.deleteCurrentObjects` and the inverse of upstream `retainOnDelete`. Keep the upstream prop names only at the adapter boundary; do not expose them as Shin configuration names.
 
 For parameter sweeps, keep all non-swept inputs identical and encode the swept value in the row identity. For `maxConcurrency` sweeps, include the top-level `parallel` field and the provider summary field `maxParallelTransfers`; those evidence fields retain their historical schema names. Distinct phase names such as `cold-create-parallel-8` are acceptable when the phase itself represents the sweep point. Use `--run-token` only for scratch paths and stack suffixes, not as committed result identity.
 
@@ -244,10 +226,7 @@ Do not infer S3 throttling from local source block counters alone:
 
 For parameter sweeps, report both performance and pressure counters. For `maxConcurrency` sweeps, include at least provider duration, billed duration, max memory, CDK deploy time, local wall time, source fetched bytes, block waits split by reason when available, block refetches, replay claims after release, active reader high-water, resident bytes high-water, and PutObject retry/throttle counters.
 
-For checksum/encryption-path changes, record `destinationChecksumStrategy` and
-keep SSE-S3 and KMS/DSSE results separate. Include the transferred/skipped object
-counts, MD5/catalog skip counters, source fetched bytes, provider duration, and
-memory so strategy-specific extra passes or transfers remain visible.
+For checksum/encryption-path changes, record `destinationChecksumStrategy` and keep SSE-S3 and KMS/DSSE results separate. Include the transferred/skipped object counts, MD5/catalog skip counters, source fetched bytes, provider duration, and memory so strategy-specific extra passes or transfers remain visible.
 
 ## Benchmark Human Page
 
