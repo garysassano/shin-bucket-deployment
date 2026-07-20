@@ -340,13 +340,8 @@ async fn process_request(
     deadlines: InvocationDeadlines,
 ) -> Result<ProcessedRequest> {
     let request = parse_request(resource_properties)?;
-    let physical_resource_id = match request_type {
-        "Create" | "Update" => destination_physical_resource_id(identity, &request),
-        "Delete" => physical_resource_id
-            .map(ToOwned::to_owned)
-            .ok_or_else(|| anyhow!("PhysicalResourceId is required for {request_type}"))?,
-        other => return Err(anyhow!("Unsupported request type: {other}")),
-    };
+    let physical_resource_id =
+        response_physical_resource_id(request_type, identity, physical_resource_id, &request)?;
     let success = success_payload(&request, physical_resource_id.clone())?;
     let success_body = serialize_response(
         identity.stack_id,
@@ -778,6 +773,21 @@ fn destination_physical_resource_id(
     )
 }
 
+fn response_physical_resource_id(
+    request_type: &str,
+    identity: RequestIdentity<'_>,
+    physical_resource_id: Option<&str>,
+    request: &crate::types::DeploymentRequest,
+) -> Result<String> {
+    match request_type {
+        "Create" => Ok(destination_physical_resource_id(identity, request)),
+        "Update" | "Delete" => physical_resource_id
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| anyhow!("PhysicalResourceId is required for {request_type}")),
+        other => Err(anyhow!("Unsupported request type: {other}")),
+    }
+}
+
 fn hash_identity_field(hasher: &mut Sha256, value: &str) {
     hasher.update((value.len() as u64).to_be_bytes());
     hasher.update(value.as_bytes());
@@ -827,7 +837,8 @@ mod tests {
         EnvelopeResponseTarget, LEGACY_RESOURCE_TYPE, RESOURCE_TYPE, RequestIdentity,
         cloudfront_caller_reference, decode_deployment_request, decode_request_envelope,
         decode_resource_properties, destination_physical_resource_id, merge_distribution_paths,
-        preflight_invalidation_requests, response_target, validate_resource_type,
+        preflight_invalidation_requests, response_physical_resource_id, response_target,
+        validate_resource_type,
     };
 
     fn deployment_request_with_paths(paths: Vec<String>) -> crate::types::DeploymentRequest {
@@ -1208,6 +1219,58 @@ mod tests {
         assert_ne!(
             baseline_id,
             destination_physical_resource_id(identity, &changed_owner)
+        );
+    }
+
+    #[test]
+    fn update_preserves_physical_resource_id_across_destination_moves() {
+        let identity = RequestIdentity {
+            stack_id: "stack-a",
+            request_id: "request-a",
+            logical_resource_id: "Deploy",
+        };
+
+        for (previous_prefix, current_prefix) in [("site", "site/assets"), ("site/assets", "site")]
+        {
+            let previous =
+                deployment_request_for_destination("destination", previous_prefix, Some("owner-a"));
+            let current =
+                deployment_request_for_destination("destination", current_prefix, Some("owner-a"));
+            let incoming_id = destination_physical_resource_id(identity, &previous);
+
+            assert_ne!(
+                incoming_id,
+                destination_physical_resource_id(identity, &current),
+                "the regression requires a destination change that alters the derived ID"
+            );
+            assert_eq!(
+                response_physical_resource_id("Update", identity, Some(&incoming_id), &current)
+                    .expect("Update physical resource ID"),
+                incoming_id,
+                "Update must not turn a destination move into a replacement"
+            );
+        }
+    }
+
+    #[test]
+    fn create_derives_and_delete_preserves_the_physical_resource_id() {
+        let identity = RequestIdentity {
+            stack_id: "stack-a",
+            request_id: "request-a",
+            logical_resource_id: "Deploy",
+        };
+        let request = deployment_request_for_destination("destination", "site", Some("owner-a"));
+        let derived_id = destination_physical_resource_id(identity, &request);
+
+        assert_eq!(
+            response_physical_resource_id("Create", identity, None, &request)
+                .expect("Create physical resource ID"),
+            derived_id
+        );
+        assert_eq!(
+            response_physical_resource_id("Delete", identity, Some(&derived_id), &request)
+                .expect("Delete physical resource ID"),
+            derived_id
         );
     }
 

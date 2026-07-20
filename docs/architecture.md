@@ -146,7 +146,7 @@ flowchart TD
   B --> Y["Parse properties; pre-serialize SUCCESS; preflight response and invalidation limits"]
   Y --> C{"Request type"}
   C -->|Create| D["Derive physical id from owner, bucket, and prefix"]
-  C -->|Update| E["Derive physical id from owner, bucket, and prefix"]
+  C -->|Update| E["Reuse incoming physical resource id"]
   C -->|Delete| F["Reuse physical resource id"]
   D --> G["Build DeploymentRequest"]
   E --> G
@@ -185,7 +185,7 @@ Deployments sharing a handler also share its role, which accumulates permissions
 
 `providerLambda.sharing: ProviderSharing.DEPLOYMENT` instead creates a stable handler child beneath that deployment construct. Construct-generated roles and log destinations are consequently deployment-scoped, and the provider policy receives only that deployment's source, destination, lifecycle, KMS, and CloudFront grants. Explicit `providerLambda.role` or `providerLambda.logGroup` values remain caller-owned and may intentionally be reused. Isolation trades more functions, roles, log resources, and independent cold starts for smaller permission and mutation blast radii; operational cost follows their separate invocations, logs, and any caller-configured provisioned concurrency.
 
-The construct uses the modeled `AWS::CloudFormation::CustomResource` type and includes the handler identity in the custom resource's logical identity. A changed shared Lambda service token therefore creates a replacement instead of attempting the unsupported in-place token update. Isolated handler settings update the stable deployment-scoped function in place. Each custom-resource generation receives a distinct destination-owner identity, while retries of the same generation return the same deterministic physical resource ID. During replacement, the destination bucket's ownership tag is updated before the previous generation is deleted; the previous handler sees the replacement as an overlapping owner and retains the live namespace. A genuine bucket or prefix change still receives a distinct physical ID and follows the configured cleanup semantics. The package-aware identity transition is therefore safe even when `onDelete.deleteCurrentObjects` is enabled. The provider accepts the former custom-named resource type on Delete during migration.
+The construct uses the modeled `AWS::CloudFormation::CustomResource` type and includes the handler identity in the custom resource's logical identity. A changed shared Lambda service token therefore creates a replacement instead of attempting the unsupported in-place token update. Isolated handler settings update the stable deployment-scoped function in place. Each custom-resource generation receives a distinct destination-owner identity, while retries of the same generation return the same deterministic physical resource ID. During replacement, the destination bucket's ownership tag is updated before the previous generation is deleted; the previous handler sees the replacement as an overlapping owner and retains the live namespace. Create derives that deterministic ID from the owner and destination, while Update reuses CloudFormation's incoming ID so a bucket or prefix change remains an in-place update governed by `onChange` rather than triggering a cleanup-phase Delete. The package-aware identity transition is therefore safe even when `onDelete.deleteCurrentObjects` is enabled. The provider accepts the former custom-named resource type on Delete during migration.
 
 ## Destination Lifecycle
 
