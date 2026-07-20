@@ -1,4 +1,5 @@
 import { CfnOutput, RemovalPolicy, type Stack } from "aws-cdk-lib";
+import type { IGrantable } from "aws-cdk-lib/aws-iam";
 import { Bucket } from "aws-cdk-lib/aws-s3";
 import { ShinBucketDeployment, Source } from "../../../src";
 
@@ -11,10 +12,20 @@ const MOVE_SHAPES: readonly MoveShape[] = [
   "cross-bucket",
 ];
 
-export function addDestinationMoveMatrix(stack: Stack, updated: boolean): void {
+export function addDestinationMoveMatrix(
+  stack: Stack,
+  updated: boolean,
+  verificationPrincipal?: IGrantable,
+): void {
   const sharedBucket = bucket(stack, "MoveMatrixSharedBucket");
   const previousBucket = bucket(stack, "MoveMatrixPreviousBucket");
   const currentBucket = bucket(stack, "MoveMatrixCurrentBucket");
+
+  if (verificationPrincipal) {
+    sharedBucket.grantRead(verificationPrincipal);
+    previousBucket.grantRead(verificationPrincipal);
+    currentBucket.grantRead(verificationPrincipal);
+  }
 
   for (const shape of MOVE_SHAPES) {
     for (const cleanup of [false, true]) {

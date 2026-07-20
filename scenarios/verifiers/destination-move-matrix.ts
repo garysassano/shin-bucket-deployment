@@ -181,20 +181,12 @@ export function assertObjectMissing(bucket: string, key: string, runAws: AwsComm
     "Listing a previous destination object",
     runAws,
   );
-  if (typeof value !== "object" || value === null || !("KeyCount" in value)) {
-    throw new Error("Listing a previous destination object returned an unexpected response shape.");
-  }
-  if (typeof value.KeyCount !== "number") {
+  if (typeof value !== "object" || value === null || !("Prefix" in value) || value.Prefix !== key) {
     throw new Error("Listing a previous destination object returned an unexpected response shape.");
   }
 
   const contents = "Contents" in value ? value.Contents : undefined;
   if (contents === undefined) {
-    if (value.KeyCount !== 0) {
-      throw new Error(
-        "Listing a previous destination object returned an unexpected response shape.",
-      );
-    }
     return;
   }
   if (!Array.isArray(contents)) {

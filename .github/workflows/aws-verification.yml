@@ -209,6 +209,7 @@ jobs:
 
       - name: Deploy and verify group
         env:
+          SHIN_VERIFY_PRINCIPAL_ARN: ${{ vars.AWS_TEST_ROLE_ARN }}
           VERIFY_GROUP: ${{ matrix.group }}
           VERIFY_SCENARIOS: ${{ matrix.scenarios }}
         run: |

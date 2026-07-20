@@ -4,19 +4,24 @@ import { assertObjectMissing } from "../scenarios/verifiers/destination-move-mat
 describe("destination move matrix verifier", () => {
   it("accepts only a successful listing that excludes the exact key", () => {
     expect(() =>
-      assertObjectMissing("bucket", "previous/object.txt", () => JSON.stringify({ KeyCount: 0 })),
+      assertObjectMissing("bucket", "previous/object.txt", () =>
+        JSON.stringify({ Prefix: "previous/object.txt" }),
+      ),
     ).not.toThrow();
     expect(() =>
       assertObjectMissing("bucket", "previous/object.txt", () =>
         JSON.stringify({
-          KeyCount: 1,
+          Prefix: "previous/object.txt",
           Contents: [{ Key: "previous/object.txt.neighbor" }],
         }),
       ),
     ).not.toThrow();
     expect(() =>
       assertObjectMissing("bucket", "previous/object.txt", () =>
-        JSON.stringify({ KeyCount: 1, Contents: [{ Key: "previous/object.txt" }] }),
+        JSON.stringify({
+          Prefix: "previous/object.txt",
+          Contents: [{ Key: "previous/object.txt" }],
+        }),
       ),
     ).toThrow("should have been deleted");
   });
@@ -28,7 +33,14 @@ describe("destination move matrix verifier", () => {
       }),
     ).toThrow("simulated AWS request failure");
     expect(() =>
-      assertObjectMissing("bucket", "previous/object.txt", () => JSON.stringify({ KeyCount: 1 })),
+      assertObjectMissing("bucket", "previous/object.txt", () =>
+        JSON.stringify({ Prefix: "wrong/object.txt" }),
+      ),
+    ).toThrow("unexpected response shape");
+    expect(() =>
+      assertObjectMissing("bucket", "previous/object.txt", () =>
+        JSON.stringify({ Prefix: "previous/object.txt", Contents: {} }),
+      ),
     ).toThrow("unexpected response shape");
     expect(() => assertObjectMissing("bucket", "previous/object.txt", () => "not-json")).toThrow(
       "invalid JSON",
