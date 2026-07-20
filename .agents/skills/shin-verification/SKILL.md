@@ -122,6 +122,26 @@ Lifecycle scenarios and assertions must use the public phase names
 `onDelete.deleteCurrentObjects` for the actions and cross-bucket target. Do not
 describe the public behavior as `prune` or `retainOnDelete`.
 
+### Destination-Move Revalidation Boundary
+
+Keep the destination-move protocol tests and scenario synthesis in the normal
+local and CI gates. Rerun the targeted `replacement-safety-initial` /
+`replacement-safety-updated` AWS chain when a change can affect any of these
+boundaries:
+
+- CloudFormation request handling, callback responses, or physical resource IDs
+- destination lifecycle mapping, update ordering, or previous/current cleanup
+- namespace-overlap classification or destination ownership protection
+- current/previous destination or CloudFront IAM and dependencies
+- handler identity, service-token changes, or custom-resource replacement
+- the destination-move scenarios, verifier, or scenario runner
+
+Changes outside those boundaries do not require this targeted matrix merely
+because they share a release. Before a release, require a current successful
+destination-move AWS run only if one of the boundaries changed after the latest
+recorded successful run. Record the sanitized result and confirmed cleanup in
+`docs/verification.md`.
+
 Always destroy AWS verification stacks and verify they are absent before finalizing `docs/verification.md`. Raw AWS logs and resource identifiers stay in scratch only.
 
 ## Verification Human Page
