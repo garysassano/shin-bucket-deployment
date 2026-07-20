@@ -1,7 +1,7 @@
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { createScenarioPlan, scenarioAppPath, scenarioCdkArgs } from "./plan";
+import { createScenarioPlan, scenarioAppPath, scenarioCdkArgs, scenarioOutputsPath } from "./plan";
 import type { ParsedArgs, ScenarioPlan, ScenarioRun } from "./types";
 
 export type RunningProcess = {
@@ -102,7 +102,12 @@ export async function executeScenarioPlan(
         return 1;
       }
     }
-    const status = await runProcess(run, "pnpm", scenarioCdkArgs(repositoryRoot, run), deployEnv);
+    const cdkArgs = scenarioCdkArgs(repositoryRoot, run);
+    const outputsFile = scenarioOutputsPath(repositoryRoot, run);
+    if (run.action === "deploy" && run.definition.postDeployVerifier !== undefined) {
+      cdkArgs.push("--outputs-file", outputsFile);
+    }
+    const status = await runProcess(run, "pnpm", cdkArgs, deployEnv);
     if (
       status !== 0 ||
       run.action !== "deploy" ||
@@ -128,6 +133,8 @@ export async function executeScenarioPlan(
       run.definition.stackName,
       "--scenario-name",
       run.name,
+      "--outputs-file",
+      outputsFile,
     ]);
   };
 
@@ -194,15 +201,10 @@ function currentAwsPrincipalArn(): string {
 }
 
 export function verificationPrincipalArn(callerArn: string): string {
-  const assumedRole =
-    /^arn:(aws|aws-cn|aws-us-gov):sts::([0-9]{12}):assumed-role\/([^/\s]+)\/[^\s]+$/.exec(
-      callerArn,
-    );
-  if (assumedRole) {
-    return `arn:${assumedRole[1]}:iam::${assumedRole[2]}:role/${assumedRole[3]}`;
-  }
   if (
-    /^arn:(aws|aws-cn|aws-us-gov):iam::[0-9]{12}:(role|user)\/[A-Za-z0-9+=,.@_/-]+$/.test(callerArn)
+    /^arn:(aws|aws-cn|aws-us-gov):(iam::[0-9]{12}:(role|user)\/[A-Za-z0-9+=,.@_/-]+|sts::[0-9]{12}:assumed-role\/[^/\s]+\/[^\s]+)$/.test(
+      callerArn,
+    )
   ) {
     return callerArn;
   }

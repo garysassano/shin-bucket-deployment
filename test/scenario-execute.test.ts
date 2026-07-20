@@ -8,17 +8,17 @@ import {
 import type { RunnableScenarioAction, ScenarioPlan, ScenarioRun } from "../scenarios/types";
 
 describe("scenario executor", () => {
-  it("uses the stable IAM role behind an assumed-role session", () => {
+  it("accepts assumed-role session principals without reconstructing role paths", () => {
     expect(
       verificationPrincipalArn(
         "arn:aws:sts::111122223333:assumed-role/VerifierRole/workflow-session",
       ),
-    ).toBe("arn:aws:iam::111122223333:role/VerifierRole");
+    ).toBe("arn:aws:sts::111122223333:assumed-role/VerifierRole/workflow-session");
     expect(
       verificationPrincipalArn(
         "arn:aws-us-gov:sts::111122223333:assumed-role/VerifierRole/workflow-session",
       ),
-    ).toBe("arn:aws-us-gov:iam::111122223333:role/VerifierRole");
+    ).toBe("arn:aws-us-gov:sts::111122223333:assumed-role/VerifierRole/workflow-session");
   });
 
   it("accepts IAM role and user principals and rejects unrelated identities", () => {
@@ -109,7 +109,8 @@ describe("scenario executor", () => {
       {
         repositoryRoot: "/repo",
         pathExists: () => true,
-        resolveAwsPrincipalArn: () => "arn:aws:iam::111122223333:role/VerifierRole",
+        resolveAwsPrincipalArn: () =>
+          "arn:aws:sts::111122223333:assumed-role/VerifierRole/workflow-session",
         startProcess: (_run, command, args, options) => {
           commands.push({
             command,
@@ -128,8 +129,12 @@ describe("scenario executor", () => {
     expect(commands).toEqual([
       {
         command: "pnpm",
-        args: expect.arrayContaining(["deploy"]),
-        verifierPrincipal: "arn:aws:iam::111122223333:role/VerifierRole",
+        args: expect.arrayContaining([
+          "deploy",
+          "--outputs-file",
+          "/repo/.verification-assets/cdk.out/verify/verified/stack-outputs.json",
+        ]),
+        verifierPrincipal: "arn:aws:sts::111122223333:assumed-role/VerifierRole/workflow-session",
       },
       {
         command: "node",
@@ -139,6 +144,8 @@ describe("scenario executor", () => {
           "VerifiedStack",
           "--scenario-name",
           "verified",
+          "--outputs-file",
+          "/repo/.verification-assets/cdk.out/verify/verified/stack-outputs.json",
         ],
       },
     ]);

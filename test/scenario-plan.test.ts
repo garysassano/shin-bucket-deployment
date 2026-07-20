@@ -1,7 +1,12 @@
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseArgs } from "../scenarios/arguments";
-import { createScenarioPlan, scenarioAppPath, scenarioCdkArgs } from "../scenarios/plan";
+import {
+  createScenarioPlan,
+  scenarioAppPath,
+  scenarioCdkArgs,
+  scenarioOutputsPath,
+} from "../scenarios/plan";
 import type { ParsedArgs, RunnableScenarioAction } from "../scenarios/types";
 
 describe("scenario planner", () => {
@@ -137,6 +142,9 @@ describe("scenario planner", () => {
       "--parameters",
       "Example:Value=hello world",
     ]);
+    expect(scenarioOutputsPath("/repo", run)).toBe(
+      "/repo/.verification-assets/cdk.out/verify/simple/stack-outputs.json",
+    );
     expect(
       planFor(["verify", "deploy", "simple", "--", "--parameters", "Example:Value=hello world"])
         .groups[0]?.cleanupCommand,

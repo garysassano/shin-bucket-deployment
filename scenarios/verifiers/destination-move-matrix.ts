@@ -17,7 +17,7 @@ type AwsCommand = (args: string[], operation: string) => string;
 function main(): void {
   const stackName = option("--stack-name");
   const phase = verificationPhase(option("--scenario-name"));
-  const outputs = stackOutputs(stackName);
+  const outputs = stackOutputs(option("--outputs-file"), stackName);
   const scratch = mkdtempSync(join(tmpdir(), "shin-destination-move-verifier-"));
 
   try {
@@ -113,39 +113,25 @@ function verificationPhase(scenarioName: string): VerificationPhase {
   throw new Error("The destination move verifier received an unexpected scenario name.");
 }
 
-function stackOutputs(name: string): Record<string, string> {
-  const value = awsJson(
-    [
-      "cloudformation",
-      "describe-stacks",
-      "--stack-name",
-      name,
-      "--query",
-      "Stacks[0].Outputs",
-      "--output",
-      "json",
-    ],
-    "Reading stack outputs",
-  );
-  if (!Array.isArray(value)) {
-    throw new Error("Reading stack outputs returned an unexpected response shape.");
+function stackOutputs(path: string, stackName: string): Record<string, string> {
+  let value: unknown;
+  try {
+    value = JSON.parse(readFileSync(path, "utf8")) as unknown;
+  } catch {
+    throw new Error("The deployment outputs file could not be read.");
   }
-
-  const outputs: Record<string, string> = {};
-  for (const entry of value) {
-    if (
-      typeof entry !== "object" ||
-      entry === null ||
-      !("OutputKey" in entry) ||
-      typeof entry.OutputKey !== "string" ||
-      !("OutputValue" in entry) ||
-      typeof entry.OutputValue !== "string"
-    ) {
-      throw new Error("Reading stack outputs returned an unexpected response shape.");
-    }
-    outputs[entry.OutputKey] = entry.OutputValue;
+  if (typeof value !== "object" || value === null || !(stackName in value)) {
+    throw new Error("The deployment outputs file returned an unexpected response shape.");
   }
-  return outputs;
+  const stack = value[stackName as keyof typeof value];
+  if (typeof stack !== "object" || stack === null || Array.isArray(stack)) {
+    throw new Error("The deployment outputs file returned an unexpected response shape.");
+  }
+  const outputs = Object.entries(stack);
+  if (outputs.some(([, outputValue]) => typeof outputValue !== "string")) {
+    throw new Error("The deployment outputs file returned an unexpected response shape.");
+  }
+  return Object.fromEntries(outputs) as Record<string, string>;
 }
 
 function output(outputs: Record<string, string>, name: string): string {

@@ -35,6 +35,10 @@ export function scenarioAppPath(repositoryRoot: string, definition: ScenarioDefi
   return join(repositoryRoot, "dist", definition.root, "apps", definition.file);
 }
 
+export function scenarioOutputsPath(repositoryRoot: string, run: ScenarioRun): string {
+  return join(cdkOutputDir(repositoryRoot, run.mode, run.name), "stack-outputs.json");
+}
+
 export function scenarioCdkArgs(repositoryRoot: string, run: ScenarioRun): string[] {
   const appCommand = `node ${JSON.stringify(scenarioAppPath(repositoryRoot, run.definition))}`;
   const args = [
