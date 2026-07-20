@@ -829,7 +829,7 @@ fn log_deployment_summary(
 #[cfg(test)]
 mod tests {
     use aws_lambda_events::event::cloudformation::CloudFormationCustomResourceRequest;
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     use crate::request::{RawDeploymentRequest, parse_request};
 
@@ -838,7 +838,7 @@ mod tests {
         cloudfront_caller_reference, decode_deployment_request, decode_request_envelope,
         decode_resource_properties, destination_physical_resource_id, merge_distribution_paths,
         preflight_invalidation_requests, response_physical_resource_id, response_target,
-        validate_resource_type,
+        serialize_response, success_payload, validate_resource_type,
     };
 
     fn deployment_request_with_paths(paths: Vec<String>) -> crate::types::DeploymentRequest {
@@ -859,6 +859,13 @@ mod tests {
         prefix: &str,
         owner_id: Option<&str>,
     ) -> crate::types::DeploymentRequest {
+        let raw: RawDeploymentRequest =
+            serde_json::from_value(deployment_request_properties(bucket, prefix, owner_id))
+                .expect("raw deployment request");
+        parse_request(&raw).expect("valid request")
+    }
+
+    fn deployment_request_properties(bucket: &str, prefix: &str, owner_id: Option<&str>) -> Value {
         let mut value = json!({
             "SourceBucketNames": ["source"],
             "SourceObjectKeys": ["asset.zip"],
@@ -869,9 +876,7 @@ mod tests {
         if let Some(owner_id) = owner_id {
             value["DestinationOwnerId"] = json!(owner_id);
         }
-        let raw: RawDeploymentRequest =
-            serde_json::from_value(value).expect("raw deployment request");
-        parse_request(&raw).expect("valid request")
+        value
     }
 
     #[test]
@@ -1193,7 +1198,7 @@ mod tests {
     }
 
     #[test]
-    fn physical_resource_id_changes_with_destination_identity() {
+    fn create_physical_resource_id_changes_with_destination_identity() {
         let identity = RequestIdentity {
             stack_id: "stack-a",
             request_id: "request-a",
@@ -1223,19 +1228,26 @@ mod tests {
     }
 
     #[test]
-    fn update_preserves_physical_resource_id_across_destination_moves() {
+    fn update_protocol_preserves_physical_resource_id_across_destination_moves() {
         let identity = RequestIdentity {
             stack_id: "stack-a",
             request_id: "request-a",
             logical_resource_id: "Deploy",
         };
 
-        for (previous_prefix, current_prefix) in [("site", "site/assets"), ("site/assets", "site")]
-        {
-            let previous =
-                deployment_request_for_destination("destination", previous_prefix, Some("owner-a"));
+        for (previous_bucket, previous_prefix, current_bucket, current_prefix) in [
+            ("destination", "site", "destination", "site/assets"),
+            ("destination", "site/assets", "destination", "site"),
+            ("destination", "site/left", "destination", "site/right"),
+            ("destination", "site", "other-destination", "site"),
+        ] {
+            let previous = deployment_request_for_destination(
+                previous_bucket,
+                previous_prefix,
+                Some("owner-a"),
+            );
             let current =
-                deployment_request_for_destination("destination", current_prefix, Some("owner-a"));
+                deployment_request_for_destination(current_bucket, current_prefix, Some("owner-a"));
             let incoming_id = destination_physical_resource_id(identity, &previous);
 
             assert_ne!(
@@ -1243,10 +1255,66 @@ mod tests {
                 destination_physical_resource_id(identity, &current),
                 "the regression requires a destination change that alters the derived ID"
             );
+
+            let envelope = decode_request_envelope(json!({
+                "RequestType": "Update",
+                "RequestId": "request-a",
+                "ResponseURL": "https://example.com/response",
+                "StackId": "stack-a",
+                "ResourceType": RESOURCE_TYPE,
+                "LogicalResourceId": "Deploy",
+                "PhysicalResourceId": incoming_id,
+                "ResourceProperties": deployment_request_properties(
+                    current_bucket,
+                    current_prefix,
+                    Some("owner-a"),
+                ),
+                "OldResourceProperties": deployment_request_properties(
+                    previous_bucket,
+                    previous_prefix,
+                    Some("owner-a"),
+                ),
+            }))
+            .expect("Update envelope");
+            let decoded = decode_deployment_request(&envelope).expect("decoded Update request");
+            let decoded_current = parse_request(&decoded.resource_properties)
+                .expect("decoded current deployment request");
+            let decoded_previous = parse_request(
+                decoded
+                    .old_resource_properties
+                    .as_ref()
+                    .expect("Update OldResourceProperties"),
+            )
+            .expect("decoded previous deployment request");
+
+            assert_eq!(decoded_current.dest_bucket_name, current_bucket);
+            assert_eq!(decoded_current.dest_bucket_prefix, current_prefix);
+            assert_eq!(decoded_previous.dest_bucket_name, previous_bucket);
+            assert_eq!(decoded_previous.dest_bucket_prefix, previous_prefix);
+
+            let response_id = response_physical_resource_id(
+                decoded.request_type,
+                decoded.identity,
+                decoded.physical_resource_id,
+                &decoded_current,
+            )
+            .expect("Update physical resource ID");
+            let payload = success_payload(&decoded_current, response_id)
+                .expect("CloudFormation success payload");
+            let response = serialize_response(
+                decoded.identity.stack_id,
+                decoded.identity.request_id,
+                decoded.identity.logical_resource_id,
+                "SUCCESS",
+                &payload,
+            )
+            .expect("serialized CloudFormation response");
+            let response: Value =
+                serde_json::from_slice(&response).expect("CloudFormation response JSON");
+
+            assert_eq!(response["Status"], "SUCCESS");
             assert_eq!(
-                response_physical_resource_id("Update", identity, Some(&incoming_id), &current)
-                    .expect("Update physical resource ID"),
-                incoming_id,
+                response["PhysicalResourceId"], incoming_id,
                 "Update must not turn a destination move into a replacement"
             );
         }

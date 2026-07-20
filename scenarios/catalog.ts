@@ -85,10 +85,14 @@ export const VERIFY_SCENARIOS = {
   "replacement-safety-initial": scenario(
     "retention/replacement-safety-initial-app.js",
     "ShinBucketDeploymentReplacementSafetyDemo",
+    "destination-move-matrix.js",
+    true,
   ),
   "replacement-safety-updated": scenario(
     "retention/replacement-safety-updated-app.js",
     "ShinBucketDeploymentReplacementSafetyDemo",
+    "destination-move-matrix.js",
+    true,
   ),
   "large-archive": scenario("scale/large-archive-app.js", "ShinBucketDeploymentLargeArchiveDemo"),
   "kms-destination": scenario(
@@ -187,6 +191,17 @@ export function verifyScenarioEntry(name: string): ScenarioEntry {
   return [name, definition];
 }
 
-function scenario(file: string, stackName: string): ScenarioDefinition {
-  return { file, root: "scenarios", stackName };
+function scenario(
+  file: string,
+  stackName: string,
+  postDeployVerifier?: string,
+  grantVerifierRead?: boolean,
+): ScenarioDefinition {
+  return {
+    file,
+    root: "scenarios",
+    stackName,
+    ...(postDeployVerifier ? { postDeployVerifier } : {}),
+    ...(grantVerifierRead ? { grantVerifierRead } : {}),
+  };
 }

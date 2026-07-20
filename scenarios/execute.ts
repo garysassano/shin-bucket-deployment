@@ -1,6 +1,7 @@
-import { type ChildProcess, spawn } from "node:child_process";
+import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { createScenarioPlan, scenarioAppPath, scenarioCdkArgs } from "./plan";
+import { join } from "node:path";
+import { createScenarioPlan, scenarioAppPath, scenarioCdkArgs, scenarioOutputsPath } from "./plan";
 import type { ParsedArgs, ScenarioPlan, ScenarioRun } from "./types";
 
 export type RunningProcess = {
@@ -19,6 +20,7 @@ export type ExecutionOptions = {
   readonly repositoryRoot?: string;
   readonly signal?: AbortSignal;
   readonly startProcess?: StartProcess;
+  readonly resolveAwsPrincipalArn?: () => string;
   readonly pathExists?: (path: string) => boolean;
   readonly log?: (message: string) => void;
 };
@@ -39,6 +41,7 @@ export async function executeScenarioPlan(
 ): Promise<number> {
   const repositoryRoot = options.repositoryRoot ?? process.cwd();
   const startProcess = options.startProcess ?? spawnProcess;
+  const resolveAwsPrincipalArn = options.resolveAwsPrincipalArn ?? currentAwsPrincipalArn;
   const pathExists = options.pathExists ?? existsSync;
   const log = options.log ?? ((message: string) => console.error(message));
   const controller = new AbortController();
@@ -56,18 +59,18 @@ export async function executeScenarioPlan(
     onExternalAbort();
   }
 
-  const runOne = async (run: ScenarioRun): Promise<number> => {
-    const appPath = scenarioAppPath(repositoryRoot, run.definition);
-    if (!pathExists(appPath)) {
-      log(`Built ${run.mode} scenario app not found: ${appPath}`);
-      log("Run `pnpm build` first.");
-      return 1;
+  const runProcess = async (
+    run: ScenarioRun,
+    command: string,
+    args: readonly string[],
+    extraEnv: Readonly<Record<string, string>> = {},
+  ): Promise<number> => {
+    if (controller.signal.aborted) {
+      return 130;
     }
-
-    log(`${run.action} ${run.mode} scenario ${run.name}`);
-    const processHandle = startProcess(run, "pnpm", scenarioCdkArgs(repositoryRoot, run), {
+    const processHandle = startProcess(run, command, args, {
       cwd: repositoryRoot,
-      env: { ...process.env, ...run.env },
+      env: { ...process.env, ...run.env, ...extraEnv },
     });
     const terminate = (): void => processHandle.terminate();
     controller.signal.addEventListener("abort", terminate, { once: true });
@@ -79,6 +82,60 @@ export async function executeScenarioPlan(
     } finally {
       controller.signal.removeEventListener("abort", terminate);
     }
+  };
+
+  const runOne = async (run: ScenarioRun): Promise<number> => {
+    const appPath = scenarioAppPath(repositoryRoot, run.definition);
+    if (!pathExists(appPath)) {
+      log(`Built ${run.mode} scenario app not found: ${appPath}`);
+      log("Run `pnpm build` first.");
+      return 1;
+    }
+
+    log(`${run.action} ${run.mode} scenario ${run.name}`);
+    let deployEnv: Readonly<Record<string, string>> = {};
+    if (run.action === "deploy" && run.definition.grantVerifierRead === true) {
+      try {
+        deployEnv = { SHIN_VERIFY_PRINCIPAL_ARN: resolveAwsPrincipalArn() };
+      } catch {
+        log("Unable to identify the AWS principal for post-deploy verification.");
+        return 1;
+      }
+    }
+    const cdkArgs = scenarioCdkArgs(repositoryRoot, run);
+    const outputsFile = scenarioOutputsPath(repositoryRoot, run);
+    if (run.action === "deploy" && run.definition.postDeployVerifier !== undefined) {
+      cdkArgs.push("--outputs-file", outputsFile);
+    }
+    const status = await runProcess(run, "pnpm", cdkArgs, deployEnv);
+    if (
+      status !== 0 ||
+      run.action !== "deploy" ||
+      run.definition.postDeployVerifier === undefined
+    ) {
+      return status;
+    }
+    const verifierPath = join(
+      repositoryRoot,
+      "dist",
+      "scenarios",
+      "verifiers",
+      run.definition.postDeployVerifier,
+    );
+    if (!pathExists(verifierPath)) {
+      log(`Built post-deploy verifier not found: ${verifierPath}`);
+      return 1;
+    }
+    log(`verify deployed state for scenario ${run.name}`);
+    return runProcess(run, "node", [
+      verifierPath,
+      "--stack-name",
+      run.definition.stackName,
+      "--scenario-name",
+      run.name,
+      "--outputs-file",
+      outputsFile,
+    ]);
   };
 
   const workers = Array.from(
@@ -126,6 +183,32 @@ export async function executeScenarioPlan(
     }
   }
   return status;
+}
+
+function currentAwsPrincipalArn(): string {
+  const result = spawnSync(
+    "aws",
+    ["sts", "get-caller-identity", "--query", "Arn", "--output", "text", "--no-cli-pager"],
+    {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  if (result.error !== undefined || result.status !== 0) {
+    throw new Error("AWS principal lookup failed.");
+  }
+  return verificationPrincipalArn(result.stdout.trim());
+}
+
+export function verificationPrincipalArn(callerArn: string): string {
+  if (
+    /^arn:(aws|aws-cn|aws-us-gov):(iam::[0-9]{12}:(role|user)\/[A-Za-z0-9+=,.@_/-]+|sts::[0-9]{12}:assumed-role\/[^/\s]+\/[^\s]+)$/.test(
+      callerArn,
+    )
+  ) {
+    return callerArn;
+  }
+  throw new Error("AWS principal lookup returned an unexpected identity.");
 }
 
 function spawnProcess(
