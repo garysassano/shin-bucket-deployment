@@ -575,6 +575,9 @@ export interface ShinBucketDeploymentProps {
    * Any upstream CDK `ISource` is accepted. Shin's `Source.asset` adds an
    * authenticated catalog to local directories by default; other source
    * implementations use the normal streamed validation path.
+   *
+   * At least one source must be present by synthesis. The array may be empty
+   * during construction when sources are added later through `addSource()`.
    */
   readonly sources: ISource[];
 
@@ -734,6 +737,11 @@ export class ShinBucketDeployment extends Construct {
 
     this.node.addValidation({
       validate: () => {
+        if (this.sources.length === 0) {
+          return [
+            "ShinBucketDeployment requires at least one source; pass a source in sources or call addSource() before synthesis.",
+          ];
+        }
         if (this.sources.some((source) => source.markers) && sourceProcessing.extract === false) {
           return [
             "Set sourceProcessing.extract:true or remove deploy-time Source.data/jsonData/yamlData values; marker replacement requires extraction.",
