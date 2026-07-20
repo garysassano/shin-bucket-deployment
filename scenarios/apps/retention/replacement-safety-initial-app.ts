@@ -1,6 +1,7 @@
 import { App, CfnOutput, RemovalPolicy, Stack, type StackProps } from "aws-cdk-lib";
 import { Bucket } from "aws-cdk-lib/aws-s3";
 import { ShinBucketDeployment, Source } from "../../../src";
+import { addDestinationMoveMatrix } from "../lifecycle/destination-move-matrix";
 
 class ReplacementSafetyShinBucketDeploymentStack extends Stack {
   constructor(scope: App, id: string, props?: StackProps) {
@@ -26,6 +27,8 @@ class ReplacementSafetyShinBucketDeploymentStack extends Stack {
         memorySize: 1024,
       },
     });
+
+    addDestinationMoveMatrix(this, false);
 
     new CfnOutput(this, "BucketName", {
       value: websiteBucket.bucketName,

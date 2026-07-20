@@ -45,16 +45,6 @@ export const VERIFY_SCENARIOS = {
     "lifecycle/cross-bucket-change-updated-app.js",
     "ShinBucketDeploymentCrossBucketChangeDemo",
   ),
-  "destination-move-matrix-initial": scenario(
-    "lifecycle/destination-move-matrix-initial-app.js",
-    "ShinBucketDeploymentDestinationMoveMatrixDemo",
-    "destination-move-matrix.js",
-  ),
-  "destination-move-matrix-updated": scenario(
-    "lifecycle/destination-move-matrix-updated-app.js",
-    "ShinBucketDeploymentDestinationMoveMatrixDemo",
-    "destination-move-matrix.js",
-  ),
   "stale-object-cleanup-initial": scenario(
     "updates/stale-object-cleanup-initial-app.js",
     "ShinBucketDeploymentStaleObjectCleanupDemo",
@@ -95,10 +85,12 @@ export const VERIFY_SCENARIOS = {
   "replacement-safety-initial": scenario(
     "retention/replacement-safety-initial-app.js",
     "ShinBucketDeploymentReplacementSafetyDemo",
+    "destination-move-matrix.js",
   ),
   "replacement-safety-updated": scenario(
     "retention/replacement-safety-updated-app.js",
     "ShinBucketDeploymentReplacementSafetyDemo",
+    "destination-move-matrix.js",
   ),
   "large-archive": scenario("scale/large-archive-app.js", "ShinBucketDeploymentLargeArchiveDemo"),
   "kms-destination": scenario(
@@ -148,7 +140,6 @@ export const VERIFY_DEFAULT_GROUPS = [
   ["child-parent-retention-initial", "child-parent-retention-updated"],
   ["child-parent-cleanup-initial", "child-parent-cleanup-updated"],
   ["cross-bucket-change-initial", "cross-bucket-change-updated"],
-  ["destination-move-matrix-initial", "destination-move-matrix-updated"],
   ["stale-object-cleanup-initial", "stale-object-cleanup-updated"],
   ["stale-object-retention-initial", "stale-object-retention-updated"],
   ["default-retention-initial", "default-retention-updated"],
@@ -173,7 +164,6 @@ export const VERIFY_DESTROY_ORDER = [
   "child-parent-retention-updated",
   "child-parent-cleanup-updated",
   "cross-bucket-change-updated",
-  "destination-move-matrix-updated",
   "stale-object-cleanup-updated",
   "stale-object-retention-updated",
   "default-retention-updated",

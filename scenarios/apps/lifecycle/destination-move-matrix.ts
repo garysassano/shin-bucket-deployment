@@ -1,4 +1,4 @@
-import { App, CfnOutput, RemovalPolicy, Stack, type StackProps } from "aws-cdk-lib";
+import { CfnOutput, RemovalPolicy, type Stack } from "aws-cdk-lib";
 import { Bucket } from "aws-cdk-lib/aws-s3";
 import { ShinBucketDeployment, Source } from "../../../src";
 
@@ -11,72 +11,58 @@ const MOVE_SHAPES: readonly MoveShape[] = [
   "cross-bucket",
 ];
 
-export function createDestinationMoveMatrixApp(updated: boolean): void {
-  const app = new App();
-  const env =
-    process.env.CDK_DEFAULT_ACCOUNT && process.env.CDK_DEFAULT_REGION
-      ? { account: process.env.CDK_DEFAULT_ACCOUNT, region: process.env.CDK_DEFAULT_REGION }
-      : undefined;
-  new DestinationMoveMatrixStack(app, "ShinBucketDeploymentDestinationMoveMatrixDemo", updated, {
-    env,
-  });
+export function addDestinationMoveMatrix(stack: Stack, updated: boolean): void {
+  const sharedBucket = bucket(stack, "MoveMatrixSharedBucket");
+  const previousBucket = bucket(stack, "MoveMatrixPreviousBucket");
+  const currentBucket = bucket(stack, "MoveMatrixCurrentBucket");
+
+  for (const shape of MOVE_SHAPES) {
+    for (const cleanup of [false, true]) {
+      const mode = cleanup ? "cleanup" : "retain";
+      const base = `matrix/${shape}/${mode}`;
+      const oldPrefix = previousPrefix(shape, base);
+      const newPrefix = currentPrefix(shape, base);
+      const oldBucket = shape === "cross-bucket" ? previousBucket : sharedBucket;
+      const newBucket = shape === "cross-bucket" ? currentBucket : sharedBucket;
+
+      new ShinBucketDeployment(stack, deploymentId(shape, cleanup), {
+        sources: updated
+          ? [Source.data("current.txt", currentBody(shape, cleanup))]
+          : [
+              Source.data("current.txt", initialCurrentBody(shape, cleanup)),
+              Source.data("obsolete.txt", previousBody(shape, cleanup)),
+            ],
+        destination: {
+          bucket: updated ? newBucket : oldBucket,
+          keyPrefix: updated ? newPrefix : oldPrefix,
+        },
+        destinationLifecycle: {
+          onDeploy: { deleteStaleObjects: false },
+          ...(updated
+            ? {
+                onChange: {
+                  deletePreviousObjects: cleanup,
+                  ...(cleanup && shape === "cross-bucket" ? { previousBucket } : {}),
+                },
+              }
+            : {}),
+          onDelete: { deleteCurrentObjects: true },
+        },
+        providerLambda: { memorySize: 1536 },
+      });
+    }
+  }
+
+  new CfnOutput(stack, "MoveMatrixSharedBucketName", { value: sharedBucket.bucketName });
+  new CfnOutput(stack, "MoveMatrixPreviousBucketName", { value: previousBucket.bucketName });
+  new CfnOutput(stack, "MoveMatrixCurrentBucketName", { value: currentBucket.bucketName });
 }
 
-class DestinationMoveMatrixStack extends Stack {
-  constructor(scope: App, id: string, updated: boolean, props?: StackProps) {
-    super(scope, id, props);
-
-    const sharedBucket = this.bucket("SharedBucket");
-    const previousBucket = this.bucket("PreviousBucket");
-    const currentBucket = this.bucket("CurrentBucket");
-
-    for (const shape of MOVE_SHAPES) {
-      for (const cleanup of [false, true]) {
-        const mode = cleanup ? "cleanup" : "retain";
-        const base = `matrix/${shape}/${mode}`;
-        const oldPrefix = previousPrefix(shape, base);
-        const newPrefix = currentPrefix(shape, base);
-        const oldBucket = shape === "cross-bucket" ? previousBucket : sharedBucket;
-        const newBucket = shape === "cross-bucket" ? currentBucket : sharedBucket;
-
-        new ShinBucketDeployment(this, deploymentId(shape, cleanup), {
-          sources: updated
-            ? [Source.data("current.txt", currentBody(shape, cleanup))]
-            : [
-                Source.data("current.txt", initialCurrentBody(shape, cleanup)),
-                Source.data("obsolete.txt", previousBody(shape, cleanup)),
-              ],
-          destination: {
-            bucket: updated ? newBucket : oldBucket,
-            keyPrefix: updated ? newPrefix : oldPrefix,
-          },
-          destinationLifecycle: {
-            onDeploy: { deleteStaleObjects: false },
-            ...(updated
-              ? {
-                  onChange: {
-                    deletePreviousObjects: cleanup,
-                    ...(cleanup && shape === "cross-bucket" ? { previousBucket } : {}),
-                  },
-                }
-              : {}),
-            onDelete: { deleteCurrentObjects: true },
-          },
-        });
-      }
-    }
-
-    new CfnOutput(this, "SharedBucketName", { value: sharedBucket.bucketName });
-    new CfnOutput(this, "PreviousBucketName", { value: previousBucket.bucketName });
-    new CfnOutput(this, "CurrentBucketName", { value: currentBucket.bucketName });
-  }
-
-  private bucket(id: string): Bucket {
-    return new Bucket(this, id, {
-      autoDeleteObjects: true,
-      removalPolicy: RemovalPolicy.DESTROY,
-    });
-  }
+function bucket(stack: Stack, id: string): Bucket {
+  return new Bucket(stack, id, {
+    autoDeleteObjects: true,
+    removalPolicy: RemovalPolicy.DESTROY,
+  });
 }
 
 export function previousPrefix(shape: MoveShape, base: string): string {

@@ -21,13 +21,13 @@ The `extract-false` scenario exercises direct `CopyObject`. Targeted AWS verific
 
 The `marker-replacement` scenario exercises plain, JSON-escaped, JSON, YAML, and repeated-token replacement. The Rust property and stream tests additionally cover simultaneous leftmost-longest overlap semantics, replacement non-recursion, decompression-chunk boundaries, UTF-8, empty and large values, CRC failures, retry bodies, and exact output limits.
 
-The `replacement-safety-initial` / `replacement-safety-updated` chain changes provider memory while destructive Delete cleanup is enabled. It verifies that generation-specific ownership prevents the previous handler from removing the newly deployed object.
+The `replacement-safety-initial` / `replacement-safety-updated` chain preserves the original provider-memory replacement case while also covering destination moves. The original deployment changes provider memory while destructive Delete cleanup is enabled, proving generation-specific ownership prevents the previous handler from removing the newly deployed object.
 
 The `external-zips` scenario deploys archives built by Info-ZIP and Python's forced ZIP64 writer through `Source.bucket`. Both fixtures intentionally have longer local-header extra fields than their central-directory entries.
 
 The lifecycle safety chains cover a root deployment sharing a bucket with a child-prefix deployment, a child-to-parent move without cleanup authorization, the same move with explicit `onChange.deletePreviousObjects`, and an explicitly authorized cross-bucket move. Together they prove that owner overlap retains co-tenant data and that previous-destination cleanup is authorization-controlled and manifest-aware.
 
-The `destination-move-matrix-initial` / `destination-move-matrix-updated` chain covers child-to-parent, parent-to-child, sibling-prefix, and cross-bucket moves with `onDelete.deleteCurrentObjects=true`. Each move runs with `onChange.deletePreviousObjects` explicitly disabled and enabled. Post-deploy verification first proves every initial fixture exists, then reads the exact updated and retained bodies and proves authorized previous objects are absent through successful S3 listings, so a successful CDK exit without the expected S3 state fails the scenario.
+The same replacement-safety chain covers child-to-parent, parent-to-child, sibling-prefix, and cross-bucket moves through a stable provider identity with `onDelete.deleteCurrentObjects=true`. Each move runs with `onChange.deletePreviousObjects` explicitly disabled and enabled. Post-deploy verification first proves every initial fixture exists, then reads the exact updated and retained bodies and proves authorized previous objects are absent through successful S3 listings, so a successful CDK exit without the expected S3 state fails the scenario.
 
 `pnpm benchmark` runs only the named benchmark scenario and expands the requested config matrix:
 

@@ -21,6 +21,12 @@ function main(): void {
   const scratch = mkdtempSync(join(tmpdir(), "shin-destination-move-verifier-"));
 
   try {
+    assertObjectBody(
+      output(outputs, "BucketName"),
+      "replacement-safe/runtime/replacement.txt",
+      `phase=${phase}\n`,
+      join(scratch, `replacement-${phase}`),
+    );
     for (const shape of MOVE_SHAPES) {
       for (const cleanup of [false, true]) {
         verifyMove(outputs, scratch, phase, shape, cleanup);
@@ -43,11 +49,11 @@ function verifyMove(
   const base = `matrix/${shape}/${mode}`;
   const oldBucket = output(
     outputs,
-    shape === "cross-bucket" ? "PreviousBucketName" : "SharedBucketName",
+    shape === "cross-bucket" ? "MoveMatrixPreviousBucketName" : "MoveMatrixSharedBucketName",
   );
   const newBucket = output(
     outputs,
-    shape === "cross-bucket" ? "CurrentBucketName" : "SharedBucketName",
+    shape === "cross-bucket" ? "MoveMatrixCurrentBucketName" : "MoveMatrixSharedBucketName",
   );
   const oldPrefix = previousPrefix(shape, base);
   const previousCurrentKey = `${oldPrefix}/current.txt`;
@@ -102,8 +108,8 @@ function option(name: string): string {
 }
 
 function verificationPhase(scenarioName: string): VerificationPhase {
-  if (scenarioName === "destination-move-matrix-initial") return "initial";
-  if (scenarioName === "destination-move-matrix-updated") return "updated";
+  if (scenarioName === "replacement-safety-initial") return "initial";
+  if (scenarioName === "replacement-safety-updated") return "updated";
   throw new Error("The destination move verifier received an unexpected scenario name.");
 }
 

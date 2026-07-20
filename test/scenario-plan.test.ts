@@ -28,9 +28,6 @@ describe("scenario planner", () => {
     const crossBucketGroup = plan.groups.find(
       ({ runs }) => runs[0]?.name === "cross-bucket-change-initial",
     );
-    const destinationMoveMatrixGroup = plan.groups.find(
-      ({ runs }) => runs[0]?.name === "destination-move-matrix-initial",
-    );
     const handlerIsolationGroup = plan.groups.find(
       ({ runs }) => runs[0]?.name === "handler-isolation",
     );
@@ -71,13 +68,6 @@ describe("scenario planner", () => {
       "cross-bucket-change-initial",
       "cross-bucket-change-updated",
     ]);
-    expect(destinationMoveMatrixGroup?.runs.map(({ name }) => name)).toEqual([
-      "destination-move-matrix-initial",
-      "destination-move-matrix-updated",
-    ]);
-    expect(destinationMoveMatrixGroup?.cleanupCommand).toBe(
-      "pnpm verify destroy destination-move-matrix-updated",
-    );
     expect(handlerIsolationGroup?.runs.map(({ name }) => name)).toEqual(["handler-isolation"]);
   });
 
@@ -100,8 +90,6 @@ describe("scenario planner", () => {
     expect(names).not.toContain("child-parent-cleanup-initial");
     expect(names).toContain("cross-bucket-change-updated");
     expect(names).not.toContain("cross-bucket-change-initial");
-    expect(names).toContain("destination-move-matrix-updated");
-    expect(names).not.toContain("destination-move-matrix-initial");
     expect(names).toContain("handler-isolation");
   });
 
