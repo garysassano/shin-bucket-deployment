@@ -1,5 +1,6 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { createScenarioPlan, scenarioAppPath, scenarioCdkArgs } from "./plan";
 import type { ParsedArgs, ScenarioPlan, ScenarioRun } from "./types";
 
@@ -56,16 +57,15 @@ export async function executeScenarioPlan(
     onExternalAbort();
   }
 
-  const runOne = async (run: ScenarioRun): Promise<number> => {
-    const appPath = scenarioAppPath(repositoryRoot, run.definition);
-    if (!pathExists(appPath)) {
-      log(`Built ${run.mode} scenario app not found: ${appPath}`);
-      log("Run `pnpm build` first.");
-      return 1;
+  const runProcess = async (
+    run: ScenarioRun,
+    command: string,
+    args: readonly string[],
+  ): Promise<number> => {
+    if (controller.signal.aborted) {
+      return 130;
     }
-
-    log(`${run.action} ${run.mode} scenario ${run.name}`);
-    const processHandle = startProcess(run, "pnpm", scenarioCdkArgs(repositoryRoot, run), {
+    const processHandle = startProcess(run, command, args, {
       cwd: repositoryRoot,
       env: { ...process.env, ...run.env },
     });
@@ -79,6 +79,44 @@ export async function executeScenarioPlan(
     } finally {
       controller.signal.removeEventListener("abort", terminate);
     }
+  };
+
+  const runOne = async (run: ScenarioRun): Promise<number> => {
+    const appPath = scenarioAppPath(repositoryRoot, run.definition);
+    if (!pathExists(appPath)) {
+      log(`Built ${run.mode} scenario app not found: ${appPath}`);
+      log("Run `pnpm build` first.");
+      return 1;
+    }
+
+    log(`${run.action} ${run.mode} scenario ${run.name}`);
+    const status = await runProcess(run, "pnpm", scenarioCdkArgs(repositoryRoot, run));
+    if (
+      status !== 0 ||
+      run.action !== "deploy" ||
+      run.definition.postDeployVerifier === undefined
+    ) {
+      return status;
+    }
+    const verifierPath = join(
+      repositoryRoot,
+      "dist",
+      "scenarios",
+      "verifiers",
+      run.definition.postDeployVerifier,
+    );
+    if (!pathExists(verifierPath)) {
+      log(`Built post-deploy verifier not found: ${verifierPath}`);
+      return 1;
+    }
+    log(`verify deployed state for scenario ${run.name}`);
+    return runProcess(run, "node", [
+      verifierPath,
+      "--stack-name",
+      run.definition.stackName,
+      "--scenario-name",
+      run.name,
+    ]);
   };
 
   const workers = Array.from(

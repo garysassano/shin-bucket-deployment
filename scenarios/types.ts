@@ -8,6 +8,7 @@ export type ScenarioDefinition = {
   readonly file: string;
   readonly root: "benchmarks" | "scenarios";
   readonly stackName: string;
+  readonly postDeployVerifier?: string;
 };
 
 export type ScenarioEntry = readonly [name: string, definition: ScenarioDefinition];

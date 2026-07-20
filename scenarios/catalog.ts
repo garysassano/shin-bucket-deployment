@@ -45,6 +45,16 @@ export const VERIFY_SCENARIOS = {
     "lifecycle/cross-bucket-change-updated-app.js",
     "ShinBucketDeploymentCrossBucketChangeDemo",
   ),
+  "destination-move-matrix-initial": scenario(
+    "lifecycle/destination-move-matrix-initial-app.js",
+    "ShinBucketDeploymentDestinationMoveMatrixDemo",
+    "destination-move-matrix.js",
+  ),
+  "destination-move-matrix-updated": scenario(
+    "lifecycle/destination-move-matrix-updated-app.js",
+    "ShinBucketDeploymentDestinationMoveMatrixDemo",
+    "destination-move-matrix.js",
+  ),
   "stale-object-cleanup-initial": scenario(
     "updates/stale-object-cleanup-initial-app.js",
     "ShinBucketDeploymentStaleObjectCleanupDemo",
@@ -138,6 +148,7 @@ export const VERIFY_DEFAULT_GROUPS = [
   ["child-parent-retention-initial", "child-parent-retention-updated"],
   ["child-parent-cleanup-initial", "child-parent-cleanup-updated"],
   ["cross-bucket-change-initial", "cross-bucket-change-updated"],
+  ["destination-move-matrix-initial", "destination-move-matrix-updated"],
   ["stale-object-cleanup-initial", "stale-object-cleanup-updated"],
   ["stale-object-retention-initial", "stale-object-retention-updated"],
   ["default-retention-initial", "default-retention-updated"],
@@ -162,6 +173,7 @@ export const VERIFY_DESTROY_ORDER = [
   "child-parent-retention-updated",
   "child-parent-cleanup-updated",
   "cross-bucket-change-updated",
+  "destination-move-matrix-updated",
   "stale-object-cleanup-updated",
   "stale-object-retention-updated",
   "default-retention-updated",
@@ -187,6 +199,15 @@ export function verifyScenarioEntry(name: string): ScenarioEntry {
   return [name, definition];
 }
 
-function scenario(file: string, stackName: string): ScenarioDefinition {
-  return { file, root: "scenarios", stackName };
+function scenario(
+  file: string,
+  stackName: string,
+  postDeployVerifier?: string,
+): ScenarioDefinition {
+  return {
+    file,
+    root: "scenarios",
+    stackName,
+    ...(postDeployVerifier ? { postDeployVerifier } : {}),
+  };
 }

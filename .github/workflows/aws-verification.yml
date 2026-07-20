@@ -131,6 +131,9 @@ jobs:
           - group: cross-bucket-change
             scenarios: cross-bucket-change-initial cross-bucket-change-updated
             cleanup: cross-bucket-change-updated
+          - group: destination-move-matrix
+            scenarios: destination-move-matrix-initial destination-move-matrix-updated
+            cleanup: destination-move-matrix-updated
           - group: stale-object-cleanup
             scenarios: stale-object-cleanup-initial stale-object-cleanup-updated
             cleanup: stale-object-cleanup-updated
