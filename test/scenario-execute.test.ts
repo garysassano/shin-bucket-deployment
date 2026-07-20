@@ -1,8 +1,38 @@
 import { describe, expect, it } from "vitest";
-import { type RunningProcess, type StartProcess, executeScenarioPlan } from "../scenarios/execute";
+import {
+  type RunningProcess,
+  type StartProcess,
+  executeScenarioPlan,
+  verificationPrincipalArn,
+} from "../scenarios/execute";
 import type { RunnableScenarioAction, ScenarioPlan, ScenarioRun } from "../scenarios/types";
 
 describe("scenario executor", () => {
+  it("uses the stable IAM role behind an assumed-role session", () => {
+    expect(
+      verificationPrincipalArn(
+        "arn:aws:sts::111122223333:assumed-role/VerifierRole/workflow-session",
+      ),
+    ).toBe("arn:aws:iam::111122223333:role/VerifierRole");
+    expect(
+      verificationPrincipalArn(
+        "arn:aws-us-gov:sts::111122223333:assumed-role/VerifierRole/workflow-session",
+      ),
+    ).toBe("arn:aws-us-gov:iam::111122223333:role/VerifierRole");
+  });
+
+  it("accepts IAM role and user principals and rejects unrelated identities", () => {
+    expect(verificationPrincipalArn("arn:aws:iam::111122223333:role/path/VerifierRole")).toBe(
+      "arn:aws:iam::111122223333:role/path/VerifierRole",
+    );
+    expect(verificationPrincipalArn("arn:aws:iam::111122223333:user/VerifierUser")).toBe(
+      "arn:aws:iam::111122223333:user/VerifierUser",
+    );
+    expect(() => verificationPrincipalArn("arn:aws:iam::111122223333:root")).toThrow(
+      "unexpected identity",
+    );
+  });
+
   it("cancels parallel siblings after the first failure and prints cleanup commands", async () => {
     const started: string[] = [];
     const terminated: string[] = [];
@@ -58,7 +88,11 @@ describe("scenario executor", () => {
   });
 
   it("runs a configured verifier after a successful deployment", async () => {
-    const commands: Array<{ command: string; args: readonly string[] }> = [];
+    const commands: Array<{
+      command: string;
+      args: readonly string[];
+      verifierPrincipal?: string;
+    }> = [];
     const baseScenario = run("verified");
     const scenario: ScenarioRun = {
       ...baseScenario,
@@ -66,6 +100,7 @@ describe("scenario executor", () => {
         ...baseScenario.definition,
         stackName: "VerifiedStack",
         postDeployVerifier: "state.js",
+        grantVerifierRead: true,
       },
     };
 
@@ -74,8 +109,15 @@ describe("scenario executor", () => {
       {
         repositoryRoot: "/repo",
         pathExists: () => true,
-        startProcess: (_run, command, args) => {
-          commands.push({ command, args });
+        resolveAwsPrincipalArn: () => "arn:aws:iam::111122223333:role/VerifierRole",
+        startProcess: (_run, command, args, options) => {
+          commands.push({
+            command,
+            args,
+            ...(options.env.SHIN_VERIFY_PRINCIPAL_ARN
+              ? { verifierPrincipal: options.env.SHIN_VERIFY_PRINCIPAL_ARN }
+              : {}),
+          });
           return { completion: Promise.resolve(0), terminate() {} };
         },
         log: () => {},
@@ -84,7 +126,11 @@ describe("scenario executor", () => {
 
     expect(status).toBe(0);
     expect(commands).toEqual([
-      { command: "pnpm", args: expect.arrayContaining(["deploy"]) },
+      {
+        command: "pnpm",
+        args: expect.arrayContaining(["deploy"]),
+        verifierPrincipal: "arn:aws:iam::111122223333:role/VerifierRole",
+      },
       {
         command: "node",
         args: [
@@ -96,6 +142,36 @@ describe("scenario executor", () => {
         ],
       },
     ]);
+  });
+
+  it("fails before deployment when the verifier principal cannot be resolved", async () => {
+    const commands: string[] = [];
+    const logs: string[] = [];
+    const baseScenario = verifiedRun("principal-fails");
+    const scenario: ScenarioRun = {
+      ...baseScenario,
+      definition: { ...baseScenario.definition, grantVerifierRead: true },
+    };
+
+    const status = await executeScenarioPlan(
+      { concurrency: 1, groups: [{ runs: [scenario] }] },
+      {
+        repositoryRoot: "/repo",
+        pathExists: () => true,
+        resolveAwsPrincipalArn: () => {
+          throw new Error("simulated STS failure");
+        },
+        startProcess: (_run, command) => {
+          commands.push(command);
+          return { completion: Promise.resolve(0), terminate() {} };
+        },
+        log: (message) => logs.push(message),
+      },
+    );
+
+    expect(status).toBe(1);
+    expect(commands).toEqual([]);
+    expect(logs).toContain("Unable to identify the AWS principal for post-deploy verification.");
   });
 
   it("reports verifier failure as scenario failure", async () => {

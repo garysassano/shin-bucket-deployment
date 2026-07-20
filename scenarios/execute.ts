@@ -1,4 +1,4 @@
-import { type ChildProcess, spawn } from "node:child_process";
+import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { createScenarioPlan, scenarioAppPath, scenarioCdkArgs } from "./plan";
@@ -20,6 +20,7 @@ export type ExecutionOptions = {
   readonly repositoryRoot?: string;
   readonly signal?: AbortSignal;
   readonly startProcess?: StartProcess;
+  readonly resolveAwsPrincipalArn?: () => string;
   readonly pathExists?: (path: string) => boolean;
   readonly log?: (message: string) => void;
 };
@@ -40,6 +41,7 @@ export async function executeScenarioPlan(
 ): Promise<number> {
   const repositoryRoot = options.repositoryRoot ?? process.cwd();
   const startProcess = options.startProcess ?? spawnProcess;
+  const resolveAwsPrincipalArn = options.resolveAwsPrincipalArn ?? currentAwsPrincipalArn;
   const pathExists = options.pathExists ?? existsSync;
   const log = options.log ?? ((message: string) => console.error(message));
   const controller = new AbortController();
@@ -61,13 +63,14 @@ export async function executeScenarioPlan(
     run: ScenarioRun,
     command: string,
     args: readonly string[],
+    extraEnv: Readonly<Record<string, string>> = {},
   ): Promise<number> => {
     if (controller.signal.aborted) {
       return 130;
     }
     const processHandle = startProcess(run, command, args, {
       cwd: repositoryRoot,
-      env: { ...process.env, ...run.env },
+      env: { ...process.env, ...run.env, ...extraEnv },
     });
     const terminate = (): void => processHandle.terminate();
     controller.signal.addEventListener("abort", terminate, { once: true });
@@ -90,7 +93,16 @@ export async function executeScenarioPlan(
     }
 
     log(`${run.action} ${run.mode} scenario ${run.name}`);
-    const status = await runProcess(run, "pnpm", scenarioCdkArgs(repositoryRoot, run));
+    let deployEnv: Readonly<Record<string, string>> = {};
+    if (run.action === "deploy" && run.definition.grantVerifierRead === true) {
+      try {
+        deployEnv = { SHIN_VERIFY_PRINCIPAL_ARN: resolveAwsPrincipalArn() };
+      } catch {
+        log("Unable to identify the AWS principal for post-deploy verification.");
+        return 1;
+      }
+    }
+    const status = await runProcess(run, "pnpm", scenarioCdkArgs(repositoryRoot, run), deployEnv);
     if (
       status !== 0 ||
       run.action !== "deploy" ||
@@ -164,6 +176,37 @@ export async function executeScenarioPlan(
     }
   }
   return status;
+}
+
+function currentAwsPrincipalArn(): string {
+  const result = spawnSync(
+    "aws",
+    ["sts", "get-caller-identity", "--query", "Arn", "--output", "text", "--no-cli-pager"],
+    {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  if (result.error !== undefined || result.status !== 0) {
+    throw new Error("AWS principal lookup failed.");
+  }
+  return verificationPrincipalArn(result.stdout.trim());
+}
+
+export function verificationPrincipalArn(callerArn: string): string {
+  const assumedRole =
+    /^arn:(aws|aws-cn|aws-us-gov):sts::([0-9]{12}):assumed-role\/([^/\s]+)\/[^\s]+$/.exec(
+      callerArn,
+    );
+  if (assumedRole) {
+    return `arn:${assumedRole[1]}:iam::${assumedRole[2]}:role/${assumedRole[3]}`;
+  }
+  if (
+    /^arn:(aws|aws-cn|aws-us-gov):iam::[0-9]{12}:(role|user)\/[A-Za-z0-9+=,.@_/-]+$/.test(callerArn)
+  ) {
+    return callerArn;
+  }
+  throw new Error("AWS principal lookup returned an unexpected identity.");
 }
 
 function spawnProcess(
