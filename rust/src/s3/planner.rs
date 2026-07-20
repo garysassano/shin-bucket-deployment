@@ -108,6 +108,11 @@ pub(super) fn validate_request_lengths(request: &DeploymentRequest) -> Result<()
             "SourceBucketNames and SourceObjectKeys must be the same length"
         ));
     }
+    if request.source_bucket_names.is_empty() {
+        return Err(anyhow!(
+            "SourceBucketNames and SourceObjectKeys must contain at least one source"
+        ));
+    }
     if request.source_catalogs.len() != request.source_bucket_names.len() {
         return Err(anyhow!(
             "SourceCatalogs and SourceBucketNames must be the same length"

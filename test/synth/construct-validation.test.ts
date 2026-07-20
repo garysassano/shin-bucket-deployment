@@ -695,6 +695,47 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     expect(() => app.synth()).toThrow(/marker replacement requires extraction/);
   });
 
+  test("fails synthesis when no deployment source was added", () => {
+    const app = new App();
+    const stack = new Stack(app, "EmptySourcesStack");
+    const destinationBucket = new Bucket(stack, "Dest");
+
+    new ShinBucketDeployment(stack, "Deploy", {
+      sources: [],
+      destination: {
+        bucket: destinationBucket,
+      },
+      providerLambda: {
+        localBuild: testLocalProviderBuild(),
+      },
+    });
+
+    expect(() => app.synth()).toThrow(
+      /requires at least one source; pass a source in sources or call addSource\(\) before synthesis/,
+    );
+  });
+
+  test("allows an initially empty deployment when addSource is called before synthesis", () => {
+    const app = new App();
+    const stack = new Stack(app, "AddedSourceStack");
+    const destinationBucket = new Bucket(stack, "Dest");
+    const deployment = new ShinBucketDeployment(stack, "Deploy", {
+      sources: [],
+      destination: {
+        bucket: destinationBucket,
+      },
+      providerLambda: {
+        localBuild: testLocalProviderBuild(),
+      },
+    });
+
+    deployment.addSource(Source.data("index.html", "ok"));
+
+    expect(() => app.synth()).not.toThrow();
+    expect(customResourceProperties(stack).SourceBucketNames).toHaveLength(1);
+    expect(customResourceProperties(stack).SourceObjectKeys).toHaveLength(1);
+  });
+
   test("renders CloudFront properties and permissions", () => {
     const stack = new Stack();
     const destinationBucket = new Bucket(stack, "Dest");
