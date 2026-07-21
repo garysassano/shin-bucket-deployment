@@ -1,6 +1,6 @@
 {
   "name": "shin-bucket-deployment",
-  "version": "0.10.3",
+  "version": "0.10.4",
   "description": "Rust-backed AWS CDK construct for performance-sensitive S3 asset deployment",
   "license": "MIT",
   "keywords": [

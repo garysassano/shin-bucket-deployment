@@ -143,17 +143,6 @@ impl Filters {
 }
 
 pub(crate) fn parse_request(raw: &RawDeploymentRequest) -> Result<DeploymentRequest> {
-    parse_request_with_checksum_strategy(raw, None)
-}
-
-pub(crate) fn parse_delete_request(raw: &RawDeploymentRequest) -> Result<DeploymentRequest> {
-    parse_request_with_checksum_strategy(raw, Some(DestinationChecksumStrategy::SseS3Etag))
-}
-
-fn parse_request_with_checksum_strategy(
-    raw: &RawDeploymentRequest,
-    delete_default_checksum_strategy: Option<DestinationChecksumStrategy>,
-) -> Result<DeploymentRequest> {
     let mut source_markers = raw.source_markers.clone();
     let mut source_markers_config = raw.source_markers_config.clone();
     let source_catalogs = parse_source_catalogs(raw)?;
@@ -189,12 +178,9 @@ fn parse_request_with_checksum_strategy(
             .clone()
             .unwrap_or_else(|| vec![default_distribution_path]),
         wait_for_distribution_invalidation: raw.wait_for_distribution_invalidation,
-        destination_checksum_strategy: raw
-            .destination_checksum_strategy
-            .or(delete_default_checksum_strategy)
-            .ok_or_else(|| {
-                anyhow!("DestinationChecksumStrategy is required for destination writes")
-            })?,
+        destination_checksum_strategy: raw.destination_checksum_strategy.ok_or_else(|| {
+            anyhow!("DestinationChecksumStrategy is required for destination writes")
+        })?,
         delete_stale_objects_on_deployment: raw.delete_stale_objects_on_deployment,
         exclude: raw.exclude.clone(),
         include: raw.include.clone(),
@@ -900,26 +886,6 @@ mod tests {
         let mut unknown = minimal_request();
         unknown["DestinationChecksumStrategy"] = json!("sha256");
         assert!(serde_json::from_value::<RawDeploymentRequest>(unknown).is_err());
-    }
-
-    #[test]
-    fn delete_parsing_defaults_only_the_write_only_checksum_strategy() {
-        let mut missing = minimal_request();
-        missing
-            .as_object_mut()
-            .unwrap()
-            .remove("DestinationChecksumStrategy");
-        missing["DeleteCurrentObjectsOnDelete"] = json!(true);
-        let raw: RawDeploymentRequest = serde_json::from_value(missing).unwrap();
-
-        assert!(parse_request(&raw).is_err());
-        let request = parse_delete_request(&raw).expect("legacy Delete request");
-
-        assert!(request.delete_current_objects_on_delete);
-        assert_eq!(
-            request.destination_checksum_strategy,
-            DestinationChecksumStrategy::SseS3Etag
-        );
     }
 
     #[test]
