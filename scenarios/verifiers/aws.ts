@@ -9,6 +9,9 @@ import {
 } from "@aws-sdk/client-s3";
 import { reportVerificationFailure } from "./report";
 
+const RESOURCE_ABSENCE_ATTEMPTS = 30;
+const RESOURCE_ABSENCE_POLL_MS = 2_000;
+
 export type ObjectMetadata = {
   readonly contentLength?: number;
   readonly contentType?: string;
@@ -104,16 +107,23 @@ export class AwsVerificationApi implements VerificationApi {
   }
 
   public async assertBucketAbsent(bucket: string): Promise<void> {
-    try {
-      await this.s3.send(new ListObjectsV2Command({ Bucket: bucket, MaxKeys: 1 }));
-    } catch (error) {
-      // Verification buckets retain their session-scoped ListBucket policy during teardown, so an
-      // existing bucket succeeds. Unlike HeadBucket's ambiguous 400/403/404 contract, this listing
-      // proves absence only when S3 reports that the bucket does not exist.
-      if (bucketListingProvesAbsence(error)) return;
-      reportVerificationFailure("bucket-probe-error");
-      throw error;
-    }
+    const absent = await waitForResourceAbsence(
+      async () => {
+        try {
+          await this.s3.send(new ListObjectsV2Command({ Bucket: bucket, MaxKeys: 1 }));
+          return false;
+        } catch (error) {
+          // Verification buckets retain their session-scoped ListBucket policy during teardown, so
+          // an existing bucket succeeds. Unlike HeadBucket's ambiguous 400/403/404 contract, this
+          // listing proves absence only when S3 reports that the bucket does not exist.
+          if (bucketListingProvesAbsence(error)) return true;
+          reportVerificationFailure("bucket-probe-error");
+          throw error;
+        }
+      },
+      (milliseconds) => this.sleep(milliseconds),
+    );
+    if (absent) return;
     reportVerificationFailure("bucket-present");
     throw new Error("A verification bucket still exists after stack cleanup.");
   }
@@ -133,6 +143,19 @@ export class AwsVerificationApi implements VerificationApi {
 
 export function bucketListingProvesAbsence(error: unknown): boolean {
   return httpStatus(error) === 404;
+}
+
+export async function waitForResourceAbsence(
+  probe: () => Promise<boolean>,
+  sleep: (milliseconds: number) => Promise<void>,
+  attempts = RESOURCE_ABSENCE_ATTEMPTS,
+  pollMilliseconds = RESOURCE_ABSENCE_POLL_MS,
+): Promise<boolean> {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (await probe()) return true;
+    if (attempt + 1 < attempts) await sleep(pollMilliseconds);
+  }
+  return false;
 }
 
 function httpStatus(error: unknown): number | undefined {

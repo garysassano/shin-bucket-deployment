@@ -11,6 +11,7 @@ import {
   type ObjectMetadata,
   type VerificationApi,
   bucketListingProvesAbsence,
+  waitForResourceAbsence,
 } from "../scenarios/verifiers/aws";
 import { requiredOutput, stackOutputs } from "../scenarios/verifiers/outputs";
 import { reportVerificationFailure } from "../scenarios/verifiers/report";
@@ -317,8 +318,10 @@ describe("cleanup verifier", () => {
 
   it("does not mask a verification failure when the summary cannot be written", () => {
     vi.stubEnv("GITHUB_STEP_SUMMARY", join(temporaryDirectory(), "missing", "summary.md"));
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
 
     expect(() => reportVerificationFailure("stack-probe-error")).not.toThrow();
+    expect(error).toHaveBeenCalledWith("Verification failure category: stack-probe-error");
   });
 
   it("retains verifier bucket policies until their buckets are removed", () => {
@@ -344,6 +347,39 @@ describe("cleanup verifier", () => {
     expect(bucketListingProvesAbsence(awsError(404))).toBe(true);
     expect(bucketListingProvesAbsence(awsError(500))).toBe(false);
     expect(bucketListingProvesAbsence(new Error("network failure"))).toBe(false);
+  });
+
+  it("waits for transient resource presence and stops once absence is proven", async () => {
+    const probes = [false, false, true];
+    const sleeps: number[] = [];
+
+    await expect(
+      waitForResourceAbsence(
+        async () => probes.shift() ?? false,
+        async (milliseconds) => {
+          sleeps.push(milliseconds);
+        },
+        4,
+        25,
+      ),
+    ).resolves.toBe(true);
+    expect(sleeps).toEqual([25, 25]);
+  });
+
+  it("reports persistent resource presence after the bounded absence wait", async () => {
+    const sleeps: number[] = [];
+
+    await expect(
+      waitForResourceAbsence(
+        async () => false,
+        async (milliseconds) => {
+          sleeps.push(milliseconds);
+        },
+        3,
+        25,
+      ),
+    ).resolves.toBe(false);
+    expect(sleeps).toEqual([25, 25]);
   });
 
   it("checks the stack and every unique scoped bucket and distribution", async () => {

@@ -8,6 +8,7 @@ export type VerificationFailureCategory =
   | "stack-probe-error";
 
 export function reportVerificationFailure(category: VerificationFailureCategory): void {
+  console.error(`Verification failure category: ${category}`);
   const summaryFile = process.env.GITHUB_STEP_SUMMARY;
   if (summaryFile) {
     try {
