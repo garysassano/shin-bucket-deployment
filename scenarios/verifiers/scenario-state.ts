@@ -319,14 +319,7 @@ async function verifyMarkerReplacement({
 }: ScenarioContext): Promise<void> {
   const bucket = requiredOutput(outputs, "BucketName");
   const special = requiredOutput(outputs, "SpecialJsonTokenValue");
-  const json = JSON.stringify({
-    stackName,
-    region: region(),
-    bucketName: bucket,
-    message: "jsonData without escape",
-    repeatedRegion: region(),
-    specialValue: special,
-  });
+  const rawJson = `{"stackName":"${stackName}","region":"${region()}","bucketName":"${bucket}","message":"jsonData without escape","repeatedRegion":"${region()}","specialValue":"${special}"}`;
   const escapedJson = JSON.stringify({
     stackName,
     region: region(),
@@ -353,7 +346,7 @@ async function verifyMarkerReplacement({
       "site/runtime/plain.txt",
       `stack=${stackName}\nregion=${region()}\nregion-again=${region()}\nbucket=${bucket}`,
     ),
-    assertObjectBody(api, bucket, "site/runtime/raw.json", json),
+    assertObjectBody(api, bucket, "site/runtime/raw.json", rawJson),
     assertObjectBody(api, bucket, "site/runtime/escaped.json", escapedJson),
     assertObjectBody(
       api,
@@ -371,7 +364,7 @@ async function verifyMarkerReplacement({
       api,
       bucket,
       "site/runtime/config.yaml",
-      `stackName: ${stackName}\nregion: ${region()}\nbucketName: ${bucket}\nmessage: yaml replacement is active\nrepeatedRegion: ${region()}\n`,
+      `stackName: "${stackName}"\nregion: "${region()}"\nbucketName: "${bucket}"\nmessage: yaml replacement is active\nrepeatedRegion: "${region()}"\n`,
     ),
   ]);
 }

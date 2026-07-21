@@ -102,7 +102,9 @@ export class AwsVerificationApi implements VerificationApi {
     try {
       await this.s3.send(new HeadBucketCommand({ Bucket: bucket }));
     } catch (error) {
-      if (httpStatus(error) === 404) return;
+      // Verification buckets retain their session-scoped read policy during teardown. An existing
+      // bucket therefore succeeds; after deletion S3 can return either 403 or 404 for HeadBucket.
+      if (bucketProbeProvesAbsence(error)) return;
       throw error;
     }
     throw new Error("A verification bucket still exists after stack cleanup.");
@@ -117,6 +119,11 @@ export class AwsVerificationApi implements VerificationApi {
     }
     throw new Error("A verification distribution still exists after stack cleanup.");
   }
+}
+
+export function bucketProbeProvesAbsence(error: unknown): boolean {
+  const status = httpStatus(error);
+  return status === 403 || status === 404;
 }
 
 function httpStatus(error: unknown): number | undefined {

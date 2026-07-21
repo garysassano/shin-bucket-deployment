@@ -1,9 +1,17 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { Stack } from "aws-cdk-lib";
+import { Template } from "aws-cdk-lib/assertions";
+import { Bucket } from "aws-cdk-lib/aws-s3";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { grantVerifierRead } from "../scenarios/apps/verification-access";
 import { VERIFY_DEFAULT_GROUPS, VERIFY_SCENARIOS } from "../scenarios/catalog";
-import type { ObjectMetadata, VerificationApi } from "../scenarios/verifiers/aws";
+import {
+  type ObjectMetadata,
+  type VerificationApi,
+  bucketProbeProvesAbsence,
+} from "../scenarios/verifiers/aws";
 import { requiredOutput, stackOutputs } from "../scenarios/verifiers/outputs";
 import { expectedScenarioNames, verifyScenarioState } from "../scenarios/verifiers/scenario-state";
 import { verifyStackAbsent } from "../scenarios/verifiers/stack-absent";
@@ -24,6 +32,7 @@ const FIXTURE_INDEX = `<!doctype html>
 const temporaryDirectories: string[] = [];
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   for (const directory of temporaryDirectories.splice(0)) {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -69,6 +78,58 @@ describe("scenario state verifier", () => {
     await expect(verifyScenarioState(STACK_NAME, "simple", outputs, api)).rejects.toThrow(
       "did not match the expected scenario state",
     );
+  });
+
+  it("matches raw, escaped, data, and YAML marker serialization exactly", async () => {
+    vi.stubEnv("AWS_REGION", "eu-central-1");
+    const api = new FakeVerificationApi();
+    putFixture(api, "destination", "site");
+    const special = 'value with "quotes" and \\backslash';
+    api.putObject(
+      "destination",
+      "site/runtime/plain.txt",
+      `stack=${STACK_NAME}\nregion=${region()}\nregion-again=${region()}\nbucket=destination`,
+    );
+    api.putObject(
+      "destination",
+      "site/runtime/raw.json",
+      `{"stackName":"${STACK_NAME}","region":"${region()}","bucketName":"destination","message":"jsonData without escape","repeatedRegion":"${region()}","specialValue":"${special}"}`,
+    );
+    api.putObject(
+      "destination",
+      "site/runtime/escaped.json",
+      JSON.stringify({
+        stackName: STACK_NAME,
+        region: region(),
+        bucketName: "destination",
+        message: "jsonData with escape",
+        repeatedRegion: region(),
+        specialValue: special,
+      }),
+    );
+    api.putObject(
+      "destination",
+      "site/runtime/from-data-raw.json",
+      `{"specialValue":"${special}"}`,
+    );
+    api.putObject(
+      "destination",
+      "site/runtime/from-data-escaped.json",
+      JSON.stringify({ specialValue: special }),
+    );
+    api.putObject(
+      "destination",
+      "site/runtime/config.yaml",
+      `stackName: "${STACK_NAME}"\nregion: "${region()}"\nbucketName: "destination"\nmessage: yaml replacement is active\nrepeatedRegion: "${region()}"\n`,
+    );
+    const outputs = outputsFile({
+      BucketName: "destination",
+      SpecialJsonTokenValue: special,
+    });
+
+    await expect(
+      verifyScenarioState(STACK_NAME, "marker-replacement", outputs, api),
+    ).resolves.toBeUndefined();
   });
 
   it("checks the copied Info-ZIP archive key, length, digest, and content type", async () => {
@@ -241,6 +302,30 @@ describe("deployment output parsing", () => {
 });
 
 describe("cleanup verifier", () => {
+  it("retains verifier bucket policies until their buckets are removed", () => {
+    const stack = new Stack();
+    const bucket = new Bucket(stack, "Destination");
+    grantVerifierRead(
+      bucket,
+      undefined,
+      "arn:aws:sts::111122223333:assumed-role/VerifierRole/workflow-session",
+    );
+
+    const policies = Template.fromStack(stack).findResources("AWS::S3::BucketPolicy");
+    expect(Object.values(policies)).toHaveLength(1);
+    expect(Object.values(policies)[0]).toMatchObject({
+      DeletionPolicy: "Retain",
+      UpdateReplacePolicy: "Retain",
+    });
+  });
+
+  it("accepts only S3's permission-hidden and not-found bucket absence responses", () => {
+    expect(bucketProbeProvesAbsence(awsError(403))).toBe(true);
+    expect(bucketProbeProvesAbsence(awsError(404))).toBe(true);
+    expect(bucketProbeProvesAbsence(awsError(500))).toBe(false);
+    expect(bucketProbeProvesAbsence(new Error("network failure"))).toBe(false);
+  });
+
   it("checks the stack and every unique scoped bucket and distribution", async () => {
     const api = new FakeVerificationApi();
     const outputs = outputsFile({
@@ -390,4 +475,14 @@ function cloudFrontOutputs(token: string): string {
     CurrentCacheProbeToken: token,
     DistributionId: "distribution",
   });
+}
+
+function awsError(httpStatusCode: number): Error {
+  return Object.assign(new Error("simulated AWS response"), {
+    $metadata: { httpStatusCode },
+  });
+}
+
+function region(): string {
+  return process.env.AWS_REGION ?? process.env.AWS_DEFAULT_REGION ?? "eu-central-1";
 }
