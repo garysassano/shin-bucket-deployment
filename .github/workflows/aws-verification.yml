@@ -138,8 +138,8 @@ jobs:
             scenarios: stale-object-retention-initial stale-object-retention-updated
             cleanup: stale-object-retention-updated
           - group: default-retention
-            scenarios: default-retention-initial default-retention-updated
-            cleanup: default-retention-updated
+            scenarios: default-retention-initial default-retention-updated default-retention-bucket-only
+            cleanup: default-retention-bucket-only
           - group: extract-false
             scenarios: extract-false
             cleanup: extract-false
@@ -165,11 +165,11 @@ jobs:
             scenarios: handler-isolation
             cleanup: handler-isolation
           - group: cloudfront-sync
-            scenarios: cloudfront-sync
-            cleanup: cloudfront-sync
+            scenarios: cloudfront-sync-initial cloudfront-sync-updated
+            cleanup: cloudfront-sync-updated
           - group: cloudfront-async
-            scenarios: cloudfront-async
-            cleanup: cloudfront-async
+            scenarios: cloudfront-async-initial cloudfront-async-updated
+            cleanup: cloudfront-async-updated
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:

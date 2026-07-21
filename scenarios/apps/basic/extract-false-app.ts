@@ -1,6 +1,9 @@
 import { App, CfnOutput, Fn, RemovalPolicy, Stack, type StackProps } from "aws-cdk-lib";
 import { Bucket } from "aws-cdk-lib/aws-s3";
+import { Asset } from "aws-cdk-lib/aws-s3-assets";
 import { ShinBucketDeployment, Source } from "../../../src";
+import { decodeExternalZipFixture } from "../external-zip-fixture";
+import { grantVerifierRead } from "../verification-access";
 
 class ExtractFalseShinBucketDeploymentStack extends Stack {
   constructor(scope: App, id: string, props?: StackProps) {
@@ -10,9 +13,13 @@ class ExtractFalseShinBucketDeploymentStack extends Stack {
       autoDeleteObjects: true,
       removalPolicy: RemovalPolicy.DESTROY,
     });
+    grantVerifierRead(websiteBucket);
+    const sourceArchive = new Asset(this, "SourceArchive", {
+      path: decodeExternalZipFixture("info-zip.zip"),
+    });
 
     const deployment = new ShinBucketDeployment(this, "DeployArchive", {
-      sources: [Source.asset("test/fixtures/my-website")],
+      sources: [Source.bucket(sourceArchive.bucket, sourceArchive.s3ObjectKey)],
       destination: {
         bucket: websiteBucket,
         keyPrefix: "archive",

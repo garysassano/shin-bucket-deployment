@@ -1,6 +1,6 @@
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { createScenarioPlan, scenarioAppPath, scenarioCdkArgs, scenarioOutputsPath } from "./plan";
 import type { ParsedArgs, ScenarioPlan, ScenarioRun } from "./types";
 
@@ -22,6 +22,7 @@ export type ExecutionOptions = {
   readonly startProcess?: StartProcess;
   readonly resolveAwsPrincipalArn?: () => string;
   readonly pathExists?: (path: string) => boolean;
+  readonly ensureDirectory?: (path: string) => void;
   readonly log?: (message: string) => void;
 };
 
@@ -43,6 +44,8 @@ export async function executeScenarioPlan(
   const startProcess = options.startProcess ?? spawnProcess;
   const resolveAwsPrincipalArn = options.resolveAwsPrincipalArn ?? currentAwsPrincipalArn;
   const pathExists = options.pathExists ?? existsSync;
+  const ensureDirectory =
+    options.ensureDirectory ?? ((path) => mkdirSync(path, { recursive: true }));
   const log = options.log ?? ((message: string) => console.error(message));
   const controller = new AbortController();
   const startedCleanupCommands: string[] = [];
@@ -105,37 +108,42 @@ export async function executeScenarioPlan(
     const cdkArgs = scenarioCdkArgs(repositoryRoot, run);
     const outputsFile = scenarioOutputsPath(repositoryRoot, run);
     if (run.action === "deploy" && run.definition.postDeployVerifier !== undefined) {
+      const outputsDirectory = dirname(outputsFile);
+      if (!pathExists(outputsDirectory)) {
+        ensureDirectory(outputsDirectory);
+      }
       cdkArgs.push("--outputs-file", outputsFile);
     }
     const status = await runProcess(run, "pnpm", cdkArgs, deployEnv);
-    if (
-      status !== 0 ||
-      run.action !== "deploy" ||
-      run.definition.postDeployVerifier === undefined
-    ) {
+    if (status !== 0) {
       return status;
     }
-    const verifierPath = join(
-      repositoryRoot,
-      "dist",
-      "scenarios",
-      "verifiers",
-      run.definition.postDeployVerifier,
-    );
+    const verifier =
+      run.action === "deploy"
+        ? run.definition.postDeployVerifier
+        : run.action === "destroy"
+          ? run.definition.postDestroyVerifier
+          : undefined;
+    if (verifier === undefined) return status;
+    const verifierPath = join(repositoryRoot, "dist", "scenarios", "verifiers", verifier);
     if (!pathExists(verifierPath)) {
-      log(`Built post-deploy verifier not found: ${verifierPath}`);
+      log(`Built post-${run.action} verifier not found: ${verifierPath}`);
       return 1;
     }
-    log(`verify deployed state for scenario ${run.name}`);
-    return runProcess(run, "node", [
+    log(
+      `verify ${run.action === "deploy" ? "deployed state" : "cleanup"} for scenario ${run.name}`,
+    );
+    const verifierArgs = [
       verifierPath,
       "--stack-name",
       run.definition.stackName,
       "--scenario-name",
       run.name,
-      "--outputs-file",
-      outputsFile,
-    ]);
+    ];
+    if (run.action === "deploy" || pathExists(outputsFile)) {
+      verifierArgs.push("--outputs-file", outputsFile);
+    }
+    return runProcess(run, "node", verifierArgs);
   };
 
   const workers = Array.from(

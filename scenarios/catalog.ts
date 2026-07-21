@@ -69,6 +69,10 @@ export const VERIFY_SCENARIOS = {
     "retention/default-retention-updated-app.js",
     "ShinBucketDeploymentDefaultRetentionDemo",
   ),
+  "default-retention-bucket-only": scenario(
+    "retention/default-retention-bucket-only-app.js",
+    "ShinBucketDeploymentDefaultRetentionDemo",
+  ),
   "extract-false": scenario("basic/extract-false-app.js", "ShinBucketDeploymentExtractFalseDemo"),
   "object-deletion-initial": scenario(
     "retention/object-deletion-initial-app.js",
@@ -85,14 +89,10 @@ export const VERIFY_SCENARIOS = {
   "replacement-safety-initial": scenario(
     "retention/replacement-safety-initial-app.js",
     "ShinBucketDeploymentReplacementSafetyDemo",
-    "destination-move-matrix.js",
-    true,
   ),
   "replacement-safety-updated": scenario(
     "retention/replacement-safety-updated-app.js",
     "ShinBucketDeploymentReplacementSafetyDemo",
-    "destination-move-matrix.js",
-    true,
   ),
   "large-archive": scenario("scale/large-archive-app.js", "ShinBucketDeploymentLargeArchiveDemo"),
   "kms-destination": scenario(
@@ -111,13 +111,25 @@ export const VERIFY_SCENARIOS = {
     "security/handler-isolation-app.js",
     "ShinBucketDeploymentHandlerIsolationDemo",
   ),
-  "cloudfront-sync": scenario(
+  "cloudfront-sync-initial": scenario(
     "cloudfront/cloudfront-sync-app.js",
     "ShinBucketDeploymentCloudFrontSyncDemo",
+    { SHIN_VERIFY_CACHE_PROBE_TOKEN: "sync-initial" },
   ),
-  "cloudfront-async": scenario(
+  "cloudfront-sync-updated": scenario(
+    "cloudfront/cloudfront-sync-app.js",
+    "ShinBucketDeploymentCloudFrontSyncDemo",
+    { SHIN_VERIFY_CACHE_PROBE_TOKEN: "sync-updated" },
+  ),
+  "cloudfront-async-initial": scenario(
     "cloudfront/cloudfront-async-app.js",
     "ShinBucketDeploymentCloudFrontAsyncDemo",
+    { SHIN_VERIFY_CACHE_PROBE_TOKEN: "async-initial" },
+  ),
+  "cloudfront-async-updated": scenario(
+    "cloudfront/cloudfront-async-app.js",
+    "ShinBucketDeploymentCloudFrontAsyncDemo",
+    { SHIN_VERIFY_CACHE_PROBE_TOKEN: "async-updated" },
   ),
 } as const satisfies Record<string, ScenarioDefinition>;
 
@@ -144,7 +156,7 @@ export const VERIFY_DEFAULT_GROUPS = [
   ["cross-bucket-change-initial", "cross-bucket-change-updated"],
   ["stale-object-cleanup-initial", "stale-object-cleanup-updated"],
   ["stale-object-retention-initial", "stale-object-retention-updated"],
-  ["default-retention-initial", "default-retention-updated"],
+  ["default-retention-initial", "default-retention-updated", "default-retention-bucket-only"],
   ["extract-false"],
   ["object-deletion-initial", "object-deletion-updated", "object-deletion-bucket-only"],
   ["replacement-safety-initial", "replacement-safety-updated"],
@@ -153,8 +165,8 @@ export const VERIFY_DEFAULT_GROUPS = [
   ["kms-managed-destination"],
   ["dsse-managed-destination"],
   ["handler-isolation"],
-  ["cloudfront-sync"],
-  ["cloudfront-async"],
+  ["cloudfront-sync-initial", "cloudfront-sync-updated"],
+  ["cloudfront-async-initial", "cloudfront-async-updated"],
 ] as const satisfies ReadonlyArray<ReadonlyArray<keyof typeof VERIFY_SCENARIOS>>;
 
 export const VERIFY_DESTROY_ORDER = [
@@ -168,7 +180,7 @@ export const VERIFY_DESTROY_ORDER = [
   "cross-bucket-change-updated",
   "stale-object-cleanup-updated",
   "stale-object-retention-updated",
-  "default-retention-updated",
+  "default-retention-bucket-only",
   "extract-false",
   "object-deletion-bucket-only",
   "replacement-safety-updated",
@@ -179,8 +191,8 @@ export const VERIFY_DESTROY_ORDER = [
   "kms-managed-destination",
   "dsse-managed-destination",
   "handler-isolation",
-  "cloudfront-sync",
-  "cloudfront-async",
+  "cloudfront-sync-updated",
+  "cloudfront-async-updated",
 ] as const;
 
 export function verifyScenarioEntry(name: string): ScenarioEntry {
@@ -194,14 +206,15 @@ export function verifyScenarioEntry(name: string): ScenarioEntry {
 function scenario(
   file: string,
   stackName: string,
-  postDeployVerifier?: string,
-  grantVerifierRead?: boolean,
+  env?: Readonly<Record<string, string>>,
 ): ScenarioDefinition {
   return {
     file,
     root: "scenarios",
     stackName,
-    ...(postDeployVerifier ? { postDeployVerifier } : {}),
-    ...(grantVerifierRead ? { grantVerifierRead } : {}),
+    postDeployVerifier: "scenario-state.js",
+    postDestroyVerifier: "stack-absent.js",
+    grantVerifierRead: true,
+    ...(env ? { env } : {}),
   };
 }

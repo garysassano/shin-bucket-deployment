@@ -1,6 +1,7 @@
 import { App, CfnOutput, RemovalPolicy, Stack, type StackProps } from "aws-cdk-lib";
 import { Bucket } from "aws-cdk-lib/aws-s3";
 import { ShinBucketDeployment, Source } from "../../../src";
+import { grantVerifierRead } from "../verification-access";
 
 export type LifecycleSafetyPhase =
   | "co-tenant-initial"
@@ -40,6 +41,7 @@ class LifecycleSafetyStack extends Stack {
       autoDeleteObjects: true,
       removalPolicy: RemovalPolicy.DESTROY,
     });
+    grantVerifierRead(destinationBucket);
 
     switch (phase) {
       case "co-tenant-initial":

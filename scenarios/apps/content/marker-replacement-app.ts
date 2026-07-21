@@ -9,6 +9,7 @@ import {
 } from "aws-cdk-lib";
 import { Bucket } from "aws-cdk-lib/aws-s3";
 import { ShinBucketDeployment, Source } from "../../../src";
+import { grantVerifierRead } from "../verification-access";
 
 class MarkerReplacementShinBucketDeploymentStack extends Stack {
   constructor(scope: App, id: string, props?: StackProps) {
@@ -18,6 +19,7 @@ class MarkerReplacementShinBucketDeploymentStack extends Stack {
       autoDeleteObjects: true,
       removalPolicy: RemovalPolicy.DESTROY,
     });
+    grantVerifierRead(websiteBucket);
 
     const specialJsonToken = new CfnParameter(this, "SpecialJsonToken", {
       type: "String",

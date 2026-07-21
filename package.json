@@ -68,7 +68,7 @@
     "rust:deny": "cargo deny --manifest-path rust/Cargo.toml --exclude spin@0.10.0 check",
     "test": "vitest run && node --test scripts/*.test.mjs",
     "test:ci": "vitest run --maxWorkers=2 && node --test scripts/*.test.mjs",
-    "workflow:lint": "node scripts/actionlint-parallel.mjs",
+    "workflow:lint": "actionlint",
     "toml:check": "taplo fmt --check mise.toml rust/Cargo.toml rust/deny.toml",
     "npm:audit": "pnpm audit --audit-level high",
     "verify:package": "node scripts/verify-package.mjs",
@@ -97,6 +97,9 @@
     }
   },
   "devDependencies": {
+    "@aws-sdk/client-cloudformation": "3.1090.0",
+    "@aws-sdk/client-cloudfront": "3.1090.0",
+    "@aws-sdk/client-s3": "3.1090.0",
     "@biomejs/biome": "2.5.0",
     "@types/node": "24.12.4",
     "aws-cdk": "2.1127.0",

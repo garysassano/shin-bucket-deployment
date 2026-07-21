@@ -36,7 +36,13 @@ export function scenarioAppPath(repositoryRoot: string, definition: ScenarioDefi
 }
 
 export function scenarioOutputsPath(repositoryRoot: string, run: ScenarioRun): string {
-  return join(cdkOutputDir(repositoryRoot, run.mode, run.name), "stack-outputs.json");
+  const scratchRoot = run.mode === "verify" ? ".verification-assets" : ".benchmark-assets";
+  return join(
+    repositoryRoot,
+    scratchRoot,
+    "outputs",
+    `${safePathPart(run.definition.stackName)}.json`,
+  );
 }
 
 export function scenarioCdkArgs(repositoryRoot: string, run: ScenarioRun): string[] {
@@ -70,7 +76,7 @@ function createVerifyPlan(
       name,
       definition,
       cdkArgs: args.cdkArgs,
-      env: {},
+      env: definition.env ?? {},
     })),
     ...(args.action === "deploy"
       ? { cleanupCommand: cleanupCommand(entries.at(-1)?.[0], args.cdkArgs) }

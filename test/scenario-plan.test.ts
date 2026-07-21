@@ -52,6 +52,17 @@ describe("scenario planner", () => {
       "object-deletion-updated",
       "object-deletion-bucket-only",
     ]);
+    const defaultRetentionGroup = plan.groups.find(
+      ({ runs }) => runs[0]?.name === "default-retention-initial",
+    );
+    expect(defaultRetentionGroup?.runs.map(({ name }) => name)).toEqual([
+      "default-retention-initial",
+      "default-retention-updated",
+      "default-retention-bucket-only",
+    ]);
+    expect(defaultRetentionGroup?.cleanupCommand).toBe(
+      "pnpm verify destroy default-retention-bucket-only",
+    );
     expect(replacementGroup?.runs.map(({ name }) => name)).toEqual([
       "replacement-safety-initial",
       "replacement-safety-updated",
@@ -73,6 +84,16 @@ describe("scenario planner", () => {
       "cross-bucket-change-initial",
       "cross-bucket-change-updated",
     ]);
+    expect(
+      plan.groups
+        .find(({ runs }) => runs[0]?.name === "cloudfront-sync-initial")
+        ?.runs.map(({ name }) => name),
+    ).toEqual(["cloudfront-sync-initial", "cloudfront-sync-updated"]);
+    expect(
+      plan.groups
+        .find(({ runs }) => runs[0]?.name === "cloudfront-async-initial")
+        ?.runs.map(({ name }) => name),
+    ).toEqual(["cloudfront-async-initial", "cloudfront-async-updated"]);
     expect(handlerIsolationGroup?.runs.map(({ name }) => name)).toEqual(["handler-isolation"]);
   });
 
@@ -83,6 +104,8 @@ describe("scenario planner", () => {
 
     expect(names).toContain("stale-object-cleanup-updated");
     expect(names).not.toContain("stale-object-cleanup-initial");
+    expect(names).toContain("default-retention-bucket-only");
+    expect(names).not.toContain("default-retention-updated");
     expect(names).toContain("object-deletion-bucket-only");
     expect(names).not.toContain("object-deletion-updated");
     expect(names).toContain("replacement-safety-updated");
@@ -96,6 +119,10 @@ describe("scenario planner", () => {
     expect(names).toContain("cross-bucket-change-updated");
     expect(names).not.toContain("cross-bucket-change-initial");
     expect(names).toContain("handler-isolation");
+    expect(names).toContain("cloudfront-sync-updated");
+    expect(names).not.toContain("cloudfront-sync-initial");
+    expect(names).toContain("cloudfront-async-updated");
+    expect(names).not.toContain("cloudfront-async-initial");
   });
 
   it("normalizes verification and benchmark application paths centrally", () => {
@@ -143,7 +170,7 @@ describe("scenario planner", () => {
       "Example:Value=hello world",
     ]);
     expect(scenarioOutputsPath("/repo", run)).toBe(
-      "/repo/.verification-assets/cdk.out/verify/simple/stack-outputs.json",
+      "/repo/.verification-assets/outputs/ShinBucketDeploymentSimpleDemo.json",
     );
     expect(
       planFor(["verify", "deploy", "simple", "--", "--parameters", "Example:Value=hello world"])

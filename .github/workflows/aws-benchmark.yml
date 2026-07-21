@@ -256,49 +256,48 @@ jobs:
           mkdir -p "$report_root/snapshots"
           cp "$RESULTS_FILE" "$report_root/results.jsonl"
 
-      - parallel:
-          - name: Render Actions summary
-            run: |
-              node dist/benchmarks/src/render/ci-summary.js \
-                --config benchmarks/configs/methodology-v2-1024-32.json \
-                --input-file "$RESULTS_FILE" \
-                --output-file "$REPORT_ROOT/summary.md" \
-                --run-id "${{ inputs.run_id }}" \
-                --scratch-root "$SCRATCH_ROOT" \
-                --preview "$REPORT_PREVIEW"
-              cat "$REPORT_ROOT/summary.md" >>"$GITHUB_STEP_SUMMARY"
+      - name: Render Actions summary
+        run: |
+          node dist/benchmarks/src/render/ci-summary.js \
+            --config benchmarks/configs/methodology-v2-1024-32.json \
+            --input-file "$RESULTS_FILE" \
+            --output-file "$REPORT_ROOT/summary.md" \
+            --run-id "${{ inputs.run_id }}" \
+            --scratch-root "$SCRATCH_ROOT" \
+            --preview "$REPORT_PREVIEW"
+          cat "$REPORT_ROOT/summary.md" >>"$GITHUB_STEP_SUMMARY"
 
-          - name: Render comparison report
-            run: |
-              node dist/benchmarks/src/render/comparison-report.js \
-                --config benchmarks/configs/methodology-v2-1024-32.json \
-                --input-file "$RESULTS_FILE" \
-                --output-file "$REPORT_ROOT/report.md" \
-                --run-id "${{ inputs.run_id }}" \
-                --scratch-root "$SCRATCH_ROOT" \
-                --preview "$REPORT_PREVIEW"
+      - name: Render comparison report
+        run: |
+          node dist/benchmarks/src/render/comparison-report.js \
+            --config benchmarks/configs/methodology-v2-1024-32.json \
+            --input-file "$RESULTS_FILE" \
+            --output-file "$REPORT_ROOT/report.md" \
+            --run-id "${{ inputs.run_id }}" \
+            --scratch-root "$SCRATCH_ROOT" \
+            --preview "$REPORT_PREVIEW"
 
-          - name: Render provider telemetry
-            run: |
-              node dist/benchmarks/src/render/telemetry-table.js \
-                --config benchmarks/configs/methodology-v2-1024-32.json \
-                --input-file "$RESULTS_FILE" \
-                --output-file "$REPORT_ROOT/telemetry.md" \
-                --run-id "${{ inputs.run_id }}" \
-                --scratch-root "$SCRATCH_ROOT" \
-                --preview "$REPORT_PREVIEW"
+      - name: Render provider telemetry
+        run: |
+          node dist/benchmarks/src/render/telemetry-table.js \
+            --config benchmarks/configs/methodology-v2-1024-32.json \
+            --input-file "$RESULTS_FILE" \
+            --output-file "$REPORT_ROOT/telemetry.md" \
+            --run-id "${{ inputs.run_id }}" \
+            --scratch-root "$SCRATCH_ROOT" \
+            --preview "$REPORT_PREVIEW"
 
-          - name: Render profile snapshots
-            if: ${{ inputs.implementations == 'shin,aws' }}
-            run: |
-              node dist/benchmarks/src/render/readme-snapshot.js \
-                --config benchmarks/configs/methodology-v2-1024-32.json \
-                --input-file "$RESULTS_FILE" \
-                --output-directory "$REPORT_ROOT/snapshots" \
-                --filename-prefix "$SNAPSHOT_PREFIX" \
-                --run-id "${{ inputs.run_id }}" \
-                --scratch-root "$SCRATCH_ROOT" \
-                --preview "$REPORT_PREVIEW"
+      - name: Render profile snapshots
+        if: ${{ inputs.implementations == 'shin,aws' }}
+        run: |
+          node dist/benchmarks/src/render/readme-snapshot.js \
+            --config benchmarks/configs/methodology-v2-1024-32.json \
+            --input-file "$RESULTS_FILE" \
+            --output-directory "$REPORT_ROOT/snapshots" \
+            --filename-prefix "$SNAPSHOT_PREFIX" \
+            --run-id "${{ inputs.run_id }}" \
+            --scratch-root "$SCRATCH_ROOT" \
+            --preview "$REPORT_PREVIEW"
 
       - name: Validate benchmark report contents
         env:
@@ -396,44 +395,43 @@ jobs:
             --run-id "${{ inputs.run_id }}" \
             --scratch-root "$SCRATCH_ROOT"
 
-      - parallel:
-          - name: Render committed comparison report
-            run: |
-              node dist/benchmarks/src/render/comparison-report.js \
-                --config benchmarks/configs/methodology-v2-1024-32.json \
-                --input-file "$RESULTS_FILE" \
-                --output-file benchmarks/ci-report.md \
-                --run-id "${{ inputs.run_id }}" \
-                --scratch-root "$SCRATCH_ROOT"
+      - name: Render committed comparison report
+        run: |
+          node dist/benchmarks/src/render/comparison-report.js \
+            --config benchmarks/configs/methodology-v2-1024-32.json \
+            --input-file "$RESULTS_FILE" \
+            --output-file benchmarks/ci-report.md \
+            --run-id "${{ inputs.run_id }}" \
+            --scratch-root "$SCRATCH_ROOT"
 
-          - name: Render committed provider telemetry
-            run: |
-              node dist/benchmarks/src/render/telemetry-table.js \
-                --config benchmarks/configs/methodology-v2-1024-32.json \
-                --input-file "$RESULTS_FILE" \
-                --output-file benchmarks/ci-telemetry.md \
-                --run-id "${{ inputs.run_id }}" \
-                --scratch-root "$SCRATCH_ROOT"
+      - name: Render committed provider telemetry
+        run: |
+          node dist/benchmarks/src/render/telemetry-table.js \
+            --config benchmarks/configs/methodology-v2-1024-32.json \
+            --input-file "$RESULTS_FILE" \
+            --output-file benchmarks/ci-telemetry.md \
+            --run-id "${{ inputs.run_id }}" \
+            --scratch-root "$SCRATCH_ROOT"
 
-          - name: Render committed profile snapshots
-            run: |
-              node dist/benchmarks/src/render/readme-snapshot.js \
-                --config benchmarks/configs/methodology-v2-1024-32.json \
-                --input-file "$RESULTS_FILE" \
-                --output-directory benchmarks/snapshots \
-                --filename-prefix ci- \
-                --run-id "${{ inputs.run_id }}" \
-                --scratch-root "$SCRATCH_ROOT"
+      - name: Render committed profile snapshots
+        run: |
+          node dist/benchmarks/src/render/readme-snapshot.js \
+            --config benchmarks/configs/methodology-v2-1024-32.json \
+            --input-file "$RESULTS_FILE" \
+            --output-directory benchmarks/snapshots \
+            --filename-prefix ci- \
+            --run-id "${{ inputs.run_id }}" \
+            --scratch-root "$SCRATCH_ROOT"
 
-          - name: Update generated benchmark documentation
-            run: |
-              node dist/benchmarks/src/render/update-ci-docs.js \
-                --config benchmarks/configs/methodology-v2-1024-32.json \
-                --input-file "$RESULTS_FILE" \
-                --run-id "${{ inputs.run_id }}" \
-                --scratch-root "$SCRATCH_ROOT" \
-                --docs-file docs/benchmark.md \
-                --benchmark-readme benchmarks/README.md
+      - name: Update generated benchmark documentation
+        run: |
+          node dist/benchmarks/src/render/update-ci-docs.js \
+            --config benchmarks/configs/methodology-v2-1024-32.json \
+            --input-file "$RESULTS_FILE" \
+            --run-id "${{ inputs.run_id }}" \
+            --scratch-root "$SCRATCH_ROOT" \
+            --docs-file docs/benchmark.md \
+            --benchmark-readme benchmarks/README.md
 
       - name: Validate publication diff
         run: |

@@ -145,7 +145,7 @@ jobs:
           install_args: actionlint ripgrep taplo
 
       - name: Lint GitHub Actions workflows
-        run: node scripts/actionlint-parallel.mjs
+        run: actionlint
 
       - name: Verify immutable action references
         run: |

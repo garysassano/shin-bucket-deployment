@@ -1,14 +1,17 @@
 import { App, CfnOutput, RemovalPolicy, Stack, type StackProps } from "aws-cdk-lib";
 import { Bucket } from "aws-cdk-lib/aws-s3";
 import { ShinBucketDeployment, Source } from "../../../src";
+import { grantVerifierRead } from "../verification-access";
 
 class DefaultRetentionShinBucketDeploymentStack extends Stack {
   constructor(scope: App, id: string, props?: StackProps) {
     super(scope, id, props);
 
     const websiteBucket = new Bucket(this, "WebsiteBucket", {
-      removalPolicy: RemovalPolicy.RETAIN,
+      autoDeleteObjects: true,
+      removalPolicy: RemovalPolicy.DESTROY,
     });
+    grantVerifierRead(websiteBucket);
 
     new ShinBucketDeployment(this, "DeployWebsite", {
       sources: [
@@ -40,8 +43,8 @@ class DefaultRetentionShinBucketDeploymentStack extends Stack {
       value: `aws s3 cp s3://${websiteBucket.bucketName}/retain-updated/runtime/current.txt -`,
     });
 
-    new CfnOutput(this, "DestroyRetainDemoCommand", {
-      value: "pnpm verify destroy default-retention-updated",
+    new CfnOutput(this, "RemoveDeploymentCommand", {
+      value: "pnpm verify deploy default-retention-bucket-only",
     });
   }
 }

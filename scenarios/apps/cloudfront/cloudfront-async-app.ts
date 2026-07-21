@@ -1,13 +1,4 @@
-import {
-  App,
-  Aws,
-  CfnOutput,
-  CfnParameter,
-  Duration,
-  RemovalPolicy,
-  Stack,
-  type StackProps,
-} from "aws-cdk-lib";
+import { App, Aws, CfnOutput, Duration, RemovalPolicy, Stack, type StackProps } from "aws-cdk-lib";
 import {
   AllowedMethods,
   CachePolicy,
@@ -17,6 +8,7 @@ import {
 import { S3BucketOrigin } from "aws-cdk-lib/aws-cloudfront-origins";
 import { Bucket } from "aws-cdk-lib/aws-s3";
 import { ShinBucketDeployment, Source } from "../../../src";
+import { grantVerifierRead } from "../verification-access";
 
 class CloudFrontAsyncShinBucketDeploymentStack extends Stack {
   constructor(scope: App, id: string, props?: StackProps) {
@@ -26,6 +18,7 @@ class CloudFrontAsyncShinBucketDeploymentStack extends Stack {
       autoDeleteObjects: true,
       removalPolicy: RemovalPolicy.DESTROY,
     });
+    grantVerifierRead(websiteBucket);
 
     const distribution = new Distribution(this, "WebsiteDistribution", {
       comment: "Manual validation target for async ShinBucketDeployment CloudFront invalidations.",
@@ -44,12 +37,7 @@ class CloudFrontAsyncShinBucketDeploymentStack extends Stack {
       },
     });
 
-    const cacheProbeToken = new CfnParameter(this, "CacheProbeToken", {
-      type: "String",
-      default: "v1",
-      description:
-        "Change this value between deploys to prove CloudFront invalidation runs asynchronously.",
-    });
+    const cacheProbeToken = process.env.SHIN_VERIFY_CACHE_PROBE_TOKEN ?? "async-initial";
 
     new ShinBucketDeployment(this, "DeployWebsite", {
       sources: [
@@ -61,7 +49,7 @@ class CloudFrontAsyncShinBucketDeploymentStack extends Stack {
             region: Aws.REGION,
             bucketName: websiteBucket.bucketName,
             distributionId: distribution.distributionId,
-            cacheProbeToken: cacheProbeToken.valueAsString,
+            cacheProbeToken,
             message: "redeploy with a different CacheProbeToken to validate async invalidation",
           },
           { escape: true },
@@ -90,7 +78,7 @@ class CloudFrontAsyncShinBucketDeploymentStack extends Stack {
     });
 
     new CfnOutput(this, "CurrentCacheProbeToken", {
-      value: cacheProbeToken.valueAsString,
+      value: cacheProbeToken,
     });
 
     new CfnOutput(this, "CloudFrontCacheProbeUrl", {
@@ -107,7 +95,7 @@ class CloudFrontAsyncShinBucketDeploymentStack extends Stack {
 
     new CfnOutput(this, "RedeployWithNewTokenCommand", {
       value:
-        "pnpm verify deploy cloudfront-async -- --parameters ShinBucketDeploymentCloudFrontAsyncDemo:CacheProbeToken=<new-token-value>",
+        "SHIN_VERIFY_CACHE_PROBE_TOKEN=<new-token-value> pnpm verify deploy cloudfront-async-updated",
     });
   }
 }
