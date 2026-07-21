@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   type RunningProcess,
   type StartProcess,
@@ -6,6 +6,10 @@ import {
   verificationPrincipalArn,
 } from "../scenarios/execute";
 import type { RunnableScenarioAction, ScenarioPlan, ScenarioRun } from "../scenarios/types";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("scenario executor", () => {
   it("accepts assumed-role session principals without reconstructing role paths", () => {
@@ -382,6 +386,28 @@ describe("scenario executor", () => {
 
     expect(status).toBe(8);
     expect(commands).toEqual(["pnpm", "node"]);
+  });
+
+  it("reports a sanitized category when stack destroy fails before verification", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const commands: string[] = [];
+
+    const status = await executeScenarioPlan(
+      { concurrency: 1, groups: [{ runs: [cleanupRun("destroy-fails")] }] },
+      {
+        repositoryRoot: "/repo",
+        pathExists: () => true,
+        startProcess: (_run, command) => {
+          commands.push(command);
+          return { completion: Promise.resolve(6), terminate() {} };
+        },
+        log: () => {},
+      },
+    );
+
+    expect(status).toBe(6);
+    expect(commands).toEqual(["pnpm"]);
+    expect(error).toHaveBeenCalledWith("Verification failure category: stack-destroy-error");
   });
 
   it.each([

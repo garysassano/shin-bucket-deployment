@@ -5,6 +5,8 @@ export type VerificationFailureCategory =
   | "bucket-probe-error"
   | "distribution-present"
   | "distribution-probe-error"
+  | "outputs-read-error"
+  | "stack-destroy-error"
   | "stack-probe-error";
 
 export function reportVerificationFailure(category: VerificationFailureCategory): void {

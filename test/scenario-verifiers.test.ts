@@ -10,7 +10,7 @@ import { VERIFY_DEFAULT_GROUPS, VERIFY_SCENARIOS } from "../scenarios/catalog";
 import {
   type ObjectMetadata,
   type VerificationApi,
-  bucketListingProvesAbsence,
+  bucketInventoryContains,
   waitForResourceAbsence,
 } from "../scenarios/verifiers/aws";
 import { requiredOutput, stackOutputs } from "../scenarios/verifiers/outputs";
@@ -324,7 +324,7 @@ describe("cleanup verifier", () => {
     expect(error).toHaveBeenCalledWith("Verification failure category: stack-probe-error");
   });
 
-  it("retains verifier bucket policies until their buckets are removed", () => {
+  it("lets CloudFormation delete verifier bucket policies normally", () => {
     const stack = new Stack();
     const bucket = new Bucket(stack, "Destination");
     grantVerifierRead(
@@ -335,18 +335,34 @@ describe("cleanup verifier", () => {
 
     const policies = Template.fromStack(stack).findResources("AWS::S3::BucketPolicy");
     expect(Object.values(policies)).toHaveLength(1);
-    expect(Object.values(policies)[0]).toMatchObject({
-      DeletionPolicy: "Retain",
-      UpdateReplacePolicy: "Retain",
-    });
+    expect(Object.values(policies)[0]).not.toHaveProperty("DeletionPolicy");
+    expect(Object.values(policies)[0]).not.toHaveProperty("UpdateReplacePolicy");
   });
 
-  it("accepts only S3's not-found response as proof that a bucket is absent", () => {
-    expect(bucketListingProvesAbsence(awsError(400))).toBe(false);
-    expect(bucketListingProvesAbsence(awsError(403))).toBe(false);
-    expect(bucketListingProvesAbsence(awsError(404))).toBe(true);
-    expect(bucketListingProvesAbsence(awsError(500))).toBe(false);
-    expect(bucketListingProvesAbsence(new Error("network failure"))).toBe(false);
+  it("paginates the owned-bucket inventory and requires an exact bucket name", async () => {
+    const tokens: Array<string | undefined> = [];
+    await expect(
+      bucketInventoryContains("target", async (continuationToken) => {
+        tokens.push(continuationToken);
+        return continuationToken
+          ? { bucketNames: ["target"] }
+          : { bucketNames: ["target-suffix"], continuationToken: "next" };
+      }),
+    ).resolves.toBe(true);
+    expect(tokens).toEqual([undefined, "next"]);
+
+    await expect(
+      bucketInventoryContains("target", async () => ({ bucketNames: ["target-suffix"] })),
+    ).resolves.toBe(false);
+  });
+
+  it("rejects repeated owned-bucket inventory continuation tokens", async () => {
+    await expect(
+      bucketInventoryContains("target", async () => ({
+        bucketNames: [],
+        continuationToken: "repeated",
+      })),
+    ).rejects.toThrow("repeated continuation token");
   });
 
   it("waits for transient resource presence and stops once absence is proven", async () => {
@@ -416,6 +432,16 @@ describe("cleanup verifier", () => {
     const api = new FakeVerificationApi();
     await expect(verifyStackAbsent(STACK_NAME, undefined, api)).resolves.toBeUndefined();
     expect(api.absenceChecks).toEqual([`stack:${STACK_NAME}`]);
+  });
+
+  it("reports a sanitized category when saved deployment outputs cannot be read", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const invalidOutputs = rawOutputsFile({ WrongStack: {} });
+
+    await expect(
+      verifyStackAbsent(STACK_NAME, invalidOutputs, new FakeVerificationApi()),
+    ).rejects.toThrow("unexpected response shape");
+    expect(error).toHaveBeenCalledWith("Verification failure category: outputs-read-error");
   });
 });
 
@@ -535,12 +561,6 @@ function cloudFrontOutputs(token: string): string {
     CloudFrontCacheProbeUrl: "https://example.invalid/probe",
     CurrentCacheProbeToken: token,
     DistributionId: "distribution",
-  });
-}
-
-function awsError(httpStatusCode: number): Error {
-  return Object.assign(new Error("simulated AWS response"), {
-    $metadata: { httpStatusCode },
   });
 }
 

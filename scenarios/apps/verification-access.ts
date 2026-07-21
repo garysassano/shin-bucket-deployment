@@ -1,4 +1,3 @@
-import { RemovalPolicy } from "aws-cdk-lib";
 import { ArnPrincipal, PolicyStatement } from "aws-cdk-lib/aws-iam";
 import type { IKey } from "aws-cdk-lib/aws-kms";
 import type { Bucket } from "aws-cdk-lib/aws-s3";
@@ -25,8 +24,5 @@ export function grantVerifierRead(
       }),
     );
     encryptionKey?.grantDecrypt(principal);
-    // Keep the verifier policy while CloudFormation removes the bucket. If bucket deletion leaks,
-    // HeadBucket remains authorized and detects it; successful bucket deletion removes the policy.
-    bucket.policy?.applyRemovalPolicy(RemovalPolicy.RETAIN);
   }
 }

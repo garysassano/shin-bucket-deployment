@@ -4,6 +4,7 @@ import {
   ChecksumMode,
   GetObjectCommand,
   HeadObjectCommand,
+  ListBucketsCommand,
   ListObjectsV2Command,
   S3Client,
 } from "@aws-sdk/client-s3";
@@ -18,6 +19,11 @@ export type ObjectMetadata = {
   readonly checksumSha256?: string;
   readonly checksumType?: string;
   readonly serverSideEncryption?: string;
+};
+
+export type BucketInventoryPage = {
+  readonly bucketNames: readonly string[];
+  readonly continuationToken?: string;
 };
 
 export interface VerificationApi {
@@ -110,13 +116,28 @@ export class AwsVerificationApi implements VerificationApi {
     const absent = await waitForResourceAbsence(
       async () => {
         try {
-          await this.s3.send(new ListObjectsV2Command({ Bucket: bucket, MaxKeys: 1 }));
-          return false;
+          return !(await bucketInventoryContains(bucket, async (continuationToken) => {
+            const response = await this.s3.send(
+              new ListBucketsCommand({
+                MaxBuckets: 1_000,
+                Prefix: bucket,
+                ...(continuationToken ? { ContinuationToken: continuationToken } : {}),
+              }),
+            );
+            const bucketNames = (response.Buckets ?? []).map(({ Name }) => {
+              if (!Name) {
+                throw new Error("Listing owned buckets returned a bucket without a name.");
+              }
+              return Name;
+            });
+            return {
+              bucketNames,
+              ...(response.ContinuationToken
+                ? { continuationToken: response.ContinuationToken }
+                : {}),
+            };
+          }));
         } catch (error) {
-          // Verification buckets retain their session-scoped ListBucket policy during teardown, so
-          // an existing bucket succeeds. Unlike HeadBucket's ambiguous 400/403/404 contract, this
-          // listing proves absence only when S3 reports that the bucket does not exist.
-          if (bucketListingProvesAbsence(error)) return true;
           reportVerificationFailure("bucket-probe-error");
           throw error;
         }
@@ -141,8 +162,24 @@ export class AwsVerificationApi implements VerificationApi {
   }
 }
 
-export function bucketListingProvesAbsence(error: unknown): boolean {
-  return httpStatus(error) === 404;
+export async function bucketInventoryContains(
+  bucket: string,
+  fetchPage: (continuationToken?: string) => Promise<BucketInventoryPage>,
+): Promise<boolean> {
+  const seenTokens = new Set<string>();
+  let continuationToken: string | undefined;
+  do {
+    const page = await fetchPage(continuationToken);
+    if (page.bucketNames.includes(bucket)) return true;
+    continuationToken = page.continuationToken;
+    if (continuationToken) {
+      if (seenTokens.has(continuationToken)) {
+        throw new Error("Listing owned buckets returned a repeated continuation token.");
+      }
+      seenTokens.add(continuationToken);
+    }
+  } while (continuationToken);
+  return false;
 }
 
 export async function waitForResourceAbsence(
