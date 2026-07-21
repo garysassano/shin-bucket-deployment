@@ -125,6 +125,42 @@ describe("scenario planner", () => {
     expect(names).not.toContain("cloudfront-async-initial");
   });
 
+  it("accepts the protected main workflow's legacy CloudFront group names", () => {
+    expect(
+      planFor(["verify", "deploy", "cloudfront-sync"]).groups[0]?.runs.map(({ name }) => name),
+    ).toEqual(["cloudfront-sync-initial", "cloudfront-sync-updated"]);
+    expect(
+      planFor(["verify", "deploy", "cloudfront-async"]).groups[0]?.runs.map(({ name }) => name),
+    ).toEqual(["cloudfront-async-initial", "cloudfront-async-updated"]);
+    expect(
+      planFor(["verify", "destroy", "cloudfront-sync"]).groups[0]?.runs.map(({ name }) => name),
+    ).toEqual(["cloudfront-sync-updated"]);
+    expect(
+      planFor(["verify", "destroy", "cloudfront-async"]).groups[0]?.runs.map(({ name }) => name),
+    ).toEqual(["cloudfront-async-updated"]);
+  });
+
+  it("adds the terminal retention phase for the protected main workflow matrix", () => {
+    const legacyPlan = planFor(["verify", "deploy", "default-retention-updated"], {
+      VERIFY_SCENARIOS: "default-retention-initial default-retention-updated",
+    });
+    const currentPlan = planFor(["verify", "deploy", "default-retention-updated"], {
+      VERIFY_SCENARIOS:
+        "default-retention-initial default-retention-updated default-retention-bucket-only",
+    });
+
+    expect(legacyPlan.groups[0]?.runs.map(({ name }) => name)).toEqual([
+      "default-retention-updated",
+      "default-retention-bucket-only",
+    ]);
+    expect(legacyPlan.groups[0]?.cleanupCommand).toBe(
+      "pnpm verify destroy default-retention-bucket-only",
+    );
+    expect(currentPlan.groups[0]?.runs.map(({ name }) => name)).toEqual([
+      "default-retention-updated",
+    ]);
+  });
+
   it("normalizes verification and benchmark application paths centrally", () => {
     const verifyRun = planFor(["verify", "synth", "simple"]).groups[0]?.runs[0];
     const benchmarkRun = planFor(["benchmark", "synth", "assets"]).groups[0]?.runs[0];
@@ -207,7 +243,7 @@ describe("scenario planner", () => {
   });
 });
 
-function planFor(argv: string[]) {
+function planFor(argv: string[], environment: Readonly<NodeJS.ProcessEnv> = {}) {
   const args = parseArgs(argv) as ParsedArgs & { readonly action: RunnableScenarioAction };
-  return createScenarioPlan(args, {});
+  return createScenarioPlan(args, environment);
 }

@@ -69,7 +69,7 @@ function createVerifyPlan(
   args: ParsedArgs & { readonly action: RunnableScenarioAction },
   environment: Readonly<NodeJS.ProcessEnv>,
 ): ScenarioPlan {
-  const groups = verificationScenarioGroups(args.action, args.name).map((entries) => ({
+  const groups = verificationScenarioGroups(args.action, args.name, environment).map((entries) => ({
     runs: entries.map(([name, definition]) => ({
       mode: "verify" as const,
       action: args.action,
@@ -124,15 +124,48 @@ function createBenchmarkPlan(
 function verificationScenarioGroups(
   action: RunnableScenarioAction,
   name: string | undefined,
+  environment: Readonly<NodeJS.ProcessEnv>,
 ): ScenarioEntry[][] {
   if (name !== undefined) {
-    return [[verifyScenarioEntry(name)]];
+    return [namedVerificationScenarioGroup(action, name, environment)];
   }
   if (action === "deploy") {
     return VERIFY_DEFAULT_GROUPS.map((group) => group.map(verifyScenarioEntry));
   }
   const names = action === "destroy" ? VERIFY_DESTROY_ORDER : VERIFY_DEFAULT_ORDER;
   return names.map((scenarioName) => [verifyScenarioEntry(scenarioName)]);
+}
+
+function namedVerificationScenarioGroup(
+  action: RunnableScenarioAction,
+  name: string,
+  environment: Readonly<NodeJS.ProcessEnv>,
+): ScenarioEntry[] {
+  if (name === "cloudfront-sync" || name === "cloudfront-async") {
+    const phaseNames =
+      action === "deploy" ? [`${name}-initial`, `${name}-updated`] : [`${name}-updated`];
+    return phaseNames.map(verifyScenarioEntry);
+  }
+
+  if (
+    action === "deploy" &&
+    name === "default-retention-updated" &&
+    legacyWorkflowOmitsDefaultRetentionTerminalPhase(environment)
+  ) {
+    return ["default-retention-updated", "default-retention-bucket-only"].map(verifyScenarioEntry);
+  }
+
+  return [verifyScenarioEntry(name)];
+}
+
+function legacyWorkflowOmitsDefaultRetentionTerminalPhase(
+  environment: Readonly<NodeJS.ProcessEnv>,
+): boolean {
+  const workflowScenarios = environment.VERIFY_SCENARIOS?.trim().split(/\s+/) ?? [];
+  return (
+    workflowScenarios.includes("default-retention-updated") &&
+    !workflowScenarios.includes("default-retention-bucket-only")
+  );
 }
 
 function benchmarkScenario(name: string | undefined): ScenarioEntry {
