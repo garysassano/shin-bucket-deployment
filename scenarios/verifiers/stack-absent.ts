@@ -1,6 +1,5 @@
 import { AwsVerificationApi, type VerificationApi } from "./aws";
 import { stackOutputs } from "./outputs";
-import { reportVerificationFailure } from "./report";
 
 export async function verifyStackAbsent(
   stackName: string,
@@ -9,12 +8,7 @@ export async function verifyStackAbsent(
 ): Promise<void> {
   let outputs: Record<string, string> = {};
   if (outputsFile) {
-    try {
-      outputs = stackOutputs(outputsFile, stackName);
-    } catch (error) {
-      reportVerificationFailure("outputs-read-error");
-      throw error;
-    }
+    outputs = stackOutputs(outputsFile, stackName);
   }
   const buckets = new Set(
     Object.entries(outputs)

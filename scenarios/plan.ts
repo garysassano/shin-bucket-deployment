@@ -150,7 +150,7 @@ function namedVerificationScenarioGroup(
   if (
     action === "deploy" &&
     name === "default-retention-updated" &&
-    legacyWorkflowOmitsDefaultRetentionTerminalPhase(environment)
+    protectedWorkflowOmitsTerminalRetentionPhase(environment)
   ) {
     return ["default-retention-updated", "default-retention-bucket-only"].map(verifyScenarioEntry);
   }
@@ -158,7 +158,7 @@ function namedVerificationScenarioGroup(
   return [verifyScenarioEntry(name)];
 }
 
-function legacyWorkflowOmitsDefaultRetentionTerminalPhase(
+function protectedWorkflowOmitsTerminalRetentionPhase(
   environment: Readonly<NodeJS.ProcessEnv>,
 ): boolean {
   const workflowScenarios = environment.VERIFY_SCENARIOS?.trim().split(/\s+/) ?? [];

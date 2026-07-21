@@ -7,7 +7,6 @@ on:
       source_ref:
         description: Exact 40-character commit to verify
         required: true
-        default: main
         type: string
 
 concurrency:
@@ -227,10 +226,6 @@ jobs:
           VERIFY_GROUP: ${{ matrix.group }}
         run: |
           if ! node dist/scenarios/runner.js verify destroy "$CLEANUP_SCENARIO" >"$RUNNER_TEMP/verify-destroy.log" 2>&1; then
-            category="$(sed -n 's/^Verification failure category: \(stack-destroy-error\|outputs-read-error\|bucket-present\|bucket-probe-error\|distribution-present\|distribution-probe-error\)$/\1/p' "$RUNNER_TEMP/verify-destroy.log" | tail -n 1)"
-            if [[ -n "$category" ]]; then
-              echo "::error::Sanitized cleanup failure category: $category"
-            fi
             echo "::error::AWS cleanup failed for group $VERIFY_GROUP"
             exit 1
           fi

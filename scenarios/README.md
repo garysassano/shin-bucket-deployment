@@ -2,11 +2,17 @@
 
 This folder contains deployable CDK apps used by both verification and benchmark workflows.
 
-`pnpm verify` runs correctness scenarios with the construct defaults. When no scenario name is supplied, it iterates every default verification scenario:
+`pnpm verify` runs correctness scenarios with the construct defaults. Listing and synthesis are normal local gates. AWS deploys are opt-in and billable: run a named scenario chain for a narrow deployed change, and use the full suite only for shared provider/runner/assertion changes or a deliberately selected release candidate. The GitHub AWS Verification workflow is manual-only and runs the full matrix.
 
 ```bash
 pnpm verify list
 pnpm verify synth
+
+# Targeted AWS verification
+pnpm verify deploy <scenario>
+pnpm verify destroy <cleanup-scenario>
+
+# Full AWS suite; use only when its broader scope is justified
 pnpm verify deploy --concurrency 4
 pnpm verify destroy --concurrency 4
 ```

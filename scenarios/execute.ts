@@ -3,7 +3,6 @@ import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createScenarioPlan, scenarioAppPath, scenarioCdkArgs, scenarioOutputsPath } from "./plan";
 import type { ParsedArgs, ScenarioPlan, ScenarioRun } from "./types";
-import { reportVerificationFailure } from "./verifiers/report";
 
 export type RunningProcess = {
   readonly completion: Promise<number>;
@@ -116,12 +115,7 @@ export async function executeScenarioPlan(
       cdkArgs.push("--outputs-file", outputsFile);
     }
     const status = await runProcess(run, "pnpm", cdkArgs, deployEnv);
-    if (status !== 0) {
-      if (run.action === "destroy") {
-        reportVerificationFailure("stack-destroy-error");
-      }
-      return status;
-    }
+    if (status !== 0) return status;
     const verifier =
       run.action === "deploy"
         ? run.definition.postDeployVerifier

@@ -104,12 +104,18 @@ Scenarios are driven through the repository runner. Verification mode runs every
 ```bash
 pnpm verify list
 pnpm verify synth
+
+# Targeted, opt-in AWS verification
+pnpm verify deploy <scenario>
+pnpm verify destroy <cleanup-scenario>
+
+# Full opt-in AWS suite for broad changes or selected release candidates
 pnpm verify deploy --concurrency 4
-pnpm verify deploy cloudfront-sync
+pnpm verify destroy --concurrency 4
 pnpm benchmark deploy assets --asset-profiles tiny-many --implementations shin,aws --transfer-max-concurrency 32 --lambda-memory-mb 1024
 ```
 
-Verification deploy/destroy can run independent scenario chains concurrently with `--concurrency`; ordered update chains still run in sequence within each chain.
+AWS verification is cost-bearing and deliberately manual. Local listing and synthesis run routinely; use the smallest relevant named chain for a narrow deployed change. Reserve the full verification suite for changes that cross multiple groups, shared provider/runner/assertion infrastructure, or an intentionally selected release candidate. Verification deploy/destroy can run independent scenario chains concurrently with `--concurrency`; ordered update chains still run in sequence within each chain.
 
 | Scenario | File | Purpose |
 | --- | --- | --- |

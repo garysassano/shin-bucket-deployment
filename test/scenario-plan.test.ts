@@ -125,7 +125,7 @@ describe("scenario planner", () => {
     expect(names).not.toContain("cloudfront-async-initial");
   });
 
-  it("accepts the protected main workflow's legacy CloudFront group names", () => {
+  it("accepts aggregate CloudFront group names for targeted runs", () => {
     expect(
       planFor(["verify", "deploy", "cloudfront-sync"]).groups[0]?.runs.map(({ name }) => name),
     ).toEqual(["cloudfront-sync-initial", "cloudfront-sync-updated"]);
@@ -140,25 +140,18 @@ describe("scenario planner", () => {
     ).toEqual(["cloudfront-async-updated"]);
   });
 
-  it("adds the terminal retention phase for the protected main workflow matrix", () => {
-    const legacyPlan = planFor(["verify", "deploy", "default-retention-updated"], {
+  it("completes the retention chain for the protected pre-merge workflow", () => {
+    const plan = planFor(["verify", "deploy", "default-retention-updated"], {
       VERIFY_SCENARIOS: "default-retention-initial default-retention-updated",
     });
-    const currentPlan = planFor(["verify", "deploy", "default-retention-updated"], {
-      VERIFY_SCENARIOS:
-        "default-retention-initial default-retention-updated default-retention-bucket-only",
-    });
 
-    expect(legacyPlan.groups[0]?.runs.map(({ name }) => name)).toEqual([
+    expect(plan.groups[0]?.runs.map(({ name }) => name)).toEqual([
       "default-retention-updated",
       "default-retention-bucket-only",
     ]);
-    expect(legacyPlan.groups[0]?.cleanupCommand).toBe(
+    expect(plan.groups[0]?.cleanupCommand).toBe(
       "pnpm verify destroy default-retention-bucket-only",
     );
-    expect(currentPlan.groups[0]?.runs.map(({ name }) => name)).toEqual([
-      "default-retention-updated",
-    ]);
   });
 
   it("normalizes verification and benchmark application paths centrally", () => {

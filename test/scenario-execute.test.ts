@@ -388,8 +388,7 @@ describe("scenario executor", () => {
     expect(commands).toEqual(["pnpm", "node"]);
   });
 
-  it("reports a sanitized category when stack destroy fails before verification", async () => {
-    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+  it("does not run cleanup verification after stack destroy fails", async () => {
     const commands: string[] = [];
 
     const status = await executeScenarioPlan(
@@ -407,7 +406,6 @@ describe("scenario executor", () => {
 
     expect(status).toBe(6);
     expect(commands).toEqual(["pnpm"]);
-    expect(error).toHaveBeenCalledWith("Verification failure category: stack-destroy-error");
   });
 
   it.each([

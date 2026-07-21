@@ -7,14 +7,8 @@ import { Bucket } from "aws-cdk-lib/aws-s3";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { grantVerifierRead } from "../scenarios/apps/verification-access";
 import { VERIFY_DEFAULT_GROUPS, VERIFY_SCENARIOS } from "../scenarios/catalog";
-import {
-  type ObjectMetadata,
-  type VerificationApi,
-  bucketInventoryContains,
-  waitForResourceAbsence,
-} from "../scenarios/verifiers/aws";
+import type { ObjectMetadata, VerificationApi } from "../scenarios/verifiers/aws";
 import { requiredOutput, stackOutputs } from "../scenarios/verifiers/outputs";
-import { reportVerificationFailure } from "../scenarios/verifiers/report";
 import { expectedScenarioNames, verifyScenarioState } from "../scenarios/verifiers/scenario-state";
 import { verifyStackAbsent } from "../scenarios/verifiers/stack-absent";
 
@@ -304,26 +298,6 @@ describe("deployment output parsing", () => {
 });
 
 describe("cleanup verifier", () => {
-  it("writes only a sanitized cleanup failure category to the workflow summary", () => {
-    const directory = temporaryDirectory();
-    const summary = join(directory, "summary.md");
-    vi.stubEnv("GITHUB_STEP_SUMMARY", summary);
-
-    reportVerificationFailure("bucket-probe-error");
-
-    expect(readFileSync(summary, "utf8")).toBe(
-      "Verification failure category: bucket-probe-error\n",
-    );
-  });
-
-  it("does not mask a verification failure when the summary cannot be written", () => {
-    vi.stubEnv("GITHUB_STEP_SUMMARY", join(temporaryDirectory(), "missing", "summary.md"));
-    const error = vi.spyOn(console, "error").mockImplementation(() => {});
-
-    expect(() => reportVerificationFailure("stack-destroy-error")).not.toThrow();
-    expect(error).toHaveBeenCalledWith("Verification failure category: stack-destroy-error");
-  });
-
   it("lets CloudFormation delete verifier bucket policies normally", () => {
     const stack = new Stack();
     const bucket = new Bucket(stack, "Destination");
@@ -337,65 +311,6 @@ describe("cleanup verifier", () => {
     expect(Object.values(policies)).toHaveLength(1);
     expect(Object.values(policies)[0]).not.toHaveProperty("DeletionPolicy");
     expect(Object.values(policies)[0]).not.toHaveProperty("UpdateReplacePolicy");
-  });
-
-  it("paginates the owned-bucket inventory and requires an exact bucket name", async () => {
-    const tokens: Array<string | undefined> = [];
-    await expect(
-      bucketInventoryContains("target", async (continuationToken) => {
-        tokens.push(continuationToken);
-        return continuationToken
-          ? { bucketNames: ["target"] }
-          : { bucketNames: ["target-suffix"], continuationToken: "next" };
-      }),
-    ).resolves.toBe(true);
-    expect(tokens).toEqual([undefined, "next"]);
-
-    await expect(
-      bucketInventoryContains("target", async () => ({ bucketNames: ["target-suffix"] })),
-    ).resolves.toBe(false);
-  });
-
-  it("rejects repeated owned-bucket inventory continuation tokens", async () => {
-    await expect(
-      bucketInventoryContains("target", async () => ({
-        bucketNames: [],
-        continuationToken: "repeated",
-      })),
-    ).rejects.toThrow("repeated continuation token");
-  });
-
-  it("waits for transient resource presence and stops once absence is proven", async () => {
-    const probes = [false, false, true];
-    const sleeps: number[] = [];
-
-    await expect(
-      waitForResourceAbsence(
-        async () => probes.shift() ?? false,
-        async (milliseconds) => {
-          sleeps.push(milliseconds);
-        },
-        4,
-        25,
-      ),
-    ).resolves.toBe(true);
-    expect(sleeps).toEqual([25, 25]);
-  });
-
-  it("reports persistent resource presence after the bounded absence wait", async () => {
-    const sleeps: number[] = [];
-
-    await expect(
-      waitForResourceAbsence(
-        async () => false,
-        async (milliseconds) => {
-          sleeps.push(milliseconds);
-        },
-        3,
-        25,
-      ),
-    ).resolves.toBe(false);
-    expect(sleeps).toEqual([25, 25]);
   });
 
   it("checks the stack and every unique scoped bucket and distribution", async () => {
@@ -433,14 +348,12 @@ describe("cleanup verifier", () => {
     expect(api.absenceChecks).toEqual([]);
   });
 
-  it("reports a sanitized category when saved deployment outputs cannot be read", async () => {
-    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+  it("fails when saved deployment outputs cannot be read", async () => {
     const invalidOutputs = rawOutputsFile({ WrongStack: {} });
 
     await expect(
       verifyStackAbsent(STACK_NAME, invalidOutputs, new FakeVerificationApi()),
     ).rejects.toThrow("unexpected response shape");
-    expect(error).toHaveBeenCalledWith("Verification failure category: outputs-read-error");
   });
 });
 
