@@ -251,6 +251,9 @@ jobs:
       - name: Verify package contract
         run: pnpm verify:package
 
+      - name: Verify TypeScript contract self-check
+        run: pnpm verify:typescript-contract -- --baseline-ref HEAD
+
   synth:
     name: Synth verification scenarios
     needs: bootstrap

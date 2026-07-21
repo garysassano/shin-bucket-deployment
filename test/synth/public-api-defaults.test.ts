@@ -35,3 +35,17 @@ test("keeps public JSDoc defaults bound to the exported source constants", () =>
   );
   expect(DEFAULT_FAILURE_DIAGNOSTICS).toBe(FailureDiagnostics.STANDARD);
 });
+
+test("binds the current verification snapshot to the package version", () => {
+  const repositoryRoot = join(__dirname, "..", "..");
+  const manifest = JSON.parse(readFileSync(join(repositoryRoot, "package.json"), "utf8")) as {
+    version: string;
+  };
+  const verification = readFileSync(join(repositoryRoot, "docs", "verification.md"), "utf8");
+  const currentSnapshot = verification.match(
+    /## Current Snapshot\n(?<snapshot>[\s\S]*?)\n## Current Coverage/,
+  )?.groups?.snapshot;
+
+  expect(currentSnapshot, "docs/verification.md Current Snapshot section").toBeDefined();
+  expect(currentSnapshot).toContain(`shin-bucket-deployment@${manifest.version}`);
+});

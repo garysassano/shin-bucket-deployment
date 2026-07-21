@@ -1,4 +1,4 @@
-import { Token } from "aws-cdk-lib";
+import { AssetHashType, BundlingFileAccess, BundlingOutput, Token } from "aws-cdk-lib";
 import type { Construct } from "constructs";
 import { DEFAULT_PROVIDER_LAMBDA_MEMORY_SIZE_MIB } from "./defaults";
 import { DestinationWriteRetryJitter, FailureDiagnostics, ProviderSharing } from "./enums";
@@ -21,6 +21,8 @@ const DEFAULT_DESTINATION_WRITE_RETRY_MAX_DELAY_MS = 5_000;
 const DEFAULT_DESTINATION_WRITE_SLOWDOWN_RETRY_BASE_DELAY_MS = 1_000;
 const DEFAULT_DESTINATION_WRITE_SLOWDOWN_RETRY_MAX_DELAY_MS = 30_000;
 const MAX_DESTINATION_KEY_PREFIX_LENGTH = 102;
+const MAX_CLOUDFRONT_INVALIDATION_PATH_CHARACTERS = 4_000;
+const DESTINATION_OWNER_TAG_PREFIX_PATTERN = /^[\p{L}\p{Z}\p{N}_.:/=+\-@]*$/u;
 
 const ROOT_KEYS = [
   "sources",
@@ -81,6 +83,7 @@ export function validateDeploymentProps(scope: Construct, props: ShinBucketDeplo
       scope,
     );
   }
+  validateSources(scope, rawProps.sources);
 
   const destination = requireObjectGroup(scope, rawProps.destination, "destination", [
     "bucket",
@@ -93,12 +96,14 @@ export function validateDeploymentProps(scope: Construct, props: ShinBucketDeplo
       scope,
     );
   }
+  validateObjectReference(scope, destination.bucket, "destination.bucket");
 
-  optionalObjectGroup(scope, rawProps.sourceProcessing, "sourceProcessing", [
-    "extract",
-    "include",
-    "exclude",
-  ]);
+  const sourceProcessing = optionalObjectGroup(
+    scope,
+    rawProps.sourceProcessing,
+    "sourceProcessing",
+    ["extract", "include", "exclude"],
+  );
   const providerLambda = optionalObjectGroup(
     scope,
     rawProps.providerLambda,
@@ -128,7 +133,7 @@ export function validateDeploymentProps(scope: Construct, props: ShinBucketDeplo
       "profile",
     ],
   );
-  optionalObjectGroup(
+  const dockerOptions = optionalObjectGroup(
     scope,
     bundling?.dockerOptions,
     "providerLambda.localBuild.bundling.dockerOptions",
@@ -146,7 +151,7 @@ export function validateDeploymentProps(scope: Construct, props: ShinBucketDeplo
       "bundlingFileAccess",
     ],
   );
-  optionalObjectGroup(
+  const commandHooks = optionalObjectGroup(
     scope,
     bundling?.commandHooks,
     "providerLambda.localBuild.bundling.commandHooks",
@@ -191,11 +196,12 @@ export function validateDeploymentProps(scope: Construct, props: ShinBucketDeplo
     ],
   );
 
-  optionalObjectGroup(scope, rawProps.cloudfrontInvalidation, "cloudfrontInvalidation", [
-    "distribution",
-    "paths",
-    "waitForCompletion",
-  ]);
+  const cloudfrontInvalidation = optionalObjectGroup(
+    scope,
+    rawProps.cloudfrontInvalidation,
+    "cloudfrontInvalidation",
+    ["distribution", "paths", "waitForCompletion"],
+  );
   const destinationLifecycle = optionalObjectGroup(
     scope,
     rawProps.destinationLifecycle,
@@ -207,10 +213,13 @@ export function validateDeploymentProps(scope: Construct, props: ShinBucketDeplo
       onDeployment: "onDeploy",
     },
   );
-  optionalObjectGroup(scope, destinationLifecycle?.onDeploy, "destinationLifecycle.onDeploy", [
-    "deleteStaleObjects",
-  ]);
-  optionalObjectGroup(
+  const onDeploy = optionalObjectGroup(
+    scope,
+    destinationLifecycle?.onDeploy,
+    "destinationLifecycle.onDeploy",
+    ["deleteStaleObjects"],
+  );
+  const onChange = optionalObjectGroup(
     scope,
     destinationLifecycle?.onChange,
     "destinationLifecycle.onChange",
@@ -221,12 +230,49 @@ export function validateDeploymentProps(scope: Construct, props: ShinBucketDeplo
       invalidateDistribution: "invalidatePreviousDistribution",
     },
   );
-  optionalObjectGroup(
+  const onDelete = optionalObjectGroup(
     scope,
     destinationLifecycle?.onDelete,
     "destinationLifecycle.onDelete",
     ["deleteCurrentObjects"],
     { deleteObjects: "deleteCurrentObjects" },
+  );
+
+  validateOptionalBoolean(scope, sourceProcessing?.extract, "sourceProcessing.extract");
+  validateOptionalStringArray(scope, sourceProcessing?.include, "sourceProcessing.include");
+  validateOptionalStringArray(scope, sourceProcessing?.exclude, "sourceProcessing.exclude");
+  validateOptionalString(scope, localBuild?.projectPath, "providerLambda.localBuild.projectPath");
+  validateBundlingProps(scope, bundling, dockerOptions, commandHooks);
+  validateProviderReferences(scope, providerLambda);
+  validateOptionalBoolean(
+    scope,
+    cloudfrontInvalidation?.waitForCompletion,
+    "cloudfrontInvalidation.waitForCompletion",
+  );
+  validateOptionalBoolean(
+    scope,
+    onDeploy?.deleteStaleObjects,
+    "destinationLifecycle.onDeploy.deleteStaleObjects",
+  );
+  validateOptionalBoolean(
+    scope,
+    onChange?.deletePreviousObjects,
+    "destinationLifecycle.onChange.deletePreviousObjects",
+  );
+  validateOptionalObjectReference(
+    scope,
+    onChange?.previousBucket,
+    "destinationLifecycle.onChange.previousBucket",
+  );
+  validateOptionalObjectReference(
+    scope,
+    onChange?.invalidatePreviousDistribution,
+    "destinationLifecycle.onChange.invalidatePreviousDistribution",
+  );
+  validateOptionalBoolean(
+    scope,
+    onDelete?.deleteCurrentObjects,
+    "destinationLifecycle.onDelete.deleteCurrentObjects",
   );
 
   if (
@@ -249,7 +295,7 @@ export function validateDeploymentProps(scope: Construct, props: ShinBucketDeplo
       scope,
     );
   }
-  validateDestinationKeyPrefix(scope, props.destination.keyPrefix);
+  validateDestinationKeyPrefix(scope, destination.keyPrefix);
 
   if (
     props.destinationLifecycle?.onChange?.previousBucket &&
@@ -261,32 +307,26 @@ export function validateDeploymentProps(scope: Construct, props: ShinBucketDeplo
       scope,
     );
   }
-  if (props.cloudfrontInvalidation) {
-    if (!props.cloudfrontInvalidation.distribution) {
+  if (cloudfrontInvalidation) {
+    if (!cloudfrontInvalidation.distribution) {
       throw new ValidationError(
         "ShinBucketDeploymentCloudFrontDistributionRequired",
         "cloudfrontInvalidation.distribution is required.",
         scope,
       );
     }
-    if (
-      props.cloudfrontInvalidation.paths !== undefined &&
-      !Token.isUnresolved(props.cloudfrontInvalidation.paths) &&
-      !props.cloudfrontInvalidation.paths.every(
-        (path) => Token.isUnresolved(path) || path.startsWith("/"),
-      )
-    ) {
-      throw new ValidationError(
-        "ShinBucketDeploymentCloudFrontPathsStart",
-        'Every cloudfrontInvalidation.paths entry must start with "/".',
-        scope,
-      );
-    }
+    validateObjectReference(
+      scope,
+      cloudfrontInvalidation.distribution,
+      "cloudfrontInvalidation.distribution",
+    );
+    validateCloudFrontPaths(scope, cloudfrontInvalidation.paths);
   }
 
   const transferOptions = props.transfer ?? {};
   const advancedTransferTuning = transferOptions.advancedTuning ?? {};
   const destinationWriteRetryTuning = advancedTransferTuning.destinationWriteRetry ?? {};
+  validateIntegerProps(scope, providerLambda ?? {}, ["memorySize"], 128, "providerLambda.", 10_240);
   validateIntegerProps(scope, transferOptions, ["maxConcurrency"], 1, "transfer.", MAX_CONCURRENCY);
   validateIntegerProps(
     scope,
@@ -514,7 +554,186 @@ function hasOwn(value: Record<string, unknown>, key: string): boolean {
   return Object.hasOwn(value, key);
 }
 
-function validateDestinationKeyPrefix(scope: Construct, prefix: string | undefined): void {
+function validateSources(scope: Construct, sources: unknown[]): void {
+  const invalidIndex = sources.findIndex(
+    (source) =>
+      typeof source !== "object" ||
+      source === null ||
+      typeof (source as { bind?: unknown }).bind !== "function",
+  );
+  if (invalidIndex !== -1) {
+    throw new ValidationError(
+      "ShinBucketDeploymentInvalidSource",
+      `sources[${invalidIndex}] must implement ISource.bind().`,
+      scope,
+    );
+  }
+}
+
+function validateProviderReferences(
+  scope: Construct,
+  providerLambda: Record<string, unknown> | undefined,
+): void {
+  validateOptionalObjectReference(
+    scope,
+    providerLambda?.architecture,
+    "providerLambda.architecture",
+  );
+  validateOptionalObjectReference(scope, providerLambda?.role, "providerLambda.role");
+  validateOptionalObjectReference(scope, providerLambda?.logGroup, "providerLambda.logGroup");
+  validateOptionalObjectReference(scope, providerLambda?.vpc, "providerLambda.vpc");
+  if (
+    providerLambda?.securityGroups !== undefined &&
+    !Token.isUnresolved(providerLambda.securityGroups)
+  ) {
+    if (!Array.isArray(providerLambda.securityGroups)) {
+      throw invalidValue(scope, "providerLambda.securityGroups", "an array");
+    }
+    for (const [index, securityGroup] of providerLambda.securityGroups.entries()) {
+      validateObjectReference(scope, securityGroup, `providerLambda.securityGroups[${index}]`);
+    }
+  }
+  if (providerLambda?.vpcSubnets !== undefined) {
+    requireObject(scope, providerLambda.vpcSubnets, "providerLambda.vpcSubnets");
+  }
+}
+
+function validateBundlingProps(
+  scope: Construct,
+  bundling: Record<string, unknown> | undefined,
+  dockerOptions: Record<string, unknown> | undefined,
+  commandHooks: Record<string, unknown> | undefined,
+): void {
+  if (!bundling) return;
+  validateOptionalStringMap(
+    scope,
+    bundling.environment,
+    "providerLambda.localBuild.bundling.environment",
+  );
+  validateOptionalBoolean(
+    scope,
+    bundling.forcedDockerBundling,
+    "providerLambda.localBuild.bundling.forcedDockerBundling",
+  );
+  validateOptionalObjectReference(
+    scope,
+    bundling.dockerImage,
+    "providerLambda.localBuild.bundling.dockerImage",
+  );
+  validateOptionalEnum(
+    scope,
+    bundling.assetHashType,
+    "providerLambda.localBuild.bundling.assetHashType",
+    Object.values(AssetHashType),
+  );
+  validateOptionalString(scope, bundling.assetHash, "providerLambda.localBuild.bundling.assetHash");
+  validateOptionalStringArray(
+    scope,
+    bundling.cargoLambdaFlags,
+    "providerLambda.localBuild.bundling.cargoLambdaFlags",
+  );
+  validateOptionalString(scope, bundling.profile, "providerLambda.localBuild.bundling.profile");
+
+  if (dockerOptions) {
+    for (const property of ["entrypoint", "command", "volumesFrom"] as const) {
+      validateOptionalStringArray(
+        scope,
+        dockerOptions[property],
+        `providerLambda.localBuild.bundling.dockerOptions.${property}`,
+      );
+    }
+    for (const property of ["workingDirectory", "user", "securityOpt", "network"] as const) {
+      validateOptionalString(
+        scope,
+        dockerOptions[property],
+        `providerLambda.localBuild.bundling.dockerOptions.${property}`,
+      );
+    }
+    validateOptionalObjectReference(
+      scope,
+      dockerOptions.local,
+      "providerLambda.localBuild.bundling.dockerOptions.local",
+    );
+    validateOptionalEnum(
+      scope,
+      dockerOptions.outputType,
+      "providerLambda.localBuild.bundling.dockerOptions.outputType",
+      Object.values(BundlingOutput),
+    );
+    validateOptionalEnum(
+      scope,
+      dockerOptions.bundlingFileAccess,
+      "providerLambda.localBuild.bundling.dockerOptions.bundlingFileAccess",
+      Object.values(BundlingFileAccess),
+    );
+    if (dockerOptions.volumes !== undefined && !Token.isUnresolved(dockerOptions.volumes)) {
+      if (!Array.isArray(dockerOptions.volumes)) {
+        throw invalidValue(
+          scope,
+          "providerLambda.localBuild.bundling.dockerOptions.volumes",
+          "an array",
+        );
+      }
+      for (const [index, volume] of dockerOptions.volumes.entries()) {
+        const path = `providerLambda.localBuild.bundling.dockerOptions.volumes[${index}]`;
+        const value = requireObject(scope, volume, path);
+        rejectUnknownKeys(scope, value, path, ["hostPath", "containerPath", "consistency"]);
+        validateRequiredString(scope, value.hostPath, `${path}.hostPath`);
+        validateRequiredString(scope, value.containerPath, `${path}.containerPath`);
+        validateOptionalString(scope, value.consistency, `${path}.consistency`);
+      }
+    }
+  }
+
+  if (commandHooks) {
+    validateOptionalFunction(
+      scope,
+      commandHooks.beforeBundling,
+      "providerLambda.localBuild.bundling.commandHooks.beforeBundling",
+    );
+    validateOptionalFunction(
+      scope,
+      commandHooks.afterBundling,
+      "providerLambda.localBuild.bundling.commandHooks.afterBundling",
+    );
+  }
+}
+
+function validateCloudFrontPaths(scope: Construct, paths: unknown): void {
+  if (paths === undefined || Token.isUnresolved(paths)) return;
+  if (!Array.isArray(paths)) {
+    throw invalidValue(scope, "cloudfrontInvalidation.paths", "an array of strings");
+  }
+  if (paths.length === 0) {
+    throw new ValidationError(
+      "ShinBucketDeploymentCloudFrontPathsRequired",
+      "cloudfrontInvalidation.paths must contain at least one path.",
+      scope,
+    );
+  }
+  for (const [index, path] of paths.entries()) {
+    if (Token.isUnresolved(path)) continue;
+    if (typeof path !== "string") {
+      throw invalidValue(scope, `cloudfrontInvalidation.paths[${index}]`, "a string");
+    }
+    if (!path.startsWith("/")) {
+      throw new ValidationError(
+        "ShinBucketDeploymentCloudFrontPathsStart",
+        `cloudfrontInvalidation.paths[${index}] must start with "/".`,
+        scope,
+      );
+    }
+    if ([...path].length > MAX_CLOUDFRONT_INVALIDATION_PATH_CHARACTERS) {
+      throw new ValidationError(
+        "ShinBucketDeploymentCloudFrontPathTooLong",
+        `cloudfrontInvalidation.paths[${index}] must be <=${MAX_CLOUDFRONT_INVALIDATION_PATH_CHARACTERS} Unicode characters.`,
+        scope,
+      );
+    }
+  }
+}
+
+function validateDestinationKeyPrefix(scope: Construct, prefix: unknown): void {
   if (prefix === undefined) return;
   if (Token.isUnresolved(prefix)) {
     throw new ValidationError(
@@ -523,6 +742,9 @@ function validateDestinationKeyPrefix(scope: Construct, prefix: string | undefin
       scope,
     );
   }
+  if (typeof prefix !== "string") {
+    throw invalidValue(scope, "destination.keyPrefix", "a string");
+  }
   if (prefix.length > MAX_DESTINATION_KEY_PREFIX_LENGTH) {
     throw new ValidationError(
       "ShinBucketDeploymentDestinationKeyPrefixTooLong",
@@ -530,6 +752,90 @@ function validateDestinationKeyPrefix(scope: Construct, prefix: string | undefin
       scope,
     );
   }
+  const ownerPrefix = destinationOwnerPrefix(prefix);
+  if (!DESTINATION_OWNER_TAG_PREFIX_PATTERN.test(ownerPrefix)) {
+    throw new ValidationError(
+      "ShinBucketDeploymentDestinationKeyPrefixTagCharacters",
+      "destination.keyPrefix contains characters that cannot be represented in the S3 ownership tag key; use Unicode letters, numbers, whitespace, or _ . : / = + - @.",
+      scope,
+    );
+  }
+}
+
+function validateRequiredString(scope: Construct, value: unknown, path: string): void {
+  if (Token.isUnresolved(value)) return;
+  if (typeof value !== "string") {
+    throw invalidValue(scope, path, "a string");
+  }
+}
+
+function validateOptionalString(scope: Construct, value: unknown, path: string): void {
+  if (value === undefined) return;
+  validateRequiredString(scope, value, path);
+}
+
+function validateOptionalBoolean(scope: Construct, value: unknown, path: string): void {
+  if (value === undefined || Token.isUnresolved(value)) return;
+  if (typeof value !== "boolean") {
+    throw invalidValue(scope, path, "a boolean");
+  }
+}
+
+function validateOptionalStringArray(scope: Construct, value: unknown, path: string): void {
+  if (value === undefined || Token.isUnresolved(value)) return;
+  if (!Array.isArray(value)) {
+    throw invalidValue(scope, path, "an array of strings");
+  }
+  for (const [index, entry] of value.entries()) {
+    validateRequiredString(scope, entry, `${path}[${index}]`);
+  }
+}
+
+function validateOptionalStringMap(scope: Construct, value: unknown, path: string): void {
+  if (value === undefined || Token.isUnresolved(value)) return;
+  const map = requireObject(scope, value, path);
+  for (const [key, entry] of Object.entries(map)) {
+    validateRequiredString(scope, entry, `${path}.${key}`);
+  }
+}
+
+function validateOptionalFunction(scope: Construct, value: unknown, path: string): void {
+  if (value === undefined || Token.isUnresolved(value)) return;
+  if (typeof value !== "function") {
+    throw invalidValue(scope, path, "a function");
+  }
+}
+
+function validateOptionalEnum(
+  scope: Construct,
+  value: unknown,
+  path: string,
+  allowed: readonly unknown[],
+): void {
+  if (value === undefined || Token.isUnresolved(value)) return;
+  if (!allowed.includes(value)) {
+    throw invalidValue(scope, path, `one of ${allowed.join(", ")}`);
+  }
+}
+
+function validateObjectReference(scope: Construct, value: unknown, path: string): void {
+  if (Token.isUnresolved(value)) return;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw invalidValue(scope, path, "a CDK object reference");
+  }
+}
+
+function validateOptionalObjectReference(scope: Construct, value: unknown, path: string): void {
+  if (value === undefined) return;
+  validateObjectReference(scope, value, path);
+}
+
+function invalidValue(scope: Construct, path: string, expected: string): ValidationError {
+  return new ValidationError(
+    `ShinBucketDeploymentInvalid${path.replaceAll(/[^A-Za-z0-9]/g, "_")}`,
+    `${path} must be ${expected}.`,
+    scope,
+  );
 }
 
 function validateIntegerProps(

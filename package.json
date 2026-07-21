@@ -1,6 +1,6 @@
 {
   "name": "shin-bucket-deployment",
-  "version": "0.10.2",
+  "version": "0.10.3",
   "description": "Rust-backed AWS CDK construct for performance-sensitive S3 asset deployment",
   "license": "MIT",
   "keywords": [
@@ -73,6 +73,7 @@
     "npm:audit": "pnpm audit --audit-level high",
     "verify:package": "node scripts/verify-package.mjs",
     "verify:synth": "pnpm verify synth",
+    "verify:typescript-contract": "node scripts/verify-typescript-refactor.mjs",
     "verify:synthesis-contract": "node scripts/verify-typescript-refactor.mjs --assemblies-only",
     "scenario": "pnpm build && node dist/scenarios/runner.js",
     "verify": "pnpm build && node dist/scenarios/runner.js verify",

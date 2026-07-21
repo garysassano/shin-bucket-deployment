@@ -1,9 +1,9 @@
 import { join } from "node:path";
-import { App, Aws, CfnParameter, Stack } from "aws-cdk-lib";
+import { App, Aws, CfnParameter, RemovalPolicy, Stack, Tags } from "aws-cdk-lib";
 import { Match, Template } from "aws-cdk-lib/assertions";
 import { AllowedMethods, Distribution, ViewerProtocolPolicy } from "aws-cdk-lib/aws-cloudfront";
 import { S3BucketOrigin } from "aws-cdk-lib/aws-cloudfront-origins";
-import { Bucket } from "aws-cdk-lib/aws-s3";
+import { Bucket, type CfnBucket } from "aws-cdk-lib/aws-s3";
 import { describe, expect, test } from "vitest";
 import {
   DestinationWriteRetryJitter,
@@ -176,6 +176,50 @@ describe("ShinBucketDeployment validation and option coverage", () => {
         message: "destination.keyPrefix must be <=102 characters.",
       }) as ValidationError,
     );
+  });
+
+  test.each([
+    "site?draft",
+    "site#draft",
+    "site[preview]",
+  ])("rejects destination prefix %s that cannot form an ownership tag key", (keyPrefix) => {
+    const stack = new Stack();
+    const destinationBucket = new Bucket(stack, "Dest");
+
+    expect(
+      () =>
+        new ShinBucketDeployment(stack, "Deploy", {
+          sources: [Source.data("index.html", "ok")],
+          destination: { bucket: destinationBucket, keyPrefix },
+          providerLambda: { localBuild: testLocalProviderBuild() },
+        }),
+    ).toThrowError(
+      expect.objectContaining({
+        code: "ShinBucketDeploymentDestinationKeyPrefixTagCharacters",
+      }) as ValidationError,
+    );
+  });
+
+  test("accepts the CloudFormation ownership-tag character boundary including Unicode", () => {
+    const stack = new Stack();
+    const destinationBucket = new Bucket(stack, "Dest");
+    const keyPrefix = "ä site_1.:/=+-@";
+
+    new ShinBucketDeployment(stack, "Deploy", {
+      sources: [Source.data("index.html", "ok")],
+      destination: { bucket: destinationBucket, keyPrefix },
+      providerLambda: { localBuild: testLocalProviderBuild() },
+    });
+
+    const properties = customResourceProperties(stack);
+    Template.fromStack(stack).hasResourceProperties("AWS::S3::Bucket", {
+      Tags: Match.arrayWith([
+        {
+          Key: `aws-cdk:cr-owned:${keyPrefix}:${properties.DestinationOwnerId}`,
+          Value: "true",
+        },
+      ]),
+    });
   });
 
   test("rejects an unresolved destination prefix before creating provider resources", () => {
@@ -393,7 +437,108 @@ describe("ShinBucketDeployment validation and option coverage", () => {
           paths: ["index.html"],
         },
       });
-    }).toThrow(/Every cloudfrontInvalidation\.paths entry must start with "\/"/);
+    }).toThrow(/cloudfrontInvalidation\.paths\[0\] must start with "\/"/);
+  });
+
+  test("validates concrete CloudFront invalidation path shapes and limits", () => {
+    const invalidPaths: ReadonlyArray<readonly [unknown, RegExp]> = [
+      [[], /must contain at least one path/],
+      ["/*", /must be an array of strings/],
+      [[7], /paths\[0\] must be a string/],
+      [[`/${"a".repeat(4_000)}`], /must be <=4000 Unicode characters/],
+    ];
+
+    for (const [index, [paths, expected]] of invalidPaths.entries()) {
+      const stack = new Stack();
+      const destinationBucket = new Bucket(stack, `Dest${index}`);
+      const distribution = new Distribution(stack, `Distribution${index}`, {
+        defaultBehavior: {
+          origin: S3BucketOrigin.withOriginAccessControl(destinationBucket),
+          viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        },
+      });
+
+      expect(
+        () =>
+          new ShinBucketDeployment(stack, `Deploy${index}`, {
+            sources: [Source.data("index.html", "ok")],
+            destination: { bucket: destinationBucket },
+            cloudfrontInvalidation: { distribution, paths } as never,
+          }),
+      ).toThrow(expected);
+    }
+  });
+
+  test("accepts 4000-character and unresolved CloudFront invalidation paths", () => {
+    const app = new App();
+    const stack = new Stack(app, "CloudFrontBoundaryStack");
+    const destinationBucket = new Bucket(stack, "Dest");
+    const distribution = new Distribution(stack, "Distribution", {
+      defaultBehavior: {
+        origin: S3BucketOrigin.withOriginAccessControl(destinationBucket),
+        viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+      },
+    });
+    const unresolvedPath = new CfnParameter(stack, "Path").valueAsString;
+
+    new ShinBucketDeployment(stack, "BoundaryDeploy", {
+      sources: [Source.data("index.html", "ok")],
+      destination: { bucket: destinationBucket },
+      cloudfrontInvalidation: { distribution, paths: [`/${"a".repeat(3_999)}`] },
+      providerLambda: { localBuild: testLocalProviderBuild() },
+    });
+    new ShinBucketDeployment(stack, "TokenDeploy", {
+      sources: [Source.data("token.html", "ok")],
+      destination: { bucket: destinationBucket, keyPrefix: "token" },
+      cloudfrontInvalidation: { distribution, paths: [unresolvedPath] },
+      providerLambda: { localBuild: testLocalProviderBuild() },
+    });
+
+    expect(() => app.synth()).not.toThrow();
+  });
+
+  test("rejects malformed JavaScript leaf values before provider creation", () => {
+    const invalidProps: ReadonlyArray<readonly [Record<string, unknown>, RegExp]> = [
+      [{ sources: [7] }, /sources\[0\] must implement ISource\.bind/],
+      [{ destination: { keyPrefix: 7 } }, /destination\.keyPrefix must be a string/],
+      [{ sourceProcessing: { extract: 1 } }, /sourceProcessing\.extract must be a boolean/],
+      [{ sourceProcessing: { include: "*.js" } }, /sourceProcessing\.include must be an array/],
+      [{ sourceProcessing: { include: [7] } }, /sourceProcessing\.include\[0\] must be a string/],
+      [{ sourceProcessing: { exclude: [false] } }, /sourceProcessing\.exclude\[0\]/],
+      [{ providerLambda: { memorySize: "1024" } }, /providerLambda\.memorySize/],
+      [{ cloudfrontInvalidation: { waitForCompletion: 1 } }, /waitForCompletion must be a boolean/],
+      [
+        { destinationLifecycle: { onDeploy: { deleteStaleObjects: "false" } } },
+        /deleteStaleObjects must be a boolean/,
+      ],
+      [
+        { destinationLifecycle: { onDelete: { deleteCurrentObjects: 1 } } },
+        /deleteCurrentObjects must be a boolean/,
+      ],
+    ];
+
+    for (const [index, [override, expected]] of invalidProps.entries()) {
+      const stack = new Stack();
+      const destinationBucket = new Bucket(stack, `Dest${index}`);
+      const base = {
+        sources: [Source.data("index.html", "ok")],
+        destination: { bucket: destinationBucket },
+      };
+      const props = {
+        ...base,
+        ...override,
+        destination: { ...base.destination, ...(override.destination ?? {}) },
+      };
+
+      expect(() => new ShinBucketDeployment(stack, `Invalid${index}`, props as never)).toThrow(
+        expected,
+      );
+      expect(
+        stack.node
+          .findAll()
+          .some((construct) => construct.node.id.startsWith("ShinBucketDeploymentHandler")),
+      ).toBe(false);
+    }
   });
 
   test.each([
@@ -734,6 +879,92 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     expect(() => app.synth()).not.toThrow();
     expect(customResourceProperties(stack).SourceBucketNames).toHaveLength(1);
     expect(customResourceProperties(stack).SourceObjectKeys).toHaveLength(1);
+  });
+
+  test.each([
+    [48, true],
+    [49, true],
+    [50, false],
+  ] as const)("enforces the S3 50-tag limit with %i pre-existing tags", (tagCount, succeeds) => {
+    const app = new App();
+    const stack = new Stack(app, `TagLimit${tagCount}`);
+    const destinationBucket = new Bucket(stack, "Dest");
+    for (let index = 0; index < tagCount; index++) {
+      Tags.of(destinationBucket).add(`application:${index}`, "true");
+    }
+    new ShinBucketDeployment(stack, "Deploy", {
+      sources: [Source.data("index.html", "ok")],
+      destination: { bucket: destinationBucket },
+      providerLambda: { localBuild: testLocalProviderBuild() },
+    });
+
+    if (succeeds) {
+      expect(() => app.synth()).not.toThrow();
+    } else {
+      expect(() => app.synth()).toThrow(/51 synthesized tags.*50-tag limit/);
+    }
+  });
+
+  test("counts stack-aspect and deployment ownership tags together", () => {
+    const app = new App();
+    const stack = new Stack(app, "SharedTagLimit");
+    const destinationBucket = new Bucket(stack, "Dest");
+    for (let index = 0; index < 49; index++) {
+      Tags.of(stack).add(`stack:${index}`, "true");
+    }
+    new ShinBucketDeployment(stack, "First", {
+      sources: [Source.data("first.html", "ok")],
+      destination: { bucket: destinationBucket },
+      providerLambda: { localBuild: testLocalProviderBuild() },
+    });
+    new ShinBucketDeployment(stack, "Second", {
+      sources: [Source.data("second.html", "ok")],
+      destination: { bucket: destinationBucket, keyPrefix: "second" },
+      providerLambda: { localBuild: testLocalProviderBuild() },
+    });
+
+    expect(() => app.synth()).toThrow(/51 synthesized tags.*50-tag limit/);
+  });
+
+  test("counts the CDK auto-delete tag in the S3 bucket quota", () => {
+    const app = new App();
+    const stack = new Stack(app, "AutoDeleteTagLimit");
+    const destinationBucket = new Bucket(stack, "Dest", {
+      autoDeleteObjects: true,
+      removalPolicy: RemovalPolicy.DESTROY,
+    });
+    for (let index = 0; index < 49; index++) {
+      Tags.of(destinationBucket).add(`application:${index}`, "true");
+    }
+    new ShinBucketDeployment(stack, "Deploy", {
+      sources: [Source.data("index.html", "ok")],
+      destination: { bucket: destinationBucket },
+      providerLambda: { localBuild: testLocalProviderBuild() },
+    });
+
+    expect(() => app.synth()).toThrow(/51 synthesized tags.*50-tag limit/);
+  });
+
+  test("deduplicates equivalent ownership tags across CDK and raw tag sources", () => {
+    const app = new App();
+    const stack = new Stack(app, "DeduplicatedTagLimit");
+    const destinationBucket = new Bucket(stack, "Dest");
+    for (let index = 0; index < 49; index++) {
+      Tags.of(destinationBucket).add(`application:${index}`, "true");
+    }
+    const deployment = new ShinBucketDeployment(stack, "Deploy", {
+      sources: [Source.data("index.html", "ok")],
+      destination: { bucket: destinationBucket },
+      providerLambda: { localBuild: testLocalProviderBuild() },
+    });
+    const customResourceScope = deployment.node.findChild("CustomResource");
+    const customResource = customResourceScope.node.children[0];
+    if (!customResource) throw new Error("Shin custom resource not found");
+    const ownershipTagKey = `aws-cdk:cr-owned:${customResource.node.addr.slice(-8)}`;
+    const bucketResource = destinationBucket.node.defaultChild as CfnBucket;
+    bucketResource.tagsRaw = [{ key: ownershipTagKey, value: "duplicate" }];
+
+    expect(() => app.synth()).not.toThrow();
   });
 
   test("renders CloudFront properties and permissions", () => {
