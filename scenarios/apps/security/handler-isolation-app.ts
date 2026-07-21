@@ -1,6 +1,7 @@
 import { App, CfnOutput, RemovalPolicy, Stack, type StackProps } from "aws-cdk-lib";
 import { Bucket } from "aws-cdk-lib/aws-s3";
 import { ProviderSharing, ShinBucketDeployment, Source } from "../../../src";
+import { grantVerifierRead } from "../verification-access";
 
 class HandlerIsolationStack extends Stack {
   constructor(scope: App, id: string, props?: StackProps) {
@@ -10,6 +11,7 @@ class HandlerIsolationStack extends Stack {
       autoDeleteObjects: true,
       removalPolicy: RemovalPolicy.DESTROY,
     });
+    grantVerifierRead(destinationBucket);
 
     for (const [idSuffix, prefix] of [
       ["First", "shared/first"],

@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { App, CfnOutput, RemovalPolicy, Stack, type StackProps } from "aws-cdk-lib";
 import { Bucket } from "aws-cdk-lib/aws-s3";
 import { ShinBucketDeployment, Source } from "../../../src";
+import { grantVerifierRead } from "../verification-access";
 
 const LARGE_FILE_BYTES = 24 * 1024 * 1024;
 
@@ -15,6 +16,7 @@ class LargeArchiveShinBucketDeploymentStack extends Stack {
       autoDeleteObjects: true,
       removalPolicy: RemovalPolicy.DESTROY,
     });
+    grantVerifierRead(websiteBucket);
 
     new ShinBucketDeployment(this, "DeployLargeArchive", {
       sources: [Source.asset(assetRoot)],

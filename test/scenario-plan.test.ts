@@ -52,6 +52,17 @@ describe("scenario planner", () => {
       "object-deletion-updated",
       "object-deletion-bucket-only",
     ]);
+    const defaultRetentionGroup = plan.groups.find(
+      ({ runs }) => runs[0]?.name === "default-retention-initial",
+    );
+    expect(defaultRetentionGroup?.runs.map(({ name }) => name)).toEqual([
+      "default-retention-initial",
+      "default-retention-updated",
+      "default-retention-bucket-only",
+    ]);
+    expect(defaultRetentionGroup?.cleanupCommand).toBe(
+      "pnpm verify destroy default-retention-bucket-only",
+    );
     expect(replacementGroup?.runs.map(({ name }) => name)).toEqual([
       "replacement-safety-initial",
       "replacement-safety-updated",
@@ -73,6 +84,16 @@ describe("scenario planner", () => {
       "cross-bucket-change-initial",
       "cross-bucket-change-updated",
     ]);
+    expect(
+      plan.groups
+        .find(({ runs }) => runs[0]?.name === "cloudfront-sync-initial")
+        ?.runs.map(({ name }) => name),
+    ).toEqual(["cloudfront-sync-initial", "cloudfront-sync-updated"]);
+    expect(
+      plan.groups
+        .find(({ runs }) => runs[0]?.name === "cloudfront-async-initial")
+        ?.runs.map(({ name }) => name),
+    ).toEqual(["cloudfront-async-initial", "cloudfront-async-updated"]);
     expect(handlerIsolationGroup?.runs.map(({ name }) => name)).toEqual(["handler-isolation"]);
   });
 
@@ -83,6 +104,8 @@ describe("scenario planner", () => {
 
     expect(names).toContain("stale-object-cleanup-updated");
     expect(names).not.toContain("stale-object-cleanup-initial");
+    expect(names).toContain("default-retention-bucket-only");
+    expect(names).not.toContain("default-retention-updated");
     expect(names).toContain("object-deletion-bucket-only");
     expect(names).not.toContain("object-deletion-updated");
     expect(names).toContain("replacement-safety-updated");
@@ -96,6 +119,73 @@ describe("scenario planner", () => {
     expect(names).toContain("cross-bucket-change-updated");
     expect(names).not.toContain("cross-bucket-change-initial");
     expect(names).toContain("handler-isolation");
+    expect(names).toContain("cloudfront-sync-updated");
+    expect(names).not.toContain("cloudfront-sync-initial");
+    expect(names).toContain("cloudfront-async-updated");
+    expect(names).not.toContain("cloudfront-async-initial");
+  });
+
+  it("accepts aggregate CloudFront group names for targeted runs", () => {
+    expect(
+      planFor(["verify", "deploy", "cloudfront-sync"]).groups[0]?.runs.map(({ name }) => name),
+    ).toEqual(["cloudfront-sync-initial", "cloudfront-sync-updated"]);
+    expect(
+      planFor(["verify", "deploy", "cloudfront-async"]).groups[0]?.runs.map(({ name }) => name),
+    ).toEqual(["cloudfront-async-initial", "cloudfront-async-updated"]);
+    expect(
+      planFor(["verify", "destroy", "cloudfront-sync"]).groups[0]?.runs.map(({ name }) => name),
+    ).toEqual(["cloudfront-sync-updated"]);
+    expect(
+      planFor(["verify", "destroy", "cloudfront-async"]).groups[0]?.runs.map(({ name }) => name),
+    ).toEqual(["cloudfront-async-updated"]);
+  });
+
+  it("runs selected independent groups concurrently and ordered phases serially", () => {
+    const plan = planFor([
+      "verify",
+      "deploy",
+      "--groups",
+      "simple,replacement-safety,cloudfront-sync",
+      "--concurrency",
+      "3",
+    ]);
+
+    expect(plan.concurrency).toBe(3);
+    expect(plan.groups.map(({ runs }) => runs.map(({ name }) => name))).toEqual([
+      ["simple"],
+      ["replacement-safety-initial", "replacement-safety-updated"],
+      ["cloudfront-sync-initial", "cloudfront-sync-updated"],
+    ]);
+    expect(plan.groups.map(({ cleanupCommand }) => cleanupCommand)).toEqual([
+      "pnpm verify destroy simple",
+      "pnpm verify destroy replacement-safety-updated",
+      "pnpm verify destroy cloudfront-sync-updated",
+    ]);
+  });
+
+  it("destroys only the terminal phase of each selected group", () => {
+    const plan = planFor([
+      "verify",
+      "destroy",
+      "--groups",
+      "default-retention,replacement-safety",
+      "--concurrency",
+      "2",
+    ]);
+
+    expect(plan.groups.map(({ runs }) => runs.map(({ name }) => name))).toEqual([
+      ["default-retention-bucket-only"],
+      ["replacement-safety-updated"],
+    ]);
+  });
+
+  it("rejects unknown and duplicate selected groups", () => {
+    expect(() => planFor(["verify", "deploy", "--groups", "simple,unknown"])).toThrow(
+      "Unknown verify group: unknown",
+    );
+    expect(() => planFor(["verify", "deploy", "--groups", "simple,simple"])).toThrow(
+      "must not contain duplicates",
+    );
   });
 
   it("normalizes verification and benchmark application paths centrally", () => {
@@ -143,7 +233,7 @@ describe("scenario planner", () => {
       "Example:Value=hello world",
     ]);
     expect(scenarioOutputsPath("/repo", run)).toBe(
-      "/repo/.verification-assets/cdk.out/verify/simple/stack-outputs.json",
+      "/repo/.verification-assets/outputs/ShinBucketDeploymentSimpleDemo.json",
     );
     expect(
       planFor(["verify", "deploy", "simple", "--", "--parameters", "Example:Value=hello world"])
@@ -180,7 +270,7 @@ describe("scenario planner", () => {
   });
 });
 
-function planFor(argv: string[]) {
+function planFor(argv: string[], environment: Readonly<NodeJS.ProcessEnv> = {}) {
   const args = parseArgs(argv) as ParsedArgs & { readonly action: RunnableScenarioAction };
-  return createScenarioPlan(args, {});
+  return createScenarioPlan(args, environment);
 }

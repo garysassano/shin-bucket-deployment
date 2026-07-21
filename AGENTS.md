@@ -5,6 +5,8 @@ Use the repo-local skill files before benchmark or verification work:
 - Benchmark and AWS CDK `BucketDeployment` comparison tasks: read `.agents/skills/shin-benchmark/SKILL.md`.
 - Correctness verification tasks: read `.agents/skills/shin-verification/SKILL.md`.
 
+AWS correctness verification is opt-in, cost-bearing, and maintainer-run through `pnpm verify`; there is no hosted full-matrix workflow. Run local gates first and use the smallest relevant named verification group for a narrow deployed change. Use `--groups` with bounded `--concurrency` only for independent groups; phases inside a group remain ordered. Reserve the full suite for changes spanning several groups, shared provider/runner/assertion behavior, or an intentionally selected release candidate. Do not recreate automatic push, pull-request, merge, or schedule verification. A future hosted workflow requires an explicit maintainer decision covering cost, least-privilege deployment access, and definitive cleanup access. Do not run AWS for docs, formatting, workflow syntax, local validation, or synthesis-only changes whose deployed behavior is proven unchanged.
+
 Keep benchmark evidence and verification evidence separate:
 
 - `docs/benchmark.md` and `benchmarks/results.jsonl` are for performance, efficiency, and upstream AWS CDK `BucketDeployment` comparisons.

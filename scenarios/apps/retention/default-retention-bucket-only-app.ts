@@ -2,7 +2,7 @@ import { App, CfnOutput, RemovalPolicy, Stack, type StackProps } from "aws-cdk-l
 import { Bucket } from "aws-cdk-lib/aws-s3";
 import { grantVerifierRead } from "../verification-access";
 
-class ObjectDeletionBucketOnlyShinBucketDeploymentStack extends Stack {
+class DefaultRetentionBucketOnlyStack extends Stack {
   constructor(scope: App, id: string, props?: StackProps) {
     super(scope, id, props);
 
@@ -12,9 +12,7 @@ class ObjectDeletionBucketOnlyShinBucketDeploymentStack extends Stack {
     });
     grantVerifierRead(websiteBucket);
 
-    new CfnOutput(this, "BucketName", {
-      value: websiteBucket.bucketName,
-    });
+    new CfnOutput(this, "BucketName", { value: websiteBucket.bucketName });
   }
 }
 
@@ -27,10 +25,4 @@ const env =
       }
     : undefined;
 
-new ObjectDeletionBucketOnlyShinBucketDeploymentStack(
-  app,
-  "ShinBucketDeploymentObjectDeletionDemo",
-  {
-    env,
-  },
-);
+new DefaultRetentionBucketOnlyStack(app, "ShinBucketDeploymentDefaultRetentionDemo", { env });

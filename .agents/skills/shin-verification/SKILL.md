@@ -85,14 +85,39 @@ Do not include benchmark configs in correctness verification unless the task is 
 
 ## AWS End-To-End Verification
 
-AWS end-to-end verification deploys real stacks and must verify S3, KMS, CloudFormation, and CloudFront state where applicable. The shared scenario runner runs all default correctness scenarios when no scenario name is supplied:
+AWS end-to-end verification is opt-in because it creates billable AWS resources and requests. Never run it automatically for every push or pull request. Run local gates first, then choose the smallest AWS scope that can validate the changed boundary.
+
+Do not run AWS verification for documentation, formatting, workflow syntax, local validation, synthesis-only API changes, or refactors whose deployed template/provider behavior is proven unchanged. Record why no AWS run was needed when documenting meaningful verification work.
+
+Use a targeted group when a change affects a narrow AWS boundary. Examples include:
+
+- S3 object or lifecycle behavior: the directly affected create/update/delete chain
+- destination identity, lifecycle, or ownership: `replacement-safety`
+- CloudFront invalidation: `cloudfront-sync` or `cloudfront-async`
+- KMS or DSSE behavior: the affected encryption scenario
+- scenario assertions or IAM: the scenarios whose verifier or grants changed
+
+Run the full suite only when a change crosses several scenario groups, changes shared provider or scenario-runner behavior, changes the common assertion/cleanup infrastructure, or is an intentionally selected release candidate that needs a fresh combined snapshot. A release does not require a full rerun when no relevant deployed boundary changed after the latest successful evidence.
+
+AWS verification is run deliberately by a maintainer through the shared scenario runner. There is no hosted full-matrix workflow. Do not add automatic push, pull-request, merge, or schedule execution. Reintroduce hosted execution only after an explicit maintainer decision accounts for cost, least-privilege deployment permissions, definitive cleanup permissions, and recovery from partial runs.
+
+AWS end-to-end verification must verify S3, KMS, CloudFormation, and CloudFront state where applicable. Group aliases expand to their ordered phases. An explicit phase name runs only that phase. `pnpm verify list` prints both phase names and group aliases.
 
 ```bash
+# One ordered group.
+pnpm verify deploy replacement-safety
+pnpm verify destroy replacement-safety
+
+# Several independent groups; phases inside each group remain serial.
+pnpm verify deploy --groups simple,filters,replacement-safety --concurrency 3
+pnpm verify destroy --groups simple,filters,replacement-safety --concurrency 3
+
+# Rare full suite: use only at the decision points described above.
 pnpm verify deploy --concurrency 4
 pnpm verify destroy --concurrency 4
 ```
 
-The runner preserves ordered update chains such as `*-initial` before `*-updated`, while running independent chains concurrently. Scenario phases use these suffixes rather than release-like `v1`/`v2` or `alpha`/`beta` labels. Use `--concurrency 1` for serial debugging.
+Use the same group selector for deploy and destroy; destroy selects each group's terminal phase. If a deploy is interrupted or fails, run the cleanup commands printed by the runner. The runner preserves ordered update chains such as `*-initial` before `*-updated`, while running independent groups concurrently. Scenario phases use these suffixes rather than release-like `v1`/`v2` or `alpha`/`beta` labels. Use `--concurrency 1` for serial debugging. Keep canonical benchmark runs sequential under the benchmark workflow so concurrent resource contention does not invalidate comparisons.
 
 The default suite includes:
 
@@ -125,7 +150,7 @@ Keep the destination-move protocol tests and scenario synthesis in the normal lo
 
 Changes outside those boundaries do not require this targeted matrix merely because they share a release. Before a release, require a current successful destination-move AWS run only if one of the boundaries changed after the latest recorded successful run. Record the sanitized result and confirmed cleanup in `docs/verification.md`.
 
-Always destroy AWS verification stacks and verify they are absent before finalizing `docs/verification.md`. Raw AWS logs and resource identifiers stay in scratch only.
+Always destroy every started AWS verification stack and independently verify its scoped resources are absent before finalizing `docs/verification.md`. Cleanup probes must be resource-scoped and definitive: exact not-found responses prove absence; authorization, network, and ambiguous service errors fail cleanup. Do not require account-wide bucket listing merely to prove a captured bucket is absent. Cleanup failure is a failed verification run, not a warning. Raw AWS logs and resource identifiers stay in scratch only.
 
 ## Verification Human Page
 

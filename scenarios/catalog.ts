@@ -69,6 +69,10 @@ export const VERIFY_SCENARIOS = {
     "retention/default-retention-updated-app.js",
     "ShinBucketDeploymentDefaultRetentionDemo",
   ),
+  "default-retention-bucket-only": scenario(
+    "retention/default-retention-bucket-only-app.js",
+    "ShinBucketDeploymentDefaultRetentionDemo",
+  ),
   "extract-false": scenario("basic/extract-false-app.js", "ShinBucketDeploymentExtractFalseDemo"),
   "object-deletion-initial": scenario(
     "retention/object-deletion-initial-app.js",
@@ -85,14 +89,10 @@ export const VERIFY_SCENARIOS = {
   "replacement-safety-initial": scenario(
     "retention/replacement-safety-initial-app.js",
     "ShinBucketDeploymentReplacementSafetyDemo",
-    "destination-move-matrix.js",
-    true,
   ),
   "replacement-safety-updated": scenario(
     "retention/replacement-safety-updated-app.js",
     "ShinBucketDeploymentReplacementSafetyDemo",
-    "destination-move-matrix.js",
-    true,
   ),
   "large-archive": scenario("scale/large-archive-app.js", "ShinBucketDeploymentLargeArchiveDemo"),
   "kms-destination": scenario(
@@ -111,13 +111,25 @@ export const VERIFY_SCENARIOS = {
     "security/handler-isolation-app.js",
     "ShinBucketDeploymentHandlerIsolationDemo",
   ),
-  "cloudfront-sync": scenario(
+  "cloudfront-sync-initial": scenario(
     "cloudfront/cloudfront-sync-app.js",
     "ShinBucketDeploymentCloudFrontSyncDemo",
+    { SHIN_VERIFY_CACHE_PROBE_TOKEN: "sync-initial" },
   ),
-  "cloudfront-async": scenario(
+  "cloudfront-sync-updated": scenario(
+    "cloudfront/cloudfront-sync-app.js",
+    "ShinBucketDeploymentCloudFrontSyncDemo",
+    { SHIN_VERIFY_CACHE_PROBE_TOKEN: "sync-updated" },
+  ),
+  "cloudfront-async-initial": scenario(
     "cloudfront/cloudfront-async-app.js",
     "ShinBucketDeploymentCloudFrontAsyncDemo",
+    { SHIN_VERIFY_CACHE_PROBE_TOKEN: "async-initial" },
+  ),
+  "cloudfront-async-updated": scenario(
+    "cloudfront/cloudfront-async-app.js",
+    "ShinBucketDeploymentCloudFrontAsyncDemo",
+    { SHIN_VERIFY_CACHE_PROBE_TOKEN: "async-updated" },
   ),
 } as const satisfies Record<string, ScenarioDefinition>;
 
@@ -131,57 +143,43 @@ export const BENCHMARK_SCENARIOS = {
 
 export const VERIFY_DEFAULT_ORDER = Object.keys(VERIFY_SCENARIOS);
 
-export const VERIFY_DEFAULT_GROUPS = [
-  ["simple"],
-  ["root-prefix"],
-  ["marker-replacement"],
-  ["filters"],
-  ["source-overwrite-order"],
-  ["external-zips"],
-  ["co-tenant-protection-initial", "co-tenant-protection-updated"],
-  ["child-parent-retention-initial", "child-parent-retention-updated"],
-  ["child-parent-cleanup-initial", "child-parent-cleanup-updated"],
-  ["cross-bucket-change-initial", "cross-bucket-change-updated"],
-  ["stale-object-cleanup-initial", "stale-object-cleanup-updated"],
-  ["stale-object-retention-initial", "stale-object-retention-updated"],
-  ["default-retention-initial", "default-retention-updated"],
-  ["extract-false"],
-  ["object-deletion-initial", "object-deletion-updated", "object-deletion-bucket-only"],
-  ["replacement-safety-initial", "replacement-safety-updated"],
-  ["large-archive"],
-  ["kms-destination"],
-  ["kms-managed-destination"],
-  ["dsse-managed-destination"],
-  ["handler-isolation"],
-  ["cloudfront-sync"],
-  ["cloudfront-async"],
-] as const satisfies ReadonlyArray<ReadonlyArray<keyof typeof VERIFY_SCENARIOS>>;
+export const VERIFY_GROUPS = {
+  simple: ["simple"],
+  "root-prefix": ["root-prefix"],
+  "marker-replacement": ["marker-replacement"],
+  filters: ["filters"],
+  "source-overwrite-order": ["source-overwrite-order"],
+  "external-zips": ["external-zips"],
+  "co-tenant-protection": ["co-tenant-protection-initial", "co-tenant-protection-updated"],
+  "child-parent-retention": ["child-parent-retention-initial", "child-parent-retention-updated"],
+  "child-parent-cleanup": ["child-parent-cleanup-initial", "child-parent-cleanup-updated"],
+  "cross-bucket-change": ["cross-bucket-change-initial", "cross-bucket-change-updated"],
+  "stale-object-cleanup": ["stale-object-cleanup-initial", "stale-object-cleanup-updated"],
+  "stale-object-retention": ["stale-object-retention-initial", "stale-object-retention-updated"],
+  "default-retention": [
+    "default-retention-initial",
+    "default-retention-updated",
+    "default-retention-bucket-only",
+  ],
+  "extract-false": ["extract-false"],
+  "object-deletion": [
+    "object-deletion-initial",
+    "object-deletion-updated",
+    "object-deletion-bucket-only",
+  ],
+  "replacement-safety": ["replacement-safety-initial", "replacement-safety-updated"],
+  "large-archive": ["large-archive"],
+  "kms-destination": ["kms-destination"],
+  "kms-managed-destination": ["kms-managed-destination"],
+  "dsse-managed-destination": ["dsse-managed-destination"],
+  "handler-isolation": ["handler-isolation"],
+  "cloudfront-sync": ["cloudfront-sync-initial", "cloudfront-sync-updated"],
+  "cloudfront-async": ["cloudfront-async-initial", "cloudfront-async-updated"],
+} as const satisfies Record<string, ReadonlyArray<keyof typeof VERIFY_SCENARIOS>>;
 
-export const VERIFY_DESTROY_ORDER = [
-  "simple",
-  "root-prefix",
-  "marker-replacement",
-  "filters",
-  "co-tenant-protection-updated",
-  "child-parent-retention-updated",
-  "child-parent-cleanup-updated",
-  "cross-bucket-change-updated",
-  "stale-object-cleanup-updated",
-  "stale-object-retention-updated",
-  "default-retention-updated",
-  "extract-false",
-  "object-deletion-bucket-only",
-  "replacement-safety-updated",
-  "source-overwrite-order",
-  "external-zips",
-  "large-archive",
-  "kms-destination",
-  "kms-managed-destination",
-  "dsse-managed-destination",
-  "handler-isolation",
-  "cloudfront-sync",
-  "cloudfront-async",
-] as const;
+export const VERIFY_DEFAULT_GROUPS = Object.values(VERIFY_GROUPS);
+
+export const VERIFY_DESTROY_ORDER = VERIFY_DEFAULT_GROUPS.map(terminalVerifyScenario);
 
 export function verifyScenarioEntry(name: string): ScenarioEntry {
   const definition = VERIFY_SCENARIOS[name as keyof typeof VERIFY_SCENARIOS];
@@ -191,17 +189,26 @@ export function verifyScenarioEntry(name: string): ScenarioEntry {
   return [name, definition];
 }
 
+function terminalVerifyScenario(
+  group: ReadonlyArray<keyof typeof VERIFY_SCENARIOS>,
+): keyof typeof VERIFY_SCENARIOS {
+  const terminal = group.at(-1);
+  if (terminal === undefined) throw new Error("Verification groups must not be empty.");
+  return terminal;
+}
+
 function scenario(
   file: string,
   stackName: string,
-  postDeployVerifier?: string,
-  grantVerifierRead?: boolean,
+  env?: Readonly<Record<string, string>>,
 ): ScenarioDefinition {
   return {
     file,
     root: "scenarios",
     stackName,
-    ...(postDeployVerifier ? { postDeployVerifier } : {}),
-    ...(grantVerifierRead ? { grantVerifierRead } : {}),
+    postDeployVerifier: "scenario-state.js",
+    postDestroyVerifier: "stack-absent.js",
+    grantVerifierRead: true,
+    ...(env ? { env } : {}),
   };
 }

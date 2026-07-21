@@ -5,6 +5,7 @@ import {
   VERIFY_DEFAULT_GROUPS,
   VERIFY_DEFAULT_ORDER,
   VERIFY_DESTROY_ORDER,
+  VERIFY_GROUPS,
   verifyScenarioEntry,
 } from "./catalog";
 import type {
@@ -36,7 +37,13 @@ export function scenarioAppPath(repositoryRoot: string, definition: ScenarioDefi
 }
 
 export function scenarioOutputsPath(repositoryRoot: string, run: ScenarioRun): string {
-  return join(cdkOutputDir(repositoryRoot, run.mode, run.name), "stack-outputs.json");
+  const scratchRoot = run.mode === "verify" ? ".verification-assets" : ".benchmark-assets";
+  return join(
+    repositoryRoot,
+    scratchRoot,
+    "outputs",
+    `${safePathPart(run.definition.stackName)}.json`,
+  );
 }
 
 export function scenarioCdkArgs(repositoryRoot: string, run: ScenarioRun): string[] {
@@ -63,19 +70,21 @@ function createVerifyPlan(
   args: ParsedArgs & { readonly action: RunnableScenarioAction },
   environment: Readonly<NodeJS.ProcessEnv>,
 ): ScenarioPlan {
-  const groups = verificationScenarioGroups(args.action, args.name).map((entries) => ({
-    runs: entries.map(([name, definition]) => ({
-      mode: "verify" as const,
-      action: args.action,
-      name,
-      definition,
-      cdkArgs: args.cdkArgs,
-      env: {},
-    })),
-    ...(args.action === "deploy"
-      ? { cleanupCommand: cleanupCommand(entries.at(-1)?.[0], args.cdkArgs) }
-      : {}),
-  }));
+  const groups = verificationScenarioGroups(args.action, args.name, args.runnerOptions).map(
+    (entries) => ({
+      runs: entries.map(([name, definition]) => ({
+        mode: "verify" as const,
+        action: args.action,
+        name,
+        definition,
+        cdkArgs: args.cdkArgs,
+        env: definition.env ?? {},
+      })),
+      ...(args.action === "deploy"
+        ? { cleanupCommand: cleanupCommand(entries.at(-1)?.[0], args.cdkArgs) }
+        : {}),
+    }),
+  );
 
   return {
     groups,
@@ -118,15 +127,51 @@ function createBenchmarkPlan(
 function verificationScenarioGroups(
   action: RunnableScenarioAction,
   name: string | undefined,
+  options: ReadonlyMap<string, string>,
 ): ScenarioEntry[][] {
   if (name !== undefined) {
-    return [[verifyScenarioEntry(name)]];
+    return [namedVerificationScenarioGroup(action, name)];
+  }
+  const selectedGroups = options.get("groups");
+  if (selectedGroups !== undefined) {
+    return verifyGroupNames(selectedGroups).map((groupName) =>
+      verificationGroupEntries(action, groupName),
+    );
   }
   if (action === "deploy") {
     return VERIFY_DEFAULT_GROUPS.map((group) => group.map(verifyScenarioEntry));
   }
   const names = action === "destroy" ? VERIFY_DESTROY_ORDER : VERIFY_DEFAULT_ORDER;
   return names.map((scenarioName) => [verifyScenarioEntry(scenarioName)]);
+}
+
+function namedVerificationScenarioGroup(
+  action: RunnableScenarioAction,
+  name: string,
+): ScenarioEntry[] {
+  if (name in VERIFY_GROUPS) return verificationGroupEntries(action, name);
+  return [verifyScenarioEntry(name)];
+}
+
+function verificationGroupEntries(action: RunnableScenarioAction, name: string): ScenarioEntry[] {
+  const group = VERIFY_GROUPS[name as keyof typeof VERIFY_GROUPS];
+  if (group === undefined) throw new Error(`Unknown verify group: ${name}`);
+  const phaseNames = action === "destroy" ? group.slice(-1) : group;
+  return phaseNames.map(verifyScenarioEntry);
+}
+
+function verifyGroupNames(value: string): string[] {
+  const names = value
+    .split(",")
+    .map((name) => name.trim())
+    .filter(Boolean);
+  if (names.length === 0) throw new Error("--groups must contain at least one group name.");
+  const unique = new Set(names);
+  if (unique.size !== names.length) throw new Error("--groups must not contain duplicates.");
+  for (const name of names) {
+    if (!(name in VERIFY_GROUPS)) throw new Error(`Unknown verify group: ${name}`);
+  }
+  return names;
 }
 
 function benchmarkScenario(name: string | undefined): ScenarioEntry {

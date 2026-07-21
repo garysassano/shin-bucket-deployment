@@ -1,6 +1,7 @@
 import { App, CfnOutput, RemovalPolicy, Stack, type StackProps } from "aws-cdk-lib";
 import { Bucket, BucketEncryption } from "aws-cdk-lib/aws-s3";
 import { ShinBucketDeployment, Source } from "../../../src";
+import { grantVerifierRead } from "../verification-access";
 
 class KmsManagedDestinationShinBucketDeploymentStack extends Stack {
   constructor(scope: App, id: string, props?: StackProps) {
@@ -11,6 +12,7 @@ class KmsManagedDestinationShinBucketDeploymentStack extends Stack {
       encryption: BucketEncryption.KMS_MANAGED,
       removalPolicy: RemovalPolicy.DESTROY,
     });
+    grantVerifierRead(websiteBucket);
 
     new ShinBucketDeployment(this, "DeployWebsite", {
       sources: [Source.data("runtime/kms-managed.txt", "encrypted-by-aws-managed-s3-key\n")],

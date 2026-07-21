@@ -1,6 +1,7 @@
 import { App, CfnOutput, RemovalPolicy, Stack, type StackProps } from "aws-cdk-lib";
 import { Bucket } from "aws-cdk-lib/aws-s3";
 import { ShinBucketDeployment, Source } from "../../../src";
+import { grantVerifierRead } from "../verification-access";
 
 class ObjectDeletionShinBucketDeploymentStack extends Stack {
   constructor(scope: App, id: string, props?: StackProps) {
@@ -10,6 +11,7 @@ class ObjectDeletionShinBucketDeploymentStack extends Stack {
       autoDeleteObjects: true,
       removalPolicy: RemovalPolicy.DESTROY,
     });
+    grantVerifierRead(websiteBucket);
 
     new ShinBucketDeployment(this, "DeployWebsite", {
       sources: [Source.data("runtime/current.txt", "phase=initial\n")],

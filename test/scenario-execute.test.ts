@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   type RunningProcess,
   type StartProcess,
@@ -6,6 +6,10 @@ import {
   verificationPrincipalArn,
 } from "../scenarios/execute";
 import type { RunnableScenarioAction, ScenarioPlan, ScenarioRun } from "../scenarios/types";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("scenario executor", () => {
   it("accepts assumed-role session principals without reconstructing role paths", () => {
@@ -132,7 +136,7 @@ describe("scenario executor", () => {
         args: expect.arrayContaining([
           "deploy",
           "--outputs-file",
-          "/repo/.verification-assets/cdk.out/verify/verified/stack-outputs.json",
+          "/repo/.verification-assets/outputs/VerifiedStack.json",
         ]),
         verifierPrincipal: "arn:aws:sts::111122223333:assumed-role/VerifierRole/workflow-session",
       },
@@ -145,9 +149,62 @@ describe("scenario executor", () => {
           "--scenario-name",
           "verified",
           "--outputs-file",
-          "/repo/.verification-assets/cdk.out/verify/verified/stack-outputs.json",
+          "/repo/.verification-assets/outputs/VerifiedStack.json",
         ],
       },
+    ]);
+  });
+
+  it("creates the persistent outputs directory before deployment", async () => {
+    const events: string[] = [];
+
+    const status = await executeScenarioPlan(
+      { concurrency: 1, groups: [{ runs: [verifiedRun("directory")] }] },
+      {
+        repositoryRoot: "/repo",
+        pathExists: (path) => path !== "/repo/.verification-assets/outputs",
+        ensureDirectory: (path) => events.push(`mkdir:${path}`),
+        startProcess: (_run, command) => {
+          events.push(command);
+          return { completion: Promise.resolve(0), terminate() {} };
+        },
+        log: () => {},
+      },
+    );
+
+    expect(status).toBe(0);
+    expect(events).toEqual(["mkdir:/repo/.verification-assets/outputs", "pnpm", "node"]);
+  });
+
+  it("shares one output file across ordered phases of the same stack", async () => {
+    const outputFiles: string[] = [];
+    const initial = verifiedRun("initial");
+    const updated: ScenarioRun = {
+      ...verifiedRun("updated"),
+      definition: { ...verifiedRun("updated").definition, stackName: initial.definition.stackName },
+    };
+
+    const status = await executeScenarioPlan(
+      { concurrency: 1, groups: [{ runs: [initial, updated] }] },
+      {
+        repositoryRoot: "/repo",
+        pathExists: () => true,
+        startProcess: (_run, command, args) => {
+          if (command === "pnpm") {
+            const index = args.indexOf("--outputs-file");
+            const path = index === -1 ? undefined : args[index + 1];
+            if (path) outputFiles.push(path);
+          }
+          return { completion: Promise.resolve(0), terminate() {} };
+        },
+        log: () => {},
+      },
+    );
+
+    expect(status).toBe(0);
+    expect(outputFiles).toEqual([
+      "/repo/.verification-assets/outputs/initial.json",
+      "/repo/.verification-assets/outputs/initial.json",
     ]);
   });
 
@@ -246,6 +303,111 @@ describe("scenario executor", () => {
     expect(commands).toEqual(["pnpm"]);
   });
 
+  it("runs a configured verifier after destroy and forwards saved outputs", async () => {
+    const commands: Array<{ command: string; args: readonly string[] }> = [];
+
+    const status = await executeScenarioPlan(
+      { concurrency: 1, groups: [{ runs: [cleanupRun("cleaned")] }] },
+      {
+        repositoryRoot: "/repo",
+        pathExists: () => true,
+        startProcess: (_run, command, args) => {
+          commands.push({ command, args });
+          return { completion: Promise.resolve(0), terminate() {} };
+        },
+        log: () => {},
+      },
+    );
+
+    expect(status).toBe(0);
+    expect(commands).toEqual([
+      {
+        command: "pnpm",
+        args: expect.arrayContaining(["destroy", "--force"]),
+      },
+      {
+        command: "node",
+        args: [
+          "/repo/dist/scenarios/verifiers/absent.js",
+          "--stack-name",
+          "cleaned",
+          "--scenario-name",
+          "cleaned",
+          "--outputs-file",
+          "/repo/.verification-assets/outputs/cleaned.json",
+        ],
+      },
+    ]);
+  });
+
+  it("runs cleanup verification without outputs after a failed or partial deployment", async () => {
+    const verifierArgs: Array<readonly string[]> = [];
+
+    const status = await executeScenarioPlan(
+      { concurrency: 1, groups: [{ runs: [cleanupRun("partial")] }] },
+      {
+        repositoryRoot: "/repo",
+        pathExists: (path) => path !== "/repo/.verification-assets/outputs/partial.json",
+        startProcess: (_run, command, args) => {
+          if (command === "node") verifierArgs.push(args);
+          return { completion: Promise.resolve(0), terminate() {} };
+        },
+        log: () => {},
+      },
+    );
+
+    expect(status).toBe(0);
+    expect(verifierArgs).toEqual([
+      [
+        "/repo/dist/scenarios/verifiers/absent.js",
+        "--stack-name",
+        "partial",
+        "--scenario-name",
+        "partial",
+      ],
+    ]);
+  });
+
+  it("reports cleanup verifier failure as scenario failure", async () => {
+    const commands: string[] = [];
+
+    const status = await executeScenarioPlan(
+      { concurrency: 1, groups: [{ runs: [cleanupRun("cleanup-fails")] }] },
+      {
+        repositoryRoot: "/repo",
+        pathExists: () => true,
+        startProcess: (_run, command) => {
+          commands.push(command);
+          return { completion: Promise.resolve(command === "node" ? 8 : 0), terminate() {} };
+        },
+        log: () => {},
+      },
+    );
+
+    expect(status).toBe(8);
+    expect(commands).toEqual(["pnpm", "node"]);
+  });
+
+  it("does not run cleanup verification after stack destroy fails", async () => {
+    const commands: string[] = [];
+
+    const status = await executeScenarioPlan(
+      { concurrency: 1, groups: [{ runs: [cleanupRun("destroy-fails")] }] },
+      {
+        repositoryRoot: "/repo",
+        pathExists: () => true,
+        startProcess: (_run, command) => {
+          commands.push(command);
+          return { completion: Promise.resolve(6), terminate() {} };
+        },
+        log: () => {},
+      },
+    );
+
+    expect(status).toBe(6);
+    expect(commands).toEqual(["pnpm"]);
+  });
+
   it.each([
     "synth",
     "destroy",
@@ -324,6 +486,17 @@ function verifiedRun(name: string, action: RunnableScenarioAction = "deploy"): S
     definition: {
       ...baseScenario.definition,
       postDeployVerifier: "state.js",
+    },
+  };
+}
+
+function cleanupRun(name: string): ScenarioRun {
+  const baseScenario = run(name, "destroy");
+  return {
+    ...baseScenario,
+    definition: {
+      ...baseScenario.definition,
+      postDestroyVerifier: "absent.js",
     },
   };
 }

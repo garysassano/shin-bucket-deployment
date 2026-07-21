@@ -2,6 +2,7 @@ import { App, CfnOutput, RemovalPolicy, Stack, type StackProps } from "aws-cdk-l
 import { Key } from "aws-cdk-lib/aws-kms";
 import { Bucket, BucketEncryption } from "aws-cdk-lib/aws-s3";
 import { ShinBucketDeployment, Source } from "../../../src";
+import { grantVerifierRead } from "../verification-access";
 
 class KmsDestinationShinBucketDeploymentStack extends Stack {
   constructor(scope: App, id: string, props?: StackProps) {
@@ -18,6 +19,7 @@ class KmsDestinationShinBucketDeploymentStack extends Stack {
       encryptionKey: key,
       removalPolicy: RemovalPolicy.DESTROY,
     });
+    grantVerifierRead(websiteBucket, key);
 
     new ShinBucketDeployment(this, "DeployWebsite", {
       sources: [

@@ -104,12 +104,22 @@ Scenarios are driven through the repository runner. Verification mode runs every
 ```bash
 pnpm verify list
 pnpm verify synth
+
+# One targeted, opt-in AWS verification group
+pnpm verify deploy replacement-safety
+pnpm verify destroy replacement-safety
+
+# Several independent groups; ordered phases remain serial
+pnpm verify deploy --groups simple,filters,replacement-safety --concurrency 3
+pnpm verify destroy --groups simple,filters,replacement-safety --concurrency 3
+
+# Rare full opt-in AWS suite for broad changes or selected release candidates
 pnpm verify deploy --concurrency 4
-pnpm verify deploy cloudfront-sync
+pnpm verify destroy --concurrency 4
 pnpm benchmark deploy assets --asset-profiles tiny-many --implementations shin,aws --transfer-max-concurrency 32 --lambda-memory-mb 1024
 ```
 
-Verification deploy/destroy can run independent scenario chains concurrently with `--concurrency`; ordered update chains still run in sequence within each chain.
+AWS verification is cost-bearing and deliberately maintainer-run; there is no hosted full-matrix workflow. Local listing and synthesis run routinely. Use the smallest relevant named group for a narrow deployed change, or `--groups` for a bounded set of independent groups. Reserve the full verification suite for changes that cross several groups, shared provider/runner/assertion infrastructure, or an intentionally selected release candidate. Verification deploy/destroy can run independent groups concurrently with `--concurrency`; ordered update phases stay serial within each group, and destroy selects each group's terminal phase. Canonical benchmark measurements remain sequential to avoid cross-stack contention.
 
 | Scenario | File | Purpose |
 | --- | --- | --- |
