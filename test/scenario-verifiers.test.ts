@@ -10,9 +10,10 @@ import { VERIFY_DEFAULT_GROUPS, VERIFY_SCENARIOS } from "../scenarios/catalog";
 import {
   type ObjectMetadata,
   type VerificationApi,
-  bucketProbeProvesAbsence,
+  bucketListingProvesAbsence,
 } from "../scenarios/verifiers/aws";
 import { requiredOutput, stackOutputs } from "../scenarios/verifiers/outputs";
+import { reportVerificationFailure } from "../scenarios/verifiers/report";
 import { expectedScenarioNames, verifyScenarioState } from "../scenarios/verifiers/scenario-state";
 import { verifyStackAbsent } from "../scenarios/verifiers/stack-absent";
 
@@ -302,6 +303,24 @@ describe("deployment output parsing", () => {
 });
 
 describe("cleanup verifier", () => {
+  it("writes only a sanitized cleanup failure category to the workflow summary", () => {
+    const directory = temporaryDirectory();
+    const summary = join(directory, "summary.md");
+    vi.stubEnv("GITHUB_STEP_SUMMARY", summary);
+
+    reportVerificationFailure("bucket-probe-error");
+
+    expect(readFileSync(summary, "utf8")).toBe(
+      "Verification failure category: bucket-probe-error\n",
+    );
+  });
+
+  it("does not mask a verification failure when the summary cannot be written", () => {
+    vi.stubEnv("GITHUB_STEP_SUMMARY", join(temporaryDirectory(), "missing", "summary.md"));
+
+    expect(() => reportVerificationFailure("stack-probe-error")).not.toThrow();
+  });
+
   it("retains verifier bucket policies until their buckets are removed", () => {
     const stack = new Stack();
     const bucket = new Bucket(stack, "Destination");
@@ -319,12 +338,12 @@ describe("cleanup verifier", () => {
     });
   });
 
-  it("accepts only S3's documented generic bucket absence responses", () => {
-    expect(bucketProbeProvesAbsence(awsError(400))).toBe(true);
-    expect(bucketProbeProvesAbsence(awsError(403))).toBe(true);
-    expect(bucketProbeProvesAbsence(awsError(404))).toBe(true);
-    expect(bucketProbeProvesAbsence(awsError(500))).toBe(false);
-    expect(bucketProbeProvesAbsence(new Error("network failure"))).toBe(false);
+  it("accepts only S3's not-found response as proof that a bucket is absent", () => {
+    expect(bucketListingProvesAbsence(awsError(400))).toBe(false);
+    expect(bucketListingProvesAbsence(awsError(403))).toBe(false);
+    expect(bucketListingProvesAbsence(awsError(404))).toBe(true);
+    expect(bucketListingProvesAbsence(awsError(500))).toBe(false);
+    expect(bucketListingProvesAbsence(new Error("network failure"))).toBe(false);
   });
 
   it("checks the stack and every unique scoped bucket and distribution", async () => {
@@ -442,11 +461,16 @@ function outputsFile(outputs: Record<string, string>): string {
 }
 
 function rawOutputsFile(value: unknown): string {
-  const directory = mkdtempSync(join(tmpdir(), "shin-scenario-verifier-"));
-  temporaryDirectories.push(directory);
+  const directory = temporaryDirectory();
   const path = join(directory, "outputs.json");
   writeFileSync(path, JSON.stringify(value));
   return path;
+}
+
+function temporaryDirectory(): string {
+  const directory = mkdtempSync(join(tmpdir(), "shin-scenario-verifier-"));
+  temporaryDirectories.push(directory);
+  return directory;
 }
 
 function cloudFrontApi(token: string): FakeVerificationApi {

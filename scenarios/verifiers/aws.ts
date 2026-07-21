@@ -3,11 +3,11 @@ import { CloudFrontClient, GetDistributionCommand } from "@aws-sdk/client-cloudf
 import {
   ChecksumMode,
   GetObjectCommand,
-  HeadBucketCommand,
   HeadObjectCommand,
   ListObjectsV2Command,
   S3Client,
 } from "@aws-sdk/client-s3";
+import { reportVerificationFailure } from "./report";
 
 export type ObjectMetadata = {
   readonly contentLength?: number;
@@ -92,21 +92,29 @@ export class AwsVerificationApi implements VerificationApi {
   }
 
   public async assertStackAbsent(stackName: string): Promise<void> {
-    await waitUntilStackDeleteComplete(
-      { client: this.cloudFormation, maxWaitTime: 120, minDelay: 2, maxDelay: 5 },
-      { StackName: stackName },
-    );
+    try {
+      await waitUntilStackDeleteComplete(
+        { client: this.cloudFormation, maxWaitTime: 120, minDelay: 2, maxDelay: 5 },
+        { StackName: stackName },
+      );
+    } catch (error) {
+      reportVerificationFailure("stack-probe-error");
+      throw error;
+    }
   }
 
   public async assertBucketAbsent(bucket: string): Promise<void> {
     try {
-      await this.s3.send(new HeadBucketCommand({ Bucket: bucket }));
+      await this.s3.send(new ListObjectsV2Command({ Bucket: bucket, MaxKeys: 1 }));
     } catch (error) {
-      // Verification buckets retain their session-scoped read policy during teardown. An existing
-      // bucket therefore succeeds; after deletion HeadBucket can return a generic 400, 403, or 404.
-      if (bucketProbeProvesAbsence(error)) return;
+      // Verification buckets retain their session-scoped ListBucket policy during teardown, so an
+      // existing bucket succeeds. Unlike HeadBucket's ambiguous 400/403/404 contract, this listing
+      // proves absence only when S3 reports that the bucket does not exist.
+      if (bucketListingProvesAbsence(error)) return;
+      reportVerificationFailure("bucket-probe-error");
       throw error;
     }
+    reportVerificationFailure("bucket-present");
     throw new Error("A verification bucket still exists after stack cleanup.");
   }
 
@@ -115,15 +123,16 @@ export class AwsVerificationApi implements VerificationApi {
       await this.cloudFront.send(new GetDistributionCommand({ Id: distributionId }));
     } catch (error) {
       if (httpStatus(error) === 404) return;
+      reportVerificationFailure("distribution-probe-error");
       throw error;
     }
+    reportVerificationFailure("distribution-present");
     throw new Error("A verification distribution still exists after stack cleanup.");
   }
 }
 
-export function bucketProbeProvesAbsence(error: unknown): boolean {
-  const status = httpStatus(error);
-  return status === 400 || status === 403 || status === 404;
+export function bucketListingProvesAbsence(error: unknown): boolean {
+  return httpStatus(error) === 404;
 }
 
 function httpStatus(error: unknown): number | undefined {
