@@ -34,7 +34,7 @@ const ROOT_KEYS = [
   "destinationLifecycle",
 ] as const;
 
-const LEGACY_ROOT_PROPERTY_MIGRATIONS = {
+const REMOVED_ROOT_PROPERTY_MIGRATIONS = {
   destinationBucket: "destination.bucket",
   destinationKeyPrefix: "destination.keyPrefix",
   extract: "sourceProcessing.extract",
@@ -378,10 +378,10 @@ export function validateDeploymentProps(scope: Construct, props: ShinBucketDeplo
 }
 
 function rejectKnownFormerRootProperties(scope: Construct, props: Record<string, unknown>): void {
-  for (const [formerPath, replacementPath] of Object.entries(LEGACY_ROOT_PROPERTY_MIGRATIONS)) {
+  for (const [formerPath, replacementPath] of Object.entries(REMOVED_ROOT_PROPERTY_MIGRATIONS)) {
     if (hasOwn(props, formerPath)) {
       throw new ValidationError(
-        "ShinBucketDeploymentLegacyProperty",
+        "ShinBucketDeploymentRemovedProperty",
         `${formerPath} has moved to ${replacementPath}.`,
         scope,
       );
@@ -406,7 +406,7 @@ function rejectKnownFormerRootProperties(scope: Construct, props: Record<string,
   for (const [formerPath, replacementPath] of replacedProperties) {
     if (hasOwn(props, formerPath)) {
       throw new ValidationError(
-        "ShinBucketDeploymentLegacyProperty",
+        "ShinBucketDeploymentRemovedProperty",
         `${formerPath} has been replaced by ${replacementPath}.`,
         scope,
       );
@@ -510,7 +510,7 @@ function validateObjectGroup(
   for (const [formerName, replacementName] of Object.entries(migrations)) {
     if (hasOwn(group, formerName)) {
       throw new ValidationError(
-        "ShinBucketDeploymentLegacyProperty",
+        "ShinBucketDeploymentRemovedProperty",
         `${path}.${formerName} has been replaced by ${path}.${replacementName}.`,
         scope,
       );
