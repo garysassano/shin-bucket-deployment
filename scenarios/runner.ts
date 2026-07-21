@@ -1,5 +1,5 @@
 import { parseArgs } from "./arguments";
-import { BENCHMARK_SCENARIOS, VERIFY_SCENARIOS } from "./catalog";
+import { BENCHMARK_SCENARIOS, VERIFY_GROUPS, VERIFY_SCENARIOS } from "./catalog";
 import { executeParsedArgs } from "./execute";
 import type { ScenarioMode } from "./types";
 
@@ -28,6 +28,12 @@ function printScenarios(mode: ScenarioMode): void {
   for (const [name, scenario] of Object.entries(scenarios)) {
     console.log(`- ${name}: ${scenario.file}`);
   }
+  if (mode === "verify") {
+    console.log("Available verify groups:");
+    for (const [name, phases] of Object.entries(VERIFY_GROUPS)) {
+      console.log(`- ${name}: ${phases.join(" -> ")}`);
+    }
+  }
 }
 
 main()
@@ -44,6 +50,8 @@ function printUsage(): void {
   console.error(
     "Usage: pnpm scenario <verify|benchmark> <list|synth|deploy|destroy> [name] [runner options] [-- extra cdk args]",
   );
-  console.error("Verification defaults: pnpm verify synth|deploy|destroy [--concurrency N]");
+  console.error(
+    "Verification defaults: pnpm verify synth|deploy|destroy [name | --groups a,b] [--concurrency N]",
+  );
   console.error("Benchmark example: pnpm benchmark deploy assets --implementations shin,aws");
 }

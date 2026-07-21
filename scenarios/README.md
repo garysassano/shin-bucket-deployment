@@ -2,22 +2,26 @@
 
 This folder contains deployable CDK apps used by both verification and benchmark workflows.
 
-`pnpm verify` runs correctness scenarios with the construct defaults. Listing and synthesis are normal local gates. AWS deploys are opt-in and billable: run a named scenario chain for a narrow deployed change, and use the full suite only for shared provider/runner/assertion changes or a deliberately selected release candidate. The GitHub AWS Verification workflow is manual-only and runs the full matrix.
+`pnpm verify` runs correctness scenarios with the construct defaults. Listing and synthesis are normal local gates. AWS deploys are opt-in, billable, and maintainer-run: use a named group for a narrow deployed change, select several independent groups only when needed, and reserve the full suite for shared provider/runner/assertion changes or a deliberately selected release candidate. There is no hosted full-matrix verification workflow.
 
 ```bash
 pnpm verify list
 pnpm verify synth
 
-# Targeted AWS verification
-pnpm verify deploy <scenario>
-pnpm verify destroy <cleanup-scenario>
+# One ordered AWS verification group
+pnpm verify deploy replacement-safety
+pnpm verify destroy replacement-safety
 
-# Full AWS suite; use only when its broader scope is justified
+# Several independent groups; phases within each group stay serial
+pnpm verify deploy --groups simple,filters,replacement-safety --concurrency 3
+pnpm verify destroy --groups simple,filters,replacement-safety --concurrency 3
+
+# Rare full AWS suite; use only when its broader scope is justified
 pnpm verify deploy --concurrency 4
 pnpm verify destroy --concurrency 4
 ```
 
-Deploy runs ordered update chains serially within each chain and runs independent chains concurrently. Use `--concurrency 1` when debugging one chain at a time.
+`pnpm verify list` shows phase names and group aliases. A group alias expands to every ordered phase; destroy selects the terminal phase. Deploy runs ordered phases serially within each group and can run independent groups concurrently. Use the same selector for deploy and destroy, and use `--concurrency 1` when debugging. Canonical benchmarks remain sequential so concurrent resource contention does not distort comparisons.
 
 The `kms-destination`, `kms-managed-destination`, and `dsse-managed-destination` scenarios exercise the strong stored-checksum path with a customer-managed key, the AWS-managed S3 KMS key, and managed DSSE respectively.
 

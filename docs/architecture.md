@@ -105,17 +105,21 @@ Scenarios are driven through the repository runner. Verification mode runs every
 pnpm verify list
 pnpm verify synth
 
-# Targeted, opt-in AWS verification
-pnpm verify deploy <scenario>
-pnpm verify destroy <cleanup-scenario>
+# One targeted, opt-in AWS verification group
+pnpm verify deploy replacement-safety
+pnpm verify destroy replacement-safety
 
-# Full opt-in AWS suite for broad changes or selected release candidates
+# Several independent groups; ordered phases remain serial
+pnpm verify deploy --groups simple,filters,replacement-safety --concurrency 3
+pnpm verify destroy --groups simple,filters,replacement-safety --concurrency 3
+
+# Rare full opt-in AWS suite for broad changes or selected release candidates
 pnpm verify deploy --concurrency 4
 pnpm verify destroy --concurrency 4
 pnpm benchmark deploy assets --asset-profiles tiny-many --implementations shin,aws --transfer-max-concurrency 32 --lambda-memory-mb 1024
 ```
 
-AWS verification is cost-bearing and deliberately manual. Local listing and synthesis run routinely; use the smallest relevant named chain for a narrow deployed change. Reserve the full verification suite for changes that cross multiple groups, shared provider/runner/assertion infrastructure, or an intentionally selected release candidate. Verification deploy/destroy can run independent scenario chains concurrently with `--concurrency`; ordered update chains still run in sequence within each chain.
+AWS verification is cost-bearing and deliberately maintainer-run; there is no hosted full-matrix workflow. Local listing and synthesis run routinely. Use the smallest relevant named group for a narrow deployed change, or `--groups` for a bounded set of independent groups. Reserve the full verification suite for changes that cross several groups, shared provider/runner/assertion infrastructure, or an intentionally selected release candidate. Verification deploy/destroy can run independent groups concurrently with `--concurrency`; ordered update phases stay serial within each group, and destroy selects each group's terminal phase. Canonical benchmark measurements remain sequential to avoid cross-stack contention.
 
 | Scenario | File | Purpose |
 | --- | --- | --- |

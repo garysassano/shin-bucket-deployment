@@ -6,8 +6,13 @@ import { Template } from "aws-cdk-lib/assertions";
 import { Bucket } from "aws-cdk-lib/aws-s3";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { grantVerifierRead } from "../scenarios/apps/verification-access";
-import { VERIFY_DEFAULT_GROUPS, VERIFY_SCENARIOS } from "../scenarios/catalog";
+import {
+  VERIFY_DEFAULT_GROUPS,
+  VERIFY_DESTROY_ORDER,
+  VERIFY_SCENARIOS,
+} from "../scenarios/catalog";
 import type { ObjectMetadata, VerificationApi } from "../scenarios/verifiers/aws";
+import { bucketListingProvesAbsence } from "../scenarios/verifiers/aws";
 import { requiredOutput, stackOutputs } from "../scenarios/verifiers/outputs";
 import { expectedScenarioNames, verifyScenarioState } from "../scenarios/verifiers/scenario-state";
 import { verifyStackAbsent } from "../scenarios/verifiers/stack-absent";
@@ -47,17 +52,11 @@ describe("scenario state verifier", () => {
     ).toBe(true);
   });
 
-  it("keeps the AWS workflow matrix identical to the default scenario groups", () => {
-    const workflow = readFileSync(".github/workflows/aws-verification.yml", "utf8");
-    const entries = [
-      ...workflow.matchAll(/^\s+- group: [^\n]+\n\s+scenarios: ([^\n]+)\n\s+cleanup: ([^\n]+)$/gm),
-    ];
-    expect(entries.map((entry) => entry[1]?.trim().split(/\s+/))).toEqual(
-      VERIFY_DEFAULT_GROUPS.map((group) => [...group]),
-    );
-    expect(entries.map((entry) => entry[2]?.trim())).toEqual(
-      VERIFY_DEFAULT_GROUPS.map((group) => group.at(-1)),
-    );
+  it("places every cataloged phase in exactly one default execution group", () => {
+    const groupedNames = VERIFY_DEFAULT_GROUPS.flatMap((group) => [...group]);
+    expect(new Set(groupedNames).size).toBe(groupedNames.length);
+    expect([...groupedNames].sort()).toEqual(Object.keys(VERIFY_SCENARIOS).sort());
+    expect(VERIFY_DESTROY_ORDER).toEqual(VERIFY_DEFAULT_GROUPS.map((group) => group.at(-1)));
   });
 
   it("fails a successful deployment when an exact object body is wrong", async () => {
@@ -298,6 +297,12 @@ describe("deployment output parsing", () => {
 });
 
 describe("cleanup verifier", () => {
+  it("treats only an exact bucket listing 404 as proven absence", () => {
+    expect(bucketListingProvesAbsence({ $metadata: { httpStatusCode: 404 } })).toBe(true);
+    expect(bucketListingProvesAbsence({ $metadata: { httpStatusCode: 403 } })).toBe(false);
+    expect(bucketListingProvesAbsence(new Error("network failure"))).toBe(false);
+  });
+
   it("lets CloudFormation delete verifier bucket policies normally", () => {
     const stack = new Stack();
     const bucket = new Bucket(stack, "Destination");

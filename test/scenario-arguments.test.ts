@@ -37,6 +37,10 @@ describe("scenario argument parser", () => {
       "Unknown benchmark option: --concurrency.",
     ],
     [
+      ["verify", "deploy", "simple", "--groups", "simple,filters"],
+      "Choose either a verification name or --groups",
+    ],
+    [
       ["verify", "deploy", "--implementations", "shin"],
       "Unknown verify option: --implementations.",
     ],

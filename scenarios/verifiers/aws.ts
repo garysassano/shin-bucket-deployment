@@ -3,7 +3,6 @@ import {
   ChecksumMode,
   GetObjectCommand,
   HeadObjectCommand,
-  ListBucketsCommand,
   ListObjectsV2Command,
   S3Client,
 } from "@aws-sdk/client-s3";
@@ -89,10 +88,13 @@ export class AwsVerificationApi implements VerificationApi {
   }
 
   public async assertBucketAbsent(bucket: string): Promise<void> {
-    const response = await this.s3.send(new ListBucketsCommand({ MaxBuckets: 1, Prefix: bucket }));
-    if ((response.Buckets ?? []).some(({ Name }) => Name === bucket)) {
-      throw new Error("A verification bucket still exists after stack cleanup.");
+    try {
+      await this.s3.send(new ListObjectsV2Command({ Bucket: bucket, MaxKeys: 1 }));
+    } catch (error) {
+      if (bucketListingProvesAbsence(error)) return;
+      throw error;
     }
+    throw new Error("A verification bucket still exists after stack cleanup.");
   }
 
   public async assertDistributionAbsent(distributionId: string): Promise<void> {
@@ -104,6 +106,10 @@ export class AwsVerificationApi implements VerificationApi {
     }
     throw new Error("A verification distribution still exists after stack cleanup.");
   }
+}
+
+export function bucketListingProvesAbsence(error: unknown): boolean {
+  return httpStatus(error) === 404;
 }
 
 function httpStatus(error: unknown): number | undefined {

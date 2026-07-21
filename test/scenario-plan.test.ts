@@ -140,17 +140,51 @@ describe("scenario planner", () => {
     ).toEqual(["cloudfront-async-updated"]);
   });
 
-  it("completes the retention chain for the protected pre-merge workflow", () => {
-    const plan = planFor(["verify", "deploy", "default-retention-updated"], {
-      VERIFY_SCENARIOS: "default-retention-initial default-retention-updated",
-    });
-
-    expect(plan.groups[0]?.runs.map(({ name }) => name)).toEqual([
-      "default-retention-updated",
-      "default-retention-bucket-only",
+  it("runs selected independent groups concurrently and ordered phases serially", () => {
+    const plan = planFor([
+      "verify",
+      "deploy",
+      "--groups",
+      "simple,replacement-safety,cloudfront-sync",
+      "--concurrency",
+      "3",
     ]);
-    expect(plan.groups[0]?.cleanupCommand).toBe(
-      "pnpm verify destroy default-retention-bucket-only",
+
+    expect(plan.concurrency).toBe(3);
+    expect(plan.groups.map(({ runs }) => runs.map(({ name }) => name))).toEqual([
+      ["simple"],
+      ["replacement-safety-initial", "replacement-safety-updated"],
+      ["cloudfront-sync-initial", "cloudfront-sync-updated"],
+    ]);
+    expect(plan.groups.map(({ cleanupCommand }) => cleanupCommand)).toEqual([
+      "pnpm verify destroy simple",
+      "pnpm verify destroy replacement-safety-updated",
+      "pnpm verify destroy cloudfront-sync-updated",
+    ]);
+  });
+
+  it("destroys only the terminal phase of each selected group", () => {
+    const plan = planFor([
+      "verify",
+      "destroy",
+      "--groups",
+      "default-retention,replacement-safety",
+      "--concurrency",
+      "2",
+    ]);
+
+    expect(plan.groups.map(({ runs }) => runs.map(({ name }) => name))).toEqual([
+      ["default-retention-bucket-only"],
+      ["replacement-safety-updated"],
+    ]);
+  });
+
+  it("rejects unknown and duplicate selected groups", () => {
+    expect(() => planFor(["verify", "deploy", "--groups", "simple,unknown"])).toThrow(
+      "Unknown verify group: unknown",
+    );
+    expect(() => planFor(["verify", "deploy", "--groups", "simple,simple"])).toThrow(
+      "must not contain duplicates",
     );
   });
 

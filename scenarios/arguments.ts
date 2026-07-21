@@ -1,6 +1,6 @@
 import type { ParsedArgs, ScenarioAction, ScenarioMode } from "./types";
 
-const VERIFY_OPTIONS = new Set(["concurrency"]);
+const VERIFY_OPTIONS = new Set(["concurrency", "groups"]);
 const BENCHMARK_OPTIONS = new Set([
   "asset-profiles",
   "implementations",
@@ -33,6 +33,9 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
     }
   } else if (modeValue === "benchmark" && name === undefined) {
     throw new Error("Benchmark actions require a scenario name.");
+  }
+  if (modeValue === "verify" && name !== undefined && runnerOptions.has("groups")) {
+    throw new Error("Choose either a verification name or --groups, not both.");
   }
 
   return {

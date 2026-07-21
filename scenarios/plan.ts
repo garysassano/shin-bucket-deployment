@@ -5,6 +5,7 @@ import {
   VERIFY_DEFAULT_GROUPS,
   VERIFY_DEFAULT_ORDER,
   VERIFY_DESTROY_ORDER,
+  VERIFY_GROUPS,
   verifyScenarioEntry,
 } from "./catalog";
 import type {
@@ -69,19 +70,21 @@ function createVerifyPlan(
   args: ParsedArgs & { readonly action: RunnableScenarioAction },
   environment: Readonly<NodeJS.ProcessEnv>,
 ): ScenarioPlan {
-  const groups = verificationScenarioGroups(args.action, args.name, environment).map((entries) => ({
-    runs: entries.map(([name, definition]) => ({
-      mode: "verify" as const,
-      action: args.action,
-      name,
-      definition,
-      cdkArgs: args.cdkArgs,
-      env: definition.env ?? {},
-    })),
-    ...(args.action === "deploy"
-      ? { cleanupCommand: cleanupCommand(entries.at(-1)?.[0], args.cdkArgs) }
-      : {}),
-  }));
+  const groups = verificationScenarioGroups(args.action, args.name, args.runnerOptions).map(
+    (entries) => ({
+      runs: entries.map(([name, definition]) => ({
+        mode: "verify" as const,
+        action: args.action,
+        name,
+        definition,
+        cdkArgs: args.cdkArgs,
+        env: definition.env ?? {},
+      })),
+      ...(args.action === "deploy"
+        ? { cleanupCommand: cleanupCommand(entries.at(-1)?.[0], args.cdkArgs) }
+        : {}),
+    }),
+  );
 
   return {
     groups,
@@ -124,10 +127,16 @@ function createBenchmarkPlan(
 function verificationScenarioGroups(
   action: RunnableScenarioAction,
   name: string | undefined,
-  environment: Readonly<NodeJS.ProcessEnv>,
+  options: ReadonlyMap<string, string>,
 ): ScenarioEntry[][] {
   if (name !== undefined) {
-    return [namedVerificationScenarioGroup(action, name, environment)];
+    return [namedVerificationScenarioGroup(action, name)];
+  }
+  const selectedGroups = options.get("groups");
+  if (selectedGroups !== undefined) {
+    return verifyGroupNames(selectedGroups).map((groupName) =>
+      verificationGroupEntries(action, groupName),
+    );
   }
   if (action === "deploy") {
     return VERIFY_DEFAULT_GROUPS.map((group) => group.map(verifyScenarioEntry));
@@ -139,33 +148,30 @@ function verificationScenarioGroups(
 function namedVerificationScenarioGroup(
   action: RunnableScenarioAction,
   name: string,
-  environment: Readonly<NodeJS.ProcessEnv>,
 ): ScenarioEntry[] {
-  if (name === "cloudfront-sync" || name === "cloudfront-async") {
-    const phaseNames =
-      action === "deploy" ? [`${name}-initial`, `${name}-updated`] : [`${name}-updated`];
-    return phaseNames.map(verifyScenarioEntry);
-  }
-
-  if (
-    action === "deploy" &&
-    name === "default-retention-updated" &&
-    protectedWorkflowOmitsTerminalRetentionPhase(environment)
-  ) {
-    return ["default-retention-updated", "default-retention-bucket-only"].map(verifyScenarioEntry);
-  }
-
+  if (name in VERIFY_GROUPS) return verificationGroupEntries(action, name);
   return [verifyScenarioEntry(name)];
 }
 
-function protectedWorkflowOmitsTerminalRetentionPhase(
-  environment: Readonly<NodeJS.ProcessEnv>,
-): boolean {
-  const workflowScenarios = environment.VERIFY_SCENARIOS?.trim().split(/\s+/) ?? [];
-  return (
-    workflowScenarios.includes("default-retention-updated") &&
-    !workflowScenarios.includes("default-retention-bucket-only")
-  );
+function verificationGroupEntries(action: RunnableScenarioAction, name: string): ScenarioEntry[] {
+  const group = VERIFY_GROUPS[name as keyof typeof VERIFY_GROUPS];
+  if (group === undefined) throw new Error(`Unknown verify group: ${name}`);
+  const phaseNames = action === "destroy" ? group.slice(-1) : group;
+  return phaseNames.map(verifyScenarioEntry);
+}
+
+function verifyGroupNames(value: string): string[] {
+  const names = value
+    .split(",")
+    .map((name) => name.trim())
+    .filter(Boolean);
+  if (names.length === 0) throw new Error("--groups must contain at least one group name.");
+  const unique = new Set(names);
+  if (unique.size !== names.length) throw new Error("--groups must not contain duplicates.");
+  for (const name of names) {
+    if (!(name in VERIFY_GROUPS)) throw new Error(`Unknown verify group: ${name}`);
+  }
+  return names;
 }
 
 function benchmarkScenario(name: string | undefined): ScenarioEntry {
