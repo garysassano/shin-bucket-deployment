@@ -134,26 +134,46 @@ function buildContract(root) {
 }
 
 function comparePublicDeclarations() {
-  const baselineDeclarations = walk(join(baselineRoot, "lib"), (path) => path.endsWith(".d.ts"));
-  const publicPaths = [
-    "cataloged-source.d.ts",
-    "errors.d.ts",
-    "index.d.ts",
-    "shin-bucket-deployment.d.ts",
-  ];
-  const baselinePaths = baselineDeclarations
-    .map((path) => relative(join(baselineRoot, "lib"), path))
-    .sort();
-  compareValue("baseline public declaration set", publicPaths, baselinePaths);
-  for (const relativePath of publicPaths) {
+  const baselinePaths = publicDeclarationPaths(baselineRoot);
+  const currentPaths = publicDeclarationPaths(repositoryRoot);
+  compareValue("public declaration set", baselinePaths, currentPaths);
+  for (const relativePath of baselinePaths) {
     const baselineFile = join(baselineRoot, "lib", relativePath);
     const currentFile = join(repositoryRoot, "lib", relativePath);
-    if (!existsSync(currentFile)) {
-      throw new Error(`Current package is missing baseline declaration ${relativePath}.`);
-    }
     compareBytes(`declaration ${relativePath}`, baselineFile, currentFile);
   }
-  return publicPaths.length;
+  return baselinePaths.length;
+}
+
+function publicDeclarationPaths(root) {
+  const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+  if (!Array.isArray(manifest.files)) {
+    throw new Error("package.json files must be an array for declaration contract verification.");
+  }
+  const explicit = new Set(
+    manifest.files
+      .filter(
+        (path) => typeof path === "string" && path.startsWith("lib/") && path.endsWith(".d.ts"),
+      )
+      .map((path) => path.slice("lib/".length)),
+  );
+  const includesAllDeclarations = manifest.files.some(
+    (path) => typeof path === "string" && path === "lib/**/*.d.ts",
+  );
+  if (includesAllDeclarations) {
+    for (const path of walk(join(root, "lib"), (path) => path.endsWith(".d.ts"))) {
+      explicit.add(relative(join(root, "lib"), path));
+    }
+  }
+  if (explicit.size === 0) {
+    throw new Error("package.json files publishes no TypeScript declarations.");
+  }
+  for (const relativePath of explicit) {
+    if (!existsSync(join(root, "lib", relativePath))) {
+      throw new Error(`Published declaration does not exist: lib/${relativePath}.`);
+    }
+  }
+  return [...explicit].sort();
 }
 
 function compareAssemblyTrees(relativeRoot) {

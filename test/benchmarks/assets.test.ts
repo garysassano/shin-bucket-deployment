@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -124,6 +125,59 @@ describe("benchmark assets", () => {
     );
     expect(baseline.sourceCount).toBe(2);
     expect(changed.assetManifestSha256).not.toBe(baseline.assetManifestSha256);
+  });
+
+  it("keeps the committed snapshot inventory equal to tracked Markdown references", () => {
+    const repositoryRoot = join(__dirname, "..", "..");
+    const snapshots = readdirSync(join(repositoryRoot, "benchmarks", "snapshots"))
+      .filter((path) => path.endsWith(".svg"))
+      .sort();
+    const trackedMarkdown = execFileSync("git", ["ls-files", "--", "*.md"], {
+      cwd: repositoryRoot,
+      encoding: "utf8",
+    })
+      .trim()
+      .split("\n")
+      .filter(Boolean);
+    const markdownReferences = trackedMarkdown.flatMap((path) =>
+      [...readFileSync(join(repositoryRoot, path), "utf8").matchAll(/snapshots\/([^\s)>]+\.svg)/g)]
+        .map((match) => match[1])
+        .filter((path): path is string => path !== undefined),
+    );
+
+    expect([...new Set(markdownReferences)].sort()).toEqual(snapshots);
+  });
+
+  it("classifies unsupported README snapshot concurrency as historical", () => {
+    const repositoryRoot = join(__dirname, "..", "..");
+    const readme = readFileSync(join(repositoryRoot, "benchmarks", "README.md"), "utf8");
+    const validationSource = readFileSync(join(repositoryRoot, "src", "validation.ts"), "utf8");
+    const currentMaximum = Number(
+      validationSource.match(/const MAX_CONCURRENCY = (?<maximum>\d+);/)?.groups?.maximum,
+    );
+    const sections = readme
+      .split(/^## /m)
+      .slice(1)
+      .map((section) => {
+        const newline = section.indexOf("\n");
+        return {
+          heading: section.slice(0, newline),
+          body: section.slice(newline + 1),
+        };
+      });
+
+    expect(currentMaximum).toBeGreaterThan(0);
+
+    for (const section of sections) {
+      const { heading, body } = section;
+      const concurrency = Number(
+        heading.match(/\/ (?<concurrency>\d+) Snapshot$/)?.groups?.concurrency,
+      );
+      if (!Number.isFinite(concurrency) || concurrency <= currentMaximum) continue;
+
+      expect(heading).toContain("Historical");
+      expect(body).toMatch(/cannot be synthesized by\s+the current construct/i);
+    }
   });
 });
 

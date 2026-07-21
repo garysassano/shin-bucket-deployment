@@ -19,7 +19,9 @@ use crate::lifecycle::{
     plan_destination_change_cleanup, previous_distribution_authorized,
     previous_namespace_is_within_current,
 };
-use crate::request::{RawDeploymentRequest, parse_old_destination, parse_request};
+use crate::request::{
+    RawDeploymentRequest, parse_delete_request, parse_old_destination, parse_request,
+};
 use crate::s3::{
     OverlappingPreviousCleanup, bucket_has_competing_owner, delete_prefix, delete_prefix_excluding,
     deploy,
@@ -339,7 +341,11 @@ async fn process_request(
     old_resource_properties: Option<&RawDeploymentRequest>,
     deadlines: InvocationDeadlines,
 ) -> Result<ProcessedRequest> {
-    let request = parse_request(resource_properties)?;
+    let request = if request_type == "Delete" {
+        parse_delete_request(resource_properties)?
+    } else {
+        parse_request(resource_properties)?
+    };
     let physical_resource_id =
         response_physical_resource_id(request_type, identity, physical_resource_id, &request)?;
     let success = success_payload(&request, physical_resource_id.clone())?;
@@ -828,17 +834,28 @@ fn log_deployment_summary(
 
 #[cfg(test)]
 mod tests {
-    use aws_lambda_events::event::cloudformation::CloudFormationCustomResourceRequest;
-    use serde_json::{Value, json};
+    use std::time::Duration;
 
-    use crate::request::{RawDeploymentRequest, parse_request};
+    use aws_lambda_events::event::cloudformation::CloudFormationCustomResourceRequest;
+    use aws_sdk_cloudfront::Client as CloudFrontClient;
+    use aws_sdk_s3::Client as S3Client;
+    use aws_sdk_s3::primitives::SdkBody;
+    use aws_smithy_http_client::test_util::{ReplayEvent, StaticReplayClient};
+    use http::{Request, Response};
+    use reqwest::Client as HttpClient;
+    use serde_json::{Value, json};
+    use tokio::time::Instant as TokioInstant;
+
+    use crate::deadline::InvocationDeadlines;
+    use crate::request::{RawDeploymentRequest, parse_delete_request, parse_request};
+    use crate::types::AppState;
 
     use super::{
         EnvelopeResponseTarget, LEGACY_RESOURCE_TYPE, RESOURCE_TYPE, RequestIdentity,
         cloudfront_caller_reference, decode_deployment_request, decode_request_envelope,
         decode_resource_properties, destination_physical_resource_id, merge_distribution_paths,
-        preflight_invalidation_requests, response_physical_resource_id, response_target,
-        serialize_response, success_payload, validate_resource_type,
+        preflight_invalidation_requests, process_request, response_physical_resource_id,
+        response_target, serialize_response, success_payload, validate_resource_type,
     };
 
     fn deployment_request_with_paths(paths: Vec<String>) -> crate::types::DeploymentRequest {
@@ -877,6 +894,88 @@ mod tests {
             value["DestinationOwnerId"] = json!(owner_id);
         }
         value
+    }
+
+    fn legacy_v0_3_delete_properties(
+        delete_current_objects_on_delete: bool,
+    ) -> RawDeploymentRequest {
+        serde_json::from_value(json!({
+            "SourceBucketNames": ["legacy-source"],
+            "SourceObjectKeys": ["legacy-asset.zip"],
+            "SourceCatalogs": [{
+                "Version": 1,
+                "Sha256": "ab".repeat(32)
+            }],
+            "DestinationBucketName": "legacy-destination",
+            "DestinationBucketKeyPrefix": "legacy-site",
+            "DestinationOwnerId": "legacy01",
+            "WaitForDistributionInvalidation": true,
+            "DeleteCurrentObjectsOnDelete": delete_current_objects_on_delete,
+            "Extract": true,
+            "DeleteStaleObjectsOnDeployment": true,
+            "SystemMetadata": {},
+            "OutputObjectKeys": true,
+            "AvailableMemoryMb": 1024
+        }))
+        .expect("released v0.3.0 resource properties")
+    }
+
+    fn replay_state(events: Vec<ReplayEvent>) -> (AppState, StaticReplayClient) {
+        let replay = StaticReplayClient::new(events);
+        let s3 = S3Client::from_conf(
+            aws_sdk_s3::Config::builder()
+                .behavior_version_latest()
+                .region(aws_sdk_s3::config::Region::new("us-east-1"))
+                .credentials_provider(aws_sdk_s3::config::Credentials::new(
+                    "test-access-key",
+                    "test-secret-key",
+                    None,
+                    None,
+                    "shin-bucket-deployment-test",
+                ))
+                .endpoint_url("https://s3.test")
+                .force_path_style(true)
+                .http_client(replay.clone())
+                .build(),
+        );
+        let state = AppState {
+            source_s3: s3.clone(),
+            destination_s3: s3,
+            cloudfront: CloudFrontClient::from_conf(
+                aws_sdk_cloudfront::Config::builder()
+                    .behavior_version_latest()
+                    .region(aws_sdk_cloudfront::config::Region::new("us-east-1"))
+                    .credentials_provider(aws_sdk_cloudfront::config::Credentials::new(
+                        "test-access-key",
+                        "test-secret-key",
+                        None,
+                        None,
+                        "shin-bucket-deployment-test",
+                    ))
+                    .build(),
+            ),
+            http: HttpClient::new(),
+            detailed_failure_diagnostics: false,
+        };
+        (state, replay)
+    }
+
+    fn s3_xml_event(body: &'static [u8]) -> ReplayEvent {
+        ReplayEvent::new(
+            Request::builder()
+                .uri("https://s3.test/expected")
+                .body(SdkBody::empty())
+                .expect("expected replay request"),
+            Response::builder()
+                .status(200)
+                .header("content-type", "application/xml")
+                .body(SdkBody::from(body))
+                .expect("replay response"),
+        )
+    }
+
+    fn test_deadlines() -> InvocationDeadlines {
+        InvocationDeadlines::from_remaining_at(TokioInstant::now(), Duration::from_secs(120))
     }
 
     #[test]
@@ -1125,6 +1224,10 @@ mod tests {
         }))
         .expect("legacy envelope");
         assert!(validate_resource_type(&legacy).is_ok());
+        let decoded_legacy = decode_deployment_request(&legacy).expect("decoded legacy Delete");
+        let legacy_request = parse_delete_request(&decoded_legacy.resource_properties)
+            .expect("legacy Delete properties must not require write-only fields");
+        assert!(!legacy_request.delete_current_objects_on_delete);
 
         let invalid = decode_request_envelope(json!({
             "RequestType": "Create",
@@ -1148,6 +1251,62 @@ mod tests {
                 .to_string()
                 .contains("unexpected CloudFormation ResourceType")
         );
+    }
+
+    #[tokio::test]
+    async fn released_legacy_delete_properties_process_retain_and_destructive_lifecycles() {
+        let identity = RequestIdentity {
+            stack_id: "legacy-stack",
+            request_id: "legacy-delete",
+            logical_resource_id: "LegacyDeploy",
+        };
+
+        let retained = legacy_v0_3_delete_properties(false);
+        let (state, replay) = replay_state(Vec::new());
+        let processed = process_request(
+            &state,
+            "Delete",
+            identity,
+            Some("legacy-physical-id"),
+            &retained,
+            None,
+            test_deadlines(),
+        )
+        .await
+        .expect("retaining legacy Delete must parse");
+        processed
+            .result
+            .expect("retaining legacy Delete must complete successfully");
+        assert_eq!(replay.actual_requests().count(), 0);
+
+        let destructive = legacy_v0_3_delete_properties(true);
+        let (state, replay) = replay_state(vec![
+            s3_xml_event(b"<Tagging><TagSet></TagSet></Tagging>"),
+            s3_xml_event(
+                b"<ListBucketResult><Name>legacy-destination</Name><Prefix>legacy-site/</Prefix><KeyCount>0</KeyCount><MaxKeys>1000</MaxKeys><IsTruncated>false</IsTruncated></ListBucketResult>",
+            ),
+        ]);
+        let processed = process_request(
+            &state,
+            "Delete",
+            identity,
+            Some("legacy-physical-id"),
+            &destructive,
+            None,
+            test_deadlines(),
+        )
+        .await
+        .expect("destructive legacy Delete must parse");
+        processed
+            .result
+            .expect("destructive legacy Delete must complete successfully");
+
+        let requests = replay.actual_requests().collect::<Vec<_>>();
+        assert_eq!(requests.len(), 2);
+        assert!(requests[0].uri().contains("legacy-destination"));
+        assert!(requests[0].uri().contains("tagging"));
+        assert!(requests[1].uri().contains("legacy-destination"));
+        assert!(requests[1].uri().contains("list-type=2"));
     }
 
     #[test]

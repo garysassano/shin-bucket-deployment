@@ -2,6 +2,7 @@ import {
   type AssetHashType,
   type BundlingFileAccess,
   type BundlingOutput,
+  type CfnTag,
   CustomResource,
   type DockerImage,
   type DockerVolume,
@@ -33,6 +34,7 @@ import {
 import { destinationOwnerPrefix, validateDeploymentProps } from "./validation";
 
 const CUSTOM_RESOURCE_OWNER_TAG = "aws-cdk:cr-owned";
+const MAX_S3_BUCKET_TAGS = 50;
 
 export interface ShinBucketDeploymentBundlingCommandHooks {
   /**
@@ -300,6 +302,11 @@ export interface ShinBucketDeploymentDestination {
    * Shin inspects the synthesized bucket encryption configuration to select
    * the cheapest sound conditional-write reconciliation strategy. Imported or
    * otherwise uninspectable buckets are rejected.
+   *
+   * Each deployment consumes one bucket ownership tag. Amazon S3 permits 50
+   * total bucket tags; bucket, stack, aspect, auto-delete, and other Shin
+   * deployment tags all share that quota. Synthesis fails when the final
+   * deduplicated tag set exceeds the limit.
    */
   readonly bucket: Bucket;
 
@@ -307,7 +314,9 @@ export interface ShinBucketDeploymentDestination {
    * S3 key prefix under which objects are deployed.
    *
    * This must be a concrete string no longer than 102 characters. `"/"` and
-   * an omitted value both select the bucket root.
+   * an omitted value both select the bucket root. Because Shin embeds this
+   * prefix in its S3 ownership tag, it may contain only Unicode letters,
+   * numbers, whitespace, or `_ . : / = + - @`.
    *
    * @default - the bucket root
    */
@@ -478,6 +487,9 @@ export interface ShinBucketDeploymentCloudFrontInvalidation {
 
   /**
    * Distribution paths to invalidate.
+   *
+   * A concrete list must contain at least one path. Every concrete path must
+   * start with `/` and contain at most 4,000 Unicode characters.
    *
    * @default - the destination prefix followed by `*`
    */
@@ -834,6 +846,9 @@ export class ShinBucketDeployment extends Construct {
     const tagKey = `${CUSTOM_RESOURCE_OWNER_TAG}${ownerPrefix ? `:${ownerPrefix}` : ""}:${destinationOwnerId}`;
 
     Tags.of(this.destinationBucket).add(tagKey, "true");
+    this.node.addValidation({
+      validate: () => validateDestinationBucketTagQuota(destinationBucketResource),
+    });
   }
 
   /**
@@ -880,4 +895,19 @@ export class ShinBucketDeployment extends Construct {
       this.sources.push(config);
     }
   }
+}
+
+function validateDestinationBucketTagQuota(bucketResource: {
+  readonly tags: { tagValues(): Record<string, string> };
+  readonly tagsRaw?: CfnTag[];
+}): string[] {
+  const tagKeys = new Set(Object.keys(bucketResource.tags.tagValues()));
+  for (const tag of bucketResource.tagsRaw ?? []) {
+    tagKeys.add(tag.key);
+  }
+  const totalTagCount = tagKeys.size;
+  if (totalTagCount <= MAX_S3_BUCKET_TAGS) return [];
+  return [
+    `The destination bucket has ${totalTagCount} synthesized tags, exceeding Amazon S3's ${MAX_S3_BUCKET_TAGS}-tag limit. Each ShinBucketDeployment requires one ownership tag; reduce bucket, stack, aspect, auto-delete, or deployment ownership tags.`,
+  ];
 }

@@ -82,8 +82,11 @@ Four-phase snapshot using the latest tiny-many 2048 MiB Shin `maxConcurrency=64`
 
 ![2048 MiB max concurrency 64 benchmark chart](snapshots/tiny-many-2048mib-64.svg)
 
-## 10240 MiB / 320 Snapshot
+## Historical 10240 MiB / 320 Snapshot
 
-Four-phase snapshot using the latest tiny-many 10240 MiB Shin `maxConcurrency=320` rows.
+Historical methodology-v1 four-phase snapshot collected before Shin capped
+`transfer.maxConcurrency` at 256. This configuration cannot be synthesized by
+the current construct and is retained only as explicitly classified historical
+evidence.
 
 ![10240 MiB max concurrency 320 benchmark chart](snapshots/tiny-many-10240mib-320.svg)
