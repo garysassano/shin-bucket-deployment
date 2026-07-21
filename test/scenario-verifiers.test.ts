@@ -319,7 +319,8 @@ describe("cleanup verifier", () => {
     });
   });
 
-  it("accepts only S3's permission-hidden and not-found bucket absence responses", () => {
+  it("accepts only S3's documented generic bucket absence responses", () => {
+    expect(bucketProbeProvesAbsence(awsError(400))).toBe(true);
     expect(bucketProbeProvesAbsence(awsError(403))).toBe(true);
     expect(bucketProbeProvesAbsence(awsError(404))).toBe(true);
     expect(bucketProbeProvesAbsence(awsError(500))).toBe(false);
