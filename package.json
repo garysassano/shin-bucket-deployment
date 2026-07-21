@@ -97,7 +97,6 @@
     }
   },
   "devDependencies": {
-    "@aws-sdk/client-cloudformation": "3.1090.0",
     "@aws-sdk/client-cloudfront": "3.1090.0",
     "@aws-sdk/client-s3": "3.1090.0",
     "@biomejs/biome": "2.5.0",

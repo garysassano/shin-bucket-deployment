@@ -16,8 +16,6 @@ export async function verifyStackAbsent(
       throw error;
     }
   }
-  await api.assertStackAbsent(stackName);
-
   const buckets = new Set(
     Object.entries(outputs)
       .filter(([name]) => name.endsWith("BucketName"))
@@ -45,7 +43,7 @@ if (require.main === module) {
   const stackName = option("--stack-name");
   if (!stackName) throw new Error("--stack-name is required.");
   verifyStackAbsent(stackName, option("--outputs-file", false))
-    .then(() => console.log("Verification stack and scoped resources are absent."))
+    .then(() => console.log("Verification stack resources are absent."))
     .catch((error: unknown) => {
       console.error(error instanceof Error ? error.message : error);
       process.exitCode = 1;

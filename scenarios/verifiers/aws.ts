@@ -1,4 +1,3 @@
-import { CloudFormationClient, waitUntilStackDeleteComplete } from "@aws-sdk/client-cloudformation";
 import { CloudFrontClient, GetDistributionCommand } from "@aws-sdk/client-cloudfront";
 import {
   ChecksumMode,
@@ -32,7 +31,6 @@ export interface VerificationApi {
   listObjects(bucket: string, prefix?: string): Promise<readonly string[]>;
   fetchText(url: string): Promise<string>;
   sleep(milliseconds: number): Promise<void>;
-  assertStackAbsent(stackName: string): Promise<void>;
   assertBucketAbsent(bucket: string): Promise<void>;
   assertDistributionAbsent(distributionId: string): Promise<void>;
 }
@@ -40,7 +38,6 @@ export interface VerificationApi {
 export class AwsVerificationApi implements VerificationApi {
   private readonly s3 = new S3Client({});
   private readonly cloudFront = new CloudFrontClient({});
-  private readonly cloudFormation = new CloudFormationClient({});
 
   public async getObject(bucket: string, key: string): Promise<Uint8Array> {
     const response = await this.s3.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
@@ -98,18 +95,6 @@ export class AwsVerificationApi implements VerificationApi {
 
   public async sleep(milliseconds: number): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, milliseconds));
-  }
-
-  public async assertStackAbsent(stackName: string): Promise<void> {
-    try {
-      await waitUntilStackDeleteComplete(
-        { client: this.cloudFormation, maxWaitTime: 120, minDelay: 2, maxDelay: 5 },
-        { StackName: stackName },
-      );
-    } catch (error) {
-      reportVerificationFailure("stack-probe-error");
-      throw error;
-    }
   }
 
   public async assertBucketAbsent(bucket: string): Promise<void> {

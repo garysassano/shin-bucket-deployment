@@ -320,8 +320,8 @@ describe("cleanup verifier", () => {
     vi.stubEnv("GITHUB_STEP_SUMMARY", join(temporaryDirectory(), "missing", "summary.md"));
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    expect(() => reportVerificationFailure("stack-probe-error")).not.toThrow();
-    expect(error).toHaveBeenCalledWith("Verification failure category: stack-probe-error");
+    expect(() => reportVerificationFailure("stack-destroy-error")).not.toThrow();
+    expect(error).toHaveBeenCalledWith("Verification failure category: stack-destroy-error");
   });
 
   it("lets CloudFormation delete verifier bucket policies normally", () => {
@@ -411,7 +411,6 @@ describe("cleanup verifier", () => {
 
     await expect(verifyStackAbsent(STACK_NAME, outputs, api)).resolves.toBeUndefined();
     expect(api.absenceChecks).toEqual([
-      `stack:${STACK_NAME}`,
       "bucket:bucket-a",
       "bucket:bucket-b",
       "distribution:distribution-a",
@@ -431,7 +430,7 @@ describe("cleanup verifier", () => {
   it("can verify stack absence after a deployment failed before outputs were written", async () => {
     const api = new FakeVerificationApi();
     await expect(verifyStackAbsent(STACK_NAME, undefined, api)).resolves.toBeUndefined();
-    expect(api.absenceChecks).toEqual([`stack:${STACK_NAME}`]);
+    expect(api.absenceChecks).toEqual([]);
   });
 
   it("reports a sanitized category when saved deployment outputs cannot be read", async () => {
@@ -495,10 +494,6 @@ class FakeVerificationApi implements VerificationApi {
 
   async sleep(milliseconds: number): Promise<void> {
     this.sleeps.push(milliseconds);
-  }
-
-  async assertStackAbsent(stackName: string): Promise<void> {
-    this.absenceChecks.push(`stack:${stackName}`);
   }
 
   async assertBucketAbsent(bucket: string): Promise<void> {

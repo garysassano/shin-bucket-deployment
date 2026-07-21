@@ -6,8 +6,7 @@ export type VerificationFailureCategory =
   | "distribution-present"
   | "distribution-probe-error"
   | "outputs-read-error"
-  | "stack-destroy-error"
-  | "stack-probe-error";
+  | "stack-destroy-error";
 
 export function reportVerificationFailure(category: VerificationFailureCategory): void {
   console.error(`Verification failure category: ${category}`);
