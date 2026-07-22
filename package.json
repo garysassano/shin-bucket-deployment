@@ -83,6 +83,10 @@
     "benchmark:publish-results": "pnpm build && node dist/benchmarks/src/publish-results.js",
     "benchmark:telemetry-table": "pnpm build && node dist/benchmarks/src/render/telemetry-table.js",
     "benchmark:run-assets": "pnpm build && node dist/benchmarks/src/run-assets-comparison.js",
+    "benchmark:oidc:synth": "pnpm build && cdk synth --app 'node dist/benchmarks/infra/gha-oidc-app.js' shin-bucket-deployment-gha-oidc",
+    "benchmark:oidc:diff": "pnpm build && cdk diff --app 'node dist/benchmarks/infra/gha-oidc-app.js' shin-bucket-deployment-gha-oidc",
+    "benchmark:oidc:deploy": "pnpm build && cdk deploy --app 'node dist/benchmarks/infra/gha-oidc-app.js' shin-bucket-deployment-gha-oidc",
+    "benchmark:oidc:destroy": "pnpm build && cdk destroy --app 'node dist/benchmarks/infra/gha-oidc-app.js' shin-bucket-deployment-gha-oidc",
     "benchmark:synth": "pnpm build && node scripts/verify-benchmark-plan.mjs && SHIN_BENCH_EXECUTION_ENVIRONMENT_TOKEN=no-aws-synth SHIN_BENCH_INVOCATION_TOKEN=no-aws-synth-invocation node dist/scenarios/runner.js benchmark synth assets --asset-profiles tiny-many --implementations shin,aws --transfer-max-concurrency 32 --lambda-memory-mb 1024 && node scripts/verify-benchmark-synth.mjs",
     "check": "pnpm build && pnpm build:package && pnpm typecheck && pnpm lint && pnpm test && pnpm rust:fmt:check && pnpm rust:clippy && pnpm rust:test && pnpm npm:audit && pnpm rust:audit && pnpm rust:deny && pnpm workflow:lint && pnpm toml:check && pnpm verify:package && pnpm verify:synth && pnpm benchmark:synth",
     "prepack": "pnpm build:package"
