@@ -80,21 +80,6 @@ export class GhaOidcStack extends Stack {
       inlinePolicies: benchmarkPolicies(),
     });
 
-    const legacyClaims: Conditions = {
-      StringEquals: {
-        "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-        "token.actions.githubusercontent.com:sub":
-          "repo:garysassano/shin-bucket-deployment:environment:aws-tests",
-      },
-    };
-
-    new Role(this, "GhaOidcRole", {
-      roleName: "ShinBucketDeploymentGitHubActions",
-      assumedBy: new WebIdentityPrincipal(provider.openIdConnectProviderArn, legacyClaims),
-      maxSessionDuration: Duration.hours(6),
-      inlinePolicies: benchmarkPolicies(),
-    });
-
     new CfnOutput(this, "GhaBenchmarkOidcRoleArn", { value: benchmarkRole.roleArn });
   }
 }

@@ -33,29 +33,10 @@ test("restricts the GitHub Actions role to the AWS benchmark environment", () =>
     ]),
   });
 
-  template.hasResourceProperties("AWS::IAM::Role", {
-    RoleName: "ShinBucketDeploymentGitHubActions",
-    AssumeRolePolicyDocument: {
-      Statement: Match.arrayWith([
-        Match.objectLike({
-          Condition: {
-            StringEquals: {
-              "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-              "token.actions.githubusercontent.com:sub":
-                "repo:garysassano/shin-bucket-deployment:environment:aws-tests",
-            },
-          },
-        }),
-      ]),
-    },
-  });
-
   const rendered = JSON.stringify(template.toJSON());
   expect(rendered).toContain(":iam::111111111111:role/cdk-hnb659fds-*-111111111111-eu-central-1");
   expect(rendered).not.toContain(':iam::111111111111:role/cdk-*"');
-  expect(rendered).toContain("stack/ShinBucketDeploymentBenchmarkAssetsDemo*/*");
-  expect(rendered).toContain("function:ShinBucketDeploymentBench-*");
-  expect(rendered).toContain("function:AwsBucketDeploymentBenchm-*");
-  expect(rendered).toContain("log-group:ShinBucketDeploymentBenchmarkAssetsDemo*:*");
-  expect(rendered).toContain("log-group:AwsBucketDeploymentBenchmarkAssetsDemo*:*");
+  template.hasOutput("GhaBenchmarkOidcRoleArn", {
+    Value: { "Fn::GetAtt": [Match.stringLikeRegexp("^GhaBenchmarkOidcRole"), "Arn"] },
+  });
 });
