@@ -216,8 +216,14 @@ async fn report_envelope_failure(
     let Some(target) = target else {
         return Err(error.into());
     };
-    let response_url = validate_response_url(&target.response_url)?;
     let full_reason = format!("{error:#}");
+    // Without this the `?` would surface only the URL error and drop the envelope
+    // failure we were called to report. `validate_response_url` deliberately does not
+    // echo the URL, and this same reason is logged and returned to CloudFormation
+    // whenever the URL is usable, so carrying it here matches the exposure the
+    // success path already accepts.
+    let response_url = validate_response_url(&target.response_url)
+        .with_context(|| format!("while reporting envelope failure: {full_reason}"))?;
     error!(error = %full_reason, "request envelope failed");
     let failure = ResponsePayload {
         physical_resource_id: target
@@ -827,10 +833,13 @@ fn log_deployment_summary(
 
 #[cfg(test)]
 mod tests {
+    use anyhow::anyhow;
     use aws_lambda_events::event::cloudformation::CloudFormationCustomResourceRequest;
     use serde_json::{Value, json};
 
+    use crate::deadline::InvocationDeadlines;
     use crate::request::{RawDeploymentRequest, parse_request};
+    use crate::types::AppState;
 
     use super::{
         EnvelopeResponseTarget, RESOURCE_TYPE, RequestIdentity, cloudfront_caller_reference,
@@ -1500,5 +1509,72 @@ mod tests {
         if let Ok(request) = decode_request_envelope(unknown) {
             assert!(response_target(&request).is_none());
         }
+    }
+
+    #[tokio::test]
+    async fn unusable_response_url_still_reports_the_original_envelope_failure() {
+        let s3 = aws_sdk_s3::Client::from_conf(
+            aws_sdk_s3::Config::builder()
+                .behavior_version_latest()
+                .region(aws_sdk_s3::config::Region::new("us-east-1"))
+                .credentials_provider(aws_sdk_s3::config::Credentials::new(
+                    "test-access-key",
+                    "test-secret-key",
+                    None,
+                    None,
+                    "shin-bucket-deployment-test",
+                ))
+                .build(),
+        );
+        let state = AppState {
+            source_s3: s3.clone(),
+            destination_s3: s3,
+            cloudfront: aws_sdk_cloudfront::Client::from_conf(
+                aws_sdk_cloudfront::Config::builder()
+                    .behavior_version_latest()
+                    .region(aws_sdk_cloudfront::config::Region::new("us-east-1"))
+                    .credentials_provider(aws_sdk_cloudfront::config::Credentials::new(
+                        "test-access-key",
+                        "test-secret-key",
+                        None,
+                        None,
+                        "shin-bucket-deployment-test",
+                    ))
+                    .build(),
+            ),
+            http: reqwest::Client::new(),
+            detailed_failure_diagnostics: false,
+        };
+        let target = EnvelopeResponseTarget {
+            // Not a usable callback URL, so `validate_response_url` fails before any
+            // request is sent and the AWS clients above are never exercised.
+            response_url: "ftp://example.com/response?X-Amz-Signature=must-not-leak".to_string(),
+            stack_id: "stack-123".to_string(),
+            request_id: "request-malformed".to_string(),
+            logical_resource_id: "Deploy".to_string(),
+            physical_resource_id: None,
+        };
+
+        let error = super::report_envelope_failure(
+            &state,
+            Some(target),
+            anyhow!("original envelope decode failure"),
+            InvocationDeadlines::from_remaining_at(
+                tokio::time::Instant::now(),
+                std::time::Duration::from_secs(120),
+            ),
+        )
+        .await
+        .expect_err("an unusable response URL must fail");
+
+        let chain = format!("{error:#}");
+        assert!(
+            chain.contains("original envelope decode failure"),
+            "the original envelope failure must survive: {chain}"
+        );
+        assert!(
+            !chain.contains("must-not-leak"),
+            "the response URL must not leak into the error chain: {chain}"
+        );
     }
 }
