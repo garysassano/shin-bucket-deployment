@@ -356,12 +356,48 @@ describe("benchmark result collector", () => {
     const fractional = providerSummaryV5Fixture();
     (fractional.copyObject as Record<string, unknown>).wireAttempts = 1.5;
     expect(providerSummaryErrors(fractional).join("; ")).toContain(
-      "copyObject.wireAttempts must be an integer",
+      "copyObject.wireAttempts must be a safe integer",
+    );
+
+    // Above 2^53 the value has already lost precision in JSON, so it must be
+    // rejected rather than silently recorded as evidence.
+    const unsafe = providerSummaryV5Fixture();
+    (unsafe.copyObject as Record<string, unknown>).wireAttempts = Number.MAX_SAFE_INTEGER + 2;
+    expect(providerSummaryErrors(unsafe).join("; ")).toContain(
+      "copyObject.wireAttempts must be a safe integer",
     );
 
     const absent = providerSummaryV5Fixture();
     delete (absent as Partial<typeof absent>).copyObject;
     expect(providerSummaryErrors(absent).join("; ")).toContain("copyObject must be an object");
+  });
+
+  test("rejects internally impossible schema-v5 copy telemetry", () => {
+    const moreFailedThanWire = providerSummaryV5Fixture();
+    moreFailedThanWire.copyObject.failedAttempts = moreFailedThanWire.copyObject.wireAttempts + 1;
+    expect(providerSummaryErrors(moreFailedThanWire).join("; ")).toContain(
+      "CopyObject failedAttempts exceeds wireAttempts",
+    );
+
+    const moreRetriesThanWire = providerSummaryV5Fixture();
+    moreRetriesThanWire.copyObject.retryAttempts = moreRetriesThanWire.copyObject.wireAttempts + 1;
+    expect(providerSummaryErrors(moreRetriesThanWire).join("; ")).toContain(
+      "CopyObject retryAttempts exceeds wireAttempts",
+    );
+
+    const moreThrottledThanFailed = providerSummaryV5Fixture();
+    moreThrottledThanFailed.copyObject.throttledAttempts =
+      moreThrottledThanFailed.copyObject.failedAttempts + 1;
+    expect(providerSummaryErrors(moreThrottledThanFailed).join("; ")).toContain(
+      "CopyObject throttledAttempts exceeds failedAttempts",
+    );
+
+    // The relationships hold at equality.
+    const atBoundary = providerSummaryV5Fixture();
+    atBoundary.copyObject.failedAttempts = atBoundary.copyObject.wireAttempts;
+    atBoundary.copyObject.retryAttempts = atBoundary.copyObject.wireAttempts;
+    atBoundary.copyObject.throttledAttempts = atBoundary.copyObject.failedAttempts;
+    expect(providerSummaryErrors(atBoundary)).toEqual([]);
   });
 
   test("keeps schema-v4 summaries valid after the v5 bump", () => {

@@ -860,7 +860,7 @@ mod tests {
         EmbeddedCatalog, EmbeddedCatalogEntry, S3_SINGLE_COPY_LIMIT, S3_SINGLE_PUT_LIMIT,
         authenticate_catalog_bytes, authenticated_catalog_entry, checked_archive_totals,
         collect_copy_plans, collect_zip_entry_plans, ensure_unique_source_offsets,
-        validate_catalog_entries, validate_deployment_preflight,
+        validate_archive_directory, validate_catalog_entries, validate_deployment_preflight,
     };
     use crate::request::compile_filters;
     use crate::s3::destination::{DestinationObject, DestinationWritePrecondition};
@@ -1341,12 +1341,29 @@ mod tests {
         bytes.iter().map(|byte| format!("{byte:02x}")).collect()
     }
 
+    /// Reads the real central directory offset out of the end-of-central-directory
+    /// record, so tests bound entry spans the way the provider does instead of
+    /// fabricating a value that could mask a future bound check.
+    fn central_directory_start_of(bytes: &[u8]) -> u64 {
+        const END_OF_DIRECTORY_SIGNATURE: [u8; 4] = [0x50, 0x4b, 0x05, 0x06];
+
+        let end_of_directory = bytes
+            .windows(4)
+            .rposition(|window| window == END_OF_DIRECTORY_SIGNATURE)
+            .expect("archive must contain an end of central directory record");
+        u32::from_le_bytes(
+            bytes[end_of_directory + 16..end_of_directory + 20]
+                .try_into()
+                .expect("central directory offset is four bytes"),
+        ) as u64
+    }
+
     /// Builds a two-entry archive and rewrites the second central directory record so
     /// both names point at the first entry's local header. `zip` will not emit this, so
-    /// the record has to be patched after the fact.
-    fn zip_bytes_with_shared_header_offset() -> Vec<u8> {
+    /// the record has to be patched after the fact. Returns the bytes alongside the
+    /// central directory offset, which planning needs to bound entry source spans.
+    fn zip_bytes_with_shared_header_offset() -> (Vec<u8>, u64) {
         const CENTRAL_DIRECTORY_SIGNATURE: [u8; 4] = [0x50, 0x4b, 0x01, 0x02];
-        const END_OF_DIRECTORY_SIGNATURE: [u8; 4] = [0x50, 0x4b, 0x05, 0x06];
         const HEADER_OFFSET_FIELD: usize = 42;
 
         let mut bytes = zip_bytes_from_entries(
@@ -1357,15 +1374,8 @@ mod tests {
             false,
         );
 
-        let end_of_directory = bytes
-            .windows(4)
-            .rposition(|window| window == END_OF_DIRECTORY_SIGNATURE)
-            .expect("archive must contain an end of central directory record");
-        let mut cursor = u32::from_le_bytes(
-            bytes[end_of_directory + 16..end_of_directory + 20]
-                .try_into()
-                .expect("central directory offset is four bytes"),
-        ) as usize;
+        let directory_start = central_directory_start_of(&bytes) as usize;
+        let mut cursor = directory_start;
 
         let mut records = Vec::new();
         while cursor + 46 <= bytes.len() && bytes[cursor..cursor + 4] == CENTRAL_DIRECTORY_SIGNATURE
@@ -1388,28 +1398,63 @@ mod tests {
             .expect("local header offset is four bytes");
         bytes[records[1] + HEADER_OFFSET_FIELD..records[1] + HEADER_OFFSET_FIELD + 4]
             .copy_from_slice(&shared);
-        bytes
+        (bytes, directory_start as u64)
     }
 
+    /// Drives the guard through `validate_archive_directory`, the function planning
+    /// actually calls, so this fails if the check is ever dropped from that path
+    /// rather than only if the helper itself regresses.
     #[tokio::test]
     async fn planning_rejects_zip_entries_sharing_a_local_header_offset() {
-        let bytes = zip_bytes_with_shared_header_offset();
+        let (bytes, central_directory_start) = zip_bytes_with_shared_header_offset();
+        let source_len = bytes.len() as u64;
         let reader = ZipFileReader::with_tokio(Cursor::new(bytes)).await.unwrap();
         let zip = reader.file().clone();
-        let mut offsets = zip
-            .entries()
-            .iter()
-            .map(|entry| entry.header_offset())
-            .collect::<Vec<_>>();
-        offsets.sort_unstable();
 
-        let error = ensure_unique_source_offsets(&offsets)
+        let error = validate_archive_directory(zip.entries(), source_len, central_directory_start)
             .expect_err("entries sharing a local header offset must fail closed");
         assert!(
             error
                 .to_string()
                 .contains("duplicate ZIP local file header offset"),
             "unexpected error: {error}"
+        );
+    }
+
+    /// The same path must accept a well-formed archive and hand back the sorted
+    /// offsets planning derives entry source spans from.
+    #[tokio::test]
+    async fn archive_directory_validation_returns_sorted_offsets_for_distinct_headers() {
+        let bytes = zip_bytes_from_entries(
+            &[
+                ("first.txt", b"first" as &[u8]),
+                ("second.txt", b"second" as &[u8]),
+            ],
+            false,
+        );
+        let source_len = bytes.len() as u64;
+        let central_directory_start = central_directory_start_of(&bytes);
+        let reader = ZipFileReader::with_tokio(Cursor::new(bytes)).await.unwrap();
+        let zip = reader.file().clone();
+
+        let mut expected = zip
+            .entries()
+            .iter()
+            .map(|entry| entry.header_offset())
+            .collect::<Vec<_>>();
+        expected.sort_unstable();
+
+        let offsets =
+            validate_archive_directory(zip.entries(), source_len, central_directory_start)
+                .expect("a well-formed archive must validate");
+        assert_eq!(offsets, expected);
+        assert!(
+            offsets[1] < central_directory_start,
+            "both local headers must precede the real central directory"
+        );
+        assert!(
+            offsets[0] < offsets[1],
+            "offsets must be sorted: {offsets:?}"
         );
     }
 

@@ -1919,10 +1919,10 @@ mod tests {
         COPY_RECONCILIATION_METADATA_KEY, CopyContext, PutContext, UploadPayload, WriteDiagnostics,
         WriteDiagnosticsSnapshot, WriteRetryCoordinator, catalog_skips_zip_entry,
         copy_reconciliation_identity, copy_source_object, digest_async_reader,
-        dispatch_failure_kind, duration_millis_u64, md5_hex, quoted_etag, read_async_reader_to_vec,
-        record_bounded_diagnostic_count, request_checksum_calculation, sanitize_diagnostic_label,
-        serialize_put_attempt_failure, sha256_base64, should_compare_marker_free_entry,
-        upload_payload, write_error_kind, write_retry_cap_millis,
+        dispatch_failure_kind, duration_millis_u64, log_copy_diagnostics, md5_hex, quoted_etag,
+        read_async_reader_to_vec, record_bounded_diagnostic_count, request_checksum_calculation,
+        sanitize_diagnostic_label, serialize_put_attempt_failure, sha256_base64,
+        should_compare_marker_free_entry, upload_payload, write_error_kind, write_retry_cap_millis,
     };
 
     #[derive(Clone, Default)]
@@ -3191,5 +3191,108 @@ mod tests {
 
     fn test_work_deadline() -> tokio::time::Instant {
         tokio::time::Instant::now() + std::time::Duration::from_secs(120)
+    }
+
+    fn summary_request() -> crate::types::DeploymentRequest {
+        let raw: crate::request::RawDeploymentRequest = serde_json::from_value(serde_json::json!({
+            "SourceBucketNames": ["source"],
+            "SourceObjectKeys": ["archive.zip"],
+            "DestinationBucketName": "destination",
+            "DestinationChecksumStrategy": "sse-s3-etag",
+            "Extract": false
+        }))
+        .expect("raw deployment request");
+        crate::request::parse_request(&raw).expect("valid request")
+    }
+
+    /// Drives a real replayed copy (one failure, one success) so the counters come
+    /// from `WriteDiagnostics` rather than being hand-seeded, then runs the bridge
+    /// and asserts each one lands on the matching `copyObject` summary field. A
+    /// mis-mapped field would pass a hand-seeded test but fail this one.
+    #[tokio::test(start_paused = true)]
+    async fn copy_diagnostics_reach_the_deployment_summary() {
+        // A throttled failure with nonzero backoff, so the throttle and wait counters
+        // are also nonzero: zero-to-zero comparisons would not catch a field swap.
+        // One throttled failure and one transient failure: throttled retries record
+        // cooldown waits while transient retries record `retry_wait_millis`, so both
+        // are needed to make all seven counters nonzero.
+        let replay = StaticReplayClient::new(vec![
+            error_event(503, "SlowDown"),
+            error_event(200, "InternalError"),
+            copy_success_event(),
+        ]);
+        let client = replay_s3_client(replay.clone());
+        let diagnostics = WriteDiagnostics::default();
+        let stats = DeploymentStats::default();
+        let retry_coordinator = WriteRetryCoordinator::new();
+        let retry = PutObjectRetryOptions {
+            max_attempts: 3,
+            retry_base_delay_ms: 10,
+            retry_max_delay_ms: 10,
+            slowdown_retry_base_delay_ms: 250,
+            slowdown_retry_max_delay_ms: 250,
+            jitter: PutObjectRetryJitter::None,
+        };
+
+        copy_source_object(
+            CopyContext {
+                destination_s3: &client,
+                destination_bucket: "destination",
+                retry: &retry,
+                retry_coordinator: &retry_coordinator,
+                diagnostics: &diagnostics,
+                stats: &stats,
+                work_deadline: test_work_deadline(),
+            },
+            &test_copy_plan(None),
+        )
+        .await
+        .expect("provider retry should succeed");
+
+        let request = summary_request();
+        let before = stats.snapshot("Create", "success", &request);
+        assert_eq!(
+            before.copy_object.wire_attempts, 0,
+            "the summary must stay empty until the diagnostics bridge runs"
+        );
+
+        log_copy_diagnostics(&retry, &diagnostics, &stats);
+
+        let observed = diagnostics.snapshot();
+        let after = stats.snapshot("Create", "success", &request);
+        assert_eq!(after.copy_object.wire_attempts, observed.wire_attempts);
+        assert_eq!(after.copy_object.failed_attempts, observed.failed_attempts);
+        assert_eq!(after.copy_object.retry_attempts, observed.retry_attempts);
+        assert_eq!(
+            after.copy_object.throttled_attempts,
+            observed.throttled_attempts
+        );
+        assert_eq!(after.copy_object.retry_wait_ms, observed.retry_wait_millis);
+        assert_eq!(
+            after.copy_object.throttle_cooldown_waits,
+            observed.throttle_cooldown_waits
+        );
+        assert_eq!(
+            after.copy_object.throttle_cooldown_wait_ms,
+            observed.throttle_cooldown_wait_millis
+        );
+
+        // The replayed copy really did throttle, retry, and wait, so the mapping
+        // assertions above are not comparing zero against zero.
+        assert_eq!(after.copy_object.wire_attempts, 3);
+        assert_eq!(after.copy_object.failed_attempts, 2);
+        assert_eq!(after.copy_object.retry_attempts, 2);
+        assert_eq!(after.copy_object.throttled_attempts, 1);
+        assert!(
+            after.copy_object.retry_wait_ms > 0,
+            "the transient retry must record backoff time"
+        );
+        assert!(
+            after.copy_object.throttle_cooldown_waits > 0
+                && after.copy_object.throttle_cooldown_wait_ms > 0,
+            "the throttled retry must record cooldown waits"
+        );
+        // Copies must not leak into the PutObject section.
+        assert_eq!(after.put_object.wire_attempts, 0);
     }
 }

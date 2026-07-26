@@ -867,14 +867,33 @@ export function providerSummaryV5Errors(summary: ProviderSummary): string[] {
         errors.push(`schema-v5 summary is missing copyObject.${name}`);
       } else if (copyObject[name] === null) {
         errors.push(`schema-v5 summary field copyObject.${name} must not be null`);
-      } else if (typeof copyObject[name] !== "number" || !Number.isInteger(copyObject[name])) {
-        errors.push(`schema-v5 summary field copyObject.${name} must be an integer`);
+      } else if (typeof copyObject[name] !== "number" || !Number.isSafeInteger(copyObject[name])) {
+        // Safe integers, matching the v3/v4 scalar and section checks. Plain
+        // `Number.isInteger` would accept values above 2^53 that have already lost
+        // precision in JSON, letting lossy counters into committed evidence.
+        errors.push(`schema-v5 summary field copyObject.${name} must be a safe integer`);
       }
     }
     for (const name of Object.keys(copyObject)) {
       if (!Object.hasOwn(fields, name)) {
         errors.push(`schema-v5 summary contains unexpected field copyObject.${name}`);
       }
+    }
+
+    // The same internal consistency the v3/v4 validators require of `putObject`.
+    // Without these the collector accepts impossible copy telemetry.
+    const counter = (name: string): number => {
+      const value = copyObject[name];
+      return typeof value === "number" && Number.isSafeInteger(value) ? value : 0;
+    };
+    if (counter("failedAttempts") > counter("wireAttempts")) {
+      errors.push("schema-v5 CopyObject failedAttempts exceeds wireAttempts");
+    }
+    if (counter("retryAttempts") > counter("wireAttempts")) {
+      errors.push("schema-v5 CopyObject retryAttempts exceeds wireAttempts");
+    }
+    if (counter("throttledAttempts") > counter("failedAttempts")) {
+      errors.push("schema-v5 CopyObject throttledAttempts exceeds failedAttempts");
     }
   }
 
