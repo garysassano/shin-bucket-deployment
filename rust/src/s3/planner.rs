@@ -348,12 +348,8 @@ async fn add_archive_entries_to_manifest(
         .await
         .context("failed to read zip archive central directory")?;
     let entries = reader.file().entries();
-    validate_archive_directory(entries, source.len(), central_directory_start)?;
-    let mut source_offsets = entries
-        .iter()
-        .map(StoredZipEntry::header_offset)
-        .collect::<Vec<_>>();
-    source_offsets.sort_unstable();
+    let source_offsets =
+        validate_archive_directory(entries, source.len(), central_directory_start)?;
     let catalog = if let Some(expected) = &request.source_catalogs[source_index] {
         match load_authenticated_catalog(
             source.clone(),
@@ -766,11 +762,13 @@ pub(super) fn validate_deployment_preflight(
     Ok(())
 }
 
+/// Validates directory-level invariants and returns the sorted local header offsets
+/// that entry source spans are derived from.
 fn validate_archive_directory(
     entries: &[StoredZipEntry],
     source_len: u64,
     central_directory_start: u64,
-) -> Result<()> {
+) -> Result<Vec<u64>> {
     let _entry_count = u64::try_from(entries.len())
         .map_err(|_| anyhow!("source ZIP entry count cannot be represented safely"))?;
     if central_directory_start > source_len {
@@ -790,7 +788,14 @@ fn validate_archive_directory(
         }
     }
 
-    Ok(())
+    let mut source_offsets = entries
+        .iter()
+        .map(StoredZipEntry::header_offset)
+        .collect::<Vec<_>>();
+    source_offsets.sort_unstable();
+    ensure_unique_source_offsets(&source_offsets)?;
+
+    Ok(source_offsets)
 }
 
 fn checked_archive_totals(
@@ -828,6 +833,20 @@ fn next_source_offset(sorted_offsets: &[u64], offset: u64) -> Option<u64> {
     sorted_offsets.get(index).copied()
 }
 
+/// Entry source spans run from one local header offset to the next, so two entries
+/// sharing a header offset would receive identical spans. The source block store
+/// assumes planned blocks are sorted and disjoint, and an identical span longer than
+/// one block breaks that invariant, so reject the archive during planning instead.
+fn ensure_unique_source_offsets(sorted_offsets: &[u64]) -> Result<()> {
+    if let Some(pair) = sorted_offsets.windows(2).find(|pair| pair[0] == pair[1]) {
+        return Err(anyhow!(
+            "duplicate ZIP local file header offset {}",
+            pair[0]
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -840,8 +859,8 @@ mod tests {
     use super::{
         EmbeddedCatalog, EmbeddedCatalogEntry, S3_SINGLE_COPY_LIMIT, S3_SINGLE_PUT_LIMIT,
         authenticate_catalog_bytes, authenticated_catalog_entry, checked_archive_totals,
-        collect_copy_plans, collect_zip_entry_plans, validate_catalog_entries,
-        validate_deployment_preflight,
+        collect_copy_plans, collect_zip_entry_plans, ensure_unique_source_offsets,
+        validate_catalog_entries, validate_deployment_preflight,
     };
     use crate::request::compile_filters;
     use crate::s3::destination::{DestinationObject, DestinationWritePrecondition};
@@ -1320,5 +1339,96 @@ mod tests {
 
     fn hex_string(bytes: &[u8]) -> String {
         bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+
+    /// Builds a two-entry archive and rewrites the second central directory record so
+    /// both names point at the first entry's local header. `zip` will not emit this, so
+    /// the record has to be patched after the fact.
+    fn zip_bytes_with_shared_header_offset() -> Vec<u8> {
+        const CENTRAL_DIRECTORY_SIGNATURE: [u8; 4] = [0x50, 0x4b, 0x01, 0x02];
+        const END_OF_DIRECTORY_SIGNATURE: [u8; 4] = [0x50, 0x4b, 0x05, 0x06];
+        const HEADER_OFFSET_FIELD: usize = 42;
+
+        let mut bytes = zip_bytes_from_entries(
+            &[
+                ("first.txt", b"first" as &[u8]),
+                ("second.txt", b"second" as &[u8]),
+            ],
+            false,
+        );
+
+        let end_of_directory = bytes
+            .windows(4)
+            .rposition(|window| window == END_OF_DIRECTORY_SIGNATURE)
+            .expect("archive must contain an end of central directory record");
+        let mut cursor = u32::from_le_bytes(
+            bytes[end_of_directory + 16..end_of_directory + 20]
+                .try_into()
+                .expect("central directory offset is four bytes"),
+        ) as usize;
+
+        let mut records = Vec::new();
+        while cursor + 46 <= bytes.len() && bytes[cursor..cursor + 4] == CENTRAL_DIRECTORY_SIGNATURE
+        {
+            records.push(cursor);
+            let field = |at: usize| {
+                u16::from_le_bytes(
+                    bytes[cursor + at..cursor + at + 2]
+                        .try_into()
+                        .expect("central directory length field is two bytes"),
+                ) as usize
+            };
+            cursor += 46 + field(28) + field(30) + field(32);
+        }
+        assert_eq!(records.len(), 2, "expected two central directory records");
+
+        let shared: [u8; 4] = bytes
+            [records[0] + HEADER_OFFSET_FIELD..records[0] + HEADER_OFFSET_FIELD + 4]
+            .try_into()
+            .expect("local header offset is four bytes");
+        bytes[records[1] + HEADER_OFFSET_FIELD..records[1] + HEADER_OFFSET_FIELD + 4]
+            .copy_from_slice(&shared);
+        bytes
+    }
+
+    #[tokio::test]
+    async fn planning_rejects_zip_entries_sharing_a_local_header_offset() {
+        let bytes = zip_bytes_with_shared_header_offset();
+        let reader = ZipFileReader::with_tokio(Cursor::new(bytes)).await.unwrap();
+        let zip = reader.file().clone();
+        let mut offsets = zip
+            .entries()
+            .iter()
+            .map(|entry| entry.header_offset())
+            .collect::<Vec<_>>();
+        offsets.sort_unstable();
+
+        let error = ensure_unique_source_offsets(&offsets)
+            .expect_err("entries sharing a local header offset must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("duplicate ZIP local file header offset"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn unique_source_offsets_accept_distinct_offsets() {
+        assert!(ensure_unique_source_offsets(&[]).is_ok());
+        assert!(ensure_unique_source_offsets(&[7]).is_ok());
+        assert!(ensure_unique_source_offsets(&[0, 10, 20]).is_ok());
+    }
+
+    #[test]
+    fn unique_source_offsets_reject_repeated_offsets() {
+        let error = ensure_unique_source_offsets(&[0, 10, 10, 20])
+            .expect_err("repeated offsets must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("duplicate ZIP local file header offset 10"),
+            "unexpected error: {error}"
+        );
     }
 }
