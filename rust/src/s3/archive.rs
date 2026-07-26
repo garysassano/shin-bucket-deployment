@@ -49,7 +49,7 @@ pub(crate) struct SourceClient {
     bucket: String,
     key: String,
     len: u64,
-    etag: Option<String>,
+    etag: String,
     diagnostics: Arc<SourceDiagnostics>,
 }
 
@@ -158,7 +158,7 @@ struct SourceFetchReservation {
 #[derive(Debug)]
 pub(crate) struct SourceHead {
     len: u64,
-    etag: Option<String>,
+    etag: String,
 }
 
 pub(crate) struct S3RangeReader {
@@ -301,10 +301,15 @@ async fn head_source(state: &AppState, bucket: &str, key: &str) -> Result<Source
     let len = u64::try_from(len)
         .with_context(|| format!("source archive s3://{bucket}/{key} has negative length {len}"))?;
 
-    Ok(SourceHead {
-        len,
-        etag: output.e_tag().map(ToOwned::to_owned),
-    })
+    // Every ranged GET sends this as `If-Match`. Without it a mid-deployment overwrite
+    // of the source would surface as confusing CRC failures instead of a clean 412, so
+    // refuse to plan against a source we cannot pin.
+    let etag = output
+        .e_tag()
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| anyhow!("source archive s3://{bucket}/{key} is missing an ETag"))?;
+
+    Ok(SourceHead { len, etag })
 }
 
 impl SourceClient {
@@ -387,16 +392,13 @@ impl SourceClient {
         end: u64,
     ) -> std::result::Result<Bytes, RangeGetError> {
         let _active_get = self.diagnostics.track_active_get();
-        let mut request = self
+        let request = self
             .client
             .get_object()
             .bucket(&self.bucket)
             .key(&self.key)
-            .range(format!("bytes={start}-{end}"));
-
-        if let Some(etag) = &self.etag {
-            request = request.if_match(etag);
-        }
+            .range(format!("bytes={start}-{end}"))
+            .if_match(&self.etag);
 
         let output = request
             .customize()
@@ -1708,6 +1710,17 @@ fn plan_source_blocks(
         }
     }
 
+    // Planning rejects archives whose entries share a local header offset, so entry
+    // spans are disjoint and the blocks derived from them must be too. `block_index_at`
+    // binary-searches this list and claim accounting assumes each byte belongs to at
+    // most one block.
+    debug_assert!(
+        blocks
+            .windows(2)
+            .all(|pair| pair[0].end < pair[1].start && pair[0].start <= pair[0].end),
+        "source blocks must be strictly increasing and disjoint"
+    );
+
     blocks
 }
 
@@ -1852,7 +1865,7 @@ mod tests {
     use crate::s3::planner::ZipEntryPlan;
     use crate::s3::{DEFAULT_SOURCE_BLOCK_BYTES, DEFAULT_SOURCE_BLOCK_MERGE_GAP_BYTES};
     use crate::types::{
-        DeploymentStats, DestinationChecksumStrategy, MarkerConfig, TrustedEntryIntegrity,
+        AppState, DeploymentStats, DestinationChecksumStrategy, MarkerConfig, TrustedEntryIntegrity,
     };
 
     const INFO_ZIP_FIXTURE: &str =
@@ -2151,7 +2164,7 @@ mod tests {
             bucket: "bucket".to_string(),
             key: "archive.zip".to_string(),
             len: (BLOCK_BYTES * 2) as u64,
-            etag: None,
+            etag: "\"test-source-etag\"".to_string(),
             diagnostics: Arc::new(SourceDiagnostics::new((BLOCK_BYTES * 2) as u64)),
         });
         let store = super::SourceBlockStore::new(
@@ -2587,7 +2600,7 @@ mod tests {
                 bucket: "bucket".to_string(),
                 key: "archive.zip".to_string(),
                 len: zip.len() as u64,
-                etag: None,
+                etag: "\"test-source-etag\"".to_string(),
                 diagnostics: Arc::new(SourceDiagnostics::new(zip.len() as u64)),
             }),
             std::slice::from_ref(&plan),
@@ -2697,7 +2710,7 @@ mod tests {
                 bucket: "bucket".to_string(),
                 key: "archive.zip".to_string(),
                 len: zip.len() as u64,
-                etag: None,
+                etag: "\"test-source-etag\"".to_string(),
                 diagnostics: Arc::new(SourceDiagnostics::new(zip.len() as u64)),
             }),
             std::slice::from_ref(&plan),
@@ -3186,7 +3199,7 @@ mod tests {
                 bucket: "bucket".to_string(),
                 key: "archive.zip".to_string(),
                 len: 1024,
-                etag: None,
+                etag: "\"test-source-etag\"".to_string(),
                 diagnostics: Arc::new(SourceDiagnostics::new(1024)),
             }),
             blocks: vec![block],
@@ -3285,7 +3298,7 @@ mod tests {
             bucket: "bucket".to_string(),
             key: "archive.zip".to_string(),
             len: span_bytes as u64,
-            etag: None,
+            etag: "\"test-source-etag\"".to_string(),
             diagnostics: Arc::new(SourceDiagnostics::new(span_bytes as u64)),
         });
         super::SourceBlockStore::new(
@@ -3369,7 +3382,7 @@ mod tests {
                 bucket: "bucket".to_string(),
                 key: "archive.zip".to_string(),
                 len: zip.len() as u64,
-                etag: None,
+                etag: "\"test-source-etag\"".to_string(),
                 diagnostics: Arc::new(SourceDiagnostics::new(zip.len() as u64)),
             }),
             blocks: vec![block],
@@ -3500,9 +3513,112 @@ mod tests {
             bucket: "bucket".to_string(),
             key: "archive.zip".to_string(),
             len,
-            etag: None,
+            etag: "\"test-source-etag\"".to_string(),
             diagnostics: Arc::new(SourceDiagnostics::new(len)),
         })
+    }
+
+    fn head_replay_event(etag: Option<&str>, len: u64) -> ReplayEvent {
+        let mut response = Response::builder()
+            .status(200)
+            .header("content-length", len.to_string());
+        if let Some(etag) = etag {
+            response = response.header("etag", etag);
+        }
+        ReplayEvent::new(
+            Request::builder()
+                .method("HEAD")
+                .uri("https://s3.test/bucket/archive.zip")
+                .body(SdkBody::empty())
+                .unwrap(),
+            response.body(SdkBody::empty()).unwrap(),
+        )
+    }
+
+    fn replay_app_state(replay: StaticReplayClient) -> AppState {
+        let s3 = aws_sdk_s3::Client::from_conf(
+            aws_sdk_s3::Config::builder()
+                .behavior_version_latest()
+                .region(aws_sdk_s3::config::Region::new("us-east-1"))
+                .credentials_provider(aws_sdk_s3::config::Credentials::new(
+                    "test-access-key",
+                    "test-secret-key",
+                    None,
+                    None,
+                    "shin-bucket-deployment-test",
+                ))
+                .endpoint_url("https://s3.test")
+                .force_path_style(true)
+                .http_client(replay)
+                .build(),
+        );
+        AppState {
+            source_s3: s3.clone(),
+            destination_s3: s3,
+            cloudfront: aws_sdk_cloudfront::Client::from_conf(
+                aws_sdk_cloudfront::Config::builder()
+                    .behavior_version_latest()
+                    .region(aws_sdk_cloudfront::config::Region::new("us-east-1"))
+                    .credentials_provider(aws_sdk_cloudfront::config::Credentials::new(
+                        "test-access-key",
+                        "test-secret-key",
+                        None,
+                        None,
+                        "shin-bucket-deployment-test",
+                    ))
+                    .build(),
+            ),
+            http: reqwest::Client::new(),
+            detailed_failure_diagnostics: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn head_source_rejects_a_source_without_an_etag() {
+        let state = replay_app_state(StaticReplayClient::new(vec![head_replay_event(None, 128)]));
+
+        let error = super::head_source(&state, "bucket", "archive.zip")
+            .await
+            .expect_err("a source HEAD without an ETag must fail closed");
+        assert!(
+            error.to_string().contains("missing an ETag"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn head_source_keeps_the_returned_etag_verbatim() {
+        let state = replay_app_state(StaticReplayClient::new(vec![head_replay_event(
+            Some("\"source-etag\""),
+            128,
+        )]));
+
+        let head = super::head_source(&state, "bucket", "archive.zip")
+            .await
+            .expect("a source HEAD with an ETag must succeed");
+        assert_eq!(head.len, 128);
+        assert_eq!(head.etag, "\"source-etag\"");
+    }
+
+    #[tokio::test]
+    async fn source_range_gets_pin_the_source_with_if_match() {
+        let replay = StaticReplayClient::new(vec![get_success_bytes(b"hello".to_vec())]);
+        let source = replay_source_client(replay.clone(), 5);
+
+        source
+            .get_range(0, 4)
+            .await
+            .expect("the ranged GET should succeed");
+
+        let request = replay
+            .actual_requests()
+            .next()
+            .expect("one ranged GET request");
+        assert_eq!(
+            request.headers().get("if-match"),
+            Some("\"test-source-etag\""),
+            "ranged GETs must pin the source ETag"
+        );
     }
 
     fn get_error_event(status: u16, code: &str) -> ReplayEvent {
