@@ -78,7 +78,7 @@ jobs:
       MISE_RUSTUP_HOME: /tmp/shin-mise/rustup
       CARGO_TARGET_DIR: /tmp/shin-cargo-target
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.source_ref }}
           persist-credentials: false
@@ -104,16 +104,16 @@ jobs:
           fi
 
       - name: Install pnpm
-        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        uses: pnpm/action-setup@v6
 
       - name: Install Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@v7
         with:
           node-version: "lts/*"
           cache: pnpm
 
       - name: Setup provider toolchain
-        uses: jdx/mise-action@dad1bfd3df957f44999b559dd69dc1671cb4e9ea # v4.2.1
+        uses: jdx/mise-action@v4
         with:
           cache: true
           install_args: rust zig cargo:cargo-lambda
@@ -122,7 +122,7 @@ jobs:
         run: rustup target add aarch64-unknown-linux-gnu
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        uses: Swatinem/rust-cache@v2
         with:
           workspaces: rust -> target
           cache-targets: true
@@ -148,7 +148,7 @@ jobs:
 
       - name: Download smoke resume state
         if: ${{ inputs.mode == 'continue' }}
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@v8
         with:
           name: benchmark-resume-${{ inputs.run_id }}
           path: ${{ runner.temp }}/benchmark-resume
@@ -165,7 +165,7 @@ jobs:
           cp "$RUNNER_TEMP/benchmark-resume/build-provenance.json" assets/bootstrap-arm64/build-provenance.json
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@517a711dbcd0e402f90c77e7e2f81e849156e31d # v6.2.2
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ vars.AWS_BENCHMARKS_ROLE_ARN }}
           role-session-name: shin-benchmark-${{ github.run_id }}
@@ -216,7 +216,7 @@ jobs:
           cp assets/bootstrap-arm64/build-provenance.json "$resume/build-provenance.json"
 
       - name: Upload sanitized benchmark state
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@v7
         with:
           name: benchmark-resume-${{ inputs.run_id }}
           path: ${{ runner.temp }}/benchmark-resume-upload
@@ -224,7 +224,7 @@ jobs:
           retention-days: 14
 
       - name: Checkout reporting revision
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -316,7 +316,7 @@ jobs:
           test -z "$(find "$REPORT_ROOT" -type f -empty -print -quit)"
 
       - name: Upload benchmark report
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@v7
         with:
           name: benchmark-report-${{ inputs.run_id }}
           path: ${{ env.REPORT_ROOT }}
@@ -333,7 +333,7 @@ jobs:
       actions: read
       contents: write
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@v7
         with:
           ref: main
           fetch-depth: 0
@@ -352,10 +352,10 @@ jobs:
           git merge-base --is-ancestor "$SOURCE_REF" "$REPORTING_REF"
 
       - name: Install pnpm
-        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        uses: pnpm/action-setup@v6
 
       - name: Install Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@v7
         with:
           node-version: "lts/*"
           cache: pnpm
@@ -364,7 +364,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Download complete benchmark state
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@v8
         with:
           name: benchmark-resume-${{ inputs.run_id }}
           path: ${{ runner.temp }}/benchmark-resume
