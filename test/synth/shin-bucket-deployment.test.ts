@@ -13,6 +13,7 @@ import { Bucket, BucketEncryption, BucketNamespace, CfnBucket } from "aws-cdk-li
 import type { IConstruct } from "constructs";
 import { expect, test } from "vitest";
 import { FailureDiagnostics, ProviderSharing, ShinBucketDeployment, Source } from "../../src";
+import { destinationChecksumStrategy } from "../../src/destination";
 import { renderHandlerConfigHashInput } from "../../src/provider";
 import { stableStringify } from "../../src/stable-json";
 import { testLocalProviderBuild } from "../support/bundling";
@@ -918,6 +919,155 @@ test("resolves destination encryption after a late property override", () => {
   });
 
   expect(customResourceProperties(stack).DestinationChecksumStrategy).toBe("kms-sha256");
+});
+
+// CDK keeps `addPropertyOverride` values out of the typed L1 model and merges them
+// only while rendering, so reading `CfnBucket.bucketEncryption` here would report the
+// pre-override `AES256` and silently choose the wrong checksum strategy.
+test("resolves destination encryption after a nested override replaces the algorithm", () => {
+  const stack = new Stack();
+  const destinationBucket = new Bucket(stack, "Dest", {
+    encryption: BucketEncryption.S3_MANAGED,
+  });
+  new ShinBucketDeployment(stack, "Deploy", {
+    sources: [Source.data("index.html", "ok")],
+    destination: { bucket: destinationBucket },
+    providerLambda: { localBuild: testLocalProviderBuild() },
+  });
+
+  const resource = destinationBucket.node.defaultChild;
+  if (!CfnBucket.isCfnBucket(resource)) {
+    throw new Error("expected destination CfnBucket");
+  }
+  // The typed property still reports AES256 after this override.
+  expect(
+    Stack.of(stack).resolve(resource.bucketEncryption).serverSideEncryptionConfiguration[0]
+      .serverSideEncryptionByDefault.sseAlgorithm,
+  ).toBe("AES256");
+  resource.addPropertyOverride(
+    "BucketEncryption.ServerSideEncryptionConfiguration.0.ServerSideEncryptionByDefault.SSEAlgorithm",
+    "aws:kms",
+  );
+
+  Template.fromStack(stack).hasResourceProperties("AWS::S3::Bucket", {
+    BucketEncryption: {
+      ServerSideEncryptionConfiguration: [
+        { ServerSideEncryptionByDefault: { SSEAlgorithm: "aws:kms" } },
+      ],
+    },
+  });
+  expect(customResourceProperties(stack).DestinationChecksumStrategy).toBe("kms-sha256");
+});
+
+test("rejects an overridden customer KMS key that the construct cannot grant", () => {
+  const stack = new Stack();
+  const destinationBucket = new Bucket(stack, "Dest");
+  new ShinBucketDeployment(stack, "Deploy", {
+    sources: [Source.data("index.html", "ok")],
+    destination: { bucket: destinationBucket },
+    providerLambda: { localBuild: testLocalProviderBuild() },
+  });
+
+  const resource = destinationBucket.node.defaultChild;
+  if (!CfnBucket.isCfnBucket(resource)) {
+    throw new Error("expected destination CfnBucket");
+  }
+  // No L2 encryptionKey exists, so the provider could not be granted access.
+  resource.addPropertyOverride("BucketEncryption", {
+    ServerSideEncryptionConfiguration: [
+      {
+        ServerSideEncryptionByDefault: {
+          SSEAlgorithm: "aws:kms",
+          KMSMasterKeyID: "arn:aws:kms:us-east-1:111122223333:key/unmanaged",
+        },
+      },
+    ],
+  });
+
+  expect(() => customResourceProperties(stack)).toThrowError(
+    expect.objectContaining({
+      code: "ShinBucketDeploymentDestinationKmsKeyUnsupported",
+    }) as Error,
+  );
+});
+
+// CDK invokes `_toCloudFormation` on every CfnElement during synthesis, so it cannot
+// quietly vanish without breaking CDK generally. A coordinated future refactor of the
+// method and its caller could still break this construct's direct call, and so could a
+// change to the rendered envelope. Either way the failure must name that cause.
+test("reports a distinct error when the CDK rendering envelope changes shape", () => {
+  const stack = new Stack();
+  const destinationBucket = new Bucket(stack, "Dest");
+  new ShinBucketDeployment(stack, "Deploy", {
+    sources: [Source.data("index.html", "ok")],
+    destination: { bucket: destinationBucket },
+    providerLambda: { localBuild: testLocalProviderBuild() },
+  });
+
+  const resource = destinationBucket.node.defaultChild;
+  if (!CfnBucket.isCfnBucket(resource)) {
+    throw new Error("expected destination CfnBucket");
+  }
+  // Structurally malformed: the `Resources` envelope is gone entirely. A wrong
+  // resource `Type` is deliberately not used here, because a consumer can produce
+  // that state themselves via `addOverride("Type", ...)`.
+  (resource as unknown as Record<string, unknown>)._toCloudFormation = () => ({
+    Resource: { Dest: { Type: "AWS::S3::Bucket" } },
+  });
+
+  expect(() => customResourceProperties(stack)).toThrowError(
+    expect.objectContaining({
+      code: "ShinBucketDeploymentCdkRenderingUnsupported",
+    }) as Error,
+  );
+});
+
+test("preserves the original failure when CDK rendering throws", () => {
+  const stack = new Stack();
+  const destinationBucket = new Bucket(stack, "Dest");
+  const resource = destinationBucket.node.defaultChild;
+  if (!CfnBucket.isCfnBucket(resource)) {
+    throw new Error("expected destination CfnBucket");
+  }
+  const cause = new TypeError("rendering contract changed");
+  (resource as unknown as Record<string, unknown>)._toCloudFormation = () => {
+    throw cause;
+  };
+
+  // Called directly rather than through synthesis, because CDK's own traversal
+  // would hit the broken method first and raise its own error.
+  let thrown: unknown;
+  try {
+    destinationChecksumStrategy(stack, destinationBucket, resource);
+  } catch (error) {
+    thrown = error;
+  }
+  expect(thrown).toMatchObject({ code: "ShinBucketDeploymentCdkRenderingUnsupported" });
+  expect((thrown as { cause?: unknown }).cause).toBe(cause);
+});
+
+// A retyped resource is something a consumer can do with the public `addOverride`,
+// so it must read as an unsupported bucket configuration, not as CDK drift.
+test("treats a publicly retyped destination resource as unsupported configuration", () => {
+  const stack = new Stack();
+  const destinationBucket = new Bucket(stack, "Dest");
+  new ShinBucketDeployment(stack, "Deploy", {
+    sources: [Source.data("index.html", "ok")],
+    destination: { bucket: destinationBucket },
+    providerLambda: { localBuild: testLocalProviderBuild() },
+  });
+
+  const resource = destinationBucket.node.defaultChild;
+  if (!CfnBucket.isCfnBucket(resource)) {
+    throw new Error("expected destination CfnBucket");
+  }
+  resource.addOverride("Type", "AWS::S3::SomethingElse");
+
+  expect(() => customResourceProperties(stack)).toThrowError(
+    expect.objectContaining({
+      code: "ShinBucketDeploymentDestinationEncryptionUnsupported",
+    }) as Error,
+  );
 });
 
 test("resolves destination encryption after an Aspect mutation", () => {
