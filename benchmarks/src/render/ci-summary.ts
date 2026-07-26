@@ -138,21 +138,21 @@ function renderPressureTable(records: readonly BenchmarkResultRecord[]): string 
     grouped.set(profile, rows);
   }
   return [
-    "| Profile | GET retries | GET errors | PUT retries | PUT throttles | Block refetches | Transfer failures |",
+    "| Profile | GET retries | GET errors | Write retries | Write throttles | Block refetches | Transfer failures |",
     "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
-    ...[...grouped.entries()]
-      .sort()
-      .map(([profile, rows]) =>
-        [
-          `| \`${profile}\``,
-          sum(rows, "source", "getRetries"),
-          sum(rows, "source", "getErrors"),
-          sum(rows, "putObject", "retryAttempts"),
-          sum(rows, "putObject", "throttledAttempts"),
-          sum(rows, "source", "blockRefetches"),
-          `${sum(rows, "transfer", "failedObjects")} |`,
-        ].join(" | "),
-      ),
+    ...[...grouped.entries()].sort().map(([profile, rows]) =>
+      [
+        `| \`${profile}\``,
+        sum(rows, "source", "getRetries"),
+        sum(rows, "source", "getErrors"),
+        // Extracted uploads report under putObject and direct copies under
+        // copyObject, so destination write pressure is the sum of both.
+        sum(rows, "putObject", "retryAttempts") + sum(rows, "copyObject", "retryAttempts"),
+        sum(rows, "putObject", "throttledAttempts") + sum(rows, "copyObject", "throttledAttempts"),
+        sum(rows, "source", "blockRefetches"),
+        `${sum(rows, "transfer", "failedObjects")} |`,
+      ].join(" | "),
+    ),
   ].join("\n");
 }
 
@@ -189,7 +189,7 @@ function comparable(
 
 function sum(
   records: readonly BenchmarkResultRecord[],
-  section: "source" | "putObject" | "transfer",
+  section: "source" | "putObject" | "copyObject" | "transfer",
   field: string,
 ): number {
   return records.reduce((total, record) => {

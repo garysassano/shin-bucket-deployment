@@ -52,6 +52,8 @@ export type ProviderSummary = {
   readonly catalog?: Record<string, number | null> | null;
   readonly source?: Record<string, number | null> | null;
   readonly putObject?: ProviderPutObjectSummary | null;
+  /** Diagnostics schema v5 and later. */
+  readonly copyObject?: Record<string, number | null> | null;
   readonly deleteObject?: Record<string, number | null> | null;
   readonly callback?: Record<string, number | null> | null;
 };
@@ -242,12 +244,40 @@ const PROVIDER_SUMMARY_SECTIONS = {
   },
 } as const;
 
+/**
+ * Schema v5 adds a `copyObject` section carrying the CopyObject retry and throttle
+ * counters that direct-copy (`extract:false`) deployments produce. It is kept out of
+ * `PROVIDER_SUMMARY_SECTIONS` because that set drives the v3 required-section loop;
+ * adding it there would make every historical v3 and v4 row report a missing section.
+ */
+const PROVIDER_SUMMARY_V5_SECTIONS = {
+  copyObject: {
+    wireAttempts: "number",
+    failedAttempts: "number",
+    retryAttempts: "number",
+    throttledAttempts: "number",
+    retryWaitMs: "number",
+    throttleCooldownWaits: "number",
+    throttleCooldownWaitMs: "number",
+  },
+} as const;
+
+const PROVIDER_SUMMARY_ALL_SECTIONS = {
+  ...PROVIDER_SUMMARY_SECTIONS,
+  ...PROVIDER_SUMMARY_V5_SECTIONS,
+} as const;
+
+/** The detailed PutObject failure breakdowns arrived in v4 and persist in later versions. */
+function hasDetailedPutObjectFields(schemaVersion: unknown): boolean {
+  return typeof schemaVersion === "number" && schemaVersion >= 4;
+}
+
 const PROVIDER_SUMMARY_V3_SCALARS = Object.keys(PROVIDER_SUMMARY_SCALARS).filter(
   (name) => name !== "status" && name !== "prune" && name !== "detailedFailureDiagnosticsEnabled",
 );
 const PROVIDER_SUMMARY_FIELDS = new Set([
   ...Object.keys(PROVIDER_SUMMARY_SCALARS),
-  ...Object.keys(PROVIDER_SUMMARY_SECTIONS),
+  ...Object.keys(PROVIDER_SUMMARY_ALL_SECTIONS),
 ]);
 const MAX_FAILURE_DIAGNOSTIC_LABELS = 32;
 const MAX_FAILURE_DIAGNOSTIC_GROUPS = 32;
@@ -750,7 +780,7 @@ export function sanitizeProviderSummary(value: unknown): ProviderSummary {
     if (!Object.hasOwn(value, name)) continue;
     sanitized[name] = sanitizedValue(value[name], kind, `providerSummary.${name}`);
   }
-  for (const [sectionName, fields] of Object.entries(PROVIDER_SUMMARY_SECTIONS)) {
+  for (const [sectionName, fields] of Object.entries(PROVIDER_SUMMARY_ALL_SECTIONS)) {
     if (!Object.hasOwn(value, sectionName)) continue;
     const section = value[sectionName];
     if (section === null) {
@@ -759,7 +789,7 @@ export function sanitizeProviderSummary(value: unknown): ProviderSummary {
     }
     if (!isObject(section)) throw new Error(`providerSummary.${sectionName} must be an object.`);
     const allowed = new Set(Object.keys(fields));
-    if (sectionName === "putObject" && value.schemaVersion === 4) {
+    if (sectionName === "putObject" && hasDetailedPutObjectFields(value.schemaVersion)) {
       for (const name of [
         "failuresBySdkErrorKind",
         "failuresByServiceCode",
@@ -782,7 +812,7 @@ export function sanitizeProviderSummary(value: unknown): ProviderSummary {
           sanitizedValue(section[name], kind, `providerSummary.${sectionName}.${name}`),
         ]),
     ) as Record<string, unknown>;
-    if (sectionName === "putObject" && value.schemaVersion === 4) {
+    if (sectionName === "putObject" && hasDetailedPutObjectFields(value.schemaVersion)) {
       sanitizedSection.failuresBySdkErrorKind = sanitizeDiagnosticCountMap(
         section.failuresBySdkErrorKind,
         "providerSummary.putObject.failuresBySdkErrorKind",
@@ -807,9 +837,54 @@ export function sanitizeProviderSummary(value: unknown): ProviderSummary {
 }
 
 export function providerSummaryErrors(summary: ProviderSummary): string[] {
+  if (summary.schemaVersion === 5) return providerSummaryV5Errors(summary);
   return summary.schemaVersion === 4
     ? providerSummaryV4Errors(summary)
     : providerSummaryV3Errors(summary);
+}
+
+/**
+ * Validates the v5-only `copyObject` section, then strips it and defers to the v4
+ * validator, mirroring how v4 layers over v3. Older rows never reach this path, so
+ * they keep validating against their own exact shape.
+ */
+export function providerSummaryV5Errors(summary: ProviderSummary): string[] {
+  const errors: string[] = [];
+  try {
+    sanitizeProviderSummary(summary);
+  } catch (error) {
+    return [error instanceof Error ? error.message : String(error)];
+  }
+  if (summary.schemaVersion !== 5) errors.push("schema-v5 schemaVersion must be 5");
+
+  const copyObject = summary.copyObject;
+  if (!isObject(copyObject)) {
+    errors.push("schema-v5 summary section copyObject must be an object");
+  } else {
+    const fields = PROVIDER_SUMMARY_V5_SECTIONS.copyObject;
+    for (const name of Object.keys(fields)) {
+      if (!Object.hasOwn(copyObject, name)) {
+        errors.push(`schema-v5 summary is missing copyObject.${name}`);
+      } else if (copyObject[name] === null) {
+        errors.push(`schema-v5 summary field copyObject.${name} must not be null`);
+      } else if (typeof copyObject[name] !== "number" || !Number.isInteger(copyObject[name])) {
+        errors.push(`schema-v5 summary field copyObject.${name} must be an integer`);
+      }
+    }
+    for (const name of Object.keys(copyObject)) {
+      if (!Object.hasOwn(fields, name)) {
+        errors.push(`schema-v5 summary contains unexpected field copyObject.${name}`);
+      }
+    }
+  }
+
+  const { copyObject: _copyObject, ...v4Summary } = summary;
+  errors.push(
+    ...providerSummaryV4Errors({ ...v4Summary, schemaVersion: 4 } as ProviderSummary).map((error) =>
+      error.replaceAll("schema-v4", "schema-v5"),
+    ),
+  );
+  return errors;
 }
 
 export function providerSummaryV4Errors(summary: ProviderSummary): string[] {

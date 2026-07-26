@@ -328,6 +328,52 @@ describe("benchmark result collector", () => {
     expect(committed.some((row) => row.providerSummary?.schemaVersion === 3)).toBe(true);
   });
 
+  test("accepts a strict schema-v5 summary carrying copy diagnostics", () => {
+    const summary = providerSummaryV5Fixture();
+
+    expect(summary.copyObject.retryAttempts).toBe(4);
+    expect(sanitizeProviderSummary(summary)).toEqual(summary);
+    expect(providerSummaryErrors(summary)).toEqual([]);
+  });
+
+  test("requires an exact schema-v5 copyObject section", () => {
+    const missing = providerSummaryV5Fixture();
+    delete (missing.copyObject as Partial<typeof missing.copyObject>).retryAttempts;
+    expect(providerSummaryErrors(missing).join("; ")).toContain(
+      "schema-v5 summary is missing copyObject.retryAttempts",
+    );
+
+    const unexpected = providerSummaryV5Fixture();
+    (unexpected.copyObject as Record<string, unknown>).failuresByServiceCode = {};
+    expect(providerSummaryErrors(unexpected).join("; ")).toContain("unexpected field");
+
+    const nulled = providerSummaryV5Fixture();
+    (nulled.copyObject as Record<string, unknown>).wireAttempts = null;
+    expect(providerSummaryErrors(nulled).join("; ")).toContain(
+      "copyObject.wireAttempts must not be null",
+    );
+
+    const fractional = providerSummaryV5Fixture();
+    (fractional.copyObject as Record<string, unknown>).wireAttempts = 1.5;
+    expect(providerSummaryErrors(fractional).join("; ")).toContain(
+      "copyObject.wireAttempts must be an integer",
+    );
+
+    const absent = providerSummaryV5Fixture();
+    delete (absent as Partial<typeof absent>).copyObject;
+    expect(providerSummaryErrors(absent).join("; ")).toContain("copyObject must be an object");
+  });
+
+  test("keeps schema-v4 summaries valid after the v5 bump", () => {
+    // v4 rows carry no copyObject section and must not be asked for one.
+    const v4 = providerSummaryV4Fixture();
+    expect(providerSummaryErrors(v4)).toEqual([]);
+
+    // A v4 row that somehow carries a copy section is still rejected as v4.
+    const contaminated = { ...v4, copyObject: providerSummaryV5Fixture().copyObject };
+    expect(providerSummaryErrors(contaminated).join("; ")).toContain("unexpected field copyObject");
+  });
+
   test("accepts schema-v4 basic failures with detailed diagnostics disabled", () => {
     const summary = providerSummaryV4Fixture();
     summary.detailedFailureDiagnosticsEnabled = false;
@@ -729,6 +775,23 @@ describe("benchmark result collector", () => {
     expect(table).toContain("| Shin telemetry rows | 1 |");
   });
 });
+
+function providerSummaryV5Fixture() {
+  const v4 = providerSummaryV4Fixture();
+  return {
+    ...v4,
+    schemaVersion: 5,
+    copyObject: {
+      wireAttempts: 12,
+      failedAttempts: 3,
+      retryAttempts: 4,
+      throttledAttempts: 2,
+      retryWaitMs: 750,
+      throttleCooldownWaits: 1,
+      throttleCooldownWaitMs: 300,
+    },
+  };
+}
 
 function providerSummaryV4Fixture() {
   const zeros = (names: readonly string[]) => Object.fromEntries(names.map((name) => [name, 0]));

@@ -29,7 +29,7 @@ use tokio::time::{Instant, sleep_until};
 use crate::deadline::{InvocationDeadlines, TaskDrainBudget};
 use crate::replace::MarkerReplacements;
 use crate::types::{
-    AppState, DeploymentRequest, DeploymentStats, DestinationChecksumStrategy,
+    AppState, CopyObjectStats, DeploymentRequest, DeploymentStats, DestinationChecksumStrategy,
     DiagnosticRangeStats, MarkerConfig, PutObjectFailureBodyStats, PutObjectFailureSourceStats,
     PutObjectFailureStateStats, PutObjectRetryJitter, PutObjectRetryOptions, PutObjectStats,
     SourceArchive,
@@ -298,7 +298,7 @@ pub(super) async fn execute_copy_plans(
         scheduler.finish().await
     }
     .await;
-    log_copy_diagnostics(&retry, &copy_diagnostics);
+    log_copy_diagnostics(&retry, &copy_diagnostics, &stats);
     copy_result
 }
 
@@ -1814,8 +1814,23 @@ fn log_put_diagnostics(
     );
 }
 
-fn log_copy_diagnostics(retry: &PutObjectRetryOptions, diagnostics: &WriteDiagnostics) {
+fn log_copy_diagnostics(
+    retry: &PutObjectRetryOptions,
+    diagnostics: &WriteDiagnostics,
+    stats: &DeploymentStats,
+) {
     let diagnostics = diagnostics.snapshot();
+    // Reuse the snapshot already taken for the log line so the structured summary
+    // carries the same counters without a second pass over the diagnostics.
+    stats.add_copy_stats(&CopyObjectStats {
+        wire_attempts: diagnostics.wire_attempts,
+        failed_attempts: diagnostics.failed_attempts,
+        retry_attempts: diagnostics.retry_attempts,
+        throttled_attempts: diagnostics.throttled_attempts,
+        retry_wait_ms: diagnostics.retry_wait_millis,
+        throttle_cooldown_waits: diagnostics.throttle_cooldown_waits,
+        throttle_cooldown_wait_ms: diagnostics.throttle_cooldown_wait_millis,
+    });
     tracing::info!(
         max_attempts = retry.max_attempts,
         retry_base_delay_ms = retry.retry_base_delay_ms,
