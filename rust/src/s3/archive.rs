@@ -42,6 +42,14 @@ pub(crate) use entry::{
 
 const GET_OBJECT_MAX_ATTEMPTS: usize = 3;
 const SOURCE_BUDGET_PERMIT_UNIT_BYTES: u64 = 4 * 1024;
+/// Source GET retry bounds, mirroring the destination-write policy in `transfer.rs`:
+/// a capped exponential ceiling per attempt, with full jitter applied underneath it so
+/// concurrent readers that hit the same SlowDown do not retry in lockstep. Throttled
+/// responses back off harder than transient transport errors.
+const SOURCE_GET_RETRY_BASE_DELAY_MS: u64 = 100;
+const SOURCE_GET_RETRY_MAX_DELAY_MS: u64 = 400;
+const SOURCE_GET_THROTTLE_RETRY_BASE_DELAY_MS: u64 = 250;
+const SOURCE_GET_THROTTLE_RETRY_MAX_DELAY_MS: u64 = 2_000;
 
 #[derive(Clone, Debug)]
 pub(crate) struct SourceClient {
@@ -358,7 +366,12 @@ impl SourceClient {
                             .source_get_throttled_attempts
                             .fetch_add(1, Ordering::Relaxed);
                     }
-                    tokio::time::sleep(Duration::from_millis(100 * attempt as u64)).await;
+                    tokio::time::sleep(source_get_retry_delay(
+                        attempt,
+                        error.throttled,
+                        fastrand::u64(..),
+                    ))
+                    .await;
                 }
                 Err(error) => {
                     if error.retryable {
@@ -1660,6 +1673,36 @@ impl SourceBlockRange {
     }
 }
 
+/// Ceiling for a source GET retry: `base * 2^(attempt - 1)`, clamped to the maximum
+/// for the error class. Saturating throughout so a large attempt count cannot wrap.
+fn source_get_retry_cap_millis(attempt: usize, throttled: bool) -> u64 {
+    let (base, max) = if throttled {
+        (
+            SOURCE_GET_THROTTLE_RETRY_BASE_DELAY_MS,
+            SOURCE_GET_THROTTLE_RETRY_MAX_DELAY_MS,
+        )
+    } else {
+        (
+            SOURCE_GET_RETRY_BASE_DELAY_MS,
+            SOURCE_GET_RETRY_MAX_DELAY_MS,
+        )
+    };
+    let shift = u32::try_from(attempt.saturating_sub(1)).unwrap_or(u32::MAX);
+    let multiplier = 1_u64.checked_shl(shift).unwrap_or(u64::MAX);
+    base.saturating_mul(multiplier).min(max)
+}
+
+/// Full jitter: sample uniformly from `0..=cap` so concurrent readers spread out
+/// instead of retrying together. `jitter` is supplied by the caller so the delay
+/// computation stays a pure function and can be tested without timing races.
+fn source_get_retry_delay(attempt: usize, throttled: bool, jitter: u64) -> Duration {
+    let cap_millis = source_get_retry_cap_millis(attempt, throttled);
+    if cap_millis == 0 {
+        return Duration::ZERO;
+    }
+    Duration::from_millis(jitter % cap_millis.saturating_add(1))
+}
+
 fn plan_source_blocks(
     source_len: u64,
     plans: &[ZipEntryPlan],
@@ -1855,7 +1898,8 @@ mod tests {
         LOCAL_FILE_HEADER_LEN, SourceClient, SourceDiagnostics, UploadBodyState,
         block_indices_for_span, marker_zip_entry_body, plan_marker_zip_entry, plan_source_blocks,
         prepare_zip_directory_reader, range_get_request_error, send_marker_zip_entry_chunks,
-        send_zip_entry_chunks, zip_entry_body, zip_entry_reader,
+        send_zip_entry_chunks, source_get_retry_cap_millis, source_get_retry_delay, zip_entry_body,
+        zip_entry_reader,
     };
     use crate::replace::MarkerReplacements;
     use crate::s3::archive::{
@@ -3516,6 +3560,59 @@ mod tests {
             etag: "\"test-source-etag\"".to_string(),
             diagnostics: Arc::new(SourceDiagnostics::new(len)),
         })
+    }
+
+    #[test]
+    fn source_get_retry_cap_grows_exponentially_and_clamps() {
+        // Transient errors: 100, 200, 400, then clamped at the maximum.
+        assert_eq!(source_get_retry_cap_millis(1, false), 100);
+        assert_eq!(source_get_retry_cap_millis(2, false), 200);
+        assert_eq!(source_get_retry_cap_millis(3, false), 400);
+        assert_eq!(source_get_retry_cap_millis(4, false), 400);
+
+        // Throttled responses back off harder: 250, 500, 1000, 2000, then clamped.
+        assert_eq!(source_get_retry_cap_millis(1, true), 250);
+        assert_eq!(source_get_retry_cap_millis(2, true), 500);
+        assert_eq!(source_get_retry_cap_millis(4, true), 2_000);
+        assert_eq!(source_get_retry_cap_millis(5, true), 2_000);
+
+        // A large attempt count must clamp rather than wrap.
+        assert_eq!(source_get_retry_cap_millis(usize::MAX, true), 2_000);
+    }
+
+    #[test]
+    fn source_get_retry_delay_applies_full_jitter_under_the_cap() {
+        // Full jitter samples 0..=cap, so the floor is zero and the ceiling is the cap.
+        assert_eq!(
+            source_get_retry_delay(2, false, 0),
+            Duration::from_millis(0)
+        );
+        assert_eq!(
+            source_get_retry_delay(2, false, 200),
+            Duration::from_millis(200)
+        );
+
+        // Every sample stays within the cap for its attempt and error class.
+        for attempt in 1..=6 {
+            for throttled in [false, true] {
+                let cap = source_get_retry_cap_millis(attempt, throttled);
+                for jitter in [0, 1, 7, 12_345, u64::MAX] {
+                    let delay = source_get_retry_delay(attempt, throttled, jitter);
+                    assert!(
+                        delay <= Duration::from_millis(cap),
+                        "attempt {attempt} throttled {throttled} jitter {jitter} gave {delay:?} over cap {cap}"
+                    );
+                }
+            }
+        }
+
+        // Throttled retries are never cheaper than transient ones at the same attempt.
+        for attempt in 1..=6 {
+            assert!(
+                source_get_retry_cap_millis(attempt, true)
+                    >= source_get_retry_cap_millis(attempt, false)
+            );
+        }
     }
 
     fn head_replay_event(etag: Option<&str>, len: u64) -> ReplayEvent {
