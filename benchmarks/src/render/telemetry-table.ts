@@ -216,6 +216,26 @@ const PUT_COLUMNS: Array<Column<TelemetryRow>> = [
   },
 ];
 
+// Direct-copy (`extract:false`) deployments report their retry and throttle pressure
+// here rather than under `putObject`. Rows older than diagnostics schema v5 have no
+// `copyObject` section and render as unavailable.
+const COPY_COLUMNS: Array<Column<TelemetryRow>> = [
+  { header: "Phase", value: phase },
+  { header: "Wire attempts", value: (row) => nested(row, "copyObject", "wireAttempts") },
+  { header: "Failed attempts", value: (row) => nested(row, "copyObject", "failedAttempts") },
+  { header: "Retry attempts", value: (row) => nested(row, "copyObject", "retryAttempts") },
+  { header: "Throttled attempts", value: (row) => nested(row, "copyObject", "throttledAttempts") },
+  { header: "Retry wait ms", value: (row) => nested(row, "copyObject", "retryWaitMs") },
+  {
+    header: "Throttle cooldown waits",
+    value: (row) => nested(row, "copyObject", "throttleCooldownWaits"),
+  },
+  {
+    header: "Throttle cooldown ms",
+    value: (row) => nested(row, "copyObject", "throttleCooldownWaitMs"),
+  },
+];
+
 const CATALOG_COLUMNS: Array<Column<TelemetryRow>> = [
   { header: "Phase", value: phase },
   { header: "Trusted archives", value: (row) => nested(row, "catalog", "trustedArchives") },
@@ -364,6 +384,10 @@ function renderGroup(group: TelemetryGroup): string[] {
     "",
     renderMarkdownTable(group.rows, PUT_COLUMNS),
     "",
+    "### CopyObject Pressure",
+    "",
+    renderMarkdownTable(group.rows, COPY_COLUMNS),
+    "",
     "### DeleteObjects Pressure",
     "",
     renderMarkdownTable(group.rows, DELETE_COLUMNS),
@@ -420,6 +444,7 @@ function nested(
     | "catalog"
     | "source"
     | "putObject"
+    | "copyObject"
     | "deleteObject"
     | "callback",
   key: string,

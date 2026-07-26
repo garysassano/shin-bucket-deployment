@@ -888,7 +888,7 @@ mod tests {
     }
 
     #[test]
-    fn deployment_summary_uses_diagnostics_schema_v4() {
+    fn deployment_summary_uses_diagnostics_schema_v5() {
         let request = deployment_request_with_paths(vec!["/*".to_string()]);
         let stats = crate::types::DeploymentStats::new(true);
         stats.add_marker_planning_pass();
@@ -906,10 +906,48 @@ mod tests {
         stats.record_callback_attempt(true);
         stats.record_callback_success();
         stats.add_callback_millis(12);
+        stats.add_copy_stats(&crate::types::CopyObjectStats {
+            wire_attempts: 7,
+            failed_attempts: 2,
+            retry_attempts: 3,
+            throttled_attempts: 1,
+            retry_wait_ms: 250,
+            throttle_cooldown_waits: 4,
+            throttle_cooldown_wait_ms: 900,
+        });
         let summary = serde_json::to_value(stats.snapshot("Create", "success", &request))
             .expect("serializable summary");
 
-        assert_eq!(summary["schemaVersion"], 4);
+        assert_eq!(summary["schemaVersion"], 5);
+
+        // Copy diagnostics aggregate into their own section and stay independent of
+        // the PutObject counters, which remain zero for an `extract:false` deployment.
+        let copy_object = summary["copyObject"]
+            .as_object()
+            .expect("copyObject section");
+        assert_eq!(copy_object["wireAttempts"], 7);
+        assert_eq!(copy_object["failedAttempts"], 2);
+        assert_eq!(copy_object["retryAttempts"], 3);
+        assert_eq!(copy_object["throttledAttempts"], 1);
+        assert_eq!(copy_object["retryWaitMs"], 250);
+        assert_eq!(copy_object["throttleCooldownWaits"], 4);
+        assert_eq!(copy_object["throttleCooldownWaitMs"], 900);
+        // Exactly the seven counters a copy can produce; the PutObject-only failure
+        // breakdowns are omitted rather than reported as empty.
+        assert_eq!(
+            copy_object.keys().map(String::as_str).collect::<Vec<_>>(),
+            vec![
+                "wireAttempts",
+                "failedAttempts",
+                "retryAttempts",
+                "throttledAttempts",
+                "retryWaitMs",
+                "throttleCooldownWaits",
+                "throttleCooldownWaitMs",
+            ]
+        );
+        assert_eq!(summary["putObject"]["wireAttempts"], 0);
+        assert_eq!(summary["putObject"]["retryAttempts"], 0);
         assert_eq!(summary["detailedFailureDiagnosticsEnabled"], true);
         assert_eq!(summary["deploymentStatus"], "success");
         assert!(summary.get("status").is_none());
@@ -1089,7 +1127,7 @@ mod tests {
 
         let summary = serde_json::to_value(stats.snapshot("Create", "failed", &request))
             .expect("serializable summary");
-        assert_eq!(summary["schemaVersion"], 4);
+        assert_eq!(summary["schemaVersion"], 5);
         assert_eq!(summary["detailedFailureDiagnosticsEnabled"], false);
         assert_eq!(summary["putObject"]["failedAttempts"], 1);
         assert_eq!(summary["putObject"]["failuresBySdkErrorKind"], json!({}));

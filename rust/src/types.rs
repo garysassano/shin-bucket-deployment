@@ -310,6 +310,13 @@ pub(crate) struct DeploymentStats {
     put_throttle_cooldown_waits: AtomicU64,
     put_throttle_cooldown_wait_millis: AtomicU64,
     detailed_put_object: Option<Box<DetailedPutObjectStats>>,
+    copy_wire_attempts: AtomicU64,
+    copy_failed_attempts: AtomicU64,
+    copy_retry_attempts: AtomicU64,
+    copy_throttled_attempts: AtomicU64,
+    copy_retry_wait_millis: AtomicU64,
+    copy_throttle_cooldown_waits: AtomicU64,
+    copy_throttle_cooldown_wait_millis: AtomicU64,
     callback_wire_attempts: AtomicU64,
     callback_failed_attempts: AtomicU64,
     callback_retry_attempts: AtomicU64,
@@ -348,6 +355,7 @@ pub(crate) struct DeploymentStatsSnapshot<'a> {
     pub(crate) catalog: CatalogStats,
     pub(crate) source: SourceStats,
     pub(crate) put_object: PutObjectStats,
+    pub(crate) copy_object: CopyObjectStats,
     pub(crate) delete_object: DeleteObjectStats,
     pub(crate) callback: CallbackStats,
 }
@@ -463,6 +471,22 @@ pub(crate) struct PutObjectStats {
     pub(crate) failures_by_service_code: BTreeMap<String, u64>,
     pub(crate) failure_states: Vec<PutObjectFailureStateStats>,
     pub(crate) failure_state_overflow_attempts: u64,
+}
+
+/// CopyObject counterpart to `PutObjectStats`. Only the seven counters that a copy
+/// can actually produce are represented: copies run with detailed diagnostics
+/// disabled and never call `record_put_failure`, so the four PutObject-only failure
+/// breakdown fields are omitted rather than reported as empty.
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CopyObjectStats {
+    pub(crate) wire_attempts: u64,
+    pub(crate) failed_attempts: u64,
+    pub(crate) retry_attempts: u64,
+    pub(crate) throttled_attempts: u64,
+    pub(crate) retry_wait_ms: u64,
+    pub(crate) throttle_cooldown_waits: u64,
+    pub(crate) throttle_cooldown_wait_ms: u64,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -854,6 +878,23 @@ impl DeploymentStats {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    pub(crate) fn add_copy_stats(&self, stats: &CopyObjectStats) {
+        self.copy_wire_attempts
+            .fetch_add(stats.wire_attempts, Ordering::Relaxed);
+        self.copy_failed_attempts
+            .fetch_add(stats.failed_attempts, Ordering::Relaxed);
+        self.copy_retry_attempts
+            .fetch_add(stats.retry_attempts, Ordering::Relaxed);
+        self.copy_throttled_attempts
+            .fetch_add(stats.throttled_attempts, Ordering::Relaxed);
+        self.copy_retry_wait_millis
+            .fetch_add(stats.retry_wait_ms, Ordering::Relaxed);
+        self.copy_throttle_cooldown_waits
+            .fetch_add(stats.throttle_cooldown_waits, Ordering::Relaxed);
+        self.copy_throttle_cooldown_wait_millis
+            .fetch_add(stats.throttle_cooldown_wait_ms, Ordering::Relaxed);
+    }
+
     pub(crate) fn add_put_stats(&self, stats: &PutObjectStats) {
         self.put_wire_attempts
             .fetch_add(stats.wire_attempts, Ordering::Relaxed);
@@ -894,7 +935,7 @@ impl DeploymentStats {
     ) -> DeploymentStatsSnapshot<'a> {
         DeploymentStatsSnapshot {
             event: "shin_deployment_summary",
-            schema_version: 4,
+            schema_version: 5,
             request_type,
             deployment_status,
             extract: request.extract,
@@ -1057,6 +1098,17 @@ impl DeploymentStats {
                             .load(Ordering::Relaxed)
                     },
                 ),
+            },
+            copy_object: CopyObjectStats {
+                wire_attempts: self.copy_wire_attempts.load(Ordering::Relaxed),
+                failed_attempts: self.copy_failed_attempts.load(Ordering::Relaxed),
+                retry_attempts: self.copy_retry_attempts.load(Ordering::Relaxed),
+                throttled_attempts: self.copy_throttled_attempts.load(Ordering::Relaxed),
+                retry_wait_ms: self.copy_retry_wait_millis.load(Ordering::Relaxed),
+                throttle_cooldown_waits: self.copy_throttle_cooldown_waits.load(Ordering::Relaxed),
+                throttle_cooldown_wait_ms: self
+                    .copy_throttle_cooldown_wait_millis
+                    .load(Ordering::Relaxed),
             },
             delete_object: DeleteObjectStats {
                 sdk_calls: self.delete_sdk_calls.load(Ordering::Relaxed),

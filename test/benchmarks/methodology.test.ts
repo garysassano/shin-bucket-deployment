@@ -1349,7 +1349,7 @@ function canonicalRecord(
 function providerSummary(memoryMb: number, parallel: number, create: boolean) {
   return {
     event: "shin_deployment_summary",
-    schemaVersion: 4,
+    schemaVersion: 5,
     requestType: create ? "Create" : "Update",
     deploymentStatus: "success",
     extract: true,
@@ -1460,6 +1460,15 @@ function providerSummary(memoryMb: number, parallel: number, create: boolean) {
       failureStates: [],
       failureStateOverflowAttempts: 0,
     },
+    copyObject: zeroFields([
+      "wireAttempts",
+      "failedAttempts",
+      "retryAttempts",
+      "throttledAttempts",
+      "retryWaitMs",
+      "throttleCooldownWaits",
+      "throttleCooldownWaitMs",
+    ]),
     deleteObject: zeroFields([
       "sdkCalls",
       "failedCalls",

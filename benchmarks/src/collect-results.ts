@@ -542,10 +542,14 @@ function summaryFromMessage(message: string): ProviderSummary | undefined {
 function isDeploymentSummary(value: unknown): value is ProviderSummary {
   if (!isRecord(value) || value.event !== "shin_deployment_summary") return false;
   sanitizeProviderSummary(value);
-  if (value.schemaVersion === 4) {
+  // Every strictly-versioned summary is validated against its own exact shape.
+  // Older, looser rows are left to parse as-is.
+  if (value.schemaVersion === 4 || value.schemaVersion === 5) {
     const errors = providerSummaryErrors(value);
     if (errors.length > 0)
-      throw new Error(`Invalid schema-v4 provider summary: ${errors.join("; ")}`);
+      throw new Error(
+        `Invalid schema-v${value.schemaVersion} provider summary: ${errors.join("; ")}`,
+      );
   }
   return true;
 }

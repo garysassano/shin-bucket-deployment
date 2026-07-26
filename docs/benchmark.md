@@ -235,6 +235,6 @@ The `assets` benchmark scenario generates deterministic bundles under `.benchmar
 
 Shin rows may include sanitized `shin_deployment_summary` telemetry. Schema-v3 summaries separate deployment work status from callback delivery, logical transfer objects from source and destination upload wire attempts, and deletion SDK calls from inferred object outcomes. They also expose consumed body replays, typed throttling/errors, cancellations, invocation-global source memory, destination metadata/page high-water, and callback attempts; historical rows may not contain every field. Use `docs/architecture.md` for exact diagnostics meanings.
 
-Do not infer S3 throttling from source block waits alone. Source S3 pressure requires source `getRetries` or `getErrors`; destination S3 throttling requires `putObject.throttledAttempts` or retry evidence.
+Do not infer S3 throttling from source block waits alone. Source S3 pressure requires source `getRetries` or `getErrors`; destination S3 throttling requires `putObject.throttledAttempts` or retry evidence for extracted uploads, and `copyObject.throttledAttempts` or retry evidence for direct copies (schema v5 and later).
 
 Do not commit `.benchmark-runs/` or other raw AWS output. Commit only sanitized result rows, Markdown/SVG render outputs, configs, source, and tests.

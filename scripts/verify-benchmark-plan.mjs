@@ -110,7 +110,7 @@ function providerSummary(memoryMb, parallel, create) {
   const zeroFields = (names) => Object.fromEntries(names.map((name) => [name, 0]));
   return {
     event: "shin_deployment_summary",
-    schemaVersion: 4,
+    schemaVersion: 5,
     requestType: create ? "Create" : "Update",
     deploymentStatus: "success",
     extract: true,
@@ -221,6 +221,15 @@ function providerSummary(memoryMb, parallel, create) {
       failureStates: [],
       failureStateOverflowAttempts: 0,
     },
+    copyObject: zeroFields([
+      "wireAttempts",
+      "failedAttempts",
+      "retryAttempts",
+      "throttledAttempts",
+      "retryWaitMs",
+      "throttleCooldownWaits",
+      "throttleCooldownWaitMs",
+    ]),
     deleteObject: zeroFields([
       "sdkCalls",
       "failedCalls",
