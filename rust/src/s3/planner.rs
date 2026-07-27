@@ -468,6 +468,16 @@ async fn add_archive_entries_to_manifest(
                 source.len()
             ));
         }
+        // `source_span_end` is what keeps an entry's bytes out of the central directory:
+        // `open_entry_data_reader` refuses a local header or data range extending past it,
+        // so a hostile archive fails when the entry is opened rather than reading
+        // directory bytes as entry content.
+        //
+        // The `.min` is defense in depth rather than the operative check — every offset
+        // reaching here has already been proven to precede `central_directory_start` by
+        // `validate_archive_directory`, so `next_source_offset` cannot return a larger
+        // value. It is kept so this span stays self-evidently bounded without depending on
+        // a precondition established in another function; don't drop it as redundant.
         let source_span_end = next_source_offset(&source_offsets, source_offset)
             .unwrap_or(central_directory_start)
             .min(central_directory_start);
