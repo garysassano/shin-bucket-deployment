@@ -518,6 +518,14 @@ export interface ShinBucketDeploymentCloudFrontInvalidation {
    * A concrete list must contain at least one path. Every concrete path must
    * start with `/` and contain at most 4,000 Unicode characters.
    *
+   * Paths must not contain `~`, in either its literal or percent-encoded form.
+   * CloudFront does not support that character for invalidations, so such a path
+   * would be accepted and then silently invalidate nothing; it is rejected at
+   * synthesis instead.
+   *
+   * `*` acts as a wildcard only as the final character of a path. Anywhere else
+   * CloudFront matches it literally.
+   *
    * @default - the destination prefix followed by `*`
    */
   readonly paths?: string[];

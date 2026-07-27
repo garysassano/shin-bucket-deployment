@@ -730,7 +730,22 @@ function validateCloudFrontPaths(scope: Construct, paths: unknown): void {
         scope,
       );
     }
+    if (containsUnsupportedTilde(path)) {
+      throw new ValidationError(
+        "ShinBucketDeploymentCloudFrontPathTilde",
+        `cloudfrontInvalidation.paths[${index}] must not contain "~". CloudFront does not support that character for invalidations, URL-encoded or not, so such a path would be accepted and then silently fail to invalidate anything.`,
+        scope,
+      );
+    }
   }
+}
+
+/**
+ * CloudFront rejects `~` for invalidations "whether it's URL-encoded or not", so the
+ * percent-encoded spellings are just as unsupported as the literal character.
+ */
+function containsUnsupportedTilde(path: string): boolean {
+  return path.includes("~") || /%7e/i.test(path);
 }
 
 function validateDestinationKeyPrefix(scope: Construct, prefix: unknown): void {
