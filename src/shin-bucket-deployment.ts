@@ -510,6 +510,20 @@ export interface ShinBucketDeploymentCloudFrontInvalidation {
   /**
    * Wait for the invalidation to complete before finishing the deployment.
    *
+   * Waiting makes the resource signal success only once CloudFront reports the
+   * invalidation `Completed`, so a dependent resource never observes stale edge
+   * content. The trade-off is that an invalidation still in progress when the
+   * provider runs out of polling budget fails the custom resource even though
+   * every object was deployed and the invalidation was successfully created.
+   * Shin stops polling at that point; it does not cancel the invalidation, whose
+   * outcome is then CloudFront's to determine. CloudFormation reacts to the
+   * failure as it would to any other, which for an Update generally means
+   * rolling back to the previous content and invalidating again.
+   *
+   * Set this to `false` when a slow invalidation should not be able to fail an
+   * otherwise successful deployment; the deployment then completes as soon as
+   * the invalidation has been created.
+   *
    * @default true
    */
   readonly waitForCompletion?: boolean;
@@ -550,6 +564,15 @@ export interface ShinBucketDeploymentDestinationLifecycle {
      * `OldResourceProperties`.
      * For a child-to-parent move, cleanup preserves previous-child keys that
      * remain in the current deployment plan.
+     *
+     * Because that previous prefix is not known until the Update event arrives,
+     * enabling this grants the provider role `s3:ListBucket`,
+     * `s3:GetBucketTagging`, and `s3:DeleteObject` across the *whole* previous
+     * bucket rather than a single prefix. The provider itself derives the actual
+     * prefix from the Update event and confines deletion to that namespace, but
+     * the IAM grant is bucket-wide and is inherited by every deployment sharing
+     * the handler role. Turn the option back off after a one-time migration if
+     * that authority is no longer needed.
      *
      * @default false
      */

@@ -220,6 +220,9 @@ Previous objects are retained by default. To delete them:
 | Changed | Unchanged | Set `deletePreviousObjects: true` and provide `previousBucket`. |
 | Changed | Changed | Set `deletePreviousObjects: true` and provide `previousBucket`. |
 
+> [!WARNING]
+> `deletePreviousObjects` grants the provider role `s3:ListBucket`, `s3:GetBucketTagging`, and `s3:DeleteObject` across the **whole** previous bucket, not a single prefix. CloudFormation only reveals the previous prefix at deploy time through `OldResourceProperties`, so the grant cannot be narrowed at synthesis. The provider derives the actual prefix from the Update event and confines deletion to that namespace, and it validates the selected bucket before using the grant — but the IAM authority is bucket-wide and is inherited by every deployment sharing the handler role.
+
 #### CloudFront Invalidation
 
 | `cloudfrontInvalidation.distribution` | Invalidation configuration |
