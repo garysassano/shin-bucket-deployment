@@ -6,6 +6,7 @@ mod replace;
 mod request;
 mod s3;
 mod types;
+mod util;
 
 use std::sync::Arc;
 use std::time::Duration;

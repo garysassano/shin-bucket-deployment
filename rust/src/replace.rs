@@ -11,6 +11,7 @@ use sha2::Sha256;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use crate::types::MarkerConfig;
+use crate::util::finalize_md5;
 
 const INPUT_CHUNK_BYTES: usize = 64 * 1024;
 
@@ -239,19 +240,6 @@ fn json_escape_marker_value(value: &str) -> Result<String> {
 
     let escaped = serde_json::to_string(value)?;
     Ok(escaped[1..escaped.len() - 1].to_string())
-}
-
-fn finalize_md5(hasher: Md5) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-
-    let digest = hasher.finalize();
-    let bytes: &[u8] = digest.as_ref();
-    let mut output = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        output.push(HEX[(byte >> 4) as usize] as char);
-        output.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    output
 }
 
 #[cfg(test)]

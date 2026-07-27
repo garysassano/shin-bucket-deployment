@@ -152,7 +152,7 @@ pub(crate) async fn deploy(
         u64::try_from(deployment_manifest.len())
             .context("deployment manifest entry count cannot be represented safely")?,
     );
-    stats.add_plan_millis(crate::types::duration_ms(started.elapsed()));
+    stats.add_plan_millis(crate::util::duration_ms(started.elapsed()));
 
     let started = std::time::Instant::now();
     let destination_plan = timeout_at(
@@ -168,7 +168,7 @@ pub(crate) async fn deploy(
     )
     .await
     .context("S3 destination planning exceeded the deployment work deadline")??;
-    stats.add_destination_list_millis(crate::types::duration_ms(started.elapsed()));
+    stats.add_destination_list_millis(crate::util::duration_ms(started.elapsed()));
 
     let started = std::time::Instant::now();
     if let Some(zip_plans) = zip_plans {
@@ -199,7 +199,7 @@ pub(crate) async fn deploy(
         )
         .await?;
     }
-    stats.add_transfer_millis(crate::types::duration_ms(started.elapsed()));
+    stats.add_transfer_millis(crate::util::duration_ms(started.elapsed()));
 
     if request.delete_stale_objects_on_deployment && destination_plan.has_stale_candidates {
         let competing_owner = timeout_at(
@@ -233,7 +233,7 @@ pub(crate) async fn deploy(
             )
             .await
             .context("stale S3 object cleanup exceeded the deployment work deadline")??;
-            stats.add_delete_millis(crate::types::duration_ms(started.elapsed()));
+            stats.add_delete_millis(crate::util::duration_ms(started.elapsed()));
         }
     }
 
@@ -268,7 +268,7 @@ pub(crate) async fn deploy(
             )
             .await
             .context("previous S3 object cleanup exceeded the deployment work deadline")??;
-            stats.add_old_prefix_delete_millis(crate::types::duration_ms(started.elapsed()));
+            stats.add_old_prefix_delete_millis(crate::util::duration_ms(started.elapsed()));
         }
     }
 

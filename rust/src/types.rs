@@ -5,15 +5,16 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use crate::util::duration_ms;
 use aws_sdk_cloudfront::Client as CloudFrontClient;
 use aws_sdk_s3::Client as S3Client;
 use reqwest::Client as HttpClient;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-const MAX_FAILURE_DIAGNOSTIC_GROUPS: usize = 32;
-const MAX_FAILURE_DIAGNOSTIC_LABELS: usize = 32;
-const OTHER_DIAGNOSTIC_LABEL: &str = "Other";
+pub(crate) const MAX_FAILURE_DIAGNOSTIC_GROUPS: usize = 32;
+pub(crate) const MAX_FAILURE_DIAGNOSTIC_LABELS: usize = 32;
+pub(crate) const OTHER_DIAGNOSTIC_LABEL: &str = "Other";
 
 #[derive(Clone)]
 pub(crate) struct AppState {
@@ -67,40 +68,8 @@ mod detailed_failure_diagnostics_tests {
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct MarkerConfig {
-    #[serde(default, deserialize_with = "deserialize_boolish")]
+    #[serde(default, deserialize_with = "crate::util::deserialize_boolish")]
     pub(crate) json_escape: bool,
-}
-
-fn deserialize_boolish<'de, D>(deserializer: D) -> std::result::Result<bool, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    struct BoolishVisitor;
-
-    impl serde::de::Visitor<'_> for BoolishVisitor {
-        type Value = bool;
-
-        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            formatter.write_str("a boolean or a string containing true or false")
-        }
-
-        fn visit_bool<E>(self, value: bool) -> std::result::Result<Self::Value, E> {
-            Ok(value)
-        }
-
-        fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
-        where
-            E: serde::de::Error,
-        {
-            match value.to_ascii_lowercase().as_str() {
-                "true" => Ok(true),
-                "false" => Ok(false),
-                _ => Err(E::invalid_value(serde::de::Unexpected::Str(value), &self)),
-            }
-        }
-    }
-
-    deserializer.deserialize_any(BoolishVisitor)
 }
 
 #[derive(Clone, Debug)]
@@ -1164,7 +1133,7 @@ fn merge_failure_states(
             .iter_mut()
             .find(|existing| same_failure_signature(existing, failure))
         {
-            merge_failure_state(existing, failure);
+            existing.merge(failure);
         } else if destination.len() < MAX_FAILURE_DIAGNOSTIC_GROUPS {
             destination.push(failure.clone());
         } else {
@@ -1174,7 +1143,53 @@ fn merge_failure_states(
     overflow
 }
 
-fn same_failure_signature(
+impl DiagnosticRangeStats {
+    pub(crate) fn merge(&mut self, other: &Self) {
+        self.min = self.min.min(other.min);
+        self.max = self.max.max(other.max);
+        self.total = self.total.saturating_add(other.total);
+    }
+}
+
+impl PutObjectFailureBodyStats {
+    pub(crate) fn merge(&mut self, other: &Self) {
+        self.attempt_number.merge(&other.attempt_number);
+        self.bytes_emitted.merge(&other.bytes_emitted);
+        self.remaining_bytes.merge(&other.remaining_bytes);
+    }
+}
+
+impl PutObjectFailureSourceStats {
+    pub(crate) fn merge(&mut self, other: &Self) {
+        self.local_window_bytes.merge(&other.local_window_bytes);
+        self.local_committed_bytes
+            .merge(&other.local_committed_bytes);
+        self.local_resident_bytes.merge(&other.local_resident_bytes);
+        self.local_capacity_waiters
+            .merge(&other.local_capacity_waiters);
+        self.global_budget_bytes.merge(&other.global_budget_bytes);
+        self.global_resident_bytes
+            .merge(&other.global_resident_bytes);
+        self.global_available_permits
+            .merge(&other.global_available_permits);
+        self.global_permit_unit_bytes
+            .merge(&other.global_permit_unit_bytes);
+        self.global_permit_waiters
+            .merge(&other.global_permit_waiters);
+        self.active_fetches.merge(&other.active_fetches);
+    }
+}
+
+impl PutObjectFailureStateStats {
+    pub(crate) fn merge(&mut self, other: &Self) {
+        self.count = self.count.saturating_add(other.count);
+        self.elapsed_ms.merge(&other.elapsed_ms);
+        self.body.merge(&other.body);
+        self.source.merge(&other.source);
+    }
+}
+
+pub(crate) fn same_failure_signature(
     left: &PutObjectFailureStateStats,
     right: &PutObjectFailureStateStats,
 ) -> bool {
@@ -1190,76 +1205,6 @@ fn same_failure_signature(
         && left.body.receiver_dropped == right.body.receiver_dropped
         && left.body.receiver_drop_aborted_producer == right.body.receiver_drop_aborted_producer
         && left.source.observed == right.source.observed
-}
-
-fn merge_failure_state(
-    destination: &mut PutObjectFailureStateStats,
-    source: &PutObjectFailureStateStats,
-) {
-    destination.count = destination.count.saturating_add(source.count);
-    merge_range(&mut destination.elapsed_ms, &source.elapsed_ms);
-    merge_range(
-        &mut destination.body.attempt_number,
-        &source.body.attempt_number,
-    );
-    merge_range(
-        &mut destination.body.bytes_emitted,
-        &source.body.bytes_emitted,
-    );
-    merge_range(
-        &mut destination.body.remaining_bytes,
-        &source.body.remaining_bytes,
-    );
-    merge_range(
-        &mut destination.source.local_window_bytes,
-        &source.source.local_window_bytes,
-    );
-    merge_range(
-        &mut destination.source.local_committed_bytes,
-        &source.source.local_committed_bytes,
-    );
-    merge_range(
-        &mut destination.source.local_resident_bytes,
-        &source.source.local_resident_bytes,
-    );
-    merge_range(
-        &mut destination.source.local_capacity_waiters,
-        &source.source.local_capacity_waiters,
-    );
-    merge_range(
-        &mut destination.source.global_budget_bytes,
-        &source.source.global_budget_bytes,
-    );
-    merge_range(
-        &mut destination.source.global_resident_bytes,
-        &source.source.global_resident_bytes,
-    );
-    merge_range(
-        &mut destination.source.global_available_permits,
-        &source.source.global_available_permits,
-    );
-    merge_range(
-        &mut destination.source.global_permit_unit_bytes,
-        &source.source.global_permit_unit_bytes,
-    );
-    merge_range(
-        &mut destination.source.global_permit_waiters,
-        &source.source.global_permit_waiters,
-    );
-    merge_range(
-        &mut destination.source.active_fetches,
-        &source.source.active_fetches,
-    );
-}
-
-fn merge_range(destination: &mut DiagnosticRangeStats, source: &DiagnosticRangeStats) {
-    destination.min = destination.min.min(source.min);
-    destination.max = destination.max.max(source.max);
-    destination.total = destination.total.saturating_add(source.total);
-}
-
-pub(crate) fn duration_ms(duration: std::time::Duration) -> u64 {
-    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
 pub(crate) struct ResponsePayload {

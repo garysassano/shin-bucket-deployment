@@ -66,25 +66,37 @@ pub(crate) struct RawDeploymentRequest {
     pub(crate) destination_bucket_name: String,
     #[serde(default)]
     pub(crate) destination_bucket_key_prefix: Option<String>,
-    #[serde(default = "default_true", deserialize_with = "deserialize_boolish")]
+    #[serde(
+        default = "default_true",
+        deserialize_with = "crate::util::deserialize_boolish"
+    )]
     pub(crate) extract: bool,
-    #[serde(default, deserialize_with = "deserialize_boolish")]
+    #[serde(default, deserialize_with = "crate::util::deserialize_boolish")]
     pub(crate) delete_current_objects_on_delete: bool,
     #[serde(default)]
     pub(crate) distribution_id: Option<String>,
     #[serde(default)]
     pub(crate) distribution_paths: Option<Vec<String>>,
-    #[serde(default = "default_true", deserialize_with = "deserialize_boolish")]
+    #[serde(
+        default = "default_true",
+        deserialize_with = "crate::util::deserialize_boolish"
+    )]
     pub(crate) wait_for_distribution_invalidation: bool,
     #[serde(default)]
     pub(crate) destination_checksum_strategy: Option<DestinationChecksumStrategy>,
-    #[serde(default = "default_true", deserialize_with = "deserialize_boolish")]
+    #[serde(
+        default = "default_true",
+        deserialize_with = "crate::util::deserialize_boolish"
+    )]
     pub(crate) delete_stale_objects_on_deployment: bool,
     #[serde(default)]
     pub(crate) exclude: Vec<String>,
     #[serde(default)]
     pub(crate) include: Vec<String>,
-    #[serde(default = "default_true", deserialize_with = "deserialize_boolish")]
+    #[serde(
+        default = "default_true",
+        deserialize_with = "crate::util::deserialize_boolish"
+    )]
     pub(crate) output_object_keys: bool,
     #[serde(default)]
     pub(crate) destination_bucket_arn: Option<String>,
@@ -583,38 +595,6 @@ where
     }
 
     deserializer.deserialize_any(U32ishVisitor).map(Some)
-}
-
-fn deserialize_boolish<'de, D>(deserializer: D) -> std::result::Result<bool, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    struct BoolishVisitor;
-
-    impl serde::de::Visitor<'_> for BoolishVisitor {
-        type Value = bool;
-
-        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            formatter.write_str("a boolean or a string containing true or false")
-        }
-
-        fn visit_bool<E>(self, value: bool) -> std::result::Result<Self::Value, E> {
-            Ok(value)
-        }
-
-        fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
-        where
-            E: serde::de::Error,
-        {
-            match value.to_ascii_lowercase().as_str() {
-                "true" => Ok(true),
-                "false" => Ok(false),
-                _ => Err(E::invalid_value(serde::de::Unexpected::Str(value), &self)),
-            }
-        }
-    }
-
-    deserializer.deserialize_any(BoolishVisitor)
 }
 
 fn deserialize_optional_u64ish<'de, D>(

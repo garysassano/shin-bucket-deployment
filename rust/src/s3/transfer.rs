@@ -30,9 +30,10 @@ use crate::deadline::{InvocationDeadlines, TaskDrainBudget};
 use crate::replace::MarkerReplacements;
 use crate::types::{
     AppState, CopyObjectStats, DeploymentRequest, DeploymentStats, DestinationChecksumStrategy,
-    DiagnosticRangeStats, MarkerConfig, PutObjectFailureBodyStats, PutObjectFailureSourceStats,
+    DiagnosticRangeStats, MAX_FAILURE_DIAGNOSTIC_GROUPS, MAX_FAILURE_DIAGNOSTIC_LABELS,
+    MarkerConfig, OTHER_DIAGNOSTIC_LABEL, PutObjectFailureBodyStats, PutObjectFailureSourceStats,
     PutObjectFailureStateStats, PutObjectRetryJitter, PutObjectRetryOptions, PutObjectStats,
-    SourceArchive,
+    SourceArchive, same_failure_signature,
 };
 
 use super::archive::{
@@ -47,6 +48,7 @@ use super::destination::{
 };
 use super::planner::{CopyPlan, ZipEntryPlan};
 use super::{S3_SINGLE_PUT_LIMIT, ZIP_ENTRY_READ_CHUNK_BYTES, source_window_bytes_for_archive};
+use crate::util::{duration_ms, finalize_md5, lower_hex};
 
 mod scheduler;
 
@@ -55,9 +57,6 @@ use scheduler::TransferScheduler;
 const COPY_RECONCILIATION_METADATA_KEY: &str = "shin-copy-identity";
 // Bump whenever the CopyObject output contract changes (for example, inferred metadata).
 const COPY_RECONCILIATION_TOKEN_VERSION: &str = "shin-copy-v1";
-const MAX_FAILURE_DIAGNOSTIC_GROUPS: usize = 32;
-const MAX_FAILURE_DIAGNOSTIC_LABELS: usize = 32;
-const OTHER_DIAGNOSTIC_LABEL: &str = "Other";
 
 enum UploadPayload {
     #[cfg(test)]
@@ -592,7 +591,9 @@ async fn copy_source_object(context: CopyContext<'_>, plan: &CopyPlan) -> Result
             Ok(_) => return Ok(()),
             Err(error) => {
                 let code = write_error_code(&error);
-                let throttled = code.as_deref().is_some_and(is_write_throttle_error_code);
+                let throttled = code
+                    .as_deref()
+                    .is_some_and(crate::util::is_throttle_error_code);
                 context.diagnostics.record_failure(&error, throttled);
                 let conditional_conflict = is_conditional_write_conflict(&error);
                 if conditional_conflict {
@@ -851,7 +852,9 @@ async fn upload_payload(
                     && attempt < max_attempts =>
             {
                 let code = write_error_code(&error);
-                let throttled = code.as_deref().is_some_and(is_write_throttle_error_code);
+                let throttled = code
+                    .as_deref()
+                    .is_some_and(crate::util::is_throttle_error_code);
                 context.diagnostics.record_put_failure(
                     &error,
                     throttled,
@@ -891,7 +894,7 @@ async fn upload_payload(
             Err(error) => {
                 let throttled = write_error_code(&error)
                     .as_deref()
-                    .is_some_and(is_write_throttle_error_code);
+                    .is_some_and(crate::util::is_throttle_error_code);
                 context.diagnostics.record_put_failure(
                     &error,
                     throttled,
@@ -1162,21 +1165,6 @@ fn md5_hex(bytes: &[u8]) -> String {
     finalize_md5(hasher)
 }
 
-fn finalize_md5(hasher: Md5) -> String {
-    let digest = hasher.finalize();
-    lower_hex(digest.as_ref())
-}
-
-fn lower_hex(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut output = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        output.push(HEX[(byte >> 4) as usize] as char);
-        output.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    output
-}
-
 async fn abort_and_drain_body_tasks(
     stores: &[Arc<SourceBlockStore>],
     drain_budget: &TaskDrainBudget,
@@ -1209,7 +1197,7 @@ fn is_retryable_write_error<E: ProvideErrorMetadata>(error: &SdkError<E>) -> boo
                 || status == 429
                 || status >= 500
                 || service.err().code().is_some_and(|code| {
-                    is_write_throttle_error_code(code)
+                    crate::util::is_throttle_error_code(code)
                         || matches!(
                             code,
                             "InternalError" | "RequestTimeout" | "RequestTimeoutException"
@@ -1244,10 +1232,6 @@ fn full_jitter_delay(cap_millis: u64, jitter: u64) -> Duration {
     Duration::from_millis(jitter % cap_millis.saturating_add(1))
 }
 
-fn duration_millis_u64(duration: Duration) -> u64 {
-    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
-}
-
 async fn wait_for_write_retry_before_deadline(
     coordinator: &WriteRetryCoordinator,
     diagnostics: &WriteDiagnostics,
@@ -1273,7 +1257,7 @@ async fn wait_for_write_retry_before_deadline(
         sleep_until(wake).await;
         diagnostics
             .retry_wait_millis
-            .fetch_add(duration_millis_u64(delay), Ordering::Relaxed);
+            .fetch_add(duration_ms(delay), Ordering::Relaxed);
         true
     }
 }
@@ -1344,7 +1328,7 @@ impl WriteDiagnostics {
             sdk_error_kind,
             dispatch_failure_kind,
             service_code,
-            elapsed_ms: DiagnosticRangeStats::single(duration_millis_u64(elapsed)),
+            elapsed_ms: DiagnosticRangeStats::single(duration_ms(elapsed)),
             body: match body_snapshot {
                 Some(body) => PutObjectFailureBodyStats {
                     attempt_observed: true,
@@ -1470,12 +1454,6 @@ impl DiagnosticRangeStats {
             total: value,
         }
     }
-
-    fn merge(&mut self, other: &Self) {
-        self.min = self.min.min(other.min);
-        self.max = self.max.max(other.max);
-        self.total = self.total.saturating_add(other.total);
-    }
 }
 
 impl PutObjectFailureBodyStats {
@@ -1493,12 +1471,6 @@ impl PutObjectFailureBodyStats {
             bytes_emitted: DiagnosticRangeStats::single(0),
             remaining_bytes: DiagnosticRangeStats::single(0),
         }
-    }
-
-    fn merge(&mut self, other: &Self) {
-        self.attempt_number.merge(&other.attempt_number);
-        self.bytes_emitted.merge(&other.bytes_emitted);
-        self.remaining_bytes.merge(&other.remaining_bytes);
     }
 }
 
@@ -1518,52 +1490,6 @@ impl PutObjectFailureSourceStats {
             active_fetches: DiagnosticRangeStats::single(0),
         }
     }
-
-    fn merge(&mut self, other: &Self) {
-        self.local_window_bytes.merge(&other.local_window_bytes);
-        self.local_committed_bytes
-            .merge(&other.local_committed_bytes);
-        self.local_resident_bytes.merge(&other.local_resident_bytes);
-        self.local_capacity_waiters
-            .merge(&other.local_capacity_waiters);
-        self.global_budget_bytes.merge(&other.global_budget_bytes);
-        self.global_resident_bytes
-            .merge(&other.global_resident_bytes);
-        self.global_available_permits
-            .merge(&other.global_available_permits);
-        self.global_permit_unit_bytes
-            .merge(&other.global_permit_unit_bytes);
-        self.global_permit_waiters
-            .merge(&other.global_permit_waiters);
-        self.active_fetches.merge(&other.active_fetches);
-    }
-}
-
-impl PutObjectFailureStateStats {
-    fn merge(&mut self, other: &Self) {
-        self.count = self.count.saturating_add(other.count);
-        self.elapsed_ms.merge(&other.elapsed_ms);
-        self.body.merge(&other.body);
-        self.source.merge(&other.source);
-    }
-}
-
-fn same_failure_signature(
-    left: &PutObjectFailureStateStats,
-    right: &PutObjectFailureStateStats,
-) -> bool {
-    left.sdk_error_kind == right.sdk_error_kind
-        && left.dispatch_failure_kind == right.dispatch_failure_kind
-        && left.service_code == right.service_code
-        && left.body.attempt_observed == right.body.attempt_observed
-        && left.body.replay == right.body.replay
-        && left.body.producer_stage == right.body.producer_stage
-        && left.body.final_frame_delivered == right.body.final_frame_delivered
-        && left.body.producer_completed == right.body.producer_completed
-        && left.body.body_error_observed == right.body.body_error_observed
-        && left.body.receiver_dropped == right.body.receiver_dropped
-        && left.body.receiver_drop_aborted_producer == right.body.receiver_drop_aborted_producer
-        && left.source.observed == right.source.observed
 }
 
 fn record_bounded_diagnostic_count(target: &Mutex<BTreeMap<String, u64>>, label: String) {
@@ -1676,7 +1602,7 @@ impl WriteRetryCoordinator {
                 .fetch_add(1, Ordering::Relaxed);
             diagnostics
                 .throttle_cooldown_wait_millis
-                .fetch_add(duration_millis_u64(delay), Ordering::Relaxed);
+                .fetch_add(duration_ms(delay), Ordering::Relaxed);
         }
     }
 
@@ -1850,21 +1776,6 @@ fn log_copy_diagnostics(
     );
 }
 
-fn is_write_throttle_error_code(code: &str) -> bool {
-    matches!(
-        code,
-        "SlowDown"
-            | "Throttling"
-            | "ThrottlingException"
-            | "TooManyRequestsException"
-            | "RequestLimitExceeded"
-            | "RequestThrottled"
-            | "RequestThrottledException"
-            | "ProvisionedThroughputExceededException"
-            | "BandwidthLimitExceeded"
-    )
-}
-
 fn write_error_code<E: ProvideErrorMetadata>(error: &SdkError<E>) -> Option<String> {
     match error {
         SdkError::ServiceError(service) => service.err().code().map(ToOwned::to_owned),
@@ -1914,12 +1825,13 @@ mod tests {
         DeploymentStats, DestinationChecksumStrategy, PutObjectRetryJitter, PutObjectRetryOptions,
         TrustedEntryIntegrity,
     };
+    use crate::util::duration_ms;
 
     use super::{
         COPY_RECONCILIATION_METADATA_KEY, CopyContext, PutContext, UploadPayload, WriteDiagnostics,
         WriteDiagnosticsSnapshot, WriteRetryCoordinator, catalog_skips_zip_entry,
         copy_reconciliation_identity, copy_source_object, digest_async_reader,
-        dispatch_failure_kind, duration_millis_u64, log_copy_diagnostics, md5_hex, quoted_etag,
+        dispatch_failure_kind, log_copy_diagnostics, md5_hex, quoted_etag,
         read_async_reader_to_vec, record_bounded_diagnostic_count, request_checksum_calculation,
         sanitize_diagnostic_label, serialize_put_attempt_failure, sha256_base64,
         should_compare_marker_free_entry, upload_payload, write_error_kind, write_retry_cap_millis,
@@ -2855,12 +2767,12 @@ mod tests {
         };
 
         assert_eq!(
-            duration_millis_u64(coordinator.retry_delay(3, false, &retry)),
+            duration_ms(coordinator.retry_delay(3, false, &retry)),
             1_000
         );
 
         retry.jitter = PutObjectRetryJitter::Full;
-        assert!(duration_millis_u64(coordinator.retry_delay(3, false, &retry)) <= 1_000);
+        assert!(duration_ms(coordinator.retry_delay(3, false, &retry)) <= 1_000);
     }
 
     #[tokio::test(start_paused = true)]

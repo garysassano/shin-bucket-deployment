@@ -24,7 +24,8 @@ use crate::s3::{
     OverlappingPreviousCleanup, bucket_has_competing_owner, delete_prefix, delete_prefix_excluding,
     deploy,
 };
-use crate::types::{AppState, DeploymentStats, ResponsePayload, duration_ms};
+use crate::types::{AppState, DeploymentStats, ResponsePayload};
+use crate::util::{duration_ms, finalize_md5, lower_hex};
 
 mod callback;
 
@@ -774,7 +775,7 @@ fn destination_physical_resource_id(
 
     format!(
         "aws.cdk.shinbucketdeployment.{}",
-        encode_hex(hasher.finalize().as_ref())
+        lower_hex(hasher.finalize().as_ref())
     )
 }
 
@@ -801,22 +802,6 @@ fn hash_identity_field(hasher: &mut Sha256, value: &str) {
 fn hash_caller_reference_field(hasher: &mut Md5, value: &str) {
     hasher.update((value.len() as u64).to_be_bytes());
     hasher.update(value.as_bytes());
-}
-
-fn finalize_md5(hasher: Md5) -> String {
-    let digest = hasher.finalize();
-    encode_hex(digest.as_ref())
-}
-
-fn encode_hex(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-
-    let mut output = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        output.push(HEX[(byte >> 4) as usize] as char);
-        output.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    output
 }
 
 fn log_deployment_summary(

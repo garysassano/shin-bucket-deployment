@@ -28,6 +28,7 @@ use super::super::{
     ZIP_ENTRY_READ_CHUNK_BYTES,
 };
 use super::{EntryAttemptClaim, SourceAttemptSnapshot, SourceBlockStore};
+use crate::util::finalize_md5;
 
 const LOCAL_FILE_HEADER_SIGNATURE: u32 = 0x0403_4b50;
 pub(super) const LOCAL_FILE_HEADER_LEN: usize = 30;
@@ -1049,19 +1050,6 @@ impl ZipEntryInputValidator<'_> {
         }
         Ok(())
     }
-}
-
-fn finalize_md5(hasher: Md5) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-
-    let digest = hasher.finalize();
-    let bytes: &[u8] = digest.as_ref();
-    let mut output = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        output.push(HEX[(byte >> 4) as usize] as char);
-        output.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    output
 }
 
 async fn append_and_send_body_chunks(
