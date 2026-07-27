@@ -86,7 +86,6 @@ pub(crate) struct DeploymentRequest {
     pub(crate) distribution_id: Option<String>,
     pub(crate) distribution_paths: Vec<String>,
     pub(crate) wait_for_distribution_invalidation: bool,
-    pub(crate) destination_checksum_strategy: DestinationChecksumStrategy,
     pub(crate) delete_stale_objects_on_deployment: bool,
     pub(crate) exclude: Vec<String>,
     pub(crate) include: Vec<String>,
@@ -98,11 +97,16 @@ pub(crate) struct DeploymentRequest {
     pub(crate) runtime: RuntimeOptions,
 }
 
+/// How the provider proves a destination object's content.
+///
+/// Only SSE-S3 destinations are supported, so this has one variant. It stays an enum
+/// rather than collapsing into nothing because it is part of the serialized request
+/// contract: an unrecognised value — including the withdrawn `kms-sha256` — must be
+/// rejected rather than silently defaulted.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum DestinationChecksumStrategy {
     SseS3Etag,
-    KmsSha256,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -908,7 +912,9 @@ impl DeploymentStats {
             request_type,
             deployment_status,
             extract: request.extract,
-            destination_checksum_strategy: request.destination_checksum_strategy,
+            // Only one strategy exists; the field stays in the record so historical
+            // benchmark rows keep validating against the same schema.
+            destination_checksum_strategy: DestinationChecksumStrategy::SseS3Etag,
             delete_stale_objects_on_deployment: request.delete_stale_objects_on_deployment,
             available_memory_mb: request.runtime.available_memory_mb,
             max_parallel_transfers: request.runtime.max_parallel_transfers,

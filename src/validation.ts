@@ -432,7 +432,7 @@ function rejectKnownFormerRootProperties(scope: Construct, props: Record<string,
     ],
     [
       "serverSideEncryptionCustomerAlgorithm",
-      "ShinBucketDeployment does not support serverSideEncryptionCustomerAlgorithm; configure supported default encryption on destination.bucket.",
+      "ShinBucketDeployment does not support serverSideEncryptionCustomerAlgorithm; SSE-C is not supported and destinations always use SSE-S3.",
     ],
     [
       "expires",
@@ -465,7 +465,7 @@ function rejectKnownFormerRootProperties(scope: Construct, props: Record<string,
   if (removedContentSettings.length > 0) {
     throw new ValidationError(
       "ShinBucketDeploymentContentSettingsUnsupported",
-      `ShinBucketDeployment does not support ${removedContentSettings.join(", ")}. Configure encryption on destination.bucket and cache/storage/lifecycle policy separately; Shin does not deploy configurable object metadata and infers content type from each object key.`,
+      `ShinBucketDeployment does not support ${removedContentSettings.join(", ")}. Destinations always use SSE-S3, which S3 applies by default, so there is no encryption to choose; configure cache/storage/lifecycle policy on the bucket or in CloudFront. Shin does not deploy configurable object metadata and infers content type from each object key.`,
       scope,
     );
   }

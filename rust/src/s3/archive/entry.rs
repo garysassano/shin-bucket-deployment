@@ -7,20 +7,17 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::task::{Context as TaskContext, Poll};
 
 use aws_sdk_s3::primitives::{ByteStream, SdkBody};
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use bytes::Bytes;
 use crc32fast::Hasher as Crc32Hasher;
 use futures_util::FutureExt;
 use http_body::{Body, Frame, SizeHint};
 use md5::{Digest as Md5Digest, Md5};
-use sha2::Sha256;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, ReadBuf};
 use tokio::sync::mpsc;
 use tokio::task::AbortHandle;
 
 use crate::replace::{MarkerReplacements, ReplacementOptions, ReplacementResult};
-use crate::types::{DeploymentStats, DestinationChecksumStrategy};
+use crate::types::DeploymentStats;
 
 use super::super::planner::ZipEntryPlan;
 use super::super::{
@@ -44,7 +41,6 @@ type BodyError = Box<dyn std::error::Error + Send + Sync>;
 #[derive(Debug, Default)]
 pub(crate) struct UploadBodyState {
     etag_md5: OnceLock<String>,
-    checksum_sha256: OnceLock<String>,
     validation_error: OnceLock<String>,
     detailed_attempt: Option<Box<UploadBodyAttemptState>>,
 }
@@ -103,20 +99,12 @@ impl UploadBodyState {
         self.etag_md5.get().map(String::as_str)
     }
 
-    pub(crate) fn checksum_sha256(&self) -> Option<&str> {
-        self.checksum_sha256.get().map(String::as_str)
-    }
-
     pub(crate) fn validation_error(&self) -> Option<&str> {
         self.validation_error.get().map(String::as_str)
     }
 
     pub(crate) fn record_etag_md5(&self, etag: String) {
         let _ = self.etag_md5.set(etag);
-    }
-
-    pub(crate) fn record_checksum_sha256(&self, checksum: String) {
-        let _ = self.checksum_sha256.set(checksum);
     }
 
     fn record_validation_error(&self, error: &str) {
@@ -284,7 +272,6 @@ struct ReceiverBodyInit {
     store: Arc<SourceBlockStore>,
     plan: ZipEntryPlan,
     body_state: Arc<UploadBodyState>,
-    checksum_strategy: DestinationChecksumStrategy,
     attempts: Arc<AtomicUsize>,
     marker: Option<MarkerBodyContext>,
 }
@@ -615,18 +602,9 @@ pub(crate) fn zip_entry_body(
     plan: ZipEntryPlan,
     content_length: u64,
     body_state: Arc<UploadBodyState>,
-    checksum_strategy: DestinationChecksumStrategy,
     attempts: Arc<AtomicUsize>,
 ) -> ByteStream {
-    zip_entry_body_inner(
-        store,
-        plan,
-        content_length,
-        body_state,
-        checksum_strategy,
-        attempts,
-        None,
-    )
+    zip_entry_body_inner(store, plan, content_length, body_state, attempts, None)
 }
 
 pub(crate) fn marker_zip_entry_body(
@@ -634,7 +612,6 @@ pub(crate) fn marker_zip_entry_body(
     plan: ZipEntryPlan,
     content_length: u64,
     body_state: Arc<UploadBodyState>,
-    checksum_strategy: DestinationChecksumStrategy,
     attempts: Arc<AtomicUsize>,
     marker: MarkerBodyContext,
 ) -> ByteStream {
@@ -643,7 +620,6 @@ pub(crate) fn marker_zip_entry_body(
         plan,
         content_length,
         body_state,
-        checksum_strategy,
         attempts,
         Some(marker),
     )
@@ -654,7 +630,6 @@ fn zip_entry_body_inner(
     plan: ZipEntryPlan,
     content_length: u64,
     body_state: Arc<UploadBodyState>,
-    checksum_strategy: DestinationChecksumStrategy,
     attempts: Arc<AtomicUsize>,
     marker: Option<MarkerBodyContext>,
 ) -> ByteStream {
@@ -664,7 +639,6 @@ fn zip_entry_body_inner(
                 store: store.clone(),
                 plan: plan.clone(),
                 body_state: Arc::clone(&body_state),
-                checksum_strategy,
                 attempts: Arc::clone(&attempts),
                 marker: marker.clone(),
             },
@@ -703,19 +677,9 @@ pub(crate) async fn plan_marker_zip_entry(
     store: Arc<SourceBlockStore>,
     plan: ZipEntryPlan,
     marker_replacements: &MarkerReplacements,
-    checksum_strategy: DestinationChecksumStrategy,
 ) -> io::Result<ReplacementResult> {
     let mut output = tokio::io::sink();
-    replace_marker_zip_entry(
-        store,
-        plan,
-        None,
-        marker_replacements,
-        &mut output,
-        checksum_strategy == DestinationChecksumStrategy::SseS3Etag,
-        false,
-    )
-    .await
+    replace_marker_zip_entry(store, plan, None, marker_replacements, &mut output).await
 }
 
 async fn replace_marker_zip_entry<W: AsyncWrite + Unpin>(
@@ -724,8 +688,6 @@ async fn replace_marker_zip_entry<W: AsyncWrite + Unpin>(
     attempt_claim: Option<EntryAttemptClaim>,
     marker_replacements: &MarkerReplacements,
     output: &mut W,
-    hash_md5: bool,
-    hash_sha256: bool,
 ) -> io::Result<ReplacementResult> {
     let mut reader = zip_entry_reader_inner(store, plan.clone(), attempt_claim)?;
     let mut validator = ZipEntryInputValidator::new(&plan);
@@ -735,8 +697,6 @@ async fn replace_marker_zip_entry<W: AsyncWrite + Unpin>(
             output,
             ReplacementOptions {
                 max_output_bytes: S3_SINGLE_PUT_LIMIT,
-                hash_md5,
-                hash_sha256,
             },
             |bytes| validator.observe(bytes),
         )
@@ -783,18 +743,8 @@ pub(super) async fn send_zip_entry_chunks(
     plan: ZipEntryPlan,
     sender: mpsc::Sender<std::result::Result<BodyFrame, BodyError>>,
     body_state: Arc<UploadBodyState>,
-    checksum_strategy: DestinationChecksumStrategy,
 ) -> std::result::Result<(), BodyError> {
-    send_zip_entry_chunks_inner(
-        store,
-        plan,
-        None,
-        sender,
-        body_state,
-        checksum_strategy,
-        None,
-    )
-    .await
+    send_zip_entry_chunks_inner(store, plan, None, sender, body_state, None).await
 }
 
 async fn send_zip_entry_chunks_inner(
@@ -803,16 +753,11 @@ async fn send_zip_entry_chunks_inner(
     attempt_claim: Option<EntryAttemptClaim>,
     sender: mpsc::Sender<std::result::Result<BodyFrame, BodyError>>,
     body_state: Arc<UploadBodyState>,
-    checksum_strategy: DestinationChecksumStrategy,
     attempt_number: Option<u64>,
 ) -> std::result::Result<(), BodyError> {
     let mut reader =
         zip_entry_reader_inner(store, plan.clone(), attempt_claim).map_err(boxed_body_error)?;
-    let mut md5 = (checksum_strategy == DestinationChecksumStrategy::SseS3Etag
-        || plan.trusted_integrity.is_some())
-    .then(Md5::new);
-    let mut sha256 =
-        (checksum_strategy == DestinationChecksumStrategy::KmsSha256).then(Sha256::new);
+    let mut md5 = Md5::new();
     let mut crc32 = Crc32Hasher::new();
     let mut bytes = 0_u64;
     let mut buffer = vec![0_u8; ZIP_ENTRY_READ_CHUNK_BYTES];
@@ -832,12 +777,7 @@ async fn send_zip_entry_chunks_inner(
         }
         let next_bytes = bytes.saturating_add(bytes_read as u64);
         validate_zip_entry_size_not_exceeded(&plan, next_bytes).map_err(boxed_body_error)?;
-        if let Some(md5) = md5.as_mut() {
-            md5.update(&buffer[..bytes_read]);
-        }
-        if let Some(sha256) = sha256.as_mut() {
-            sha256.update(&buffer[..bytes_read]);
-        }
+        md5.update(&buffer[..bytes_read]);
         crc32.update(&buffer[..bytes_read]);
         pending.clear();
         pending.extend_from_slice(&buffer[..bytes_read]);
@@ -845,17 +785,10 @@ async fn send_zip_entry_chunks_inner(
     }
 
     validate_zip_entry_output(&plan, bytes, crc32.finalize()).map_err(boxed_body_error)?;
-    if let Some(md5) = md5 {
-        let etag_md5 = finalize_md5(md5);
-        plan.validate_trusted_md5(&etag_md5)
-            .map_err(boxed_body_error)?;
-        if checksum_strategy == DestinationChecksumStrategy::SseS3Etag {
-            body_state.record_etag_md5(etag_md5);
-        }
-    }
-    if let Some(sha256) = sha256 {
-        body_state.record_checksum_sha256(BASE64_STANDARD.encode(sha256.finalize()));
-    }
+    let etag_md5 = finalize_md5(md5);
+    plan.validate_trusted_md5(&etag_md5)
+        .map_err(boxed_body_error)?;
+    body_state.record_etag_md5(etag_md5);
 
     // The final frame is also the producer-completion handshake. Release the
     // source reader and all of its entry claims before making that frame
@@ -876,7 +809,6 @@ pub(super) async fn send_marker_zip_entry_chunks(
     marker_replacements: Arc<MarkerReplacements>,
     sender: mpsc::Sender<std::result::Result<BodyFrame, BodyError>>,
     body_state: Arc<UploadBodyState>,
-    checksum_strategy: DestinationChecksumStrategy,
 ) -> std::result::Result<(), BodyError> {
     send_marker_zip_entry_chunks_inner(
         store,
@@ -886,7 +818,6 @@ pub(super) async fn send_marker_zip_entry_chunks(
         marker_replacements,
         sender,
         body_state,
-        checksum_strategy,
         None,
     )
     .await
@@ -901,7 +832,6 @@ async fn send_marker_zip_entry_chunks_inner(
     marker_replacements: Arc<MarkerReplacements>,
     sender: mpsc::Sender<std::result::Result<BodyFrame, BodyError>>,
     body_state: Arc<UploadBodyState>,
-    checksum_strategy: DestinationChecksumStrategy,
     attempt_number: Option<u64>,
 ) -> std::result::Result<(), BodyError> {
     let pipe_capacity = ZIP_ENTRY_BODY_CHUNK_BYTES
@@ -915,8 +845,6 @@ async fn send_marker_zip_entry_chunks_inner(
             attempt_claim,
             &marker_replacements,
             &mut output_writer,
-            checksum_strategy == DestinationChecksumStrategy::SseS3Etag,
-            checksum_strategy == DestinationChecksumStrategy::KmsSha256,
         )
         .await
         .map_err(boxed_body_error)?;
@@ -935,20 +863,15 @@ async fn send_marker_zip_entry_chunks_inner(
     let consumer = forward_replaced_body_chunks(&mut output_reader, &sender);
     let (result, final_chunk) = tokio::try_join!(producer, consumer)?;
 
-    if let Some(md5) = result.md5 {
-        if let Some(expected) = body_state.etag_md5()
-            && expected != md5
-        {
-            return Err(boxed_body_error(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "marker output digest changed between planning and upload passes",
-            )));
-        }
-        body_state.record_etag_md5(md5);
+    if let Some(expected) = body_state.etag_md5()
+        && expected != result.md5
+    {
+        return Err(boxed_body_error(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "marker output digest changed between planning and upload passes",
+        )));
     }
-    if let Some(sha256) = result.sha256 {
-        body_state.record_checksum_sha256(sha256);
-    }
+    body_state.record_etag_md5(result.md5);
     body_state.record_producer_stage(attempt_number, UploadProducerStage::FinalFrameReady);
     match final_chunk {
         Some(final_chunk) => {
@@ -1164,7 +1087,6 @@ impl Body for ReceiverBody {
                         marker.replacements,
                         sender.clone(),
                         Arc::clone(&init.body_state),
-                        init.checksum_strategy,
                         attempt_number,
                     ))
                     .catch_unwind()
@@ -1176,7 +1098,6 @@ impl Body for ReceiverBody {
                         Some(attempt_claim),
                         sender.clone(),
                         Arc::clone(&init.body_state),
-                        init.checksum_strategy,
                         attempt_number,
                     ))
                     .catch_unwind()

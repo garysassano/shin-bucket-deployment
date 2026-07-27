@@ -123,6 +123,9 @@ All 24 current Shin phase records selected `sse-s3-etag`. They reported zero MD5
 
 All 12 current Shin phase records selected `kms-sha256` and reported zero PUT retries or throttles and zero source GET retries or errors. The necessary stored-checksum plus independent-digest work therefore stayed within -2.2% to +3.4% of the original PR #12 provider duration and 0.4% to 2.2% of its median peak memory across the four phases. It still completed provider work about 2.6x to 2.7x faster than upstream.
 
+> [!NOTE]
+> These rows predate the withdrawal of SSE-KMS/SSE-DSSE destination support. They are retained as the evidence behind the decision made at the time; `kms-sha256` no longer exists as a strategy.
+
 These rows are decision evidence for the checksum redesign, not a replacement for the repository's canonical snapshot. The temporary before/current and encryption variants do not fit the current JSONL upsert identity without overwriting one another, and broader methodology-v2/CI regression work remains separate. Raw logs and individual rows remain outside git. Every benchmark stack was destroyed, and a final scoped check found none remaining.
 
 ## Transfer scheduler performance decision

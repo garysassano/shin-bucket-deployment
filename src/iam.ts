@@ -1,4 +1,4 @@
-import { ArnFormat, Stack, Token } from "aws-cdk-lib";
+import { Stack, Token } from "aws-cdk-lib";
 import type { IDistributionRef } from "aws-cdk-lib/aws-cloudfront";
 import { Effect, PolicyStatement } from "aws-cdk-lib/aws-iam";
 import type { Function as LambdaFunction } from "aws-cdk-lib/aws-lambda";
@@ -24,15 +24,12 @@ export function grantDestinationPermissions(
     permissions.destinationKeyPrefix,
   );
   const destinationGrants = BucketGrants.fromBucket(permissions.destinationBucket);
-  // `BucketGrants` splits mixed actions by service: S3 actions target object
-  // keys, while KMS actions target the bucket key only when one exists.
+  // Destinations are SSE-S3 only, so the provider needs no KMS authority at all.
   destinationGrants.actionsOnObjectKeys(
     handler,
     destinationObjectKeyPattern,
     "s3:GetObject",
     "s3:PutObject",
-    "kms:Decrypt",
-    "kms:GenerateDataKey",
   );
   if (permissions.deleteCurrentObjects) {
     destinationGrants.actionsOnObjectKeys(handler, destinationObjectKeyPattern, "s3:DeleteObject");
@@ -52,12 +49,6 @@ export function grantDestinationPermissions(
       bucketTagReadStatement(permissions.destinationBucket.bucketArn),
     );
   }
-  // A managed-key bucket has no IKey for BucketGrants to target. Keep this
-  // tightly conditioned statement on every handler so a later L1/Aspect
-  // transition to alias/aws/s3 remains authorized; it is inert for every
-  // other key and service.
-  addHandlerPolicy(handler, dependables, awsManagedS3KmsPolicyStatement(scope));
-
   if (permissions.previousBucket) {
     const previousGrants = BucketGrants.fromBucket(permissions.previousBucket);
     previousGrants.actionsOnObjectKeys(handler, "*", "s3:DeleteObject");
@@ -170,30 +161,6 @@ function destinationListPolicyStatement(
     actions: ["s3:ListBucket"],
     resources: [bucketArn],
     conditions: prefix ? { StringEquals: { "s3:prefix": prefix } } : undefined,
-  });
-}
-
-function awsManagedS3KmsPolicyStatement(scope: Construct): PolicyStatement {
-  const stack = Stack.of(scope);
-  return new PolicyStatement({
-    effect: Effect.ALLOW,
-    actions: ["kms:Decrypt", "kms:GenerateDataKey"],
-    resources: [
-      stack.formatArn({
-        service: "kms",
-        resource: "key",
-        resourceName: "*",
-        arnFormat: ArnFormat.SLASH_RESOURCE_NAME,
-      }),
-    ],
-    conditions: {
-      "ForAnyValue:StringEquals": {
-        "kms:ResourceAliases": "alias/aws/s3",
-      },
-      StringEquals: {
-        "kms:ViaService": `s3.${stack.region}.${stack.urlSuffix}`,
-      },
-    },
   });
 }
 

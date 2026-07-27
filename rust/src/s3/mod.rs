@@ -335,7 +335,6 @@ mod tests {
             "SourceBucketNames": [],
             "SourceObjectKeys": [],
             "DestinationBucketName": "destination",
-            "DestinationChecksumStrategy": "sse-s3-etag",
             "DeleteStaleObjectsOnDeployment": true
         }))
         .expect("empty source request should deserialize");
@@ -460,9 +459,6 @@ mod aws_integration_tests {
                 distribution_id: None,
                 distribution_paths: None,
                 wait_for_distribution_invalidation: true,
-                destination_checksum_strategy: Some(
-                    crate::types::DestinationChecksumStrategy::SseS3Etag,
-                ),
                 delete_stale_objects_on_deployment: true,
                 exclude: Vec::new(),
                 include: Vec::new(),

@@ -23,8 +23,6 @@ pnpm verify destroy --concurrency 4
 
 `pnpm verify list` shows phase names and group aliases. A group alias expands to every ordered phase; destroy selects the terminal phase. Deploy runs ordered phases serially within each group and can run independent groups concurrently. Use the same selector for deploy and destroy, and use `--concurrency 1` when debugging. Canonical benchmarks remain sequential so concurrent resource contention does not distort comparisons.
 
-The `kms-destination`, `kms-managed-destination`, and `dsse-managed-destination` scenarios exercise the strong stored-checksum path with a customer-managed key, the AWS-managed S3 KMS key, and managed DSSE respectively.
-
 The `handler-isolation` scenario deploys two constructs through the default shared provider and two through deployment-scoped providers. Synthesis proves three distinct Lambda/role policy boundaries, while AWS assertions prove all four namespaces are written through their intended boundary.
 
 The `extract-false` scenario exercises direct `CopyObject`. Targeted AWS verification additionally checks the opaque reconciliation metadata and an existing-destination repair through the destination `If-Match` guard.

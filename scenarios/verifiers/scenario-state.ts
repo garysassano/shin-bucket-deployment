@@ -238,25 +238,6 @@ const SCENARIO_ASSERTIONS: Readonly<Record<string, ScenarioAssertion>> = {
       ),
     ]);
   },
-  "kms-destination": encryptionScenario(
-    "kms-site/runtime/kms.txt",
-    "encrypted-by-bucket-default-kms-key\n",
-    "aws:kms",
-    "xlkRCTCTstRHhaJVMhHeXT7S4opbHEH82f+DUeU1sLI=",
-    ["kms-site/app.js", "kms-site/index.html", "kms-site/runtime/kms.txt"],
-  ),
-  "kms-managed-destination": encryptionScenario(
-    "kms-managed-site/runtime/kms-managed.txt",
-    "encrypted-by-aws-managed-s3-key\n",
-    "aws:kms",
-    "l9AgkZn9JIfdB92qd1kabqygO900YlyzotW/CxtFjuk=",
-  ),
-  "dsse-managed-destination": encryptionScenario(
-    "dsse-managed-site/runtime/dsse-managed.txt",
-    "encrypted-by-managed-dsse\n",
-    "aws:kms:dsse",
-    "wpHYQjkJVk4+CR7F989LE4Y3aRQ7wBPN9Pk4XfcduTE=",
-  ),
   "handler-isolation": async ({ outputs, api }) => {
     const bucket = requiredOutput(outputs, "BucketName");
     const keys = ["shared/first", "shared/second", "isolated/first", "isolated/second"];
@@ -640,32 +621,6 @@ async function assertDestinationMoveKeySets(
       currentKeys,
     ),
   ]);
-}
-
-function encryptionScenario(
-  key: string,
-  body: string,
-  serverSideEncryption: string,
-  checksumSha256: string,
-  expectedKeys: readonly string[] = [key],
-): ScenarioAssertion {
-  return async ({ outputs, api }) => {
-    const bucket = requiredOutput(outputs, "BucketName");
-    const prefix = `${key.split("/")[0]}/`;
-    await Promise.all([
-      assertExactKeys(api, bucket, prefix, expectedKeys),
-      ...(expectedKeys.length > 1
-        ? [assertFixtureBodies(api, bucket, key.split("/")[0] ?? "")]
-        : []),
-      assertObjectBody(api, bucket, key, body),
-      assertObjectMetadata(api, bucket, key, {
-        contentLength: Buffer.byteLength(body),
-        checksumSha256,
-        checksumType: "FULL_OBJECT",
-        serverSideEncryption,
-      }),
-    ]);
-  };
 }
 
 function cloudFrontScenario(

@@ -158,33 +158,6 @@ describe("scenario state verifier", () => {
     );
   });
 
-  it("checks encrypted object bodies and stored checksum metadata", async () => {
-    const api = new FakeVerificationApi();
-    const key = "kms-managed-site/runtime/kms-managed.txt";
-    const body = "encrypted-by-aws-managed-s3-key\n";
-    api.putObject("destination", key, body, {
-      contentLength: Buffer.byteLength(body),
-      checksumSha256: "l9AgkZn9JIfdB92qd1kabqygO900YlyzotW/CxtFjuk=",
-      checksumType: "FULL_OBJECT",
-      serverSideEncryption: "aws:kms",
-    });
-    const outputs = outputsFile({ BucketName: "destination" });
-
-    await expect(
-      verifyScenarioState(STACK_NAME, "kms-managed-destination", outputs, api),
-    ).resolves.toBeUndefined();
-
-    api.metadata.set(objectId("destination", key), {
-      contentLength: Buffer.byteLength(body),
-      checksumSha256: "wrong",
-      checksumType: "FULL_OBJECT",
-      serverSideEncryption: "aws:kms",
-    });
-    await expect(
-      verifyScenarioState(STACK_NAME, "kms-managed-destination", outputs, api),
-    ).rejects.toThrow("unexpected checksumSha256");
-  });
-
   it("proves retained objects survive custom-resource deletion", async () => {
     const api = new FakeVerificationApi();
     putFixture(api, "destination", "retain-initial");

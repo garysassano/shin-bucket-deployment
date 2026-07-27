@@ -58,7 +58,7 @@ The official `BucketDeployment` is a good default for many stacks, but its provi
 | Archive-aware planning      | For extracted assets, the provider plans directly from the zip archive instead of extracting the whole archive to a working directory before syncing.                                                                                                                                                                                                       |
 | Invocation-wide memory cap  | Central-directory planning and every source archive share a source-memory budget capped at half the provider's actual Lambda memory by default; destination cleanup retains at most manifest metadata plus one S3 page.                                                                                                                                                  |
 | Bounded fail-fast transfers | Transfer concurrency is capped by `transfer.maxConcurrency`. The first observed failure or panic stops admission and drains outstanding work before cleanup or invalidation can continue.                                                                                                                                                                                                  |
-| Encryption-aware writes     | SSE-S3 destinations use the cheap single-part MD5/`ETag` path; KMS and DSSE destinations store full-object SHA-256 only where encrypted `ETag`s cannot prove content identity.                                                                                                                                                                                  |
+| Skips unchanged objects     | Unchanged objects are identified from one destination listing and never re-uploaded. That comparison needs the destination `ETag` to be a plaintext MD5, so destinations must use SSE-S3. SSE-KMS and SSE-DSSE buckets would each need a per-object `HeadObject` instead; rather than carry a second reconciliation path, Shin refuses them at synthesis.                                                                                                                                                                                  |
 | Bounded marker replacement  | Marker-free entries stream directly. Marker entries use deterministic simultaneous replacement with one exact-length planning pass and a second retryable streaming pass only when upload is required; neither pass retains the complete entry or output.                                                                                                  |
 | Safer destination moves     | Opt-in cleanup deploys new content first, infers the previous prefix, and preserves overlapping current namespaces. See [Destination Lifecycle](#destination-lifecycle).                                                                                                                                                                                    |
 
@@ -183,7 +183,6 @@ The constructed deployment exposes these values and methods; these are construct
 | `waitForDistributionInvalidation` | `cloudfrontInvalidation.waitForCompletion` |
 | `outputObjectKeys` | `objectKeys`; Shin returns the key list only when this property is accessed. |
 | `logRetention` | `providerLambda.logGroup` |
-| `serverSideEncryption`, `serverSideEncryptionAwsKmsKeyId` | Default encryption on `destination.bucket` |
 
 ### Unsupported Properties
 
@@ -191,6 +190,7 @@ The constructed deployment exposes these values and methods; these are construct
 | --- | --- |
 | `accessControl`, `cacheControl`, `contentDisposition`, `contentEncoding`, `contentLanguage`, `expires`, `metadata`, `storageClass`, `websiteRedirectLocation` | Object metadata is intentionally outside the deployment contract. Configure cache behavior in CloudFront and storage/lifecycle behavior on the bucket. |
 | `contentType` | Shin automatically infers `Content-Type` from each deployed object's file extension, with `application/octet-stream` as the fallback. |
+| `serverSideEncryption`, `serverSideEncryptionAwsKmsKeyId` | There is nothing to configure. Destinations must use SSE-S3, which S3 applies by default to every bucket, so no per-object encryption choice exists. SSE-KMS and SSE-DSSE destination buckets are refused at synthesis. |
 | `serverSideEncryptionCustomerAlgorithm` | SSE-C is not supported. |
 | `ephemeralStorageSize` | The provider does not stage archives or extracted files in Lambda `/tmp`. |
 | `signContent` | The provider uses AWS SDK calls directly, not the upstream AWS CLI upload path. |

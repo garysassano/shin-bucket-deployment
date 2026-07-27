@@ -95,18 +95,6 @@ export const VERIFY_SCENARIOS = {
     "ShinBucketDeploymentReplacementSafetyDemo",
   ),
   "large-archive": scenario("scale/large-archive-app.js", "ShinBucketDeploymentLargeArchiveDemo"),
-  "kms-destination": scenario(
-    "security/kms-destination-app.js",
-    "ShinBucketDeploymentKmsDestinationDemo",
-  ),
-  "kms-managed-destination": scenario(
-    "security/kms-managed-destination-app.js",
-    "ShinBucketDeploymentKmsManagedDestinationDemo",
-  ),
-  "dsse-managed-destination": scenario(
-    "security/dsse-managed-destination-app.js",
-    "ShinBucketDeploymentDsseManagedDestinationDemo",
-  ),
   "handler-isolation": scenario(
     "security/handler-isolation-app.js",
     "ShinBucketDeploymentHandlerIsolationDemo",
@@ -169,9 +157,6 @@ export const VERIFY_GROUPS = {
   ],
   "replacement-safety": ["replacement-safety-initial", "replacement-safety-updated"],
   "large-archive": ["large-archive"],
-  "kms-destination": ["kms-destination"],
-  "kms-managed-destination": ["kms-managed-destination"],
-  "dsse-managed-destination": ["dsse-managed-destination"],
   "handler-isolation": ["handler-isolation"],
   "cloudfront-sync": ["cloudfront-sync-initial", "cloudfront-sync-updated"],
   "cloudfront-async": ["cloudfront-async-initial", "cloudfront-async-updated"],

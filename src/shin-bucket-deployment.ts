@@ -20,7 +20,7 @@ import type { ILogGroupRef } from "aws-cdk-lib/aws-logs";
 import { Bucket, type IBucket } from "aws-cdk-lib/aws-s3";
 import type { ISource, SourceConfig } from "aws-cdk-lib/aws-s3-deployment";
 import { Construct } from "constructs";
-import { destinationChecksumStrategy, inspectableDestinationBucketResource } from "./destination";
+import { inspectableDestinationBucketResource, validateDestinationEncryption } from "./destination";
 import type { DestinationWriteRetryJitter, FailureDiagnostics, ProviderSharing } from "./enums";
 import { ValidationError } from "./errors";
 import { grantDestinationPermissions } from "./iam";
@@ -425,7 +425,7 @@ export interface ShinBucketDeploymentProviderLambdaOptions {
    * Existing execution role for the provider Lambda.
    *
    * Deployments with the same provider configuration share a handler and role
-   * by default. Source, destination, KMS, and CloudFront permissions from every
+   * by default. Source, destination, and CloudFront permissions from every
    * sharing deployment accumulate on that role. A caller-supplied role remains
    * caller-owned even with `sharing: ProviderSharing.DEPLOYMENT`.
    *
@@ -438,7 +438,7 @@ export interface ShinBucketDeploymentProviderLambdaOptions {
    * similar produce a construct outside this stack's dependency graph, so
    * CloudFormation cannot order the custom resource after policy changes made
    * elsewhere. Ensure an imported role already carries the required source,
-   * destination, KMS, and CloudFront permissions before the deployment runs, or
+   * destination, and CloudFront permissions before the deployment runs, or
    * the provider can start and fail with AccessDenied.
    *
    * @default - a role is created for the provider
@@ -705,7 +705,7 @@ export interface ShinBucketDeploymentProps {
  *
  * By default, deployments with the same handler identity settings in one stack
  * reuse a single Lambda function. Its role accumulates permissions for every
- * source, destination, KMS key, and CloudFront distribution used by those
+ * source, destination, and CloudFront distribution used by those
  * deployments. `providerLambda` settings and the package/provider identity
  * participate in shared identity; request-level `transfer` settings do not and
  * can differ between sharing deployments. Set
@@ -855,10 +855,6 @@ export class ShinBucketDeployment extends Construct {
         ),
         DestinationBucketName: this.destinationBucket.bucketName,
         DestinationBucketKeyPrefix: destination.keyPrefix,
-        DestinationChecksumStrategy: Lazy.uncachedString({
-          produce: () =>
-            destinationChecksumStrategy(this, this.destinationBucket, destinationBucketResource),
-        }),
         DestinationOwnerId: Lazy.uncachedString({
           produce: () => this.cr.node.addr.slice(-8),
         }),
@@ -914,6 +910,15 @@ export class ShinBucketDeployment extends Construct {
     Tags.of(this.destinationBucket).add(tagKey, "true");
     this.node.addValidation({
       validate: () => validateDestinationBucketTagQuota(destinationBucketResource),
+    });
+    // Deferred to synthesis rather than checked here: an escape hatch that switches the
+    // bucket to KMS may be applied after this construct is created, and only the rendered
+    // resource reflects it.
+    this.node.addValidation({
+      validate: () => {
+        validateDestinationEncryption(this, destinationBucketResource);
+        return [];
+      },
     });
   }
 

@@ -1202,7 +1202,10 @@ mod tests {
             "ResourceProperties": {
                 "SourceBucketNames": ["source"],
                 "SourceObjectKeys": ["asset.zip"],
-                "DestinationBucketName": "destination"
+                "DestinationBucketName": "destination",
+                // One catalog descriptor for two declared sources: a Delete envelope has
+                // to fail this the same way every other request type does.
+                "SourceCatalogs": [{ "Version": 1, "Sha256": "00" }, { "Version": 1, "Sha256": "11" }]
             }
         }))
         .expect("Delete envelope");
@@ -1210,7 +1213,12 @@ mod tests {
         let error = parse_request(&decoded.resource_properties)
             .expect_err("Delete must not relax the current request schema");
 
-        assert!(error.to_string().contains("DestinationChecksumStrategy"));
+        assert!(
+            error
+                .to_string()
+                .contains("SourceCatalogs and SourceBucketNames must be the same length"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
