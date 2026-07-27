@@ -248,6 +248,19 @@ struct CopyContext<'a> {
     work_deadline: Instant,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CopyOutcome {
+    Copied,
+    Skipped,
+}
+
+fn record_copy_outcome(stats: &DeploymentStats, outcome: CopyOutcome, copied_bytes: u64) {
+    match outcome {
+        CopyOutcome::Copied => stats.add_copied_object(copied_bytes),
+        CopyOutcome::Skipped => stats.add_skipped_object(),
+    }
+}
+
 pub(super) async fn execute_copy_plans(
     state: &AppState,
     request: &DeploymentRequest,
@@ -275,7 +288,7 @@ pub(super) async fn execute_copy_plans(
 
             scheduler
                 .spawn(async move {
-                    copy_source_object(
+                    let outcome = copy_source_object(
                         CopyContext {
                             destination_s3: &state.destination_s3,
                             destination_bucket: &destination_bucket,
@@ -288,7 +301,7 @@ pub(super) async fn execute_copy_plans(
                         &plan,
                     )
                     .await?;
-                    stats.add_copied_object(copied_bytes);
+                    record_copy_outcome(&stats, outcome, copied_bytes);
                     Ok(())
                 })
                 .await?;
@@ -538,13 +551,31 @@ fn should_compare_marker_free_entry(
         && destination_object.is_some_and(|object| object.size == Some(plan.size))
 }
 
-async fn copy_source_object(context: CopyContext<'_>, plan: &CopyPlan) -> Result<()> {
+async fn copy_source_object(context: CopyContext<'_>, plan: &CopyPlan) -> Result<CopyOutcome> {
     let copy_source = format!(
         "{}/{}",
         plan.source_bucket,
         urlencoding::encode(&plan.source_key).replace('+', "%20")
     );
     let reconciliation_identity = copy_reconciliation_identity(context.destination_bucket, plan);
+
+    if plan.identity_probe
+        && destination_matches_copy_identity(
+            context.destination_s3,
+            context.destination_bucket,
+            plan,
+            &reconciliation_identity,
+            HeadRetries::Enabled,
+        )
+        .await
+            == Some(true)
+    {
+        tracing::info!(
+            destination_key = plan.destination_key,
+            "destination already holds this exact copy; skipping"
+        );
+        return Ok(CopyOutcome::Skipped);
+    }
 
     tracing::info!(
         source_bucket = plan.source_bucket,
@@ -588,7 +619,7 @@ async fn copy_source_object(context: CopyContext<'_>, plan: &CopyPlan) -> Result
             .send()
             .await
         {
-            Ok(_) => return Ok(()),
+            Ok(_) => return Ok(CopyOutcome::Copied),
             Err(error) => {
                 let code = write_error_code(&error);
                 let throttled = code
@@ -604,7 +635,7 @@ async fn copy_source_object(context: CopyContext<'_>, plan: &CopyPlan) -> Result
                 if (conditional_conflict || (retryable && attempt == max_attempts))
                     && reconcile_copy(&context, plan, &reconciliation_identity).await
                 {
-                    return Ok(());
+                    return Ok(CopyOutcome::Copied);
                 }
                 if retryable && attempt < max_attempts {
                     if !wait_for_write_retry_before_deadline(
@@ -687,29 +718,44 @@ fn copy_reconciliation_identity(destination_bucket: &str, plan: &CopyPlan) -> St
     lower_hex(&hasher.finalize())
 }
 
-async fn reconcile_copy(
-    context: &CopyContext<'_>,
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum HeadRetries {
+    Enabled,
+    Disabled,
+}
+
+/// `HeadObject`s the destination and reports whether it carries exactly the identity this
+/// plan writes, at exactly this plan's length. `None` means the HEAD itself failed, which
+/// callers must treat as "not proven" rather than as a negative answer.
+async fn destination_matches_copy_identity(
+    destination_s3: &S3Client,
+    destination_bucket: &str,
     plan: &CopyPlan,
     expected_identity: &str,
-) -> bool {
-    let head = match context
-        .destination_s3
+    retries: HeadRetries,
+) -> Option<bool> {
+    let request = destination_s3
         .head_object()
-        .bucket(context.destination_bucket)
+        .bucket(destination_bucket)
         .key(&plan.destination_key)
-        .customize()
-        .config_override(aws_sdk_s3::config::Builder::new().retry_config(RetryConfig::disabled()))
-        .send()
-        .await
-    {
+        .customize();
+    let request = match retries {
+        // The ambiguous-result path is already inside a retry loop that owns the write
+        // budget, so its reconciliation HEAD must not retry on its own.
+        HeadRetries::Disabled => request.config_override(
+            aws_sdk_s3::config::Builder::new().retry_config(RetryConfig::disabled()),
+        ),
+        HeadRetries::Enabled => request,
+    };
+    let head = match request.send().await {
         Ok(head) => head,
         Err(error) => {
-            tracing::warn!(
+            tracing::debug!(
                 destination_key = plan.destination_key,
                 error = %error,
-                "could not reconcile an ambiguous CopyObject result"
+                "destination HeadObject failed; copy identity is unproven"
             );
-            return false;
+            return None;
         }
     };
     let size_matches = head
@@ -720,14 +766,39 @@ async fn reconcile_copy(
         .metadata()
         .and_then(|metadata| metadata.get(COPY_RECONCILIATION_METADATA_KEY))
         .is_some_and(|identity| identity == expected_identity);
-    if !size_matches || !identity_matches {
-        return false;
+    Some(size_matches && identity_matches)
+}
+
+async fn reconcile_copy(
+    context: &CopyContext<'_>,
+    plan: &CopyPlan,
+    expected_identity: &str,
+) -> bool {
+    match destination_matches_copy_identity(
+        context.destination_s3,
+        context.destination_bucket,
+        plan,
+        expected_identity,
+        HeadRetries::Disabled,
+    )
+    .await
+    {
+        None => {
+            tracing::warn!(
+                destination_key = plan.destination_key,
+                "could not reconcile an ambiguous CopyObject result"
+            );
+            false
+        }
+        Some(false) => false,
+        Some(true) => {
+            tracing::info!(
+                destination_key = plan.destination_key,
+                "ambiguous CopyObject result matched the intended object"
+            );
+            true
+        }
     }
-    tracing::info!(
-        destination_key = plan.destination_key,
-        "ambiguous CopyObject result matched the intended object"
-    );
-    true
 }
 
 async fn prepare_zip_entry_for_comparison(
@@ -1828,13 +1899,14 @@ mod tests {
     use crate::util::duration_ms;
 
     use super::{
-        COPY_RECONCILIATION_METADATA_KEY, CopyContext, PutContext, UploadPayload, WriteDiagnostics,
-        WriteDiagnosticsSnapshot, WriteRetryCoordinator, catalog_skips_zip_entry,
+        COPY_RECONCILIATION_METADATA_KEY, CopyContext, CopyOutcome, PutContext, UploadPayload,
+        WriteDiagnostics, WriteDiagnosticsSnapshot, WriteRetryCoordinator, catalog_skips_zip_entry,
         copy_reconciliation_identity, copy_source_object, digest_async_reader,
         dispatch_failure_kind, log_copy_diagnostics, md5_hex, quoted_etag,
-        read_async_reader_to_vec, record_bounded_diagnostic_count, request_checksum_calculation,
-        sanitize_diagnostic_label, serialize_put_attempt_failure, sha256_base64,
-        should_compare_marker_free_entry, upload_payload, write_error_kind, write_retry_cap_millis,
+        read_async_reader_to_vec, record_bounded_diagnostic_count, record_copy_outcome,
+        request_checksum_calculation, sanitize_diagnostic_label, serialize_put_attempt_failure,
+        sha256_base64, should_compare_marker_free_entry, upload_payload, write_error_kind,
+        write_retry_cap_millis,
     };
 
     #[derive(Clone, Default)]
@@ -2438,6 +2510,126 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn identity_probe_retires_a_copy_whose_destination_already_matches() {
+        let plan = test_copy_plan_with_identity_probe();
+        let identity = copy_reconciliation_identity("destination", &plan);
+        let metadata_header = format!("x-amz-meta-{COPY_RECONCILIATION_METADATA_KEY}");
+        let (result, replay, diagnostics) = run_test_copy(
+            vec![head_event(vec![
+                ("content-length", "5"),
+                (metadata_header.as_str(), identity.as_str()),
+            ])],
+            plan,
+            2,
+        )
+        .await;
+
+        assert_eq!(
+            result.expect("a matching identity token proves the copy is current"),
+            CopyOutcome::Skipped
+        );
+        assert_eq!(
+            replay
+                .actual_requests()
+                .map(|request| request.method().to_string())
+                .collect::<Vec<_>>(),
+            vec!["HEAD"],
+            "a proven-current destination must cost one HeadObject and no CopyObject"
+        );
+        assert_eq!(diagnostics.wire_attempts, 0);
+    }
+
+    #[tokio::test]
+    async fn identity_probe_fails_closed_and_copies_when_the_destination_is_unproven() {
+        let metadata_header = format!("x-amz-meta-{COPY_RECONCILIATION_METADATA_KEY}");
+        let identity =
+            copy_reconciliation_identity("destination", &test_copy_plan_with_identity_probe());
+        for (label, probe_event) in [
+            (
+                "a foreign token",
+                head_event(vec![
+                    ("content-length", "5"),
+                    (metadata_header.as_str(), "written-by-something-else"),
+                ]),
+            ),
+            (
+                "an absent token, as written by an older provider",
+                head_event(vec![("content-length", "5")]),
+            ),
+            (
+                "a token recorded against a different length",
+                head_event(vec![
+                    ("content-length", "6"),
+                    (metadata_header.as_str(), identity.as_str()),
+                ]),
+            ),
+            ("a failed HeadObject", error_event(403, "AccessDenied")),
+        ] {
+            let (result, replay, _) = run_test_copy(
+                vec![probe_event, copy_success_event()],
+                test_copy_plan_with_identity_probe(),
+                2,
+            )
+            .await;
+
+            assert_eq!(
+                result.unwrap_or_else(|error| panic!("{label} should still copy: {error:#}")),
+                CopyOutcome::Copied,
+                "{label} must not retire the copy"
+            );
+            let copies = replay
+                .actual_requests()
+                .filter(|request| request.headers().contains_key("x-amz-copy-source"))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                copies.len(),
+                1,
+                "{label} must fall through to exactly one CopyObject"
+            );
+            assert_eq!(
+                copies[0].headers().get("if-match"),
+                Some("\"destination-etag\""),
+                "{label} must still guard the fallthrough copy with the listed destination ETag"
+            );
+        }
+    }
+
+    #[test]
+    fn a_skipped_copy_is_accounted_as_skipped_rather_than_copied() {
+        let stats = DeploymentStats::default();
+        record_copy_outcome(&stats, CopyOutcome::Skipped, 4096);
+        record_copy_outcome(&stats, CopyOutcome::Copied, 4096);
+
+        let request = summary_request();
+        let snapshot = stats.snapshot("Create", "success", &request);
+        assert_eq!(snapshot.counts.skipped_objects, 1);
+        assert_eq!(snapshot.counts.copied_objects, 1);
+        assert_eq!(
+            snapshot.bytes.copied, 4096,
+            "a retired copy must not inflate transferred bytes"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_copy_without_an_identity_probe_issues_no_head() {
+        let (result, replay, _) =
+            run_test_copy(vec![copy_success_event()], test_copy_plan(None), 2).await;
+
+        assert_eq!(
+            result.expect("an unprobed copy should proceed directly"),
+            CopyOutcome::Copied
+        );
+        assert_eq!(
+            replay
+                .actual_requests()
+                .map(|request| request.method().to_string())
+                .collect::<Vec<_>>(),
+            vec!["PUT"],
+            "the listing-only fast path must not pay for a HeadObject"
+        );
+    }
+
+    #[tokio::test]
     async fn each_application_put_attempt_uses_one_sdk_attempt() {
         let replay = StaticReplayClient::new(vec![error_event(500, "InternalError")]);
         let client = replay_s3_client(replay.clone());
@@ -2968,7 +3160,11 @@ mod tests {
         events: Vec<ReplayEvent>,
         plan: CopyPlan,
         max_attempts: usize,
-    ) -> (Result<()>, StaticReplayClient, WriteDiagnosticsSnapshot) {
+    ) -> (
+        Result<CopyOutcome>,
+        StaticReplayClient,
+        WriteDiagnosticsSnapshot,
+    ) {
         let replay = StaticReplayClient::new(events);
         let client = replay_s3_client(replay.clone());
         let diagnostics = WriteDiagnostics::default();
@@ -3000,6 +3196,16 @@ mod tests {
             destination_key: "site/file.txt".to_string(),
             destination_precondition,
             size: 5,
+            identity_probe: false,
+        }
+    }
+
+    fn test_copy_plan_with_identity_probe() -> CopyPlan {
+        CopyPlan {
+            identity_probe: true,
+            ..test_copy_plan(Some(DestinationWritePrecondition::IfMatch(
+                "\"destination-etag\"".to_string(),
+            )))
         }
     }
 
