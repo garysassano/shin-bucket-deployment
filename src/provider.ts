@@ -17,6 +17,12 @@ const HANDLER_BINARY_NAME = "shin-bucket-deployment-handler";
 const PACKAGE_NAME = "shin-bucket-deployment";
 const SHARED_HANDLER_ID_PREFIX = "ShinBucketDeploymentHandler";
 const ISOLATED_HANDLER_ID = "ShinBucketDeploymentHandler";
+// Handler identity is recomputed for every construct, so these memoize reads of
+// files that cannot change during a synthesis: the installed package manifest and
+// the prebuilt bootstrap archives. Both caches live for the whole process rather
+// than per-`App`, which is correct for an installed package but means a long-lived
+// process that swaps package fixtures under the same path — a test runner, most
+// likely — keeps observing the first version and digest it read.
 const fileSha256Cache = new Map<string, string>();
 let packageVersionCache: string | undefined;
 
