@@ -750,7 +750,7 @@ export class ShinBucketDeployment extends Construct {
       source.bind(this, { handlerRole: this.handlerRole }),
     );
 
-    grantDestinationPermissions(this, this.handlerFunction, {
+    const providerPolicyDependables = grantDestinationPermissions(this, this.handlerFunction, {
       destinationBucket: this.destinationBucket,
       destinationKeyPrefix: destination.keyPrefix,
       deleteCurrentObjects: deleteStaleObjectsOnDeploy || deleteCurrentObjectsOnDelete,
@@ -852,6 +852,14 @@ export class ShinBucketDeployment extends Construct {
         PutObjectRetryJitter: destinationWriteRetryTuning.jitter,
       },
     });
+
+    // Under `@aws-cdk/aws-lambda:createNewPoliciesWithAddToRolePolicy` the provider
+    // grants land in standalone policies that the handler's own DependsOn does not
+    // cover, so order the custom resource after each of them explicitly. Attaching
+    // these to the handler instead would cycle: its role is inside its subtree.
+    for (const dependable of providerPolicyDependables) {
+      this.cr.node.addDependency(dependable);
+    }
 
     const destinationOwnerId = this.cr.node.addr.slice(-8);
     const ownerPrefix = destinationOwnerPrefix(destination.keyPrefix);

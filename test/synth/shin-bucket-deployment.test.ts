@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { App, Aspects, CfnParameter, Stack } from "aws-cdk-lib";
 import { Match, Template } from "aws-cdk-lib/assertions";
+import { AllowedMethods, Distribution, ViewerProtocolPolicy } from "aws-cdk-lib/aws-cloudfront";
+import { S3BucketOrigin } from "aws-cdk-lib/aws-cloudfront-origins";
 import { SecurityGroup, SubnetType, Vpc } from "aws-cdk-lib/aws-ec2";
 import { Role, ServicePrincipal } from "aws-cdk-lib/aws-iam";
 import { Key } from "aws-cdk-lib/aws-kms";
@@ -1544,4 +1546,60 @@ test("orders the custom resource after the provider role's default policy", () =
   expect(Array.isArray(handlerDependsOn) ? handlerDependsOn : [handlerDependsOn]).toContain(
     defaultPolicy,
   );
+});
+
+// `@aws-cdk/aws-lambda:createNewPoliciesWithAddToRolePolicy` makes
+// `Function.addToRolePolicy` emit standalone policies instead of extending the
+// role's default policy. Those are not covered by the handler's `DependsOn`, so
+// routing the provider grants through the role's `addToPrincipalPolicy` and
+// registering the returned dependable is what keeps ordering correct.
+test.each([
+  false,
+  true,
+])("orders the custom resource after every provider policy (createNewPolicies=%s)", (createNewPolicies) => {
+  const app = new App({
+    context: {
+      "@aws-cdk/aws-lambda:createNewPoliciesWithAddToRolePolicy": createNewPolicies,
+    },
+  });
+  const stack = new Stack(app, "S");
+  const destinationBucket = new Bucket(stack, "Dest");
+  const distribution = new Distribution(stack, "Distribution", {
+    defaultBehavior: {
+      origin: S3BucketOrigin.withOriginAccessControl(destinationBucket),
+      allowedMethods: AllowedMethods.ALLOW_GET_HEAD_OPTIONS,
+      viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+    },
+  });
+  new ShinBucketDeployment(stack, "Deploy", {
+    sources: [Source.data("index.html", "ok")],
+    destination: { bucket: destinationBucket },
+    cloudfrontInvalidation: { distribution, paths: ["/*"] },
+    destinationLifecycle: { onDelete: { deleteCurrentObjects: true } },
+    providerLambda: { localBuild: testLocalProviderBuild() },
+  });
+
+  const template = Template.fromStack(stack).toJSON() as {
+    Resources: Record<
+      string,
+      { Type: string; DependsOn?: string | string[]; Properties?: unknown }
+    >;
+  };
+  const customResource = Object.entries(template.Resources).find(
+    ([, resource]) => resource.Type === "AWS::CloudFormation::CustomResource",
+  )?.[0];
+  if (!customResource) throw new Error("no custom resource in template");
+
+  const policies = Object.entries(template.Resources)
+    .filter(([, resource]) => resource.Type === "AWS::IAM::Policy")
+    .map(([id]) => id);
+  // Routing grants through the role collapses them into the default policy, so
+  // the flag no longer splits them out. The invariant that matters either way is
+  // that every synthesized policy precedes the custom resource.
+  expect(policies.length).toBeGreaterThan(0);
+
+  const dependencies = transitiveDependencies(template.Resources, customResource);
+  for (const policy of policies) {
+    expect(dependencies).toContain(policy);
+  }
 });
