@@ -39,6 +39,10 @@ pub(super) struct CopyPlan {
     pub(super) destination_key: String,
     pub(super) destination_precondition: Option<DestinationWritePrecondition>,
     pub(super) size: u64,
+    /// A same-sized destination object exists whose `ETag` cannot prove the copy is
+    /// current, so one `HeadObject` may still retire this plan. See
+    /// [`copy_identity_probe_is_useful`].
+    pub(super) identity_probe: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -211,8 +215,11 @@ pub(super) fn collect_copy_plans(
             PlannedAction::CopyObject { source_index, size } => {
                 let destination_key =
                     join_s3_key(&request.dest_bucket_prefix, &planned.relative_key);
-                let content_changed = request.destination_checksum_strategy
-                    == crate::types::DestinationChecksumStrategy::KmsSha256
+                // A KMS/DSSE destination ETag is not the plaintext MD5, so it can never
+                // stand in for the source ETag.
+                let destination_etag_is_plaintext_md5 = request.destination_checksum_strategy
+                    != crate::types::DestinationChecksumStrategy::KmsSha256;
+                let content_changed = !destination_etag_is_plaintext_md5
                     || planned.expected_etag.as_deref().is_none_or(|etag| {
                         !destination_etag_matches(destination_objects, &planned.relative_key, etag)
                     });
@@ -232,14 +239,19 @@ pub(super) fn collect_copy_plans(
                         planned.relative_key
                     )
                 })?;
+                let destination_object = destination_objects.get(&planned.relative_key);
                 plans.push(CopyPlan {
                     source_bucket: request.source_bucket_names[source_index].clone(),
                     source_key: request.source_object_keys[source_index].clone(),
+                    identity_probe: copy_identity_probe_is_useful(
+                        destination_object,
+                        &expected_etag,
+                        size,
+                        destination_etag_is_plaintext_md5,
+                    ),
                     expected_etag,
                     destination_key,
-                    destination_precondition: destination_write_precondition(
-                        destination_objects.get(&planned.relative_key),
-                    ),
+                    destination_precondition: destination_write_precondition(destination_object),
                     size,
                 });
             }
@@ -292,6 +304,38 @@ pub(super) fn collect_zip_entry_plans(
     }
 
     grouped
+}
+
+/// Decides whether a surviving copy plan deserves one `HeadObject` before the copy.
+///
+/// The listing-only fast path above compares the source `ETag` against the destination
+/// `ETag`. A multipart source defeats that comparison structurally: its `ETag` is
+/// `<md5>-<parts>`, while `CopyObject` writes a single-part destination whose `ETag` is a
+/// plain MD5. The two can never be equal, so an unchanged multipart source would be
+/// recopied on every deployment. A probe is only worth an API call when a destination
+/// object of exactly the source's length already exists; anything else has to be copied
+/// regardless.
+///
+/// KMS/DSSE destinations defeat the comparison too, but they are deliberately left on the
+/// unconditional-recopy path: the `shin-copy-identity` token binds no encryption state, so
+/// it cannot prove that an existing object carries the destination bucket's *current*
+/// default key. Probing there would silently retain objects encrypted under a rotated or
+/// replaced key.
+fn copy_identity_probe_is_useful(
+    destination_object: Option<&DestinationObject>,
+    expected_etag: &str,
+    size: u64,
+    destination_etag_is_plaintext_md5: bool,
+) -> bool {
+    let destination_size_matches =
+        destination_object.is_some_and(|object| object.size == Some(size));
+    destination_size_matches
+        && destination_etag_is_plaintext_md5
+        && is_multipart_etag(expected_etag)
+}
+
+fn is_multipart_etag(etag: &str) -> bool {
+    etag.contains('-')
 }
 
 async fn source_object_metadata(
@@ -934,6 +978,65 @@ mod tests {
             Some(DestinationWritePrecondition::IfNoneMatch)
         );
         assert_eq!(plans[0].size, 1024);
+        assert!(
+            !plans[0].identity_probe,
+            "an absent destination object cannot be proven current"
+        );
+    }
+
+    #[test]
+    fn identity_probes_are_planned_only_where_the_etag_comparison_cannot_work() {
+        let plan_for = |source_etag: &str, destination: Option<(&str, u64)>, kms: bool| {
+            let mut manifest = DeploymentManifest::new();
+            manifest.insert(
+                "archive.zip".to_string(),
+                PlannedObject {
+                    relative_key: "archive.zip".to_string(),
+                    expected_etag: Some(source_etag.to_string()),
+                    action: PlannedAction::CopyObject {
+                        source_index: 0,
+                        size: Some(1024),
+                    },
+                },
+            );
+            let destination_objects = destination
+                .map(|(etag, size)| {
+                    HashMap::from([(
+                        "archive.zip".to_string(),
+                        DestinationObject {
+                            etag: Some(etag.to_string()),
+                            size: Some(size),
+                        },
+                    )])
+                })
+                .unwrap_or_default();
+            let mut request = copy_request();
+            if kms {
+                request.destination_checksum_strategy = DestinationChecksumStrategy::KmsSha256;
+            }
+            collect_copy_plans(&manifest, &request, &destination_objects).unwrap()
+        };
+
+        // A multipart source ETag can never equal the plain MD5 that CopyObject writes.
+        let multipart = plan_for("abc123-4", Some(("abc123", 1024)), false);
+        assert_eq!(multipart.len(), 1);
+        assert!(multipart[0].identity_probe);
+
+        // A KMS destination ETag cannot match either, but the token binds no encryption
+        // state, so probing there could retain an object under a rotated key.
+        let kms = plan_for("abc123-4", Some(("ciphertext-etag", 1024)), true);
+        assert_eq!(kms.len(), 1);
+        assert!(!kms[0].identity_probe);
+
+        // A single-part SSE-S3 mismatch is a real content change; a HEAD cannot retire it.
+        let changed = plan_for("abc123", Some(("def456", 1024)), false);
+        assert_eq!(changed.len(), 1);
+        assert!(!changed[0].identity_probe);
+
+        // A different length rules the destination out without spending an API call.
+        let resized = plan_for("abc123-4", Some(("abc123", 999)), false);
+        assert_eq!(resized.len(), 1);
+        assert!(!resized[0].identity_probe);
     }
 
     #[test]
