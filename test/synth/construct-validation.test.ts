@@ -446,6 +446,11 @@ describe("ShinBucketDeployment validation and option coverage", () => {
       ["/*", /must be an array of strings/],
       [[7], /paths\[0\] must be a string/],
       [[`/${"a".repeat(4_000)}`], /must be <=4000 Unicode characters/],
+      // CloudFront does not support `~` for invalidations, URL-encoded or not, so a
+      // path containing one would be accepted and then silently invalidate nothing.
+      [["/~user/*"], /must not contain "~"/],
+      [["/a/%7Euser/*"], /must not contain "~"/],
+      [["/a/%7euser/*"], /must not contain "~"/],
     ];
 
     for (const [index, [paths, expected]] of invalidPaths.entries()) {

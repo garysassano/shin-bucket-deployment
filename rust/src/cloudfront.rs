@@ -138,9 +138,26 @@ pub(crate) fn validate_invalidation_paths(paths: &[String]) -> Result<i32> {
             "CloudFront invalidation path {} is {characters} characters; the maximum is {MAX_INVALIDATION_PATH_CHARACTERS}",
             index + 1
         );
+        ensure!(
+            !contains_unsupported_tilde(path),
+            "CloudFront invalidation path {} contains `~`, which CloudFront does not support for invalidations, URL-encoded or not",
+            index + 1
+        );
     }
 
     Ok(quantity)
+}
+
+/// CloudFront documents `~` as unsupported in invalidation paths "whether it's
+/// URL-encoded or not", so the percent-encoded spellings are equally unsupported.
+///
+/// This runs in the provider as well as at synth because protocol callers reach the
+/// custom resource directly and never see the construct's validation.
+fn contains_unsupported_tilde(path: &str) -> bool {
+    path.contains('~')
+        || path.as_bytes().windows(3).any(|window| {
+            window[0] == b'%' && window[1] == b'7' && window[2].eq_ignore_ascii_case(&b'e')
+        })
 }
 
 fn invalidation_quantity(path_count: usize) -> Result<i32> {
@@ -174,6 +191,28 @@ mod tests {
 
         let path = format!("/{}", "a".repeat(MAX_INVALIDATION_PATH_CHARACTERS));
         assert!(validate_invalidation_paths(&[path]).is_err());
+    }
+
+    #[test]
+    fn invalidation_paths_reject_the_tilde_in_every_spelling() {
+        // CloudFront: "Don't use the `~` character in your path. CloudFront doesn't
+        // support this character for invalidations, whether it's URL-encoded or not."
+        for path in ["/~user/*", "/a/%7Euser/*", "/a/%7euser/*", "/trailing~"] {
+            assert!(
+                validate_invalidation_paths(&[path.to_string()]).is_err(),
+                "`{path}` must be rejected"
+            );
+        }
+
+        // A percent sequence that merely looks similar stays valid.
+        assert_eq!(
+            validate_invalidation_paths(&["/a/%7Db/*".to_string()]).expect("valid path"),
+            1
+        );
+        assert_eq!(
+            validate_invalidation_paths(&["/a/%7.txt".to_string()]).expect("valid path"),
+            1
+        );
     }
 
     #[test]
