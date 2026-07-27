@@ -479,7 +479,10 @@ fn range_get_request_error(error: SdkError<GetObjectError>) -> RangeGetError {
     let (retryable, throttled) = match &error {
         SdkError::ServiceError(service) => {
             let status = service.raw().status().as_u16();
-            let throttled = service.err().code().is_some_and(is_s3_throttle_error_code);
+            let throttled = service
+                .err()
+                .code()
+                .is_some_and(crate::util::is_throttle_error_code);
             (
                 status == 408 || status == 429 || status >= 500 || throttled,
                 throttled,
@@ -502,21 +505,6 @@ fn range_get_request_error(error: SdkError<GetObjectError>) -> RangeGetError {
         retryable,
         throttled,
     }
-}
-
-fn is_s3_throttle_error_code(code: &str) -> bool {
-    matches!(
-        code,
-        "SlowDown"
-            | "Throttling"
-            | "ThrottlingException"
-            | "TooManyRequestsException"
-            | "RequestLimitExceeded"
-            | "RequestThrottled"
-            | "RequestThrottledException"
-            | "ProvisionedThroughputExceededException"
-            | "BandwidthLimitExceeded"
-    )
 }
 
 impl SourceDiagnostics {

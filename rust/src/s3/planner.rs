@@ -472,7 +472,6 @@ async fn load_authenticated_catalog(
     let plan = zip_entry_plan(
         source.len(),
         0,
-        0,
         stored,
         EMBEDDED_CATALOG_PATH.to_string(),
         next_source_offset(source_offsets, stored.header_offset())
@@ -644,7 +643,6 @@ fn is_lowercase_md5(value: &str) -> bool {
 
 fn zip_entry_plan(
     source_len: u64,
-    _archive_index: usize,
     source_index: usize,
     stored: &StoredZipEntry,
     relative_key: String,
@@ -715,7 +713,6 @@ pub(super) fn validate_deployment_preflight(
     request: &DeploymentRequest,
     manifest: &DeploymentManifest,
 ) -> Result<()> {
-    let mut total_output_bytes = 0_u64;
     for planned in manifest.values() {
         let destination_key = join_s3_key(&request.dest_bucket_prefix, &planned.relative_key);
         let key_bytes = destination_key.len();
@@ -726,7 +723,7 @@ pub(super) fn validate_deployment_preflight(
             ));
         }
 
-        let size = match planned.action {
+        match planned.action {
             PlannedAction::CopyObject { source_index, size } => {
                 request
                     .source_bucket_names
@@ -741,7 +738,6 @@ pub(super) fn validate_deployment_preflight(
                         anyhow!("copy plan references missing source index {source_index}")
                     })?;
                 validate_copy_object_size(&planned.relative_key, size)?;
-                size
             }
             PlannedAction::ZipEntry { size, .. } => {
                 if size > S3_SINGLE_PUT_LIMIT {
@@ -750,13 +746,7 @@ pub(super) fn validate_deployment_preflight(
                         planned.relative_key
                     ));
                 }
-                Some(size)
             }
-        };
-        if let Some(size) = size {
-            total_output_bytes = total_output_bytes
-                .checked_add(size)
-                .ok_or_else(|| anyhow!("deployment output size arithmetic overflowed"))?;
         }
     }
     Ok(())
@@ -769,8 +759,6 @@ fn validate_archive_directory(
     source_len: u64,
     central_directory_start: u64,
 ) -> Result<Vec<u64>> {
-    let _entry_count = u64::try_from(entries.len())
-        .map_err(|_| anyhow!("source ZIP entry count cannot be represented safely"))?;
     if central_directory_start > source_len {
         return Err(anyhow!(
             "source ZIP central directory starts beyond the source object"

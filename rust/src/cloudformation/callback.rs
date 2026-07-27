@@ -5,7 +5,8 @@ use aws_lambda_events::event::cloudformation::CloudFormationCustomResourceReques
 use serde_json::json;
 use tokio::time::{Instant as TokioInstant, sleep_until, timeout_at};
 
-use crate::types::{DeploymentStats, ResponsePayload, duration_ms};
+use crate::types::{DeploymentStats, ResponsePayload};
+use crate::util::duration_ms;
 
 use super::RequestEnvelope;
 
