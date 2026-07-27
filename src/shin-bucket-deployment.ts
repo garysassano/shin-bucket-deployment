@@ -414,6 +414,18 @@ export interface ShinBucketDeploymentProviderLambdaOptions {
    * sharing deployment accumulate on that role. A caller-supplied role remains
    * caller-owned even with `sharing: ProviderSharing.DEPLOYMENT`.
    *
+   * For a role this construct creates, deployment ordering is guaranteed: the
+   * custom resource resolves the handler's ARN, and the handler is ordered after
+   * the role's default policy, so the grants are in place before the provider
+   * runs.
+   *
+   * That guarantee does not extend to an imported role. `Role.fromRoleArn` and
+   * similar produce a construct outside this stack's dependency graph, so
+   * CloudFormation cannot order the custom resource after policy changes made
+   * elsewhere. Ensure an imported role already carries the required source,
+   * destination, KMS, and CloudFront permissions before the deployment runs, or
+   * the provider can start and fail with AccessDenied.
+   *
    * @default - a role is created for the provider
    */
   readonly role?: IRole;
