@@ -414,6 +414,18 @@ export interface ShinBucketDeploymentProviderLambdaOptions {
    * sharing deployment accumulate on that role. A caller-supplied role remains
    * caller-owned even with `sharing: ProviderSharing.DEPLOYMENT`.
    *
+   * For a role this construct creates, deployment ordering is guaranteed: the
+   * custom resource resolves the handler's ARN, and the handler is ordered after
+   * the role's default policy, so the grants are in place before the provider
+   * runs.
+   *
+   * That guarantee does not extend to an imported role. `Role.fromRoleArn` and
+   * similar produce a construct outside this stack's dependency graph, so
+   * CloudFormation cannot order the custom resource after policy changes made
+   * elsewhere. Ensure an imported role already carries the required source,
+   * destination, KMS, and CloudFront permissions before the deployment runs, or
+   * the provider can start and fail with AccessDenied.
+   *
    * @default - a role is created for the provider
    */
   readonly role?: IRole;
@@ -738,7 +750,7 @@ export class ShinBucketDeployment extends Construct {
       source.bind(this, { handlerRole: this.handlerRole }),
     );
 
-    grantDestinationPermissions(this, this.handlerFunction, {
+    const providerPolicyDependables = grantDestinationPermissions(this, this.handlerFunction, {
       destinationBucket: this.destinationBucket,
       destinationKeyPrefix: destination.keyPrefix,
       deleteCurrentObjects: deleteStaleObjectsOnDeploy || deleteCurrentObjectsOnDelete,
@@ -840,6 +852,14 @@ export class ShinBucketDeployment extends Construct {
         PutObjectRetryJitter: destinationWriteRetryTuning.jitter,
       },
     });
+
+    // Under `@aws-cdk/aws-lambda:createNewPoliciesWithAddToRolePolicy` the provider
+    // grants land in standalone policies that the handler's own DependsOn does not
+    // cover, so order the custom resource after each of them explicitly. Attaching
+    // these to the handler instead would cycle: its role is inside its subtree.
+    for (const dependable of providerPolicyDependables) {
+      this.cr.node.addDependency(dependable);
+    }
 
     const destinationOwnerId = this.cr.node.addr.slice(-8);
     const ownerPrefix = destinationOwnerPrefix(destination.keyPrefix);

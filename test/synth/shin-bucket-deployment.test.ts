@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { App, Aspects, CfnParameter, Stack } from "aws-cdk-lib";
 import { Match, Template } from "aws-cdk-lib/assertions";
+import { AllowedMethods, Distribution, ViewerProtocolPolicy } from "aws-cdk-lib/aws-cloudfront";
+import { S3BucketOrigin } from "aws-cdk-lib/aws-cloudfront-origins";
 import { SecurityGroup, SubnetType, Vpc } from "aws-cdk-lib/aws-ec2";
 import { Role, ServicePrincipal } from "aws-cdk-lib/aws-iam";
 import { Key } from "aws-cdk-lib/aws-kms";
@@ -1455,4 +1457,149 @@ test("limits cross-bucket cleanup authority to the explicitly authorized previou
   expect(JSON.stringify(deleteStatements)).not.toContain("CurrentDest");
   expect(ownershipStatements).toHaveLength(1);
   expect(JSON.stringify(ownershipStatements)).toContain("PreviousDest");
+});
+
+/**
+ * Collects everything a resource depends on, following both explicit `DependsOn`
+ * and the implicit dependencies CloudFormation derives from `Ref`/`Fn::GetAtt`.
+ */
+function transitiveDependencies(
+  resources: Record<string, { DependsOn?: string | string[]; Properties?: unknown }>,
+  start: string,
+): Set<string> {
+  const referenced = (node: unknown, into: Set<string>): void => {
+    if (Array.isArray(node)) {
+      for (const item of node) referenced(item, into);
+      return;
+    }
+    if (typeof node !== "object" || node === null) return;
+    for (const [key, value] of Object.entries(node)) {
+      if (key === "Ref" && typeof value === "string") into.add(value);
+      else if (key === "Fn::GetAtt" && Array.isArray(value) && typeof value[0] === "string") {
+        into.add(value[0]);
+      } else referenced(value, into);
+    }
+  };
+
+  const seen = new Set<string>();
+  const queue = [start];
+  while (queue.length > 0) {
+    const current = queue.pop();
+    if (current === undefined || seen.has(current)) continue;
+    seen.add(current);
+    const resource = resources[current];
+    if (!resource) continue;
+    const next = new Set<string>();
+    const dependsOn = resource.DependsOn;
+    if (typeof dependsOn === "string") next.add(dependsOn);
+    else if (Array.isArray(dependsOn)) for (const id of dependsOn) next.add(id);
+    referenced(resource.Properties, next);
+    for (const id of next) if (!seen.has(id)) queue.push(id);
+  }
+  seen.delete(start);
+  return seen;
+}
+
+// The custom resource must not be created before the role policy that grants it
+// source, destination, and KMS access, or the provider starts and immediately
+// fails with AccessDenied. Nothing previously locked that ordering in.
+test("orders the custom resource after the provider role's default policy", () => {
+  const stack = new Stack();
+  const destinationBucket = new Bucket(stack, "Dest");
+  new ShinBucketDeployment(stack, "Deploy", {
+    sources: [Source.data("index.html", "ok")],
+    destination: { bucket: destinationBucket },
+    providerLambda: { localBuild: testLocalProviderBuild() },
+  });
+
+  const template = Template.fromStack(stack).toJSON() as {
+    Resources: Record<
+      string,
+      { Type: string; DependsOn?: string | string[]; Properties?: unknown }
+    >;
+  };
+  const entries = Object.entries(template.Resources);
+  const findId = (type: string): string => {
+    const match = entries.filter(([, resource]) => resource.Type === type);
+    expect(match).toHaveLength(1);
+    const found = match[0];
+    if (!found) throw new Error(`no ${type} in template`);
+    return found[0];
+  };
+
+  const customResource = findId("AWS::CloudFormation::CustomResource");
+  const defaultPolicy = findId("AWS::IAM::Policy");
+  const role = findId("AWS::IAM::Role");
+
+  // Direct or transitive is fine; CloudFormation honours both. Assert the closure
+  // first, then each individual link, so a break reports which one gave way rather
+  // than just that the ordering was lost.
+  const dependencies = transitiveDependencies(template.Resources, customResource);
+  expect(dependencies).toContain(defaultPolicy);
+  expect(dependencies).toContain(role);
+
+  const handler = findId("AWS::Lambda::Function");
+  // Link 1: the custom resource reaches the handler through its ServiceToken.
+  expect(transitiveDependencies(template.Resources, customResource)).toContain(handler);
+  // Link 2: the handler is ordered after the policy that grants it access.
+  const handlerDependsOn = template.Resources[handler]?.DependsOn;
+  expect(Array.isArray(handlerDependsOn) ? handlerDependsOn : [handlerDependsOn]).toContain(
+    defaultPolicy,
+  );
+});
+
+// `@aws-cdk/aws-lambda:createNewPoliciesWithAddToRolePolicy` makes
+// `Function.addToRolePolicy` emit standalone policies instead of extending the
+// role's default policy. Those are not covered by the handler's `DependsOn`, so
+// routing the provider grants through the role's `addToPrincipalPolicy` and
+// registering the returned dependable is what keeps ordering correct.
+test.each([
+  false,
+  true,
+])("orders the custom resource after every provider policy (createNewPolicies=%s)", (createNewPolicies) => {
+  const app = new App({
+    context: {
+      "@aws-cdk/aws-lambda:createNewPoliciesWithAddToRolePolicy": createNewPolicies,
+    },
+  });
+  const stack = new Stack(app, "S");
+  const destinationBucket = new Bucket(stack, "Dest");
+  const distribution = new Distribution(stack, "Distribution", {
+    defaultBehavior: {
+      origin: S3BucketOrigin.withOriginAccessControl(destinationBucket),
+      allowedMethods: AllowedMethods.ALLOW_GET_HEAD_OPTIONS,
+      viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+    },
+  });
+  new ShinBucketDeployment(stack, "Deploy", {
+    sources: [Source.data("index.html", "ok")],
+    destination: { bucket: destinationBucket },
+    cloudfrontInvalidation: { distribution, paths: ["/*"] },
+    destinationLifecycle: { onDelete: { deleteCurrentObjects: true } },
+    providerLambda: { localBuild: testLocalProviderBuild() },
+  });
+
+  const template = Template.fromStack(stack).toJSON() as {
+    Resources: Record<
+      string,
+      { Type: string; DependsOn?: string | string[]; Properties?: unknown }
+    >;
+  };
+  const customResource = Object.entries(template.Resources).find(
+    ([, resource]) => resource.Type === "AWS::CloudFormation::CustomResource",
+  )?.[0];
+  if (!customResource) throw new Error("no custom resource in template");
+
+  const policies = Object.entries(template.Resources)
+    .filter(([, resource]) => resource.Type === "AWS::IAM::Policy")
+    .map(([id]) => id);
+  // Routing grants through the role collapses them into the default policy, so
+  // the flag no longer splits them out. The invariant that matters either way is
+  // that every synthesized policy precedes the custom resource.
+  expect(policies.length).toBeGreaterThan(0);
+
+  const dependencies = transitiveDependencies(template.Resources, customResource);
+  for (const policy of policies) {
+    expect(dependencies).toContain(policy);
+  }
 });
