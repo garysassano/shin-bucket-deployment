@@ -281,7 +281,6 @@ describe("cleanup verifier", () => {
     const bucket = new Bucket(stack, "Destination");
     grantVerifierRead(
       bucket,
-      undefined,
       "arn:aws:sts::111122223333:assumed-role/VerifierRole/workflow-session",
     );
 
