@@ -71,6 +71,8 @@ The official `BucketDeployment` is a good default for many stacks, but its provi
 
 <img src="https://raw.githubusercontent.com/garysassano/shin-bucket-deployment/main/benchmarks/snapshots/tiny-many-2048mib-64.svg" alt="ShinBucketDeployment tiny-many 2048 MiB max concurrency 64 benchmark" width="100%">
 
+<img src="https://raw.githubusercontent.com/garysassano/shin-bucket-deployment/main/benchmarks/snapshots/tiny-many-4096mib-128.svg" alt="ShinBucketDeployment tiny-many 4096 MiB max concurrency 128 benchmark" width="100%">
+
 ## Construct API
 
 Only `sources` and `destination` are required. Sources accept any upstream CDK `ISource`; Shin also provides `Source.asset`, `Source.bucket`, `Source.data`, `Source.jsonData`, and `Source.yamlData` helpers.

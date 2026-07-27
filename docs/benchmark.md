@@ -207,12 +207,12 @@ All six Shin rows reported zero source GET retries/errors, destination PUT retri
 | Region | `eu-central-1` |
 | Implementations | `shin` and upstream AWS CDK `BucketDeployment` |
 | Asset profile | `tiny-many` |
-| Lambda configurations | 1024 MiB / 32 and 64 Shin transfers; 2048 MiB / 64 and 128 Shin transfers |
+| Lambda configurations | 1024 MiB / 32 and 64 Shin transfers; 2048 MiB / 64 and 128 Shin transfers; 4096 MiB / 128 Shin transfers |
 | Phases | `cold-create`, `unchanged-update`, `changed-update`, `pruned-update` |
 | Cleanup | All benchmark stacks destroyed after telemetry collection |
 | Raw evidence | Not committed; raw AWS output remains in scratch only |
 
-The README-linked charts use the 1024 MiB / 32 and 2048 MiB / 64 rows. The additional 1024 MiB / 64 and 2048 MiB / 128 diagnostics are retained in `benchmarks/results.jsonl`. Provider durations for the four Shin configurations were:
+The README-linked charts use the 1024 MiB / 32, 2048 MiB / 64, and 4096 MiB / 128 rows. The 1024 and 2048 rows come from the earlier 0.10.4 diagnostic described below. The restored 4096 MiB / 128 chart comes from a clean 0.11.0 run at source commit `462db1f`; it is still exploratory single-sample evidence. The additional 1024 MiB / 64 and 2048 MiB / 128 diagnostics are retained in `benchmarks/results.jsonl`. Provider durations were:
 
 | Lambda configuration | Cold create | Unchanged update | Changed update | Pruned update | Peak memory on create |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -220,10 +220,13 @@ The README-linked charts use the 1024 MiB / 32 and 2048 MiB / 64 rows. The addit
 | 1024 MiB / 64 transfers | 2.603 s | 0.476 s | 0.721 s | 3.122 s | 47 MiB |
 | 2048 MiB / 64 transfers | 1.502 s | 0.488 s | 0.623 s | 3.228 s | 57 MiB |
 | 2048 MiB / 128 transfers | 1.482 s | 0.503 s | 0.546 s | 3.132 s | 68 MiB |
+| 4096 MiB / 128 transfers | 1.251 s | 0.449 s | 0.656 s | 3.164 s | 71 MiB |
 
 Against the previous single-sample README snapshot, 1024 MiB / 32 was slower in all four provider phases by 4.5% to 18.7%. At 2048 MiB / 64, cold create and changed update improved by 3.7% and 10.0%, while unchanged and pruned update were slower by 9.2% and 10.6%. This mixed single-sample signal does not establish a systematic regression, but the consistent 1024 MiB / 32 movement warrants a repeated clean methodology-v2 comparison before performance acceptance. All Shin samples reported zero source GET retries/errors, destination PUT retries/throttles, block refetches, transfer failures, cancellations, and panics.
 
 This methodology-v1 diagnostic records a dirty source tree because its new benchmark config was added before the provenance-bound provider build. The measured provider is still bound to source commit `2e511b6`; use the result for investigation and README illustration, not release-grade acceptance.
+
+The later 4096 MiB / 128 diagnostic captured complete provider telemetry from a clean source tree at `462db1f`. It reported zero source GET retries/errors, destination PUT retries/throttles, block refetches, transfer failures, cancellations, and panics. All benchmark stacks were destroyed and the final scoped cleanup check found none remaining.
 
 ## Reading Results
 
