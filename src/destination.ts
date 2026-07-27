@@ -2,7 +2,6 @@ import { Stack } from "aws-cdk-lib";
 import { type Bucket, CfnBucket } from "aws-cdk-lib/aws-s3";
 import type { Construct } from "constructs";
 import { ValidationError } from "./errors";
-import { stableStringify } from "./stable-json";
 
 export function inspectableDestinationBucketResource(scope: Construct, bucket: Bucket): CfnBucket {
   const resource = bucket.node.defaultChild;
@@ -24,9 +23,9 @@ export function inspectableDestinationBucketResource(scope: Construct, bucket: B
  * separate from the typed L1 model and merges them only while rendering, so the
  * public property reports `undefined` for a bucket encrypted purely by escape
  * hatch, and reports the pre-override algorithm when an override replaces it.
- * Trusting it would silently classify a KMS bucket as SSE-S3 and skip
- * {@link validateDestinationKmsKey}. The rendered form is the only
- * representation of what actually deploys.
+ * Trusting it would silently classify a KMS bucket as SSE-S3 and accept a
+ * destination that cannot support incremental deployment. The rendered form is the
+ * only representation of what actually deploys.
  *
  * `_toCloudFormation` is CDK-internal, so a rendering failure is converted into a
  * distinct, stable error rather than surfacing as a raw `TypeError`. Note CDK
@@ -63,14 +62,26 @@ function renderedBucketEncryption(scope: Construct, bucketResource: CfnBucket): 
   return isRecord(properties) ? properties.BucketEncryption : undefined;
 }
 
-export function destinationChecksumStrategy(
-  scope: Construct,
-  bucket: Bucket,
-  bucketResource: CfnBucket,
-): "sse-s3-etag" | "kms-sha256" {
+/**
+ * Confirms the destination bucket uses SSE-S3, the only encryption mode this
+ * construct supports.
+ *
+ * Incremental deployment reads the destination `ETag` from a single `ListObjectsV2`
+ * page and compares it against a known plaintext MD5. A KMS or DSSE object's `ETag`
+ * is not that digest, and a listing returns no checksum, so proving such an object
+ * unchanged would need a per-object `HeadObject` and a second stored-digest scheme
+ * running alongside the `ETag` one. That parallel path is what this construct
+ * declines to carry, not something impossible — and without it every deployment
+ * would silently re-upload every object. Refusing at synthesis is the honest
+ * outcome. SSE-S3 is on by default on every S3 bucket, so this costs nothing to
+ * satisfy.
+ */
+export function validateDestinationEncryption(scope: Construct, bucketResource: CfnBucket): void {
   const resolved = renderedBucketEncryption(scope, bucketResource);
   if (resolved === undefined) {
-    return "sse-s3-etag";
+    // No explicit rule renders when the bucket relies on the account default, which
+    // S3 guarantees is SSE-S3.
+    return;
   }
   if (!isRecord(resolved)) {
     throw unsupportedDestinationEncryption(scope);
@@ -85,41 +96,19 @@ export function destinationChecksumStrategy(
   }
   switch (encryption.SSEAlgorithm) {
     case "AES256":
-      return "sse-s3-etag";
+      return;
     case "aws:kms":
     case "aws:kms:dsse":
-      validateDestinationKmsKey(scope, bucket, encryption.KMSMasterKeyID);
-      return "kms-sha256";
+      throw unsupportedDestinationKmsEncryption(scope);
     default:
       throw unsupportedDestinationEncryption(scope);
   }
 }
 
-function validateDestinationKmsKey(
-  scope: Construct,
-  bucket: Bucket,
-  kmsMasterKeyId: unknown,
-): void {
-  if (kmsMasterKeyId === undefined) {
-    return;
-  }
-  const encryptionKey = bucket.encryptionKey;
-  if (!encryptionKey) {
-    throw unsupportedDestinationKmsKey(scope);
-  }
-  const stack = Stack.of(scope);
-  if (
-    stableStringify(stack.resolve(kmsMasterKeyId)) !==
-    stableStringify(stack.resolve(encryptionKey.keyArn))
-  ) {
-    throw unsupportedDestinationKmsKey(scope);
-  }
-}
-
-function unsupportedDestinationKmsKey(scope: Construct): ValidationError {
+function unsupportedDestinationKmsEncryption(scope: Construct): ValidationError {
   return new ValidationError(
-    "ShinBucketDeploymentDestinationKmsKeyUnsupported",
-    "destination.bucket KMSMasterKeyID must be omitted for the AWS-managed S3 key or match destination.bucket.encryptionKey so CDK can grant the provider access.",
+    "ShinBucketDeploymentDestinationKmsEncryptionUnsupported",
+    "destination.bucket must use SSE-S3 (AES256) default encryption. ShinBucketDeployment does not support SSE-KMS or SSE-DSSE destinations: their object ETags are not plaintext MD5 digests, so identifying unchanged objects would require a per-object HeadObject instead of one bucket listing. Rather than carry that second reconciliation path, Shin refuses these buckets — otherwise every deployment would silently re-upload every object.",
     scope,
   );
 }
@@ -145,7 +134,7 @@ function unsupportedCdkRendering(scope: Construct, cause?: unknown): ValidationE
 function unsupportedDestinationEncryption(scope: Construct): ValidationError {
   return new ValidationError(
     "ShinBucketDeploymentDestinationEncryptionUnsupported",
-    "destination.bucket must synthesize one inspectable default encryption rule using AES256, aws:kms, or aws:kms:dsse.",
+    "destination.bucket must synthesize one inspectable default encryption rule using AES256.",
     scope,
   );
 }

@@ -8,14 +8,13 @@ import { AllowedMethods, Distribution, ViewerProtocolPolicy } from "aws-cdk-lib/
 import { S3BucketOrigin } from "aws-cdk-lib/aws-cloudfront-origins";
 import { SecurityGroup, SubnetType, Vpc } from "aws-cdk-lib/aws-ec2";
 import { Role, ServicePrincipal } from "aws-cdk-lib/aws-iam";
-import { Key } from "aws-cdk-lib/aws-kms";
 import { Architecture } from "aws-cdk-lib/aws-lambda";
 import { LogGroup } from "aws-cdk-lib/aws-logs";
 import { Bucket, BucketEncryption, BucketNamespace, CfnBucket } from "aws-cdk-lib/aws-s3";
 import type { IConstruct } from "constructs";
 import { expect, test } from "vitest";
 import { FailureDiagnostics, ProviderSharing, ShinBucketDeployment, Source } from "../../src";
-import { destinationChecksumStrategy } from "../../src/destination";
+import { validateDestinationEncryption } from "../../src/destination";
 import { renderHandlerConfigHashInput } from "../../src/provider";
 import { stableStringify } from "../../src/stable-json";
 import { testLocalProviderBuild } from "../support/bundling";
@@ -73,7 +72,6 @@ test("renders a Rust-backed custom resource", () => {
     },
     Extract: true,
     DeleteStaleObjectsOnDeployment: true,
-    DestinationChecksumStrategy: "sse-s3-etag",
   });
 }, 120_000);
 
@@ -812,76 +810,66 @@ test("scopes destination object permissions to the destination prefix", () => {
 });
 
 test.each([
-  ["default", undefined, "sse-s3-etag"],
-  ["S3 managed", BucketEncryption.S3_MANAGED, "sse-s3-etag"],
-  ["KMS", BucketEncryption.KMS, "kms-sha256"],
-  ["KMS managed", BucketEncryption.KMS_MANAGED, "kms-sha256"],
-  ["DSSE", BucketEncryption.DSSE, "kms-sha256"],
-  ["DSSE managed", BucketEncryption.DSSE_MANAGED, "kms-sha256"],
-] as const)("derives the destination checksum strategy for %s encryption", (_, encryption, expected) => {
+  ["default", undefined],
+  ["S3 managed", BucketEncryption.S3_MANAGED],
+] as const)("accepts %s destination encryption", (_, encryption) => {
   const stack = new Stack();
   const destinationBucket = new Bucket(stack, "Dest", encryption ? { encryption } : {});
 
   new ShinBucketDeployment(stack, "Deploy", {
     sources: [Source.data("index.html", "ok")],
-    destination: {
-      bucket: destinationBucket,
-    },
-    providerLambda: {
-      localBuild: testLocalProviderBuild(),
-    },
+    destination: { bucket: destinationBucket },
+    providerLambda: { localBuild: testLocalProviderBuild() },
   });
 
-  expect(customResourceProperties(stack).DestinationChecksumStrategy).toBe(expected);
+  expect(() => customResourceProperties(stack)).not.toThrow();
 });
 
-test("grants checksum-mode access to the AWS-managed S3 KMS key", () => {
+test.each([
+  ["KMS", BucketEncryption.KMS],
+  ["KMS managed", BucketEncryption.KMS_MANAGED],
+  ["DSSE", BucketEncryption.DSSE],
+  ["DSSE managed", BucketEncryption.DSSE_MANAGED],
+] as const)("refuses a %s destination bucket", (_, encryption) => {
   const stack = new Stack();
-  const destinationBucket = new Bucket(stack, "Dest", {
-    encryption: BucketEncryption.KMS_MANAGED,
-  });
+  const destinationBucket = new Bucket(stack, "Dest", { encryption });
+
   new ShinBucketDeployment(stack, "Deploy", {
     sources: [Source.data("index.html", "ok")],
-    destination: {
-      bucket: destinationBucket,
-    },
-    providerLambda: {
-      localBuild: testLocalProviderBuild(),
-    },
+    destination: { bucket: destinationBucket },
+    providerLambda: { localBuild: testLocalProviderBuild() },
   });
 
-  Template.fromStack(stack).hasResourceProperties("AWS::IAM::Policy", {
-    PolicyDocument: {
-      Statement: Match.arrayWith([
-        Match.objectLike({
-          Action: Match.arrayWith(["kms:Decrypt", "kms:GenerateDataKey"]),
-          Condition: {
-            "ForAnyValue:StringEquals": {
-              "kms:ResourceAliases": "alias/aws/s3",
-            },
-            StringEquals: {
-              "kms:ViaService": Match.anyValue(),
-            },
-          },
-          Effect: "Allow",
-          Resource: Match.anyValue(),
-        }),
-      ]),
-    },
-  });
+  expect(() => customResourceProperties(stack)).toThrow(/must use SSE-S3 \(AES256\)/);
 });
 
-test("resolves destination encryption lazily after L1 mutation", () => {
+test("never asks for KMS permissions on the provider role", () => {
   const stack = new Stack();
   const destinationBucket = new Bucket(stack, "Dest");
   new ShinBucketDeployment(stack, "Deploy", {
     sources: [Source.data("index.html", "ok")],
-    destination: {
-      bucket: destinationBucket,
-    },
-    providerLambda: {
-      localBuild: testLocalProviderBuild(),
-    },
+    destination: { bucket: destinationBucket },
+    providerLambda: { localBuild: testLocalProviderBuild() },
+  });
+
+  const rendered = JSON.stringify(Template.fromStack(stack).toJSON());
+
+  // SSE-S3 needs no key access, so an SSE-S3-only construct must not grant any.
+  expect(rendered).not.toContain("kms:Decrypt");
+  expect(rendered).not.toContain("kms:GenerateDataKey");
+  expect(rendered).not.toContain("alias/aws/s3");
+});
+
+// The refusal has to survive escape hatches. CDK keeps `addPropertyOverride` values out
+// of the typed L1 model and merges them only while rendering, so a check that read
+// `CfnBucket.bucketEncryption` would see the pre-override `AES256` and wave KMS through.
+test("refuses a bucket switched to KMS by direct L1 mutation", () => {
+  const stack = new Stack();
+  const destinationBucket = new Bucket(stack, "Dest");
+  new ShinBucketDeployment(stack, "Deploy", {
+    sources: [Source.data("index.html", "ok")],
+    destination: { bucket: destinationBucket },
+    providerLambda: { localBuild: testLocalProviderBuild() },
   });
 
   const resource = destinationBucket.node.defaultChild;
@@ -894,20 +882,16 @@ test("resolves destination encryption lazily after L1 mutation", () => {
     ],
   };
 
-  expect(customResourceProperties(stack).DestinationChecksumStrategy).toBe("kms-sha256");
+  expect(() => customResourceProperties(stack)).toThrow(/must use SSE-S3 \(AES256\)/);
 });
 
-test("resolves destination encryption after a late property override", () => {
+test("refuses a bucket switched to KMS by a late property override", () => {
   const stack = new Stack();
   const destinationBucket = new Bucket(stack, "Dest");
   new ShinBucketDeployment(stack, "Deploy", {
     sources: [Source.data("index.html", "ok")],
-    destination: {
-      bucket: destinationBucket,
-    },
-    providerLambda: {
-      localBuild: testLocalProviderBuild(),
-    },
+    destination: { bucket: destinationBucket },
+    providerLambda: { localBuild: testLocalProviderBuild() },
   });
 
   const resource = destinationBucket.node.defaultChild;
@@ -920,13 +904,10 @@ test("resolves destination encryption after a late property override", () => {
     ],
   });
 
-  expect(customResourceProperties(stack).DestinationChecksumStrategy).toBe("kms-sha256");
+  expect(() => customResourceProperties(stack)).toThrow(/must use SSE-S3 \(AES256\)/);
 });
 
-// CDK keeps `addPropertyOverride` values out of the typed L1 model and merges them
-// only while rendering, so reading `CfnBucket.bucketEncryption` here would report the
-// pre-override `AES256` and silently choose the wrong checksum strategy.
-test("resolves destination encryption after a nested override replaces the algorithm", () => {
+test("refuses a bucket whose algorithm is replaced by a nested override", () => {
   const stack = new Stack();
   const destinationBucket = new Bucket(stack, "Dest", {
     encryption: BucketEncryption.S3_MANAGED,
@@ -951,46 +932,7 @@ test("resolves destination encryption after a nested override replaces the algor
     "aws:kms",
   );
 
-  Template.fromStack(stack).hasResourceProperties("AWS::S3::Bucket", {
-    BucketEncryption: {
-      ServerSideEncryptionConfiguration: [
-        { ServerSideEncryptionByDefault: { SSEAlgorithm: "aws:kms" } },
-      ],
-    },
-  });
-  expect(customResourceProperties(stack).DestinationChecksumStrategy).toBe("kms-sha256");
-});
-
-test("rejects an overridden customer KMS key that the construct cannot grant", () => {
-  const stack = new Stack();
-  const destinationBucket = new Bucket(stack, "Dest");
-  new ShinBucketDeployment(stack, "Deploy", {
-    sources: [Source.data("index.html", "ok")],
-    destination: { bucket: destinationBucket },
-    providerLambda: { localBuild: testLocalProviderBuild() },
-  });
-
-  const resource = destinationBucket.node.defaultChild;
-  if (!CfnBucket.isCfnBucket(resource)) {
-    throw new Error("expected destination CfnBucket");
-  }
-  // No L2 encryptionKey exists, so the provider could not be granted access.
-  resource.addPropertyOverride("BucketEncryption", {
-    ServerSideEncryptionConfiguration: [
-      {
-        ServerSideEncryptionByDefault: {
-          SSEAlgorithm: "aws:kms",
-          KMSMasterKeyID: "arn:aws:kms:us-east-1:111122223333:key/unmanaged",
-        },
-      },
-    ],
-  });
-
-  expect(() => customResourceProperties(stack)).toThrowError(
-    expect.objectContaining({
-      code: "ShinBucketDeploymentDestinationKmsKeyUnsupported",
-    }) as Error,
-  );
+  expect(() => customResourceProperties(stack)).toThrow(/must use SSE-S3 \(AES256\)/);
 });
 
 // CDK invokes `_toCloudFormation` on every CfnElement during synthesis, so it cannot
@@ -1040,7 +982,7 @@ test("preserves the original failure when CDK rendering throws", () => {
   // would hit the broken method first and raise its own error.
   let thrown: unknown;
   try {
-    destinationChecksumStrategy(stack, destinationBucket, resource);
+    validateDestinationEncryption(stack, resource);
   } catch (error) {
     thrown = error;
   }
@@ -1072,7 +1014,7 @@ test("treats a publicly retyped destination resource as unsupported configuratio
   );
 });
 
-test("resolves destination encryption after an Aspect mutation", () => {
+test("refuses a bucket switched to KMS by an Aspect", () => {
   const stack = new Stack();
   const destinationBucket = new Bucket(stack, "Dest");
   new ShinBucketDeployment(stack, "Deploy", {
@@ -1101,7 +1043,7 @@ test("resolves destination encryption after an Aspect mutation", () => {
     },
   });
 
-  expect(customResourceProperties(stack).DestinationChecksumStrategy).toBe("kms-sha256");
+  expect(() => customResourceProperties(stack)).toThrow(/must use SSE-S3 \(AES256\)/);
 });
 
 test("rejects unknown and uninspectable destination encryption", () => {
@@ -1125,7 +1067,9 @@ test("rejects unknown and uninspectable destination encryption", () => {
       { serverSideEncryptionByDefault: { sseAlgorithm: "future:algorithm" } },
     ],
   };
-  expect(() => customResourceProperties(unknownStack)).toThrow(/AES256, aws:kms, or aws:kms:dsse/);
+  expect(() => customResourceProperties(unknownStack)).toThrow(
+    /inspectable default encryption rule using AES256/,
+  );
 
   const importedStack = new Stack();
   const imported = Bucket.fromBucketName(importedStack, "Imported", "imported-bucket");
@@ -1181,7 +1125,7 @@ test.each([
   expect(() => customResourceProperties(stack)).toThrow(/one inspectable default encryption rule/);
 });
 
-test("rejects an L1-injected customer KMS key without a matching L2 grant", () => {
+test("refuses an L1-injected customer KMS key", () => {
   const stack = new Stack();
   const destinationBucket = new Bucket(stack, "Dest");
   new ShinBucketDeployment(stack, "Deploy", {
@@ -1208,7 +1152,7 @@ test("rejects an L1-injected customer KMS key without a matching L2 grant", () =
     ],
   };
 
-  expect(() => customResourceProperties(stack)).toThrow(/match destination\.bucket\.encryptionKey/);
+  expect(() => customResourceProperties(stack)).toThrow(/must use SSE-S3 \(AES256\)/);
 });
 
 test("supports account-regional destination buckets", () => {
@@ -1307,46 +1251,6 @@ test("keeps delete and list permissions scoped when current object deletion is e
       ]),
     },
   });
-});
-
-test("grants destination KMS permissions when the destination bucket is encrypted", () => {
-  const stack = new Stack();
-  const key = new Key(stack, "Key");
-  const destinationBucket = new Bucket(stack, "Dest", {
-    encryption: BucketEncryption.KMS,
-    encryptionKey: key,
-  });
-
-  new ShinBucketDeployment(stack, "Deploy", {
-    sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
-    destination: {
-      bucket: destinationBucket,
-      keyPrefix: "site",
-    },
-    providerLambda: {
-      localBuild: testLocalProviderBuild(),
-    },
-  });
-
-  const template = Template.fromStack(stack);
-
-  template.hasResourceProperties("AWS::IAM::Policy", {
-    PolicyDocument: {
-      Statement: Match.arrayWith([
-        Match.objectLike({
-          Action: Match.arrayWith(["kms:Decrypt", "kms:GenerateDataKey"]),
-          Resource: {
-            "Fn::GetAtt": ["Key961B73FD", "Arn"],
-          },
-        }),
-      ]),
-    },
-  });
-
-  const rendered = JSON.stringify(template.toJSON());
-  expect(rendered).not.toContain("kms:DescribeKey");
-  expect(rendered).not.toContain("kms:Encrypt");
-  expect(rendered).not.toContain("kms:ReEncrypt");
 });
 
 test("omits delete and ownership-read permissions when all deletion is disabled", () => {

@@ -12,9 +12,8 @@ use crate::s3::{
     PUT_OBJECT_SLOWDOWN_RETRY_MAX_DELAY_MS, adaptive_source_get_concurrency,
 };
 use crate::types::{
-    DeletePreviousObjectsOnChange, DeploymentRequest, DestinationChecksumStrategy, Filters,
-    MarkerConfig, PreviousDestination, PutObjectRetryJitter, PutObjectRetryOptions, RuntimeOptions,
-    TrustedSourceCatalog,
+    DeletePreviousObjectsOnChange, DeploymentRequest, Filters, MarkerConfig, PreviousDestination,
+    PutObjectRetryJitter, PutObjectRetryOptions, RuntimeOptions, TrustedSourceCatalog,
 };
 
 const DEFAULT_AVAILABLE_MEMORY_MB: u64 = 1024;
@@ -82,8 +81,6 @@ pub(crate) struct RawDeploymentRequest {
         deserialize_with = "crate::util::deserialize_boolish"
     )]
     pub(crate) wait_for_distribution_invalidation: bool,
-    #[serde(default)]
-    pub(crate) destination_checksum_strategy: Option<DestinationChecksumStrategy>,
     #[serde(
         default = "default_true",
         deserialize_with = "crate::util::deserialize_boolish"
@@ -190,9 +187,6 @@ pub(crate) fn parse_request(raw: &RawDeploymentRequest) -> Result<DeploymentRequ
             .clone()
             .unwrap_or_else(|| vec![default_distribution_path]),
         wait_for_distribution_invalidation: raw.wait_for_distribution_invalidation,
-        destination_checksum_strategy: raw.destination_checksum_strategy.ok_or_else(|| {
-            anyhow!("DestinationChecksumStrategy is required for destination writes")
-        })?,
         delete_stale_objects_on_deployment: raw.delete_stale_objects_on_deployment,
         exclude: raw.exclude.clone(),
         include: raw.include.clone(),
@@ -708,7 +702,6 @@ mod tests {
             "SourceBucketNames": ["source-bucket"],
             "SourceObjectKeys": ["source.zip"],
             "DestinationBucketName": "dest-bucket",
-            "DestinationChecksumStrategy": "sse-s3-etag"
         })
     }
 
@@ -734,10 +727,6 @@ mod tests {
         );
         assert_eq!(request.runtime.source_get_concurrency, 4);
         assert_eq!(request.runtime.max_parallel_transfers, 32);
-        assert_eq!(
-            request.destination_checksum_strategy,
-            DestinationChecksumStrategy::SseS3Etag
-        );
         assert_eq!(
             request.runtime.put_object_retry.jitter,
             PutObjectRetryJitter::Full
@@ -846,26 +835,17 @@ mod tests {
     }
 
     #[test]
-    fn destination_checksum_strategy_is_required_and_exact() {
-        let mut missing = minimal_request();
-        missing
-            .as_object_mut()
-            .unwrap()
-            .remove("DestinationChecksumStrategy");
-        let raw: RawDeploymentRequest = serde_json::from_value(missing).unwrap();
-        assert!(parse_request(&raw).is_err());
-
-        let mut kms = minimal_request();
-        kms["DestinationChecksumStrategy"] = json!("kms-sha256");
-        let request = parse_request(&serde_json::from_value(kms).unwrap()).unwrap();
-        assert_eq!(
-            request.destination_checksum_strategy,
-            DestinationChecksumStrategy::KmsSha256
-        );
-
-        let mut unknown = minimal_request();
-        unknown["DestinationChecksumStrategy"] = json!("sha256");
-        assert!(serde_json::from_value::<RawDeploymentRequest>(unknown).is_err());
+    fn a_withdrawn_destination_checksum_strategy_is_ignored_rather_than_honoured() {
+        // KMS destinations are refused at synthesis, so the provider no longer reads a
+        // strategy at all. A stale template still carrying one must parse and be ignored
+        // rather than resurrect a code path that no longer exists.
+        for stale in ["kms-sha256", "sse-s3-etag", "sha256"] {
+            let mut props = minimal_request();
+            props["DestinationChecksumStrategy"] = json!(stale);
+            let raw: RawDeploymentRequest =
+                serde_json::from_value(props).expect("an unknown field must not fail the request");
+            assert!(parse_request(&raw).is_ok());
+        }
     }
 
     #[test]

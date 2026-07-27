@@ -1959,9 +1959,7 @@ mod tests {
     };
     use crate::s3::planner::ZipEntryPlan;
     use crate::s3::{DEFAULT_SOURCE_BLOCK_BYTES, DEFAULT_SOURCE_BLOCK_MERGE_GAP_BYTES};
-    use crate::types::{
-        AppState, DeploymentStats, DestinationChecksumStrategy, MarkerConfig, TrustedEntryIntegrity,
-    };
+    use crate::types::{AppState, DeploymentStats, MarkerConfig, TrustedEntryIntegrity};
 
     const INFO_ZIP_FIXTURE: &str =
         include_str!("../../test-fixtures/external-zips/info-zip.zip.b64");
@@ -2354,15 +2352,10 @@ mod tests {
         let store = ready_store_for_plan(&zip, &plan);
         let (sender, _receiver) = tokio::sync::mpsc::channel(1);
 
-        let error = send_zip_entry_chunks(
-            store,
-            plan,
-            sender,
-            Arc::new(UploadBodyState::default()),
-            DestinationChecksumStrategy::SseS3Etag,
-        )
-        .await
-        .unwrap_err();
+        let error =
+            send_zip_entry_chunks(store, plan, sender, Arc::new(UploadBodyState::default()))
+                .await
+                .unwrap_err();
 
         assert!(error.to_string().contains("CRC32"));
     }
@@ -2378,15 +2371,10 @@ mod tests {
         let store = ready_store_for_plan(&zip, &plan);
         let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
 
-        let error = send_zip_entry_chunks(
-            store,
-            plan,
-            sender,
-            Arc::new(UploadBodyState::default()),
-            DestinationChecksumStrategy::SseS3Etag,
-        )
-        .await
-        .expect_err("trusted MD5 mismatch must fail the body");
+        let error =
+            send_zip_entry_chunks(store, plan, sender, Arc::new(UploadBodyState::default()))
+                .await
+                .expect_err("trusted MD5 mismatch must fail the body");
 
         assert!(error.to_string().contains("authenticated catalog entry"));
         assert!(
@@ -2398,40 +2386,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn streamed_checksum_work_is_selected_by_destination_strategy() {
+    async fn streaming_an_entry_always_records_its_md5() {
+        // SSE-S3 is the only supported destination encryption, so the MD5 that proves an
+        // object's content is computed unconditionally rather than selected by strategy.
         let zip = zip_from_entry("index.txt", b"hello zipped world");
+        let plan = zip_plan_from_archive(&zip, "index.txt");
+        let store = ready_store_for_plan(&zip, &plan);
+        let (sender, _receiver) = tokio::sync::mpsc::channel(2);
+        let state = Arc::new(UploadBodyState::default());
 
-        let sse_plan = zip_plan_from_archive(&zip, "index.txt");
-        let sse_store = ready_store_for_plan(&zip, &sse_plan);
-        let (sse_sender, _sse_receiver) = tokio::sync::mpsc::channel(2);
-        let sse_state = Arc::new(UploadBodyState::default());
-        send_zip_entry_chunks(
-            sse_store,
-            sse_plan,
-            sse_sender,
-            Arc::clone(&sse_state),
-            DestinationChecksumStrategy::SseS3Etag,
-        )
-        .await
-        .expect("SSE-S3 stream");
-        assert!(sse_state.etag_md5().is_some());
-        assert!(sse_state.checksum_sha256().is_none());
+        send_zip_entry_chunks(store, plan, sender, Arc::clone(&state))
+            .await
+            .expect("SSE-S3 stream");
 
-        let kms_plan = zip_plan_from_archive(&zip, "index.txt");
-        let kms_store = ready_store_for_plan(&zip, &kms_plan);
-        let (kms_sender, _kms_receiver) = tokio::sync::mpsc::channel(2);
-        let kms_state = Arc::new(UploadBodyState::default());
-        send_zip_entry_chunks(
-            kms_store,
-            kms_plan,
-            kms_sender,
-            Arc::clone(&kms_state),
-            DestinationChecksumStrategy::KmsSha256,
-        )
-        .await
-        .expect("KMS stream");
-        assert!(kms_state.etag_md5().is_none());
-        assert!(kms_state.checksum_sha256().is_some());
+        assert!(state.etag_md5().is_some());
     }
 
     #[tokio::test]
@@ -2445,33 +2413,22 @@ mod tests {
         .expect("marker automaton");
         let store = ready_store_for_plan(&zip, &plan);
 
-        let result = plan_marker_zip_entry(
-            store,
-            plan.clone(),
-            &replacements,
-            DestinationChecksumStrategy::SseS3Etag,
-        )
-        .await
-        .expect("marker planning pass");
+        let result = plan_marker_zip_entry(store, plan.clone(), &replacements)
+            .await
+            .expect("marker planning pass");
 
         assert_eq!(
             result.output_bytes,
             b"before expanded-value after".len() as u64
         );
-        assert!(result.md5.is_some());
-        assert!(result.sha256.is_none());
+        assert!(!result.md5.is_empty());
 
         let mut invalid = plan;
         invalid.crc32 ^= 1;
         let invalid_store = ready_store_for_plan(&zip, &invalid);
-        let error = plan_marker_zip_entry(
-            invalid_store,
-            invalid,
-            &replacements,
-            DestinationChecksumStrategy::SseS3Etag,
-        )
-        .await
-        .expect_err("marker planning must preserve CRC validation");
+        let error = plan_marker_zip_entry(invalid_store, invalid, &replacements)
+            .await
+            .expect_err("marker planning must preserve CRC validation");
         assert!(error.to_string().contains("CRC32"));
     }
 
@@ -2495,7 +2452,6 @@ mod tests {
             plan,
             output.len() as u64,
             Arc::clone(&body_state),
-            DestinationChecksumStrategy::SseS3Etag,
             body_attempts,
             super::MarkerBodyContext {
                 replacements,
@@ -2546,7 +2502,6 @@ mod tests {
             replacements,
             sender,
             Arc::new(UploadBodyState::default()),
-            DestinationChecksumStrategy::SseS3Etag,
         )
         .await
         .expect_err("CRC failure must fail the marker body");
@@ -2580,7 +2535,6 @@ mod tests {
                 replacements,
                 sender,
                 Arc::new(UploadBodyState::default()),
-                DestinationChecksumStrategy::SseS3Etag,
             ),
         )
         .await;
@@ -2598,14 +2552,7 @@ mod tests {
         let store = ready_store_for_plan(&zip, &plan);
         let body_state = Arc::new(UploadBodyState::default());
         let body_attempts = Arc::new(AtomicUsize::new(0));
-        let body = zip_entry_body(
-            Arc::clone(&store),
-            plan,
-            9,
-            body_state,
-            DestinationChecksumStrategy::SseS3Etag,
-            body_attempts,
-        );
+        let body = zip_entry_body(Arc::clone(&store), plan, 9, body_state, body_attempts);
         let sdk_body = body.into_inner();
         let unpolled_clone = sdk_body.try_clone().expect("retryable body clone");
 
@@ -2640,7 +2587,6 @@ mod tests {
             plan,
             b"snapshot body".len() as u64,
             Arc::clone(&body_state),
-            DestinationChecksumStrategy::SseS3Etag,
             Arc::new(AtomicUsize::new(0)),
         );
         let sdk_body = body.into_inner();
@@ -2713,7 +2659,6 @@ mod tests {
             plan.clone(),
             plan.size,
             Arc::clone(&body_state),
-            DestinationChecksumStrategy::SseS3Etag,
             Arc::new(AtomicUsize::new(0)),
         )
         .into_inner();
@@ -2823,7 +2768,6 @@ mod tests {
             plan.clone(),
             plan.size,
             Arc::clone(&body_state),
-            DestinationChecksumStrategy::SseS3Etag,
             Arc::new(AtomicUsize::new(0)),
         )
         .into_inner();
@@ -2898,7 +2842,6 @@ mod tests {
             plan,
             expected.len() as u64,
             Arc::new(UploadBodyState::default()),
-            DestinationChecksumStrategy::SseS3Etag,
             Arc::new(AtomicUsize::new(0)),
         )
         .into_inner();
@@ -2941,7 +2884,6 @@ mod tests {
             plan,
             0,
             Arc::new(UploadBodyState::default()),
-            DestinationChecksumStrategy::SseS3Etag,
             Arc::new(AtomicUsize::new(0)),
         )
         .into_inner();
@@ -2995,7 +2937,6 @@ mod tests {
             plan.clone(),
             plan.size,
             Arc::new(UploadBodyState::default()),
-            DestinationChecksumStrategy::SseS3Etag,
             Arc::new(AtomicUsize::new(0)),
         );
         let mut first = body.into_inner();
@@ -3093,7 +3034,6 @@ mod tests {
             plan.clone(),
             plan.size,
             Arc::new(UploadBodyState::default()),
-            DestinationChecksumStrategy::SseS3Etag,
             Arc::new(AtomicUsize::new(0)),
         );
         let mut first = body.into_inner();

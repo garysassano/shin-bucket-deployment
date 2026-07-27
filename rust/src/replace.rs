@@ -3,11 +3,8 @@ use std::io;
 
 use aho_corasick::{AhoCorasick, AhoCorasickBuilder, MatchKind};
 use anyhow::Result;
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use md5::{Digest as Md5Digest, Md5};
 use serde_json::Value;
-use sha2::Sha256;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use crate::types::MarkerConfig;
@@ -25,22 +22,18 @@ pub(crate) struct MarkerReplacements {
 #[derive(Clone, Copy)]
 pub(crate) struct ReplacementOptions {
     pub(crate) max_output_bytes: u64,
-    pub(crate) hash_md5: bool,
-    pub(crate) hash_sha256: bool,
 }
 
 #[derive(Debug)]
 pub(crate) struct ReplacementResult {
     pub(crate) output_bytes: u64,
-    pub(crate) md5: Option<String>,
-    pub(crate) sha256: Option<String>,
+    pub(crate) md5: String,
 }
 
 struct OutputAccounting {
     max_output_bytes: u64,
     output_bytes: u64,
-    md5: Option<Md5>,
-    sha256: Option<Sha256>,
+    md5: Md5,
 }
 
 impl MarkerReplacements {
@@ -159,8 +152,7 @@ impl OutputAccounting {
         Self {
             max_output_bytes: options.max_output_bytes,
             output_bytes: 0,
-            md5: options.hash_md5.then(Md5::new),
-            sha256: options.hash_sha256.then(Sha256::new),
+            md5: Md5::new(),
         }
     }
 
@@ -190,12 +182,7 @@ impl OutputAccounting {
             ));
         }
 
-        if let Some(md5) = self.md5.as_mut() {
-            md5.update(bytes);
-        }
-        if let Some(sha256) = self.sha256.as_mut() {
-            sha256.update(bytes);
-        }
+        self.md5.update(bytes);
         output.write_all(bytes).await?;
         self.output_bytes = next;
         Ok(())
@@ -204,10 +191,7 @@ impl OutputAccounting {
     fn finish(self) -> ReplacementResult {
         ReplacementResult {
             output_bytes: self.output_bytes,
-            md5: self.md5.map(finalize_md5),
-            sha256: self
-                .sha256
-                .map(|sha256| BASE64_STANDARD.encode(sha256.finalize())),
+            md5: finalize_md5(self.md5),
         }
     }
 }
@@ -295,11 +279,7 @@ mod tests {
             .replace_stream(
                 &mut input,
                 &mut output,
-                ReplacementOptions {
-                    max_output_bytes,
-                    hash_md5: true,
-                    hash_sha256: true,
-                },
+                ReplacementOptions { max_output_bytes },
                 |_| Ok(()),
             )
             .await?;
@@ -369,8 +349,7 @@ mod tests {
             [b"before--".as_slice(), large.as_bytes(), b"-after"].concat()
         );
         assert_eq!(result.output_bytes, output.len() as u64);
-        assert!(result.md5.is_some());
-        assert!(result.sha256.is_some());
+        assert!(!result.md5.is_empty());
     }
 
     #[tokio::test]
