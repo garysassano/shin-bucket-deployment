@@ -31,6 +31,10 @@ use super::{
 
 const RESERVED_CATALOG_V2_PATH: &str = ".shin/catalog.v2.json";
 
+/// Multiplier turning a catalog's declared size into its estimated peak resident cost.
+/// See [`catalog_memory_estimate`].
+const CATALOG_ALLOCATION_FACTOR: u64 = 4;
+
 #[derive(Clone, Debug)]
 pub(super) struct CopyPlan {
     pub(super) source_bucket: String,
@@ -522,6 +526,22 @@ async fn load_authenticated_catalog(
             .unwrap_or(central_directory_start)
             .min(central_directory_start),
     )?;
+
+    // Charge the catalog against the source budget before allocating anything for it.
+    // Planning is sequential, so the only permit outstanding here is this archive's
+    // central-directory reservation: a refusal means the configured budget cannot fit
+    // planning and this catalog together, which no amount of waiting would change.
+    let catalog_permit = source_budget
+        .try_reserve_planning(catalog_memory_estimate(stored.uncompressed_size())?)
+        .map_err(|error| catalog_budget_error(error.to_string()))?;
+    // The store below still has to fetch at least one block while that permit is held.
+    // Checking now turns what would otherwise be a deadlock into an actionable error.
+    if !source_budget.can_reserve_additional(catalog_source_block_bytes(request, &plan)) {
+        return Err(catalog_budget_error(
+            "no room remains for the source block that reads it".to_string(),
+        ));
+    }
+
     let store = SourceBlockStore::new(
         source.clone(),
         std::slice::from_ref(&plan),
@@ -534,7 +554,15 @@ async fn load_authenticated_catalog(
         source_budget,
     );
     let mut reader = zip_entry_reader(store, plan.clone())?;
+    // Reserve the declared size up front. The read loop below refuses to append past
+    // `plan.size`, which is that same declared size, so the buffer can never outgrow this
+    // capacity and geometric reallocation cannot overshoot what was just charged.
     let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(usize::try_from(stored.uncompressed_size()).map_err(|_| {
+            anyhow!("embedded source catalog size does not fit this platform's address space")
+        })?)
+        .map_err(|_| anyhow!("embedded source catalog buffer could not be allocated"))?;
     let mut crc32 = Crc32Hasher::new();
     let mut total_bytes = 0_u64;
     let mut buffer = vec![0_u8; 64 * 1024];
@@ -557,7 +585,48 @@ async fn load_authenticated_catalog(
     }
     validate_zip_entry_output(&plan, total_bytes, crc32.finalize())?;
     let catalog = authenticate_catalog_bytes(&bytes, expected_sha256)?;
-    validate_catalog_entries(catalog, entries)
+    // The raw buffer and the decoded catalog are simultaneously resident only across the
+    // parse above; releasing the raw half here keeps the peak at that parse rather than
+    // letting it grow again while the manifest map is built.
+    drop(bytes);
+    let manifest = validate_catalog_entries(catalog, entries);
+    // The surviving map is charged to the central directory's per-entry metadata
+    // estimate, so the catalog reservation ends with the transient buffers.
+    drop(catalog_permit);
+    manifest
+}
+
+/// Estimated peak resident bytes for processing a catalog of `uncompressed_size`.
+///
+/// The raw JSON buffer stays resident while `serde_json` builds the fully owned
+/// `EmbeddedCatalog`, so the peak is raw plus decoded. Decoded is *not* bounded by the
+/// JSON length: the smallest syntactically valid entry is 62 JSON bytes but decodes to an
+/// 88-byte `EmbeddedCatalogEntry` plus its `Vec` capacity slack, and validation only
+/// rejects such entries after the whole document has been decoded. The factor matches
+/// `DIRECTORY_ALLOCATION_FACTOR` both because that measured worst case needs more than
+/// double and because the two decoded-size estimates should not drift apart.
+fn catalog_memory_estimate(uncompressed_size: u64) -> Result<u64> {
+    uncompressed_size
+        .checked_mul(CATALOG_ALLOCATION_FACTOR)
+        .ok_or_else(|| anyhow!("embedded source catalog memory estimate overflowed"))
+}
+
+/// Bytes the catalog's own block fetch will need on top of the catalog reservation.
+///
+/// This is one block, not the store's window: the window is a multi-block retention
+/// ceiling, while the budget is acquired per fetched block, and a block never exceeds the
+/// entry's own source span.
+fn catalog_source_block_bytes(request: &DeploymentRequest, plan: &ZipEntryPlan) -> u64 {
+    u64::try_from(request.runtime.source_block_bytes)
+        .unwrap_or(u64::MAX)
+        .min(plan.source_span_end.saturating_sub(plan.source_offset))
+}
+
+fn catalog_budget_error(detail: String) -> anyhow::Error {
+    anyhow!(
+        "the embedded source catalog does not fit the invocation-global source budget: {detail}. \
+         Raise `providerLambda.memorySize`, or raise `transfer.advancedTuning.sourceWindowMemoryBudgetMiB` if it was lowered explicitly"
+    )
 }
 
 fn authenticated_catalog_entry(entries: &[StoredZipEntry]) -> Result<&StoredZipEntry> {
@@ -889,13 +958,17 @@ mod tests {
     use zip::write::{SimpleFileOptions, ZipWriter};
 
     use super::{
-        EmbeddedCatalog, EmbeddedCatalogEntry, S3_SINGLE_COPY_LIMIT, S3_SINGLE_PUT_LIMIT,
-        authenticate_catalog_bytes, authenticated_catalog_entry, checked_archive_totals,
+        CATALOG_ALLOCATION_FACTOR, EMBEDDED_CATALOG_MAX_BYTES, EmbeddedCatalog,
+        EmbeddedCatalogEntry, S3_SINGLE_COPY_LIMIT, S3_SINGLE_PUT_LIMIT, ZipEntryPlan,
+        authenticate_catalog_bytes, authenticated_catalog_entry, catalog_budget_error,
+        catalog_memory_estimate, catalog_source_block_bytes, checked_archive_totals,
         collect_copy_plans, collect_zip_entry_plans, ensure_unique_source_offsets,
         validate_archive_directory, validate_catalog_entries, validate_deployment_preflight,
     };
     use crate::request::compile_filters;
+    use crate::s3::archive::SourceByteBudget;
     use crate::s3::destination::{DestinationObject, DestinationWritePrecondition};
+    use crate::types::DeploymentStats;
     use crate::types::{
         DeploymentManifest, DeploymentRequest, DestinationChecksumStrategy, MarkerConfig,
         PlannedAction, PlannedObject, PutObjectRetryJitter, PutObjectRetryOptions, RuntimeOptions,
@@ -1187,6 +1260,243 @@ mod tests {
         let mut zip = zip_from_entries(&[("index.html", b"index" as &[u8])]);
         assert_eq!(zip.len(), 1);
         assert_eq!(zip.by_index(0).unwrap().name(), "index.html");
+    }
+
+    #[test]
+    fn a_minimal_catalog_entry_decodes_larger_than_its_json() {
+        // The reason CATALOG_ALLOCATION_FACTOR cannot be 2. The smallest syntactically
+        // valid entry, including its separating comma, is:
+        let json_per_entry = r#"{"path":"","size":0,"md5":"00000000000000000000000000000000"},"#;
+        // ...and it decodes to an owned struct plus its 32-byte md5 heap allocation.
+        // Nothing rejects it until validate_catalog_entries runs on the whole document.
+        let entry_struct = std::mem::size_of::<EmbeddedCatalogEntry>();
+        let md5_heap = 32;
+
+        // Even ignoring the Vec, decoded already exceeds the JSON it came from, which is
+        // what rules out a factor of 2: it budgets raw (1x) plus at most raw again.
+        assert!(
+            entry_struct + md5_heap > json_per_entry.len(),
+            "a catalog decodes to more owned bytes than its JSON source, \
+             so `raw + decoded` cannot fit in 2x the raw size"
+        );
+
+        // The documented worst case also allows for the entry Vec carrying up to double
+        // the capacity it needs, since serde grows it geometrically while deserializing.
+        // Compared as integers scaled by the JSON length so the bound cannot drift.
+        let worst_decoded_per_entry = 2 * entry_struct + md5_heap;
+        let worst_peak = json_per_entry.len() + worst_decoded_per_entry;
+        assert!(
+            CATALOG_ALLOCATION_FACTOR as usize * json_per_entry.len() > worst_peak,
+            "CATALOG_ALLOCATION_FACTOR ({CATALOG_ALLOCATION_FACTOR}) must stay above the \
+             worst-case peak of {worst_peak} bytes per {} JSON bytes",
+            json_per_entry.len()
+        );
+    }
+
+    #[test]
+    fn catalog_memory_estimate_is_checked_and_covers_the_declared_size() {
+        assert_eq!(
+            catalog_memory_estimate(1024).unwrap(),
+            1024 * CATALOG_ALLOCATION_FACTOR
+        );
+        assert!(
+            catalog_memory_estimate(u64::MAX).is_err(),
+            "a hostile declared size must be rejected rather than wrapping to a small estimate"
+        );
+    }
+
+    #[test]
+    fn catalog_source_block_bytes_uses_a_block_not_the_store_window() {
+        let mut request = copy_request();
+        request.runtime.source_block_bytes = 8 * 1024 * 1024;
+        // The store's window is far larger than one block; charging the window would
+        // reject configurations that actually fit.
+        assert!(
+            crate::s3::source_window_bytes_for_archive(&request.runtime, 512 * 1024 * 1024, 1)
+                as u64
+                > request.runtime.source_block_bytes as u64
+        );
+
+        let wide = catalog_plan(0, 64 * 1024 * 1024);
+        assert_eq!(
+            catalog_source_block_bytes(&request, &wide),
+            request.runtime.source_block_bytes as u64,
+            "a wide entry is bounded by the block size"
+        );
+
+        let narrow = catalog_plan(1_000, 1_000 + 4_096);
+        assert_eq!(
+            catalog_source_block_bytes(&request, &narrow),
+            4_096,
+            "a narrow entry is bounded by its own source span"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_unaffordable_catalog_is_refused_immediately_rather_than_awaited() {
+        let budget = SourceByteBudget::new(
+            32 * 1024 * 1024,
+            std::sync::Arc::new(DeploymentStats::default()),
+            false,
+        );
+        // Exhaust most of the budget the way a held planning reservation would.
+        let _held = budget
+            .try_reserve_planning(28 * 1024 * 1024)
+            .expect("the first reservation fits");
+
+        // Well under the whole budget, so this is contention rather than an oversized
+        // request — exactly the case that used to await a permit nothing would release.
+        let estimate = catalog_memory_estimate(2 * 1024 * 1024).unwrap();
+        assert!(estimate < budget.limit_bytes());
+
+        let started = tokio::time::Instant::now();
+        let error = budget
+            .try_reserve_planning(estimate)
+            .err()
+            .expect("a catalog that cannot fit alongside planning must be refused");
+
+        assert_eq!(
+            tokio::time::Instant::now(),
+            started,
+            "the refusal must not enter a wait; on a paused clock any await would advance time"
+        );
+        assert!(
+            error.to_string().contains("exceeds the remaining"),
+            "the error must name contention, not an oversized request: {error}"
+        );
+    }
+
+    #[test]
+    fn a_catalog_that_fits_is_admitted_and_releases_on_drop() {
+        let budget = SourceByteBudget::new(
+            64 * 1024 * 1024,
+            std::sync::Arc::new(DeploymentStats::default()),
+            false,
+        );
+        let estimate = catalog_memory_estimate(4 * 1024 * 1024).unwrap();
+
+        let permit = budget.try_reserve_planning(estimate).expect("it fits");
+        assert!(
+            !budget.can_reserve_additional(62 * 1024 * 1024),
+            "the reservation must actually consume budget while it is held"
+        );
+
+        drop(permit);
+        assert!(
+            budget.can_reserve_additional(62 * 1024 * 1024),
+            "dropping the permit must return the budget"
+        );
+    }
+
+    #[test]
+    fn the_former_hang_band_now_errors_instead_of_waiting_forever() {
+        // The reported defect: a catalog estimate that exceeds what remains after
+        // planning, but is still under the whole budget, used to await a permit that
+        // nothing would ever release, because planning is sequential.
+        let limit = 16 * 1024 * 1024_u64;
+        let budget = SourceByteBudget::new(
+            usize::try_from(limit).unwrap(),
+            std::sync::Arc::new(DeploymentStats::default()),
+            false,
+        );
+        let planning = 10 * 1024 * 1024;
+        let _planning_permit = budget
+            .try_reserve_planning(planning)
+            .expect("planning fits");
+
+        let catalog_estimate = catalog_memory_estimate(2 * 1024 * 1024).unwrap();
+        assert!(catalog_estimate <= limit, "it fits the budget on its own");
+        assert!(
+            catalog_estimate > limit - planning,
+            "but not alongside the planning reservation: this is the hang band"
+        );
+        assert!(budget.try_reserve_planning(catalog_estimate).is_err());
+    }
+
+    #[test]
+    fn the_declared_size_cap_keeps_the_catalog_estimate_bounded() {
+        // `uncompressed_size` is attacker-controlled, so what makes the estimate safe is
+        // that `load_authenticated_catalog` rejects anything above the cap before
+        // computing it. That leaves the estimate with a known worst case rather than an
+        // arbitrary one, which is the property the budget arithmetic depends on.
+        assert_eq!(
+            catalog_memory_estimate(EMBEDDED_CATALOG_MAX_BYTES).unwrap(),
+            EMBEDDED_CATALOG_MAX_BYTES * CATALOG_ALLOCATION_FACTOR
+        );
+        // A budget below that worst case must refuse it rather than admit and overshoot.
+        let budget = SourceByteBudget::new(
+            usize::try_from(EMBEDDED_CATALOG_MAX_BYTES).unwrap(),
+            std::sync::Arc::new(DeploymentStats::default()),
+            false,
+        );
+        assert!(
+            budget
+                .try_reserve_planning(catalog_memory_estimate(EMBEDDED_CATALOG_MAX_BYTES).unwrap())
+                .is_err(),
+            "a max-size catalog needs {CATALOG_ALLOCATION_FACTOR}x its own bytes, so it \
+             cannot be admitted to a budget of exactly one catalog"
+        );
+    }
+
+    #[test]
+    fn admission_accounts_for_each_reservation_rounding_up_to_a_permit_unit() {
+        // Permits are 4 KiB and every acquisition rounds up independently, so three
+        // reservations whose bytes sum to under the limit can still be jointly
+        // infeasible. This is why admission asks the budget rather than comparing bytes.
+        let unit = 4 * 1024_u64;
+        let limit = 11 * unit;
+        let budget = SourceByteBudget::new(
+            usize::try_from(limit).unwrap(),
+            std::sync::Arc::new(DeploymentStats::default()),
+            false,
+        );
+
+        // Each of these wastes almost a whole unit to rounding.
+        let unaligned = 3 * unit + 1;
+        let _planning = budget
+            .try_reserve_planning(unaligned)
+            .expect("planning fits");
+        let _catalog = budget
+            .try_reserve_planning(unaligned)
+            .expect("catalog fits");
+
+        let block = unaligned;
+        assert!(
+            3 * unaligned < limit,
+            "the byte totals say all three fit: {} < {limit}",
+            3 * unaligned
+        );
+        assert!(
+            !budget.can_reserve_additional(block),
+            "but each rounds up to 4 units, so the first two consume 8 of 11 permits and \
+             the block's 4 no longer fit"
+        );
+    }
+
+    #[test]
+    fn a_budget_refusal_names_the_settings_that_resolve_it() {
+        // This error is the only thing a user sees when a catalog cannot be admitted, so
+        // it has to name the levers rather than just the shortfall.
+        let message = catalog_budget_error("nothing fits".to_string()).to_string();
+
+        assert!(message.contains("providerLambda.memorySize"));
+        assert!(message.contains("sourceWindowMemoryBudgetMiB"));
+        assert!(message.contains("nothing fits"));
+    }
+
+    fn catalog_plan(source_offset: u64, source_span_end: u64) -> ZipEntryPlan {
+        ZipEntryPlan {
+            source_index: 0,
+            relative_key: ".shin/catalog.json".to_string(),
+            destination_key: ".shin/catalog.json".to_string(),
+            size: 0,
+            compressed_size: 0,
+            compression_code: 0,
+            crc32: 0,
+            trusted_integrity: None,
+            source_offset,
+            source_span_end,
+        }
     }
 
     #[test]

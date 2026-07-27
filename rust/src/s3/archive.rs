@@ -232,6 +232,17 @@ enum SourceBlockStatus {
     Failed(String),
 }
 
+/// Invocation-global ceiling on **resident source-phase memory**, not merely on bytes
+/// streamed. Every major source-phase allocation is charged against it through a
+/// conservative estimate of its decoded size: block windows, central-directory planning
+/// (`DIRECTORY_ALLOCATION_FACTOR` and friends), and embedded-catalog processing
+/// (`CATALOG_ALLOCATION_FACTOR`).
+///
+/// It is an accounting bound over those estimates, not an allocator-level hard limit.
+/// Small fixed-size working buffers, decompressor state, hasher state and allocator
+/// bookkeeping are outside it, so it constrains how much the provider *plans* to hold
+/// resident rather than measuring process RSS. The estimates are deliberately
+/// conservative so that the accounting stays an upper bound on the allocations it covers.
 pub(crate) struct SourceByteBudget {
     limit_bytes: u64,
     permit_unit_bytes: u64,
@@ -786,11 +797,48 @@ impl SourceByteBudget {
             .map(|permit| SourcePlanningPermit { _permit: permit })
     }
 
-    async fn acquire(
+    /// Reserves budget without ever waiting, for callers that run while the sequential
+    /// planning phase holds its own permit. A caller in that position competes with
+    /// nobody, so a refusal means the configured budget cannot fit the work at all and
+    /// waiting could never succeed — the error is the answer, not a retry signal.
+    pub(crate) fn try_reserve_planning(
         self: &Arc<Self>,
         bytes: u64,
-        cancel_wait: EnabledNotification,
-    ) -> io::Result<SourceBudgetPermit> {
+    ) -> io::Result<SourcePlanningPermit> {
+        let permits = self.permit_count(bytes)?;
+        // A fail-fast attempt is never a waiter, so it deliberately bypasses the
+        // `capacity_waiters` diagnostic that the awaited path maintains.
+        let permit = Arc::clone(&self.semaphore)
+            .try_acquire_many_owned(permits)
+            .map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!(
+                        "reserving {bytes} bytes exceeds the remaining {}-byte invocation-global source budget",
+                        self.limit_bytes
+                    ),
+                )
+            })?;
+        Ok(SourcePlanningPermit {
+            _permit: self.finish_acquire(bytes, permit),
+        })
+    }
+
+    /// Reports whether a further reservation of `bytes` could be satisfied right now.
+    ///
+    /// Only meaningful to a caller that knows nothing else is acquiring concurrently —
+    /// during sequential planning — and only as a fail-fast check, never as a
+    /// check-then-acquire guard. It exists because the byte totals alone do not predict
+    /// admission: every acquisition rounds up to a whole permit unit independently, so
+    /// reservations that sum to less than the limit can still be jointly infeasible.
+    pub(crate) fn can_reserve_additional(&self, bytes: u64) -> bool {
+        let Ok(permits) = self.permit_count(bytes) else {
+            return false;
+        };
+        u64::try_from(self.semaphore.available_permits()).unwrap_or(0) >= u64::from(permits)
+    }
+
+    fn permit_count(&self, bytes: u64) -> io::Result<u32> {
         if bytes == 0 || bytes > self.limit_bytes {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -800,13 +848,33 @@ impl SourceByteBudget {
                 ),
             ));
         }
-        let permits = bytes.div_ceil(self.permit_unit_bytes);
-        let permits = u32::try_from(permits).map_err(|_| {
+        u32::try_from(bytes.div_ceil(self.permit_unit_bytes)).map_err(|_| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "source block budget permit count exceeds the semaphore limit",
             )
-        })?;
+        })
+    }
+
+    fn finish_acquire(
+        self: &Arc<Self>,
+        bytes: u64,
+        permit: OwnedSemaphorePermit,
+    ) -> SourceBudgetPermit {
+        self.stats.acquire_source_global_bytes(bytes);
+        SourceBudgetPermit {
+            bytes,
+            _permit: permit,
+            budget: Arc::clone(self),
+        }
+    }
+
+    async fn acquire(
+        self: &Arc<Self>,
+        bytes: u64,
+        cancel_wait: EnabledNotification,
+    ) -> io::Result<SourceBudgetPermit> {
+        let permits = self.permit_count(bytes)?;
         let permit = if self.capacity_waiters.is_some() {
             let acquisition = Arc::clone(&self.semaphore).acquire_many_owned(permits);
             tokio::pin!(acquisition);
@@ -829,12 +897,7 @@ impl SourceByteBudget {
                 () = cancel_wait => return Err(io::Error::other("source block reservation was cancelled")),
             }
         };
-        self.stats.acquire_source_global_bytes(bytes);
-        Ok(SourceBudgetPermit {
-            bytes,
-            _permit: permit,
-            budget: Arc::clone(self),
-        })
+        Ok(self.finish_acquire(bytes, permit))
     }
 }
 

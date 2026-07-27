@@ -283,6 +283,21 @@ export interface ShinBucketDeploymentAdvancedTransferTuning {
    * Optional lower invocation-global budget, in MiB, shared fairly by source
    * archive windows. It cannot exceed 50% of the provider's actual Lambda
    * memory.
+   *
+   * The budget bounds resident source-phase *memory*, not just bytes streamed.
+   * Block windows, central-directory planning, and embedded-catalog processing
+   * are all charged against it using conservative estimates of their decoded
+   * size, so it constrains how much the provider holds resident at once rather
+   * than how much it reads overall. It is an accounting bound over those
+   * estimates, not an allocator-level hard limit: small fixed working buffers
+   * and allocator overhead sit outside it.
+   *
+   * Lowering this can make a deployment that previously worked fail during
+   * planning with an explicit budget error — most likely on a source archive
+   * with a large trusted catalog, whose processing needs several times the
+   * catalog's own size. Raise `providerLambda.memorySize`, or this value, if
+   * that happens.
+   *
    * @default - 50% of the provider Lambda memory size
    */
   readonly sourceWindowMemoryBudgetMiB?: number;
