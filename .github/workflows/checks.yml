@@ -113,6 +113,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # `high` rather than `moderate` is deliberate: npm dependencies here are
+      # almost entirely development-time and are not part of the published
+      # runtime. See the supply chain section of SECURITY.md.
       - name: npm audit
         run: pnpm audit --audit-level high
 

@@ -169,7 +169,11 @@ jobs:
         with:
           role-to-assume: ${{ vars.AWS_BENCHMARKS_ROLE_ARN }}
           role-session-name: shin-benchmark-${{ github.run_id }}
-          role-duration-seconds: 21600
+          # 4h. The longest observed benchmark run is ~133 minutes, so this keeps
+          # roughly 80% headroom while halving the previous 6h grant. Raise it if a
+          # larger matrix ever approaches the limit; credentials expiring mid-run
+          # fails the run rather than degrading it.
+          role-duration-seconds: 14400
           mask-aws-account-id: true
           aws-region: ${{ env.AWS_REGION }}
 

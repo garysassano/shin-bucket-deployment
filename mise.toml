@@ -1,9 +1,13 @@
+# The provider build toolchain (rust, cargo-lambda, zig) is pinned exactly: the
+# published package ships prebuilt bootstrap.zip binaries, so a floating version
+# lets the same tag rebuild to different bytes. Node and pnpm track a major.
+# See the supply chain section of SECURITY.md.
 [tools]
 actionlint = "1.7.12"
 node = "24"
 pnpm = "11"
 ripgrep = "15.1.0"
-rust = "stable"
+rust = "1.97.1"
 taplo = "0.10.0"
 zig = "0.16.0"
 "cargo:cargo-lambda" = "1.9.1"
