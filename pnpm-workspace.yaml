@@ -1,7 +1,3 @@
 minimumReleaseAge: 4320
 overrides:
   vite: 8.1.3
-  # Forces a patched postcss under vitest > vite until vitest ships one itself.
-  # Remove once `pnpm why postcss` shows >= 8.5.18 without this pin.
-  # GHSA-r28c-9q8g-f849. Tracked in issue #76.
-  postcss: ^8.5.18
