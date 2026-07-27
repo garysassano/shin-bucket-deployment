@@ -202,15 +202,28 @@ All six Shin rows reported zero source GET retries/errors, destination PUT retri
 
 | Field | Value |
 | --- | --- |
-| Snapshot date | 2026-07-18 |
-| Source commit | `c6a97be` |
+| Snapshot date | 2026-07-27 |
+| Source commit | `2e511b6` |
 | Region | `eu-central-1` |
 | Implementations | `shin` and upstream AWS CDK `BucketDeployment` |
 | Asset profile | `tiny-many` |
-| Lambda configurations | 1024 MiB / 32 Shin transfers; 2048 MiB / 64 Shin transfers |
+| Lambda configurations | 1024 MiB / 32 and 64 Shin transfers; 2048 MiB / 64 and 128 Shin transfers |
 | Phases | `cold-create`, `unchanged-update`, `changed-update`, `pruned-update` |
 | Cleanup | All benchmark stacks destroyed after telemetry collection |
 | Raw evidence | Not committed; raw AWS output remains in scratch only |
+
+The README-linked charts use the 1024 MiB / 32 and 2048 MiB / 64 rows. The additional 1024 MiB / 64 and 2048 MiB / 128 diagnostics are retained in `benchmarks/results.jsonl`. Provider durations for the four Shin configurations were:
+
+| Lambda configuration | Cold create | Unchanged update | Changed update | Pruned update | Peak memory on create |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 1024 MiB / 32 transfers | 2.819 s | 0.490 s | 0.750 s | 3.266 s | 44 MiB |
+| 1024 MiB / 64 transfers | 2.603 s | 0.476 s | 0.721 s | 3.122 s | 47 MiB |
+| 2048 MiB / 64 transfers | 1.502 s | 0.488 s | 0.623 s | 3.228 s | 57 MiB |
+| 2048 MiB / 128 transfers | 1.482 s | 0.503 s | 0.546 s | 3.132 s | 68 MiB |
+
+Against the previous single-sample README snapshot, 1024 MiB / 32 was slower in all four provider phases by 4.5% to 18.7%. At 2048 MiB / 64, cold create and changed update improved by 3.7% and 10.0%, while unchanged and pruned update were slower by 9.2% and 10.6%. This mixed single-sample signal does not establish a systematic regression, but the consistent 1024 MiB / 32 movement warrants a repeated clean methodology-v2 comparison before performance acceptance. All Shin samples reported zero source GET retries/errors, destination PUT retries/throttles, block refetches, transfer failures, cancellations, and panics.
+
+This methodology-v1 diagnostic records a dirty source tree because its new benchmark config was added before the provenance-bound provider build. The measured provider is still bound to source commit `2e511b6`; use the result for investigation and README illustration, not release-grade acceptance.
 
 ## Reading Results
 

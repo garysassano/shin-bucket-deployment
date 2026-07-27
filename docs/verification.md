@@ -19,9 +19,9 @@ This page is the current human-readable correctness snapshot for `ShinBucketDepl
 
 | Field | Value |
 | --- | --- |
-| Latest verification date | 2026-07-21 |
-| Current package metadata | `shin-bucket-deployment@0.10.4`; release candidate tag `v0.10.4`. The package version participates in shared-handler identity. |
-| Current verification baseline | The `0.10.4` strict current-protocol local run plus the targeted AWS `object-deletion` chain using the same full request shape; H3 raw workflow validation and H4 SDK assertions for all 36 phases in [PR #64](https://github.com/garysassano/shin-bucket-deployment/pull/64); H1 destination-update physical-ID preservation in [PR #62](https://github.com/garysassano/shin-bucket-deployment/pull/62); and the earlier released-package evidence |
+| Latest verification date | 2026-07-27 |
+| Current package metadata | `shin-bucket-deployment@0.11.0`; release candidate tag `v0.11.0`. The package version participates in shared-handler identity. |
+| Current verification baseline | The `0.11.0` release-candidate local gates plus the targeted AWS `object-deletion` chain using the same full request shape; H3 raw workflow validation and H4 SDK assertions for all 36 phases in [PR #64](https://github.com/garysassano/shin-bucket-deployment/pull/64); H1 destination-update physical-ID preservation in [PR #62](https://github.com/garysassano/shin-bucket-deployment/pull/62); and the earlier released-package evidence |
 | Current verification category | Complete deterministic runner/assertion, protocol, construct, package, workflow, and synthesis validation; complete targeted current-code object-deletion and destination-move AWS evidence; partial broader current-code AWS assertion smoke; and earlier registry-installed and direct-copy AWS assertions |
 | Latest current runs | `2026-07-21-local-strict-custom-resource-protocol`, `2026-07-21-aws-object-deletion`, `2026-07-21-local-workflow-state-assertions`, `2026-07-21-aws-workflow-state-assertion-smoke`, and `2026-07-21-aws-destination-move-safety` |
 | AWS status for combined code | The targeted three-phase `object-deletion` chain passed using the current full request shape and completed definitive cleanup. Seven broader groups previously completed their SDK-backed assertions at `f3b5050`; that hosted run was canceled because its cleanup verifier lacked account-wide bucket-list permission, so it remains partial broader-suite evidence. |
