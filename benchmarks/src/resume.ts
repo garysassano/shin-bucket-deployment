@@ -20,7 +20,7 @@ type ResumeIdentity = {
   readonly runId: string;
   readonly source: Omit<BenchmarkSourceMetadata, "gitDirty" | "changedPaths">;
   readonly configuration: {
-    readonly methodologyVersion: 1 | 2;
+    readonly methodologyVersion: 2;
     readonly region: string;
     readonly destinationPrefix: string;
     readonly assetProfiles: BenchmarkRunOptions["assetProfiles"];
@@ -157,7 +157,7 @@ export function resumeIdentity(
   options: BenchmarkRunOptions,
   metadata: BenchmarkSourceMetadata,
 ): ResumeIdentity {
-  const expectedRepetitions = options.methodologyVersion === 2 ? 5 : options.repetitions;
+  const expectedRepetitions = 5;
   const canonicalOptions = { ...options, startRepetition: 1, repetitions: expectedRepetitions };
   const { gitDirty: _gitDirty, changedPaths: _changedPaths, ...source } = metadata;
   return {
@@ -165,7 +165,7 @@ export function resumeIdentity(
     runId: options.runId,
     source,
     configuration: {
-      methodologyVersion: options.methodologyVersion,
+      methodologyVersion: 2,
       region: options.region,
       destinationPrefix: options.destinationPrefix,
       assetProfiles: options.assetProfiles,

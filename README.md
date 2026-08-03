@@ -62,17 +62,6 @@ The official `BucketDeployment` is a good default for many stacks, but its provi
 | Bounded marker replacement  | Marker-free entries stream directly. Marker entries use deterministic simultaneous replacement with one exact-length planning pass and a second retryable streaming pass only when upload is required; neither pass retains the complete entry or output.                                                                                                  |
 | Safer destination moves     | Opt-in cleanup deploys new content first, infers the previous prefix, and preserves overlapping current namespaces. See [Destination Lifecycle](#destination-lifecycle).                                                                                                                                                                                    |
 
-## Benchmark Snapshots
-
-> [!CAUTION]
-> These charts are illustrative, not performance guarantees or guidance for production defaults. See [Benchmark](docs/benchmark.md) for the supporting evidence.
-
-<img src="https://raw.githubusercontent.com/garysassano/shin-bucket-deployment/main/benchmarks/snapshots/tiny-many-1024mib-32.svg" alt="ShinBucketDeployment tiny-many 1024 MiB max concurrency 32 benchmark" width="100%">
-
-<img src="https://raw.githubusercontent.com/garysassano/shin-bucket-deployment/main/benchmarks/snapshots/tiny-many-2048mib-64.svg" alt="ShinBucketDeployment tiny-many 2048 MiB max concurrency 64 benchmark" width="100%">
-
-<img src="https://raw.githubusercontent.com/garysassano/shin-bucket-deployment/main/benchmarks/snapshots/tiny-many-4096mib-128.svg" alt="ShinBucketDeployment tiny-many 4096 MiB max concurrency 128 benchmark" width="100%">
-
 ## Construct API
 
 Only `sources` and `destination` are required. Sources accept any upstream CDK `ISource`; Shin also provides `Source.asset`, `Source.bucket`, `Source.data`, `Source.jsonData`, and `Source.yamlData` helpers.

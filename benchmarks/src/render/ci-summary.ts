@@ -42,7 +42,6 @@ export function renderBenchmarkCiSummary(options: SummaryOptions): string {
     : selectValidatedBenchmarkRun;
   const records = selectRecords({
     records: readBenchmarkResultRecords(options.inputFile),
-    methodologyVersion: 2,
     runId: options.runId,
     configFile: options.configFile,
     inputFile: options.inputFile,

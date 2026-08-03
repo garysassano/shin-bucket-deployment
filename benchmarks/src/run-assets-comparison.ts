@@ -20,7 +20,7 @@ import {
 import {
   type BenchmarkImplementation,
   type BenchmarkResultRecord,
-  methodologyV2RecordErrors,
+  benchmarkRecordErrors,
 } from "./model";
 import { completedSampleIds } from "./persistence";
 import { type PlannedBenchmarkRun, createBenchmarkPlan, wallClockCapReached } from "./plan";
@@ -94,21 +94,15 @@ async function main(signal: AbortSignal): Promise<void> {
   }
   const sourceMetadata = await collectBenchmarkSourceMetadata(process.cwd(), options.outputFile);
   const resumeSession = openResumeSession({ options, sourceMetadata });
-  if (
-    options.methodologyVersion === 2 &&
-    (resumeSession.gitDirty || sourceMetadata.providerBootstrapBuildDirty)
-  ) {
+  if (resumeSession.gitDirty || sourceMetadata.providerBootstrapBuildDirty) {
     resumeSession.close();
-    throw new Error(
-      "Methodology-v2 benchmark evidence requires clean source and bootstrap build provenance.",
-    );
+    throw new Error("Benchmark evidence requires clean source and bootstrap build provenance.");
   }
   try {
     const completed = completedSampleIds(
       options.outputFile,
       options.runId,
       options.phases.map((phase) => phase.name),
-      options.methodologyVersion,
     );
     const runs = createBenchmarkPlan(options).filter((run) => !completed.has(run.sampleId));
     if (completed.size > 0) {
@@ -162,11 +156,11 @@ async function main(signal: AbortSignal): Promise<void> {
 }
 
 export function benchmarkProviderBuildArgs(
-  options: Pick<BenchmarkRunOptions, "methodologyVersion" | "outputFile">,
+  options: Pick<BenchmarkRunOptions, "outputFile">,
 ): string[] {
   return [
     "scripts/build-bootstrap.mjs",
-    options.methodologyVersion === 2 ? "--benchmark" : "--benchmark-current-tree",
+    "--benchmark",
     "--evidence-output",
     options.outputFile,
     "arm64",
@@ -327,7 +321,7 @@ async function runBenchmarkStack(args: {
         ...(run.implementation === "shin" ? { summaryFile } : {}),
         outputFile: options.outputFile,
         resultSchemaVersion: 2,
-        methodologyVersion: options.methodologyVersion,
+        methodologyVersion: 2,
         runId: options.runId,
         sampleId: run.sampleId,
         snapshotDate: options.snapshotDate,
@@ -452,7 +446,7 @@ async function runBenchmarkStack(args: {
       cleanup: "all benchmark stacks destroyed",
     }));
     for (const record of qualifiedRecords) {
-      const errors = options.methodologyVersion === 2 ? methodologyV2RecordErrors(record) : [];
+      const errors = benchmarkRecordErrors(record);
       if (errors.length > 0) {
         throw new Error(`Refusing to qualify invalid benchmark evidence: ${errors.join("; ")}`);
       }
@@ -1110,7 +1104,7 @@ async function assertSourceUnchanged(
     current: await collectBenchmarkSourceMetadata(process.cwd(), options.outputFile),
     repositoryRoot: process.cwd(),
     evidenceOutputFile: options.outputFile,
-    requireClean: options.methodologyVersion === 2,
+    requireClean: true,
   });
 }
 

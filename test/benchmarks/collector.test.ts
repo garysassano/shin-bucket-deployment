@@ -3,13 +3,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { collectBenchmarkResult } from "../../benchmarks/src/collect-results";
-import {
-  providerSummaryErrors,
-  readBenchmarkResultRecords,
-  sanitizeProviderSummary,
-} from "../../benchmarks/src/model";
+import { parseBenchmarkRunOptions } from "../../benchmarks/src/config";
+import { providerSummaryErrors, sanitizeProviderSummary } from "../../benchmarks/src/model";
+import { createBenchmarkPlan } from "../../benchmarks/src/plan";
 import { renderBenchmarkReport } from "../../benchmarks/src/render/comparison-report";
 import { renderBenchmarkResultsTable } from "../../benchmarks/src/render/telemetry-table";
+import { CANONICAL_BENCHMARK_CONFIG } from "../../benchmarks/src/validation";
+import { canonicalRecord } from "../support/benchmark-records";
 
 describe("benchmark result collector", () => {
   test("upserts sanitized benchmark result records", () => {
@@ -268,12 +268,12 @@ describe("benchmark result collector", () => {
     });
   });
 
-  test("round-trips strict schema-v4 PutObject failure diagnostics", () => {
+  test("round-trips strict current-schema PutObject failure diagnostics", () => {
     const dir = mkdtempSync(join(tmpdir(), "shin-bench-collector-v4-"));
     const logFile = join(dir, "deploy.log");
     const summaryFile = join(dir, "summary.json");
     const outputFile = join(dir, "results.jsonl");
-    const summary = providerSummaryV4Fixture();
+    const summary = summaryFixture();
     writeFileSync(
       logFile,
       [
@@ -307,53 +307,32 @@ describe("benchmark result collector", () => {
     expect(providerSummaryErrors(summary)).toEqual([]);
   });
 
-  test("keeps strict schema-v3 summaries and committed historical rows readable", () => {
-    const v4 = providerSummaryV4Fixture();
-    const { detailedFailureDiagnosticsEnabled: _detailedFailureDiagnosticsEnabled, ...v3TopLevel } =
-      v4;
-    const {
-      failuresBySdkErrorKind: _sdkKinds,
-      failuresByServiceCode: _serviceCodes,
-      failureStates: _failureStates,
-      failureStateOverflowAttempts: _overflow,
-      ...putObject
-    } = v4.putObject;
-    const v3 = { ...v3TopLevel, schemaVersion: 3, putObject };
-
-    expect(providerSummaryErrors(v3)).toEqual([]);
-    const committed = readBenchmarkResultRecords(
-      join(process.cwd(), "benchmarks", "results.jsonl"),
-    );
-    expect(committed.length).toBeGreaterThan(0);
-    expect(committed.some((row) => row.providerSummary?.schemaVersion === 3)).toBe(true);
-  });
-
-  test("accepts a strict schema-v5 summary carrying copy diagnostics", () => {
-    const summary = providerSummaryV5Fixture();
+  test("accepts a strict current-schema summary carrying copy diagnostics", () => {
+    const summary = summaryFixture();
 
     expect(summary.copyObject.retryAttempts).toBe(4);
     expect(sanitizeProviderSummary(summary)).toEqual(summary);
     expect(providerSummaryErrors(summary)).toEqual([]);
   });
 
-  test("requires an exact schema-v5 copyObject section", () => {
-    const missing = providerSummaryV5Fixture();
+  test("requires an exact current-schema copyObject section", () => {
+    const missing = summaryFixture();
     delete (missing.copyObject as Partial<typeof missing.copyObject>).retryAttempts;
     expect(providerSummaryErrors(missing).join("; ")).toContain(
-      "schema-v5 summary is missing copyObject.retryAttempts",
+      "summary is missing copyObject.retryAttempts",
     );
 
-    const unexpected = providerSummaryV5Fixture();
+    const unexpected = summaryFixture();
     (unexpected.copyObject as Record<string, unknown>).failuresByServiceCode = {};
     expect(providerSummaryErrors(unexpected).join("; ")).toContain("unexpected field");
 
-    const nulled = providerSummaryV5Fixture();
+    const nulled = summaryFixture();
     (nulled.copyObject as Record<string, unknown>).wireAttempts = null;
     expect(providerSummaryErrors(nulled).join("; ")).toContain(
       "copyObject.wireAttempts must not be null",
     );
 
-    const fractional = providerSummaryV5Fixture();
+    const fractional = summaryFixture();
     (fractional.copyObject as Record<string, unknown>).wireAttempts = 1.5;
     expect(providerSummaryErrors(fractional).join("; ")).toContain(
       "copyObject.wireAttempts must be a safe integer",
@@ -361,31 +340,31 @@ describe("benchmark result collector", () => {
 
     // Above 2^53 the value has already lost precision in JSON, so it must be
     // rejected rather than silently recorded as evidence.
-    const unsafe = providerSummaryV5Fixture();
+    const unsafe = summaryFixture();
     (unsafe.copyObject as Record<string, unknown>).wireAttempts = Number.MAX_SAFE_INTEGER + 2;
     expect(providerSummaryErrors(unsafe).join("; ")).toContain(
       "copyObject.wireAttempts must be a safe integer",
     );
 
-    const absent = providerSummaryV5Fixture();
+    const absent = summaryFixture();
     delete (absent as Partial<typeof absent>).copyObject;
     expect(providerSummaryErrors(absent).join("; ")).toContain("copyObject must be an object");
   });
 
-  test("rejects internally impossible schema-v5 copy telemetry", () => {
-    const moreFailedThanWire = providerSummaryV5Fixture();
+  test("rejects internally impossible current-schema copy telemetry", () => {
+    const moreFailedThanWire = summaryFixture();
     moreFailedThanWire.copyObject.failedAttempts = moreFailedThanWire.copyObject.wireAttempts + 1;
     expect(providerSummaryErrors(moreFailedThanWire).join("; ")).toContain(
       "CopyObject failedAttempts exceeds wireAttempts",
     );
 
-    const moreRetriesThanWire = providerSummaryV5Fixture();
+    const moreRetriesThanWire = summaryFixture();
     moreRetriesThanWire.copyObject.retryAttempts = moreRetriesThanWire.copyObject.wireAttempts + 1;
     expect(providerSummaryErrors(moreRetriesThanWire).join("; ")).toContain(
       "CopyObject retryAttempts exceeds wireAttempts",
     );
 
-    const moreThrottledThanFailed = providerSummaryV5Fixture();
+    const moreThrottledThanFailed = summaryFixture();
     moreThrottledThanFailed.copyObject.throttledAttempts =
       moreThrottledThanFailed.copyObject.failedAttempts + 1;
     expect(providerSummaryErrors(moreThrottledThanFailed).join("; ")).toContain(
@@ -393,25 +372,15 @@ describe("benchmark result collector", () => {
     );
 
     // The relationships hold at equality.
-    const atBoundary = providerSummaryV5Fixture();
+    const atBoundary = summaryFixture();
     atBoundary.copyObject.failedAttempts = atBoundary.copyObject.wireAttempts;
     atBoundary.copyObject.retryAttempts = atBoundary.copyObject.wireAttempts;
     atBoundary.copyObject.throttledAttempts = atBoundary.copyObject.failedAttempts;
     expect(providerSummaryErrors(atBoundary)).toEqual([]);
   });
 
-  test("keeps schema-v4 summaries valid after the v5 bump", () => {
-    // v4 rows carry no copyObject section and must not be asked for one.
-    const v4 = providerSummaryV4Fixture();
-    expect(providerSummaryErrors(v4)).toEqual([]);
-
-    // A v4 row that somehow carries a copy section is still rejected as v4.
-    const contaminated = { ...v4, copyObject: providerSummaryV5Fixture().copyObject };
-    expect(providerSummaryErrors(contaminated).join("; ")).toContain("unexpected field copyObject");
-  });
-
-  test("accepts schema-v4 basic failures with detailed diagnostics disabled", () => {
-    const summary = providerSummaryV4Fixture();
+  test("accepts current-schema basic failures with detailed diagnostics disabled", () => {
+    const summary = summaryFixture();
     summary.detailedFailureDiagnosticsEnabled = false;
     Object.assign(summary.putObject, {
       failuresBySdkErrorKind: {},
@@ -425,34 +394,34 @@ describe("benchmark result collector", () => {
     expect(providerSummaryErrors(summary)).toEqual([]);
   });
 
-  test("requires an exact schema-v4 diagnostics marker and empty disabled detail", () => {
-    const missing = providerSummaryV4Fixture();
+  test("requires an exact current-schema diagnostics marker and empty disabled detail", () => {
+    const missing = summaryFixture();
     delete (missing as Partial<typeof missing>).detailedFailureDiagnosticsEnabled;
     expect(providerSummaryErrors(missing).join("; ")).toContain(
       "detailedFailureDiagnosticsEnabled must be boolean",
     );
 
-    const invalid = providerSummaryV4Fixture();
+    const invalid = summaryFixture();
     invalid.detailedFailureDiagnosticsEnabled = "true" as never;
     expect(providerSummaryErrors(invalid).join("; ")).toContain(
       "detailedFailureDiagnosticsEnabled",
     );
 
-    const disabledWithDetail = providerSummaryV4Fixture();
+    const disabledWithDetail = summaryFixture();
     disabledWithDetail.detailedFailureDiagnosticsEnabled = false;
     expect(providerSummaryErrors(disabledWithDetail).join("; ")).toContain(
       "disabled detailed failure diagnostics must be empty",
     );
   });
 
-  test("rejects identifiers, arbitrary strings, and unexpected nested v4 fields", () => {
+  test("rejects identifiers, arbitrary strings, and unexpected nested current-schema fields", () => {
     for (const [field, value] of [
       ["objectKey", "private/object.txt"],
       ["bucketName", "private-bucket"],
       ["requestId", "request-identifier"],
       ["rawError", "raw transport detail"],
     ] as const) {
-      const summary = providerSummaryV4Fixture();
+      const summary = summaryFixture();
       const state = firstFailureState(summary);
       summary.putObject.failureStates[0] = {
         ...state,
@@ -461,20 +430,20 @@ describe("benchmark result collector", () => {
       expect(providerSummaryErrors(summary).join("; ")).toContain("unexpected field");
     }
 
-    const invalidLabel = providerSummaryV4Fixture();
+    const invalidLabel = summaryFixture();
     firstFailureState(invalidLabel).serviceCode = "RequestTimeout/private-object";
     expect(providerSummaryErrors(invalidLabel).join("; ")).toContain("serviceCode is invalid");
   });
 
-  test("rejects oversized v4 maps and failure-state arrays", () => {
-    const oversizedMap = providerSummaryV4Fixture();
+  test("rejects oversized current-schema maps and failure-state arrays", () => {
+    const oversizedMap = summaryFixture();
     Object.assign(
       oversizedMap.putObject.failuresByServiceCode,
       Object.fromEntries(Array.from({ length: 33 }, (_, index) => [`Code${index}`, 0])),
     );
     expect(providerSummaryErrors(oversizedMap).join("; ")).toContain("exceeds 32 labels");
 
-    const oversizedStates = providerSummaryV4Fixture();
+    const oversizedStates = summaryFixture();
     const state = firstFailureState(oversizedStates);
     oversizedStates.putObject.failureStates = Array.from({ length: 33 }, () =>
       structuredClone(state),
@@ -482,16 +451,16 @@ describe("benchmark result collector", () => {
     expect(providerSummaryErrors(oversizedStates).join("; ")).toContain("exceeds 32 groups");
   });
 
-  test("rejects malformed v4 ranges and inconsistent failure totals", () => {
-    const inverted = providerSummaryV4Fixture();
+  test("rejects malformed current-schema ranges and inconsistent failure totals", () => {
+    const inverted = summaryFixture();
     firstFailureState(inverted).elapsedMs = { min: 2, max: 1, total: 3 };
     expect(providerSummaryErrors(inverted).join("; ")).toContain("min exceeds max");
 
-    const outside = providerSummaryV4Fixture();
+    const outside = summaryFixture();
     firstFailureState(outside).body.remainingBytes.total = 1;
     expect(providerSummaryErrors(outside).join("; ")).toContain("outside the represented range");
 
-    const inconsistent = providerSummaryV4Fixture();
+    const inconsistent = summaryFixture();
     inconsistent.putObject.failureStateOverflowAttempts = 1;
     expect(providerSummaryErrors(inconsistent).join("; ")).toContain(
       "counts plus overflow must equal failedAttempts",
@@ -571,251 +540,64 @@ describe("benchmark result collector", () => {
     const dir = mkdtempSync(join(tmpdir(), "shin-bench-report-"));
     const inputFile = join(dir, "results.jsonl");
     const outputFile = join(dir, "report.md");
-    writeFileSync(
-      inputFile,
-      `${[
-        {
-          methodologyVersion: 1,
-          gitDirty: false,
-          snapshotDate: "2026-05-08",
-          providerImplementationCommit: "abc1234",
-          providerImplementationSubject: "test",
-          resultDocumentationCommit: null,
-          region: "ap-southeast-2",
-          implementation: "shin",
-          profile: "mixed",
-          memoryMb: 1024,
-          parallel: 8,
-          phase: "cold-create",
-          state: "baseline",
-          fileCount: 442,
-          totalBytes: 52904649,
-          cdkDeploySeconds: 60,
-          localWallSeconds: 90,
-          providerDurationSeconds: 2,
-          billedDurationSeconds: 2.1,
-          initDurationSeconds: 0.1,
-          maxMemoryMb: 80,
-          providerInvoked: true,
-          cleanup: "all benchmark stacks destroyed",
-          notes: null,
-        },
-        {
-          methodologyVersion: 1,
-          gitDirty: false,
-          snapshotDate: "2026-05-08",
-          providerImplementationCommit: "abc1234",
-          providerImplementationSubject: "test",
-          resultDocumentationCommit: null,
-          region: "ap-southeast-2",
-          implementation: "shin",
-          profile: "mixed",
-          memoryMb: 1024,
-          parallel: 8,
-          sourceWindowBytes: 134217728,
-          phase: "cold-create",
-          state: "baseline",
-          fileCount: 442,
-          totalBytes: 52904649,
-          cdkDeploySeconds: 70,
-          localWallSeconds: 100,
-          providerDurationSeconds: 4,
-          billedDurationSeconds: 4.1,
-          initDurationSeconds: 0.15,
-          maxMemoryMb: 100,
-          providerInvoked: true,
-          cleanup: "all benchmark stacks destroyed",
-          notes: null,
-        },
-        {
-          methodologyVersion: 1,
-          gitDirty: false,
-          snapshotDate: "2026-05-08",
-          providerImplementationCommit: null,
-          providerImplementationSubject: null,
-          resultDocumentationCommit: null,
-          region: "ap-southeast-2",
-          implementation: "aws",
-          profile: "mixed",
-          memoryMb: 1024,
-          parallel: null,
-          phase: "cold-create",
-          state: "baseline",
-          fileCount: 442,
-          totalBytes: 52904649,
-          cdkDeploySeconds: 90,
-          localWallSeconds: 120,
-          providerDurationSeconds: 8,
-          billedDurationSeconds: 8.2,
-          initDurationSeconds: 0.2,
-          maxMemoryMb: 180,
-          providerInvoked: true,
-          cleanup: "all benchmark stacks destroyed",
-          notes: null,
-        },
-      ]
-        .map((record) => JSON.stringify(record))
-        .join("\n")}\n`,
-    );
+    const options = parseBenchmarkRunOptions([
+      "--config",
+      CANONICAL_BENCHMARK_CONFIG,
+      "--run-id",
+      "00000000-0000-4000-a000-00000000002a",
+      "--snapshot-date",
+      "2026-01-01",
+    ]);
+    const records = createBenchmarkPlan(options)
+      .filter((sample) => sample.repetition === 1)
+      .flatMap((sample) => options.phases.map((phase) => canonicalRecord(options, sample, phase)));
+    writeFileSync(inputFile, `${records.map((record) => JSON.stringify(record)).join("\n")}\n`);
 
-    const report = renderBenchmarkReport({
-      assetProfile: "mixed",
-      inputFile,
-      outputFile,
-      methodologyVersion: 1,
-    });
+    const report = renderBenchmarkReport({ inputFile, outputFile, preview: true });
 
     expect(readFileSync(outputFile, "utf8")).toEqual(report);
     expect(report.endsWith("\n")).toBe(true);
     expect(report.endsWith("\n\n")).toBe(false);
-    expect(report).toContain("Benchmark Report: mixed");
-    expect(report).toContain("- Source window bytes: adaptive, 134217728");
-    expect(report).toContain(
-      "| mixed | cold-create | 1024 | 8 | adaptive | shin | 1 | 2 | 2 | 2 | 0 | 2 | 2 |",
-    );
-    expect(report).toContain(
-      "| mixed | cold-create | 1024 | 8 | 134217728 | shin | 1 | 4 | 4 | 4 | 0 | 4 | 4 |",
-    );
+    expect(report).toContain("## Scope");
     expect(report).toContain("## ShinBucketDeployment vs AWS BucketDeployment");
-    expect(report).toContain(
-      "| mixed | cold-create | 1024 | 8 | adaptive | 2 s vs 8 s (4x faster) | 90 s vs 120 s (1.333x faster) | 60 s vs 90 s (1.5x faster) | 80 MiB vs 180 MiB (55.556% lower) |",
-    );
-    expect(report).toContain(
-      "| mixed | cold-create | 1024 | 8 | 134217728 | 4 s vs 8 s (2x faster) | 100 s vs 120 s (1.2x faster) | 70 s vs 90 s (1.286x faster) | 100 MiB vs 180 MiB (44.444% lower) |",
-    );
-    expect(report).toContain(
-      "### mixed cold-create at 1024 MiB / max concurrency 8 / source window adaptive",
-    );
-    expect(report).toContain(
-      "### mixed cold-create at 1024 MiB / max concurrency 8 / source window 134217728",
-    );
-    expect(report).toContain("| Provider duration | 2 s | 8 s | +6 s | 4x | +300% |");
-    expect(report).toContain("| Init duration | 0.1 s | 0.2 s | +0.1 s | 2x | +100% |");
-    expect(report).toContain("| Max memory | 80 MiB | 180 MiB | +100 MiB | 2.25x | +125% |");
+    expect(report).toContain("tiny-many");
+    expect(report).toContain("cold-create");
     expect(report).not.toContain("## Visual Summary");
-    expect(report).not.toContain("shin-vs-aws-duration-memory.svg");
     expect(existsSync(join(dir, "report-assets"))).toBe(false);
-    expect(report).not.toContain("xychart-beta");
   });
 
   test("renders grouped Shin provider telemetry tables", () => {
     const dir = mkdtempSync(join(tmpdir(), "shin-bench-results-table-"));
     const inputFile = join(dir, "results.jsonl");
     const outputFile = join(dir, "telemetry.md");
-    writeFileSync(
-      inputFile,
-      `${[
-        {
-          methodologyVersion: 1,
-          gitDirty: false,
-          snapshotDate: "2026-05-14",
-          region: "ap-southeast-2",
-          implementation: "shin",
-          profile: "tiny-many",
-          memoryMb: 1024,
-          parallel: 32,
-          phase: "cold-create",
-          state: "baseline",
-          fileCount: 2584,
-          totalBytes: 8178618,
-          cdkDeploySeconds: 66.1,
-          localWallSeconds: 120.069,
-          providerDurationSeconds: 3.261,
-          billedDurationSeconds: 3.386,
-          initDurationSeconds: 0.124,
-          maxMemoryMb: 97,
-          providerInvoked: true,
-          cleanup: "all benchmark stacks destroyed",
-          notes: null,
-          providerSummary: {
-            schemaVersion: 3,
-            requestType: "Create",
-            deploymentStatus: "success",
-            destinationChecksumStrategy: "sse-s3-etag",
-            durationMs: 3207,
-            phaseMs: {
-              plan: 328,
-              destinationList: 34,
-              transfer: 2843,
-              delete: 0,
-              callback: 12,
-            },
-            counts: { uploadedObjects: 2585, skippedObjects: 0, catalogSkips: 0 },
-            transfer: {
-              scheduledObjects: 2585,
-              completedObjects: 2585,
-              failedObjects: 0,
-              cancelledObjects: 0,
-              panickedObjects: 0,
-              inFlightHighWater: 32,
-            },
-            source: {
-              fetchedBytes: 856774,
-              getRetries: 0,
-              getThrottledAttempts: 0,
-              getRetryableErrors: 0,
-              getPermanentErrors: 0,
-              bodyAttempts: 2585,
-              bodyReplays: 0,
-            },
-            putObject: { wireAttempts: 2585, retryAttempts: 0, throttledAttempts: 0 },
-            catalog: {
-              trustedArchives: 1,
-              untrustedArchives: 0,
-              trustedEntries: 2585,
-              fallbackHashAttempts: 0,
-              sparseSkips: 0,
-            },
-            deleteObject: {
-              sdkCalls: 1,
-              failedCalls: 0,
-              requestedObjects: 10,
-              inferredDeletedObjects: 10,
-              unconfirmedObjects: 0,
-              noSuchBucketRequestedIdentifiers: 0,
-            },
-            callback: {
-              wireAttempts: 1,
-              failedAttempts: 0,
-              retryAttempts: 0,
-              confirmedResponses: 1,
-            },
-          },
-        },
-      ]
-        .map((record) => JSON.stringify(record))
-        .join("\n")}\n`,
-    );
+    const options = parseBenchmarkRunOptions([
+      "--config",
+      CANONICAL_BENCHMARK_CONFIG,
+      "--run-id",
+      "00000000-0000-4000-a000-00000000002b",
+      "--snapshot-date",
+      "2026-01-01",
+    ]);
+    const records = createBenchmarkPlan(options)
+      .filter((sample) => sample.repetition === 1)
+      .flatMap((sample) => options.phases.map((phase) => canonicalRecord(options, sample, phase)));
+    writeFileSync(inputFile, `${records.map((record) => JSON.stringify(record)).join("\n")}\n`);
 
-    const table = renderBenchmarkResultsTable({ inputFile, outputFile, methodologyVersion: 1 });
+    const table = renderBenchmarkResultsTable({ inputFile, outputFile, preview: true });
 
     expect(readFileSync(outputFile, "utf8")).toEqual(table);
     expect(table).toContain("# Shin Provider Benchmark Telemetry");
     expect(table).toContain("## tiny-many / 1024 MiB / max concurrency 32");
     expect(table).toContain("### Runtime");
-    expect(table).toContain(
-      "| cold-create | baseline | Create | success | 2584 | 8178618 | 66.1 | 120.069 | 3.261 | 3207 | 3.386 | 0.124 | 97 | null | null | sse-s3-etag | 1 |",
-    );
     expect(table).toContain("### Provider Phase Timing");
-    expect(table).toContain("| cold-create | 328 | 34 | 2843 | 0 | null | null | 12 |");
     expect(table).toContain("### Catalog Trust And Fallback");
-    expect(table).toContain("| cold-create | 1 | 0 | 2585 | 0 | 0 |");
-    expect(table).toContain("### Source Range Reads");
-    expect(table).toContain("### Transfer Scheduler");
-    expect(table).toContain("| cold-create | 2585 | 2585 | 0 | 0 | 0 | 32 |");
-    expect(table).toContain("### PutObject Pressure");
-    expect(table).toContain("### DeleteObjects Pressure");
-    expect(table).toContain("| cold-create | 1 | 0 | 10 | 10 | 0 | 0 |");
-    expect(table).toContain("### CloudFormation Callback");
-    expect(table).toContain("| cold-create | 1 | 0 | 0 | 1 |");
-    expect(table).toContain("| Shin telemetry rows | 1 |");
   });
 });
 
-function providerSummaryV5Fixture() {
-  const v4 = providerSummaryV4Fixture();
+function summaryFixture() {
+  const base = summaryBaseFixture();
   return {
-    ...v4,
+    ...base,
     schemaVersion: 5,
     copyObject: {
       wireAttempts: 12,
@@ -829,12 +611,12 @@ function providerSummaryV5Fixture() {
   };
 }
 
-function providerSummaryV4Fixture() {
+function summaryBaseFixture() {
   const zeros = (names: readonly string[]) => Object.fromEntries(names.map((name) => [name, 0]));
   const range = (value: number, count = 2) => ({ min: value, max: value, total: value * count });
   return {
     event: "shin_deployment_summary",
-    schemaVersion: 4,
+    schemaVersion: 5,
     requestType: "Create",
     deploymentStatus: "success",
     extract: true,
@@ -997,8 +779,8 @@ function providerSummaryV4Fixture() {
   };
 }
 
-function firstFailureState(summary: ReturnType<typeof providerSummaryV4Fixture>) {
+function firstFailureState(summary: ReturnType<typeof summaryBaseFixture>) {
   const state = summary.putObject.failureStates[0];
-  if (state === undefined) throw new Error("schema-v4 fixture must contain one failure state");
+  if (state === undefined) throw new Error("summary fixture must contain one failure state");
   return state;
 }

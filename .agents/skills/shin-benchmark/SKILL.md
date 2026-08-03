@@ -105,7 +105,7 @@ Choose benchmark configs deliberately. Paired Shin vs AWS comparisons should use
 
 Benchmark configuration uses behavior-oriented names even when comparing with upstream AWS CDK. Map `deleteStaleObjects` to Shin `destinationLifecycle.onDeploy.deleteStaleObjects` and upstream `prune`. Map `deleteCurrentObjectsOnDelete` to Shin `destinationLifecycle.onDelete.deleteCurrentObjects` and the inverse of upstream `retainOnDelete`. Keep the upstream prop names only at the adapter boundary; do not expose them as Shin configuration names.
 
-For parameter sweeps, keep all non-swept inputs identical and encode the swept value in the row identity. For `maxConcurrency` sweeps, include the top-level `parallel` field and the provider summary field `maxParallelTransfers`; those evidence fields retain their historical schema names. Distinct phase names such as `cold-create-parallel-8` are acceptable when the phase itself represents the sweep point. Use `--run-token` only for scratch paths and stack suffixes, not as committed result identity.
+For parameter sweeps, keep all non-swept inputs identical and encode the swept value in the row identity. For `maxConcurrency` sweeps, include the top-level `parallel` field and the provider summary field `maxParallelTransfers`; those evidence field names are stable. Distinct phase names such as `cold-create-parallel-8` are acceptable when the phase itself represents the sweep point. Use `--run-token` only for scratch paths and stack suffixes, not as committed result identity.
 
 Always collect telemetry first, then destroy benchmark stacks, then verify they are absent before finalizing records.
 
@@ -165,7 +165,7 @@ Do not parse `summary=...` tracing lines by hand. If parsing fails, fix `benchma
 
 ## Benchmark Records
 
-Write one JSON object per measured phase to `benchmarks/results.jsonl`. This file is current-result data for reports and profile snapshots, not append-only history. Methodology-v2 rows are upserted by their methodology, run, sample, repetition, implementation, configuration, phase, and state identity. Rows without `methodologyVersion` are preserved and interpreted as methodology-v1 historical evidence; default reports exclude them.
+Write one JSON object per measured phase to `benchmarks/results.jsonl`. This file is current-result data for reports and profile snapshots, not append-only history. Rows are upserted by their run, sample, repetition, implementation, configuration, phase, and state identity. There is one methodology and one result schema; rows that do not conform are not readable and belong in `archive/`.
 
 Required fields:
 
@@ -260,7 +260,7 @@ pnpm benchmark:comparison-report -- --input-file benchmarks/results.jsonl --asse
 Before committing benchmark updates:
 
 ```bash
-pnpm benchmark:comparison-report -- --input-file benchmarks/results.jsonl --methodology-version 1 --output-file /tmp/benchmark-report-check.md
+pnpm benchmark:comparison-report -- --input-file benchmarks/results.jsonl --preview true --output-file /tmp/benchmark-report-check.md
 git diff --check
 pnpm exec vitest run test/benchmarks/collector.test.ts
 ```

@@ -28,7 +28,6 @@ export type PhaseConfig = {
   readonly deleteCurrentObjectsOnDelete?: boolean;
 };
 export type BenchmarkRunOptions = {
-  readonly methodologyVersion: 1 | 2;
   readonly runId: string;
   readonly repetitions: number;
   readonly startRepetition: number;
@@ -66,7 +65,6 @@ const phaseSchema = z.object({
 export const benchmarkConfigSchema = z
   .object({
     $schema: nonEmptyStringSchema.optional(),
-    methodologyVersion: z.union([z.literal(1), z.literal(2)]).optional(),
     runId: uuidSchema.optional(),
     repetitions: positiveIntegerSchema.optional(),
     startRepetition: positiveIntegerSchema.optional(),
@@ -104,7 +102,6 @@ type ConfigInput = z.infer<typeof benchmarkConfigSchema>;
 
 const CLI_OPTIONS = [
   "config",
-  "methodology-version",
   "run-id",
   "repetitions",
   "start-repetition",
@@ -129,9 +126,6 @@ const CLI_OPTIONS = [
 export function parseBenchmarkRunOptions(args: string[]): BenchmarkRunOptions {
   const values = parseCliOptions(args, CLI_OPTIONS, usage);
   const config = readConfig(values.get("config"));
-  const methodologyVersion = parseMethodologyVersion(
-    values.get("methodology-version") ?? String(config.methodologyVersion ?? 2),
-  );
   const assetProfiles = values.has("asset-profiles")
     ? listValue(required(values, "asset-profiles")).map(parseAssetProfile)
     : (config.assetProfiles ?? ["tiny-many"]);
@@ -150,12 +144,8 @@ export function parseBenchmarkRunOptions(args: string[]): BenchmarkRunOptions {
     throw new Error("run-id must be a UUID.");
   }
   const configuredRunToken = values.get("run-token") ?? config.runToken;
-  if (
-    methodologyVersion === 2 &&
-    configuredRunToken !== undefined &&
-    configuredRunToken !== runId
-  ) {
-    throw new Error("methodology-v2 run-token must be identical to the opaque run-id.");
+  if (configuredRunToken !== undefined && configuredRunToken !== runId) {
+    throw new Error("run-token must be identical to the opaque run-id.");
   }
   const runToken = configuredRunToken ?? runId;
   const concurrency = positiveInteger(
@@ -166,7 +156,7 @@ export function parseBenchmarkRunOptions(args: string[]): BenchmarkRunOptions {
     throw new Error("Benchmark methodology requires sequential execution with concurrency 1.");
   }
   const repetitions = positiveInteger(
-    values.get("repetitions") ?? String(config.repetitions ?? (methodologyVersion === 2 ? 5 : 1)),
+    values.get("repetitions") ?? String(config.repetitions ?? 5),
     "repetitions",
   );
   const startRepetition = positiveInteger(
@@ -189,10 +179,8 @@ export function parseBenchmarkRunOptions(args: string[]): BenchmarkRunOptions {
     values.get("detailed-failure-diagnostics") ?? config.detailedFailureDiagnostics ?? true,
     "detailed-failure-diagnostics",
   );
-  if (methodologyVersion === 2 && !detailedFailureDiagnostics) {
-    throw new Error(
-      "Methodology-v2 benchmarks require detailed failure diagnostics; use methodology v1 for an explicit production-default overhead diagnostic.",
-    );
+  if (!detailedFailureDiagnostics) {
+    throw new Error("Benchmarks require detailed failure diagnostics; they cannot be disabled.");
   }
   const scratchRoot = resolve(
     values.get("scratch-root") ??
@@ -222,7 +210,6 @@ export function parseBenchmarkRunOptions(args: string[]): BenchmarkRunOptions {
     throw new Error("comparison-variant contains unsupported characters.");
   }
   return {
-    methodologyVersion,
     runId,
     repetitions,
     startRepetition,
@@ -248,13 +235,12 @@ export function parseBenchmarkRunOptions(args: string[]): BenchmarkRunOptions {
 }
 
 export function assertBenchmarkExecutionAuthorized(options: BenchmarkRunOptions): void {
-  if (options.methodologyVersion !== 2) return;
   if (options.maxWallClockMinutes === undefined) {
-    throw new Error("Methodology-v2 AWS execution requires an explicit wall-clock cap.");
+    throw new Error("AWS benchmark execution requires an explicit wall-clock cap.");
   }
   const lastRepetition = options.startRepetition + options.repetitions - 1;
   if (lastRepetition > 5 || lastRepetition > options.approvedThroughRepetition) {
-    throw new Error("Requested repetitions exceed the explicitly approved methodology-v2 range.");
+    throw new Error("Requested repetitions exceed the explicitly approved range.");
   }
   const smoke =
     options.startRepetition === 1 &&
@@ -266,7 +252,7 @@ export function assertBenchmarkExecutionAuthorized(options: BenchmarkRunOptions)
     options.approvedThroughRepetition === 5;
   if (!smoke && !continuation) {
     throw new Error(
-      "Methodology-v2 execution must be either the approved repetition-1 smoke or repetitions 2-5 continuation.",
+      "Benchmark execution must be either the approved repetition-1 smoke or repetitions 2-5 continuation.",
     );
   }
 }
@@ -275,8 +261,10 @@ export function benchmarkConfigurationSha256(options: BenchmarkRunOptions): stri
   return createHash("sha256")
     .update(
       JSON.stringify({
-        methodologyVersion: options.methodologyVersion,
-        expectedRepetitions: options.methodologyVersion === 2 ? 5 : options.repetitions,
+        // Pinned literal: this digest is the committed `benchmarkConfigSha256` identity of
+        // existing rows. Removing the field would silently re-key every retained row.
+        methodologyVersion: 2,
+        expectedRepetitions: 5,
         concurrency: options.concurrency,
         region: options.region,
         destinationPrefix: options.destinationPrefix,
@@ -340,11 +328,6 @@ function parseImplementation(value: string): BenchmarkImplementation {
 }
 function parseAssetProfile(value: string): BenchmarkAssetProfile {
   return isBenchmarkAssetProfile(value) ? value : usage();
-}
-function parseMethodologyVersion(value: string): 1 | 2 {
-  if (value === "1") return 1;
-  if (value === "2") return 2;
-  throw new Error("methodology-version must be 1 or 2.");
 }
 function positiveInteger(value: string, name: string): number {
   const parsed = Number(value);

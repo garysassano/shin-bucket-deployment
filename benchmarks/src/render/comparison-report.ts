@@ -9,7 +9,6 @@ import {
 import { parseCliOptions } from "../cli";
 import {
   type BenchmarkResultRecord,
-  benchmarkMethodologyVersion,
   implementationLabel,
   phaseRank,
   readBenchmarkResultRecords,
@@ -32,7 +31,6 @@ type RenderOptions = {
   readonly assetProfile?: string;
   readonly memoryMb?: number;
   readonly parallel?: number;
-  readonly methodologyVersion?: 1 | 2;
   readonly runId?: string;
   readonly configFile?: string;
   readonly scratchRoot?: string;
@@ -54,7 +52,6 @@ const CLI_OPTIONS = [
   "input-file",
   "transfer-max-concurrency",
   "lambda-memory-mb",
-  "methodology-version",
   "output-file",
   "preview",
   "run-id",
@@ -73,7 +70,6 @@ export function renderBenchmarkReport(options: RenderOptions): string {
     : selectValidatedBenchmarkRun;
   const records = selectRecords({
     records: readBenchmarkResultRecords(options.inputFile),
-    methodologyVersion: options.methodologyVersion ?? 2,
     runId: options.runId,
     configFile: options.configFile,
     inputFile: options.inputFile,
@@ -138,23 +134,19 @@ function renderScope(records: BenchmarkRecord[], preview: boolean): string {
     records.map((record) => formatSourceWindow(record.sourceWindowBytes)),
   );
   const phases = unique(records.map((record) => record.phase));
-  const methodologyVersions = unique(records.map(benchmarkMethodologyVersion));
   const runIds = unique(records.map((record) => record.runId));
   const sampleCounts = unique(
     aggregateRows(records, "providerDurationSeconds", preview).map((row) => row.count),
   );
   const completeness =
-    methodologyVersions.length === 1 && methodologyVersions[0] === 2
-      ? sampleCounts.length === 1 && sampleCounts[0] === 5
-        ? "complete (n=5 per provider-duration cell)"
-        : `incomplete (observed n=${sampleCounts.join(", ") || "0"}; canonical target is n=5)`
-      : "historical methodology; no v2 completeness claim";
+    sampleCounts.length === 1 && sampleCounts[0] === 5
+      ? "complete (n=5 per provider-duration cell)"
+      : `incomplete (observed n=${sampleCounts.join(", ") || "0"}; canonical target is n=5)`;
 
   return [
     "## Scope",
     "",
     `- Snapshot date: ${snapshotDates.join(", ")}`,
-    `- Methodology: ${methodologyVersions.map((version) => `v${version}`).join(", ")}`,
     `- Run ID: ${runIds.join(", ") || "not recorded"}`,
     `- Sample completeness: ${completeness}`,
     `- Implementations: ${implementations.join(", ")}`,
@@ -396,7 +388,7 @@ function aggregateRows(
   preview = false,
 ): AggregatedRow[] {
   const rows = aggregateMetric(records, metric).sort(compareAggregatedRows);
-  if (!preview && records.some((record) => benchmarkMethodologyVersion(record) === 2)) {
+  if (!preview) {
     assertCompleteSamples(rows);
   }
   return rows;
@@ -526,7 +518,6 @@ function parseArgs(args: string[]): RenderOptions {
     outputFile: values.get("output-file") ?? "benchmarks/report.md",
     memoryMb: parsePositiveInteger(values.get("lambda-memory-mb")),
     parallel: parsePositiveInteger(values.get("transfer-max-concurrency")),
-    methodologyVersion: parseMethodologyVersion(values.get("methodology-version")),
     preview: parseBoolean(values.get("preview")),
     runId: values.get("run-id"),
     configFile: values.get("config"),
@@ -539,13 +530,6 @@ function parseBoolean(value: string | undefined): boolean | undefined {
   if (value === undefined) return undefined;
   if (value === "true") return true;
   if (value === "false") return false;
-  usage();
-}
-
-function parseMethodologyVersion(value: string | undefined): 1 | 2 | undefined {
-  if (value === undefined) return undefined;
-  if (value === "1") return 1;
-  if (value === "2") return 2;
   usage();
 }
 

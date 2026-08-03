@@ -5,7 +5,7 @@ import {
   type BenchmarkResultRecord,
   type ProviderSummary,
   benchmarkEvidenceSanitizationErrors,
-  methodologyV2RecordErrors,
+  benchmarkRecordErrors,
   normalizeImplementation,
   providerSummaryErrors,
   sanitizeProviderSummary,
@@ -14,7 +14,7 @@ import { upsertBenchmarkRecord } from "./persistence";
 
 export type CollectBenchmarkOptions = {
   readonly resultSchemaVersion?: number;
-  readonly methodologyVersion?: number;
+  readonly methodologyVersion?: 2;
   readonly runId?: string;
   readonly sampleId?: string;
   readonly assetProfile?: string;
@@ -295,7 +295,7 @@ export function collectBenchmarkResult(options: CollectBenchmarkOptions): Benchm
     throw new Error(`Benchmark record failed sanitization: ${sanitizationErrors.join("; ")}`);
   }
   if (strictEvidence) {
-    const recordErrors = methodologyV2RecordErrors(record, { allowPendingCleanup: true });
+    const recordErrors = benchmarkRecordErrors(record, { allowPendingCleanup: true });
     if (recordErrors.length > 0) {
       throw new Error(`Invalid methodology-v2 benchmark record: ${recordErrors.join("; ")}`);
     }
@@ -316,7 +316,7 @@ function parseArgs(args: string[]): CollectBenchmarkOptions {
 
   return {
     resultSchemaVersion: optionalPositiveInteger(values, "result-schema-version"),
-    methodologyVersion: optionalPositiveInteger(values, "methodology-version"),
+    methodologyVersion: optionalMethodologyVersion(values),
     runId: values.get("run-id"),
     sampleId: values.get("sample-id"),
     assetProfile: values.get("asset-profile"),
@@ -399,6 +399,13 @@ function optionalNumber(values: Map<string, string>, name: string): number | und
     usage();
   }
   return parsed;
+}
+
+function optionalMethodologyVersion(values: Map<string, string>): 2 | undefined {
+  const value = optionalNumber(values, "methodology-version");
+  if (value === undefined) return undefined;
+  if (value !== 2) usage();
+  return 2;
 }
 
 function optionalPositiveInteger(values: Map<string, string>, name: string): number | undefined {

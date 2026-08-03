@@ -13,7 +13,6 @@ function main(): void {
   const scratchRoot = required(values, "scratch-root");
   const records = selectValidatedBenchmarkRun({
     records: readBenchmarkResultRecords(inputFile),
-    methodologyVersion: 2,
     runId,
     configFile: values.get("config"),
     inputFile,

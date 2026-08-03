@@ -1,13 +1,7 @@
 import type { BenchmarkRunOptions } from "./config";
 import { benchmarkConfigurationSha256, parseBenchmarkRunOptions } from "./config";
 import type { BenchmarkResultRecord } from "./model";
-import {
-  benchmarkMethodologyVersion,
-  implementationLabel,
-  isCompleteBenchmarkRecord,
-  methodologyV2RecordErrors,
-  selectBenchmarkRun,
-} from "./model";
+import { benchmarkRecordErrors, implementationLabel, selectBenchmarkRun } from "./model";
 import { createBenchmarkPlan } from "./plan";
 import { assertBenchmarkLedgerMatchesManifest } from "./resume";
 
@@ -15,7 +9,6 @@ export const CANONICAL_BENCHMARK_CONFIG = "benchmarks/configs/methodology-v2-102
 
 type BenchmarkSelectionArgs = {
   readonly records: readonly BenchmarkResultRecord[];
-  readonly methodologyVersion: 1 | 2;
   readonly runId?: string;
   readonly configFile?: string;
   readonly inputFile?: string;
@@ -36,19 +29,15 @@ function selectValidatedRecords(
   args: BenchmarkSelectionArgs,
   requireCompleteRun: boolean,
 ): BenchmarkResultRecord[] {
-  const methodologyRecords = args.records.filter(
-    (record) => benchmarkMethodologyVersion(record) === args.methodologyVersion,
-  );
-  const selected = selectBenchmarkRun(
-    args.methodologyVersion === 1
-      ? methodologyRecords.filter(isCompleteBenchmarkRecord)
-      : methodologyRecords,
-    args.runId,
-  );
-  if (args.methodologyVersion === 2) {
-    if (args.inputFile !== undefined) {
+  const methodologyRecords = args.records;
+  const selected = selectBenchmarkRun(methodologyRecords, args.runId);
+  {
+    // Publication binds the ledger to its runner-written resume manifest. Preview
+    // rendering is the explicit inspect-without-publishing mode, so it reads the
+    // committed JSONL directly; records are still validated either way.
+    if (requireCompleteRun && args.inputFile !== undefined) {
       if (args.scratchRoot === undefined) {
-        throw new Error("Methodology-v2 publication requires the external scratch directory.");
+        throw new Error("Benchmark publication requires the external scratch directory.");
       }
       assertBenchmarkLedgerMatchesManifest({
         scratchRoot: args.scratchRoot,
@@ -111,11 +100,7 @@ function validateMethodologyV2Records(
   if (records.length === 0) {
     throw new Error("No methodology-v2 records were available for canonical rendering.");
   }
-  if (
-    options.methodologyVersion !== 2 ||
-    options.repetitions !== 5 ||
-    options.startRepetition !== 1
-  ) {
+  if (options.repetitions !== 5 || options.startRepetition !== 1) {
     throw new Error("Canonical methodology-v2 rendering requires the exact five-repetition plan.");
   }
   const expected = new Map<
@@ -135,7 +120,7 @@ function validateMethodologyV2Records(
   const expectedConfigurationSha256 = benchmarkConfigurationSha256(options);
   const workloadIdentity = new Map<string, string>();
   for (const record of records) {
-    errors.push(...methodologyV2RecordErrors(record));
+    errors.push(...benchmarkRecordErrors(record));
     const identity = `${record.sampleId ?? ""}\0${record.phase ?? ""}`;
     const planned = expected.get(identity);
     if (planned === undefined) {

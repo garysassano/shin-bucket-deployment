@@ -20,7 +20,6 @@ const CLI_OPTIONS = [
   "input-file",
   "transfer-max-concurrency",
   "lambda-memory-mb",
-  "methodology-version",
   "output-directory",
   "preview",
   "run-id",
@@ -87,7 +86,6 @@ const headerLayout = parseHeaderLayout(cliArgs);
 const requestedProfile = parseStringArg(cliArgs, "--asset-profile");
 const requestedMemoryMb = parseNumberArg(cliArgs, "--lambda-memory-mb");
 const requestedShinMaxConcurrency = parseNumberArg(cliArgs, "--transfer-max-concurrency");
-const requestedMethodologyVersion = parseNumberArg(cliArgs, "--methodology-version") ?? 2;
 const requestedRunId = parseStringArg(cliArgs, "--run-id");
 const requestedConfigFile = parseStringArg(cliArgs, "--config");
 const requestedScratchRoot = parseStringArg(cliArgs, "--scratch-root");
@@ -96,9 +94,6 @@ const requestedFilenamePrefix = parseStringArg(cliArgs, "--filename-prefix") ?? 
 const requestedPreview = parseBooleanArg(cliArgs, "--preview") ?? false;
 if (!/^[a-z0-9-]*$/.test(requestedFilenamePrefix)) {
   throw new Error("--filename-prefix may contain only lowercase letters, digits, and hyphens");
-}
-if (requestedMethodologyVersion !== 1 && requestedMethodologyVersion !== 2) {
-  throw new Error("--methodology-version must be 1 or 2");
 }
 const inputFile = resolve(
   process.cwd(),
@@ -304,8 +299,8 @@ function findSelections(records: BenchmarkRecord[]): DataSelection[] {
         record.runId === metadataRecord.runId &&
         record.profile === metadataRecord.profile &&
         record.memoryMb === metadataRecord.memoryMb &&
-        (record.parallel === null ||
-          (requestedMethodologyVersion === 1 && record.parallel === metadataRecord.parallel)),
+        // AWS rows always carry `parallel: null`; Shin parallelism is not an upstream input.
+        record.parallel === null,
     );
     const runRecords = [...shinRecords, ...awsRecords];
     const phases = new Set(comparablePhases(runRecords));
@@ -626,7 +621,6 @@ const selectRecords = requestedPreview
 const benchmarkDataItems = findSelections(
   selectRecords({
     records: readBenchmarkResultRecords(inputFile),
-    methodologyVersion: requestedMethodologyVersion,
     runId: requestedRunId,
     configFile: requestedConfigFile,
     inputFile,
