@@ -1,13 +1,22 @@
 {
   "$schema": "../schemas/asset-benchmark-config.schema.json",
+  "repetitions": 1,
   "region": "eu-central-1",
   "concurrency": 1,
-  "assetProfiles": ["marker-heavy"],
-  "implementations": ["shin", "aws"],
+  "assetProfiles": ["mixed"],
+  "implementations": ["shin"],
   "lambdaConfigs": [
     {
+      "memoryMb": 1024,
+      "parallel": 128
+    },
+    {
       "memoryMb": 2048,
-      "parallel": 32
+      "parallel": 128
+    },
+    {
+      "memoryMb": 3072,
+      "parallel": 128
     }
   ],
   "phases": [
@@ -23,6 +32,10 @@
     {
       "name": "changed-update",
       "assetState": "changed"
+    },
+    {
+      "name": "pruned-update",
+      "assetState": "pruned"
     }
   ]
 }

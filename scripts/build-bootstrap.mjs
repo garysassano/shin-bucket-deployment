@@ -9,7 +9,6 @@
 //   node scripts/build-bootstrap.mjs arm64      # build a single architecture
 //   node scripts/build-bootstrap.mjs x86_64
 //   node scripts/build-bootstrap.mjs --benchmark arm64
-//   node scripts/build-bootstrap.mjs --benchmark-current-tree arm64
 //
 // Requires `cargo-lambda` on PATH.
 
@@ -170,12 +169,7 @@ function buildArch(
 }
 
 function main() {
-  const cleanBenchmarkBuild = process.argv.includes("--benchmark");
-  const currentTreeBenchmarkBuild = process.argv.includes("--benchmark-current-tree");
-  if (cleanBenchmarkBuild && currentTreeBenchmarkBuild) {
-    throw new Error("Choose either --benchmark or --benchmark-current-tree, not both.");
-  }
-  const benchmarkBuild = cleanBenchmarkBuild || currentTreeBenchmarkBuild;
+  const benchmarkBuild = process.argv.includes("--benchmark");
   const evidenceOutputIndex = process.argv.indexOf("--evidence-output");
   const evidenceOutput =
     evidenceOutputIndex === -1 ? "benchmarks/results.jsonl" : process.argv[evidenceOutputIndex + 1];
@@ -187,7 +181,6 @@ function main() {
     .filter(
       (argument, index, args) =>
         argument !== "--benchmark" &&
-        argument !== "--benchmark-current-tree" &&
         argument !== "--evidence-output" &&
         args[index - 1] !== "--evidence-output",
     );
@@ -207,22 +200,9 @@ function main() {
     !isAbsolute(evidenceRelative)
       ? [evidenceRelative]
       : [];
-  if (currentTreeBenchmarkBuild) {
-    const sourceBeforeApplicationBuild = collectSourceIdentity(repoRoot, excludedPaths);
-    run(join(repoRoot, "node_modules", ".bin", "tsc"), ["-p", "tsconfig.build.json"]);
-    const sourceAfterApplicationBuild = collectSourceIdentity(repoRoot, excludedPaths);
-    if (
-      JSON.stringify(sourceAfterApplicationBuild) !== JSON.stringify(sourceBeforeApplicationBuild)
-    ) {
-      throw new Error("Source identity changed while building the benchmark application.");
-    }
-    const applicationBuildSha256 = directorySha256(join(repoRoot, "dist"));
-    buildArch("arm64", repoRoot, applicationBuildSha256, excludedPaths);
-    return;
-  }
   const source = collectSourceIdentity(repoRoot, excludedPaths);
   if (source.dirty) {
-    throw new Error("Methodology-v2 provider builds require a clean source tree.");
+    throw new Error("Benchmark provider builds require a clean source tree.");
   }
   const scratch = mkdtempSync(join(tmpdir(), "shin-benchmark-provider-build-"));
   const worktree = join(scratch, "source");

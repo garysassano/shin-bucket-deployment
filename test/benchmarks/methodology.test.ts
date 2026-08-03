@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -26,9 +25,7 @@ import {
 } from "../../benchmarks/src/metadata";
 import {
   type BenchmarkResultRecord,
-  benchmarkMethodologyVersion,
   isCanonicalBenchmarkRecord,
-  methodologyV2RecordErrors,
   readBenchmarkResultRecords,
   selectBenchmarkRun,
 } from "../../benchmarks/src/model";
@@ -55,6 +52,7 @@ import {
   selectValidatedBenchmarkRun,
   validateMethodologyV2Run,
 } from "../../benchmarks/src/validation";
+import { canonicalRecord, codeSha256 } from "../support/benchmark-records";
 
 const usage = (): never => {
   throw new Error("usage");
@@ -73,7 +71,6 @@ describe("benchmark methodology v2", () => {
   test("defaults to five sequential methodology-v2 repetitions", () => {
     const options = parseBenchmarkRunOptions([]);
     expect(options).toMatchObject({
-      methodologyVersion: 2,
       repetitions: 5,
       concurrency: 1,
       preserveOnFailure: false,
@@ -96,58 +93,29 @@ describe("benchmark methodology v2", () => {
     );
   });
 
-  test("allows diagnostics-off only as an explicit methodology-v1 control", () => {
-    const disabled = parseBenchmarkRunOptions([
-      "--methodology-version",
-      "1",
-      "--detailed-failure-diagnostics",
-      "false",
-    ]);
-    expect(disabled.detailedFailureDiagnostics).toBe(false);
+  test("refuses to disable detailed failure diagnostics", () => {
     expect(() => parseBenchmarkRunOptions(["--detailed-failure-diagnostics", "false"])).toThrow(
-      "Methodology-v2 benchmarks require detailed failure diagnostics",
+      "Benchmarks require detailed failure diagnostics",
     );
-    expect(() =>
-      parseBenchmarkRunOptions([
-        "--methodology-version",
-        "1",
-        "--detailed-failure-diagnostics",
-        "sometimes",
-      ]),
-    ).toThrow("true or false");
-
-    const enabled = parseBenchmarkRunOptions([
-      "--methodology-version",
-      "1",
-      "--run-id",
-      "00000000-0000-4000-a000-000000000017",
-    ]);
-    expect(benchmarkConfigurationSha256(disabled)).not.toBe(benchmarkConfigurationSha256(enabled));
+    expect(() => parseBenchmarkRunOptions(["--detailed-failure-diagnostics", "sometimes"])).toThrow(
+      "true or false",
+    );
+    expect(
+      parseBenchmarkRunOptions(["--detailed-failure-diagnostics", "true"])
+        .detailedFailureDiagnostics,
+    ).toBe(true);
   });
 
-  test("selects clean or current-tree provider provenance by methodology", () => {
+  test("always builds the provider from a clean detached worktree", () => {
     expect(
       benchmarkProviderBuildArgs({
-        methodologyVersion: 2,
-        outputFile: "/tmp/methodology-v2.jsonl",
+        outputFile: "/tmp/benchmark.jsonl",
       }),
     ).toEqual([
       "scripts/build-bootstrap.mjs",
       "--benchmark",
       "--evidence-output",
-      "/tmp/methodology-v2.jsonl",
-      "arm64",
-    ]);
-    expect(
-      benchmarkProviderBuildArgs({
-        methodologyVersion: 1,
-        outputFile: "/tmp/methodology-v1.jsonl",
-      }),
-    ).toEqual([
-      "scripts/build-bootstrap.mjs",
-      "--benchmark-current-tree",
-      "--evidence-output",
-      "/tmp/methodology-v1.jsonl",
+      "/tmp/benchmark.jsonl",
       "arm64",
     ]);
   });
@@ -334,8 +302,18 @@ describe("benchmark methodology v2", () => {
     ).not.toBe(digest);
   });
 
-  test("rejects benchmark concurrency above one", () => {
-    expect(() => parseBenchmarkRunOptions(["--concurrency", "2"])).toThrow("sequential execution");
+  test("bounds benchmark concurrency and keeps it in configuration identity", () => {
+    expect(parseBenchmarkRunOptions(["--concurrency", "3"]).concurrency).toBe(3);
+    expect(() => parseBenchmarkRunOptions(["--concurrency", "5"])).toThrow(
+      "concurrency must not exceed 4",
+    );
+    const sequential = parseBenchmarkRunOptions([
+      "--run-id",
+      "00000000-0000-4000-a000-000000000031",
+    ]);
+    expect(benchmarkConfigurationSha256({ ...sequential, concurrency: 3 })).not.toBe(
+      benchmarkConfigurationSha256(sequential),
+    );
   });
 
   test("rejects non-opaque run identities", () => {
@@ -684,8 +662,7 @@ describe("benchmark methodology v2", () => {
     expect(explicit).toBe(aws);
   });
 
-  test("treats absent methodology as v1 and only completed v2 as canonical", () => {
-    expect(benchmarkMethodologyVersion({})).toBe(1);
+  test("treats only completed rows as canonical", () => {
     expect(
       isCanonicalBenchmarkRecord({ methodologyVersion: 2, gitDirty: false, cleanup: "pending" }),
     ).toBe(false);
@@ -693,15 +670,6 @@ describe("benchmark methodology v2", () => {
     expect(() =>
       validateMethodologyV2Run([canonicalAwsRecord()], parseBenchmarkRunOptions([])),
     ).toThrow("missing planned sample/phase");
-  });
-
-  test("keeps committed methodology-v2 rows without source-window metadata valid", () => {
-    const rows = readBenchmarkResultRecords(
-      join(process.cwd(), "benchmarks", "results.jsonl"),
-    ).filter((record) => record.methodologyVersion === 2);
-    expect(rows.length).toBeGreaterThan(0);
-    expect(rows.some((record) => !Object.hasOwn(record, "sourceWindowBytes"))).toBe(true);
-    expect(rows.flatMap((record) => methodologyV2RecordErrors(record))).toEqual([]);
   });
 
   test("selects the latest completed run instead of aggregating different runs", () => {
@@ -866,18 +834,7 @@ describe("benchmark methodology v2", () => {
     const dir = mkdtempSync(join(tmpdir(), "shin-benchmark-persistence-"));
     const output = join(dir, "results.jsonl");
     writeFileSync(output, `${JSON.stringify({ phase: "history", profile: "old" })}\n`);
-    const identity = {
-      methodologyVersion: 1,
-      runId: "run",
-      sampleId: "sample",
-      repetition: 1,
-      implementation: "shin",
-      profile: "tiny-many",
-      memoryMb: 1024,
-      parallel: 32,
-      phase: "cold-create",
-      state: "baseline",
-    } as const;
+    const { cleanup: _cleanup, ...identity } = canonicalAwsRecord();
     upsertBenchmarkRecord(output, { ...identity, cleanup: "benchmark cleanup pending" });
     upsertBenchmarkRecord(output, { ...identity, cleanup: "all benchmark stacks destroyed" });
     const rows = readFileSync(output, "utf8")
@@ -887,7 +844,9 @@ describe("benchmark methodology v2", () => {
     expect(rows).toHaveLength(2);
     expect(rows[0]).toMatchObject({ phase: "history" });
     expect(rows[1]).toMatchObject({ cleanup: "all benchmark stacks destroyed" });
-    expect(completedSampleIds(output, "run", ["cold-create"], 1)).toEqual(new Set(["sample"]));
+    expect(completedSampleIds(output, identity.runId, [identity.phase])).toEqual(
+      new Set([identity.sampleId]),
+    );
   });
 
   test("only resumes complete methodology-v2 samples with valid provenance", () => {
@@ -895,13 +854,13 @@ describe("benchmark methodology v2", () => {
     const output = join(dir, "results.jsonl");
     const record = canonicalAwsRecord();
     writeFileSync(output, `${JSON.stringify(record)}\n`);
-    expect(completedSampleIds(output, record.runId, [record.phase], 2)).toEqual(
+    expect(completedSampleIds(output, record.runId, [record.phase])).toEqual(
       new Set([record.sampleId]),
     );
 
     const { sourceTreeSha256: _sourceTreeSha256, ...invalid } = record;
     writeFileSync(output, `${JSON.stringify(invalid)}\n`);
-    expect(() => completedSampleIds(output, record.runId, [record.phase], 2)).toThrow(
+    expect(() => completedSampleIds(output, record.runId, [record.phase])).toThrow(
       "invalid sourceTreeSha256",
     );
   });
@@ -1021,7 +980,6 @@ describe("benchmark methodology v2", () => {
     expect(() =>
       selectValidatedBenchmarkRun({
         records,
-        methodologyVersion: 2,
         runId: options.runId,
         inputFile: outputFile,
         scratchRoot,
@@ -1040,7 +998,7 @@ describe("benchmark methodology v2", () => {
     const runId = "00000000-0000-4000-a000-000000000003";
     const options = parseBenchmarkRunOptions([
       "--config",
-      "benchmarks/configs/methodology-v2-1024-32.json",
+      "benchmarks/configs/canonical.json",
       "--run-id",
       runId,
       "--snapshot-date",
@@ -1053,26 +1011,23 @@ describe("benchmark methodology v2", () => {
     const records = createBenchmarkPlan(options).flatMap((sample) =>
       options.phases.map((phase) => canonicalRecord(options, sample, phase)),
     );
-    expect(selectValidatedBenchmarkRun({ records, methodologyVersion: 2, runId })).toHaveLength(80);
+    expect(selectValidatedBenchmarkRun({ records, runId })).toHaveLength(120);
     const previewRecords = records.filter((record) => record.repetition === 1);
     expect(
       selectValidatedBenchmarkPreview({
         records: previewRecords,
-        methodologyVersion: 2,
         runId,
       }),
-    ).toHaveLength(16);
+    ).toHaveLength(24);
     expect(() =>
       selectValidatedBenchmarkRun({
         records: previewRecords,
-        methodologyVersion: 2,
         runId,
       }),
     ).toThrow("missing planned sample/phase");
     expect(() =>
       selectValidatedBenchmarkPreview({
         records: previewRecords.slice(1),
-        methodologyVersion: 2,
         runId,
       }),
     ).toThrow("incomplete preview sample/phase");
@@ -1081,7 +1036,6 @@ describe("benchmark methodology v2", () => {
         records: records.map((record, index) =>
           index === 0 ? { ...record, billedDurationSeconds: null } : record,
         ),
-        methodologyVersion: 2,
         runId,
       }),
     ).toThrow("missing billedDurationSeconds");
@@ -1121,7 +1075,7 @@ describe("benchmark methodology v2", () => {
     const options: BenchmarkRunOptions = {
       ...parseBenchmarkRunOptions([
         "--config",
-        "benchmarks/configs/methodology-v2-1024-32.json",
+        "benchmarks/configs/canonical.json",
         "--run-id",
         runId,
         "--snapshot-date",
@@ -1149,13 +1103,12 @@ describe("benchmark methodology v2", () => {
     expect(
       selectValidatedBenchmarkRun({
         records: readBenchmarkResultRecords(outputFile),
-        methodologyVersion: 2,
         runId,
-        configFile: "benchmarks/configs/methodology-v2-1024-32.json",
+        configFile: "benchmarks/configs/canonical.json",
         inputFile: outputFile,
         scratchRoot,
       }),
-    ).toHaveLength(80);
+    ).toHaveLength(120);
   });
 });
 
@@ -1263,237 +1216,4 @@ function canonicalAwsRecord() {
     notes: null,
     providerSummary: null,
   };
-}
-
-function canonicalRecord(
-  options: BenchmarkRunOptions,
-  sample: ReturnType<typeof createBenchmarkPlan>[number],
-  phase: BenchmarkRunOptions["phases"][number],
-) {
-  const shin = sample.implementation === "shin";
-  const archiveSha256 = shin ? "a".repeat(64) : "b".repeat(64);
-  return {
-    resultSchemaVersion: 2,
-    methodologyVersion: 2,
-    runId: options.runId,
-    sampleId: sample.sampleId,
-    snapshotDate: options.snapshotDate,
-    decisionRunId: options.decisionRunId ?? null,
-    comparisonVariant: options.comparisonVariant ?? null,
-    repetition: sample.repetition,
-    benchmarkConfigSha256: benchmarkConfigurationSha256(options),
-    assetManifestSha256: assetManifestSha256(sample.assetProfile, phase.assetState),
-    dependencyLockSha256: "1".repeat(64),
-    applicationBuildSha256: "2".repeat(64),
-    installedDependenciesSha256: "7".repeat(64),
-    nodeVersion: "v24.0.0",
-    pnpmVersion: "11.0.0",
-    executionEnvironmentSha256: "8".repeat(64),
-    sourceTreeSha256: "3".repeat(64),
-    providerImplementationCommit: shin ? "9".repeat(40) : null,
-    providerImplementationSubject: shin ? "subject" : null,
-    providerPackageName: shin ? "shin-bucket-deployment" : "aws-cdk-lib",
-    providerPackageVersion: "1.0.0",
-    providerArchitecture: shin ? "arm64" : "x86_64",
-    providerRuntime: shin ? "provided.al2023" : "python3.13",
-    providerHandler: shin ? "bootstrap" : "index.handler",
-    providerCodeSha256: codeSha256(archiveSha256),
-    providerBootstrapSha256: shin ? "a".repeat(64) : null,
-    providerBootstrapArchiveSha256: shin ? archiveSha256 : null,
-    providerBootstrapProvenanceSha256: shin ? "4".repeat(64) : null,
-    providerBootstrapBuildDirty: shin ? false : null,
-    providerBootstrapCargoVersion: shin ? "cargo 1.0.0" : null,
-    providerBootstrapRustcVersion: shin ? "rustc 1.0.0" : null,
-    providerBootstrapCargoLambdaVersion: shin ? "cargo-lambda 1.0.0" : null,
-    providerBootstrapZigVersion: shin ? "1.0.0" : null,
-    providerBootstrapBuildToolchainSha256: shin ? "6".repeat(64) : null,
-    providerBootstrapBuildEnvironmentSha256: shin ? "5".repeat(64) : null,
-    gitDirty: false,
-    cdkCliVersion: "1.0.0",
-    cdkCliInstalledSha256: "c".repeat(64),
-    awsCdkLibVersion: "1.0.0",
-    awsCdkLibIntegrity: "sha512-test",
-    awsCdkLibInstalledSha256: "d".repeat(64),
-    constructsInstalledSha256: "f".repeat(64),
-    executionEnvironmentFresh: true,
-    memoryMeasurementScope: "phase-local" as const,
-    resultDocumentationCommit: null,
-    region: options.region,
-    implementation: sample.implementation,
-    profile: sample.assetProfile,
-    memoryMb: sample.memoryMb,
-    parallel: sample.parallel,
-    detailedFailureDiagnostics: shin ? options.detailedFailureDiagnostics : null,
-    ...(Object.hasOwn(sample, "sourceWindowBytes")
-      ? { sourceWindowBytes: sample.sourceWindowBytes ?? null }
-      : {}),
-    phase: phase.name,
-    state: phase.assetState,
-    fileCount: 1,
-    totalBytes: 1,
-    cdkDeploySeconds: 1,
-    localWallSeconds: 1,
-    providerDurationSeconds: 1,
-    billedDurationSeconds: 1,
-    initDurationSeconds: 0.1,
-    maxMemoryMb: 1,
-    providerInvoked: true,
-    cleanup: "all benchmark stacks destroyed",
-    notes: null,
-    providerSummary: shin
-      ? providerSummary(sample.memoryMb, sample.parallel as number, phase.name === "cold-create")
-      : null,
-  };
-}
-
-function providerSummary(memoryMb: number, parallel: number, create: boolean) {
-  return {
-    event: "shin_deployment_summary",
-    schemaVersion: 5,
-    requestType: create ? "Create" : "Update",
-    deploymentStatus: "success",
-    extract: true,
-    destinationChecksumStrategy: "sse-s3-etag",
-    deleteStaleObjectsOnDeployment: true,
-    availableMemoryMb: memoryMb,
-    maxParallelTransfers: parallel,
-    detailedFailureDiagnosticsEnabled: true,
-    durationMs: 1,
-    phaseMs: zeroFields([
-      "plan",
-      "destinationList",
-      "transfer",
-      "delete",
-      "cloudfront",
-      "oldPrefixDelete",
-      "callback",
-    ]),
-    counts: {
-      ...zeroFields([
-        "sourceArchives",
-        "plannedEntries",
-        "filteredEntries",
-        "markerEntries",
-        "destinationObjects",
-        "destinationMetadataRetained",
-        "destinationPageObjectsHighWater",
-        "deleteObjects",
-        "deleteBatches",
-        "uploadedObjects",
-        "skippedObjects",
-        "conditionalConflicts",
-        "copiedObjects",
-        "md5HashAttempts",
-        "md5Skips",
-        "catalogSkips",
-      ]),
-      plannedEntries: 1,
-      skippedObjects: 1,
-    },
-    bytes: zeroFields(["sourceZip", "uploaded", "copied"]),
-    transfer: zeroFields([
-      "scheduledObjects",
-      "completedObjects",
-      "failedObjects",
-      "cancelledObjects",
-      "panickedObjects",
-      "inFlightHighWater",
-    ]),
-    markerReplacement: {
-      strategy: "planning-plus-retryable-stream",
-      semantics: "leftmost-longest-non-recursive",
-      plannedPassesPerUpload: 2,
-      planningPasses: 0,
-      uploadPasses: 0,
-    },
-    catalog: zeroFields([
-      "trustedArchives",
-      "untrustedArchives",
-      "trustedEntries",
-      "fallbackHashAttempts",
-      "sparseSkips",
-    ]),
-    source: zeroFields([
-      "plannedBlocks",
-      "plannedBytes",
-      "fetchedBlocks",
-      "fetchedBytes",
-      "getAttempts",
-      "getRetries",
-      "getThrottledAttempts",
-      "getRetryableErrors",
-      "getPermanentErrors",
-      "getRequestErrors",
-      "getBodyErrors",
-      "getShortBodyErrors",
-      "getErrors",
-      "blockHits",
-      "blockMisses",
-      "blockRefetches",
-      "blockWaits",
-      "blockWaitsFetching",
-      "blockWaitsCapacity",
-      "replayClaims",
-      "replayClaimsAfterRelease",
-      "replayClaimsAfterFailure",
-      "bodyAttempts",
-      "bodyReplays",
-      "activeGetsHighWater",
-      "activeReadersHighWater",
-      "residentBytesHighWater",
-      "globalBudgetBytes",
-      "globalResidentBytesCurrent",
-      "globalResidentBytesHighWater",
-    ]),
-    putObject: {
-      ...zeroFields([
-        "wireAttempts",
-        "failedAttempts",
-        "retryAttempts",
-        "throttledAttempts",
-        "retryWaitMs",
-        "throttleCooldownWaits",
-        "throttleCooldownWaitMs",
-      ]),
-      failuresBySdkErrorKind: {},
-      failuresByServiceCode: {},
-      failureStates: [],
-      failureStateOverflowAttempts: 0,
-    },
-    copyObject: zeroFields([
-      "wireAttempts",
-      "failedAttempts",
-      "retryAttempts",
-      "throttledAttempts",
-      "retryWaitMs",
-      "throttleCooldownWaits",
-      "throttleCooldownWaitMs",
-    ]),
-    deleteObject: zeroFields([
-      "sdkCalls",
-      "failedCalls",
-      "requestedObjects",
-      "inferredDeletedObjects",
-      "unconfirmedObjects",
-      "noSuchBucketRequestedIdentifiers",
-    ]),
-    callback: {
-      wireAttempts: 1,
-      failedAttempts: 0,
-      retryAttempts: 0,
-      confirmedResponses: 1,
-    },
-  };
-}
-
-function zeroFields(names: readonly string[]): Record<string, number> {
-  return Object.fromEntries(names.map((name) => [name, 0]));
-}
-
-function assetManifestSha256(profile: string, state: string): string {
-  return createHash("sha256").update(`${profile}\0${state}`).digest("hex");
-}
-
-function codeSha256(hexDigest: string): string {
-  return Buffer.from(hexDigest, "hex").toString("base64");
 }

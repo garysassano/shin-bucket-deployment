@@ -90,12 +90,92 @@ if capacityBytes > 512 MiB:
   capacityBytes -= 384 MiB
 
 sourceWindowBytes = min(capacityBytes, 512 MiB)
-sourceWindowBytes = max(sourceWindowBytes, min(sourceBlockBytes, sourceZipBytes))
+minimumFeedWindowBytes = min(sourceGetConcurrency * sourceBlockBytes, sourceZipBytes)
+sourceWindowBytes = max(sourceWindowBytes, minimumFeedWindowBytes)
 
 sum(resident source block bytes across archives) <= globalSourceBudgetBytes
 ```
 
-`transfer.advancedTuning.sourceWindowMemoryBudgetMiB` can lower `globalSourceBudgetBytes`; it cannot raise the half-memory cap. The final local-window `max` ensures at least one validated source block can be admitted, while the `min(sourceZipBytes)` clamp avoids planning a larger local window than the archive can contain. The global semaphore, not the sum of local-window values, is the aggregate bound.
+`transfer.advancedTuning.sourceWindowMemoryBudgetMiB` can lower `globalSourceBudgetBytes`; it cannot raise the half-memory cap. The final local-window `max` preserves enough blocks to use the configured source GET concurrency, while the `min(sourceZipBytes)` clamp avoids planning a larger local window than the archive can contain. `sourceBlockBytes * sourceGetConcurrency` is already validated to fit the global budget. The global semaphore, not the sum of local-window values, is the aggregate bound.
+
+### Observed source-window behavior
+
+Measured 2026-08-03 at provider commit `20313b6`, `mixed` profile (442 files, 17.5 MiB
+archive), five repetitions per canonical configuration. Evidence rows are in
+`benchmarks/results.jsonl`.
+
+At the measured provider commit, the reservation above scaled with `maxConcurrency`, and
+`capacityBytes` saturated at zero. Once `reservedBytes` exceeded
+`globalSourceBudgetBytes`, the then-current final `max` dropped the window to a single
+`sourceBlockBytes` block. That floor could not sustain the configured source GET pipeline.
+The current formula instead preserves `sourceGetConcurrency` blocks, subject to archive
+size and the existing global budget validation. The measurements below describe the
+pre-fix single-block behavior; `source.residentBytesHighWater` collapsing to roughly one
+block was its signal.
+
+Pre-fix predicted versus measured `residentBytesHighWater`:
+
+| Configuration | reservedBytes | budget | predicted window | measured |
+| --- | ---: | ---: | ---: | ---: |
+| 1024 MiB / 32 | 481 MiB | 512 MiB | 17.5 MiB (whole archive) | 19.0 MiB |
+| 2048 MiB / 64 | 897 MiB | 1024 MiB | 17.5 MiB (whole archive) | 19.0 MiB |
+| 4096 MiB / 128 | 1665 MiB | 2048 MiB | 17.5 MiB (whole archive) | 19.0 MiB |
+| 1024 MiB / 128 | 1633 MiB | 512 MiB | 8 MiB (floor) | 7.8 MiB |
+| 2048 MiB / 128 | 1665 MiB | 1024 MiB | 8 MiB (floor) | 7.8 MiB |
+| 3072 MiB / 128 | 1665 MiB | 1536 MiB | 8 MiB (floor) | 7.8 MiB |
+
+Confirmed consequences of a collapsed window, all from the same rows:
+
+- `activeGetsHighWater` falls from 3 to 1: the reader stops running ahead.
+- `blockWaits` rises about 2.4x (62-64 to 152-153), entirely `blockWaitsFetching`.
+  `blockWaitsCapacity` is zero in every observation, so the provider never waits on the
+  memory budget itself.
+- Provider duration for `cold-create` rises 18.0% at 1024 MiB and 18.0% at 2048 MiB, two
+  independent memory settings producing the same figure.
+- Request bodies can starve outright, producing `PutObject` failures with service code
+  `RequestTimeout` after about 55 s having emitted zero body bytes, with producers in the
+  `reading-source` stage. `putObject.throttledAttempts` is zero in these observations, so
+  this is not S3 throttling. Provider-owned retries sometimes absorb it and sometimes do
+  not:
+
+  | Workload | Configuration | Outcome |
+  | --- | --- | --- |
+  | `mixed` (442 files, 17.5 MiB) | 3072 MiB / 128, run beside two other 128-transfer stacks | 27 failures, all objects completed, 56 s |
+  | `mixed` | 3072 MiB / 128, run alone | clean, 0.999 s |
+  | `large-few` (32 files, 2-12 MB each) | **1024 MiB / 32 (the shipped defaults)** | 6 failures, retries completed, 56.3 s |
+  | `large-few` | 1024 MiB / 128 | 5 failures, retries completed, 56.2 s |
+  | `large-few` | 2048 MiB / 64 | clean, 1.179 s |
+  | `large-few` | **2048 MiB / 128** | **retries exhausted; `CREATE_FAILED`, deployment failed** |
+  | `large-few` | 4096 MiB / 128 | clean, 0.962 s |
+
+  The 2048 MiB / 128 case is a hard failure, not a slow success: CloudFormation reported
+  `CREATE_FAILED` with `failed to upload ...: RequestTimeout`. Both settings are within the
+  documented range (`maxConcurrency` accepts up to 256). Retries are therefore not a
+  guaranteed backstop for this condition.
+
+Reserve calibration measured on the same rows, fitting peak Lambda memory against
+concurrency and window (residual under 1 MiB across all six configurations):
+
+```text
+peakMemoryMiB = 67.4 + (0.342 * maxConcurrency) + (0.79 * sourceWindowMiB)
+```
+
+The 64 MiB base reserve matches the measured 67.4 MiB. The 12 MiB transfer-worker reserve
+does not match the measured 0.342 MiB marginal cost per worker on this profile; the
+structural per-worker buffers described above total about 1.3 MiB even at worst case.
+Because the reserve is multiplied by a caller-controlled value, the window threshold on
+this profile lands at approximately 33 transfers at 1024 MiB, 73 at 2048 MiB, 116 at
+3072 MiB, and 159 at 4096 MiB. `DEFAULT_TRANSFER_MAX_CONCURRENCY` is 32 and
+`DEFAULT_PROVIDER_LAMBDA_MEMORY_SIZE_MIB` is 1024, so the shipped default sits immediately
+below the threshold on this profile.
+
+On `large-few` the reserve behaves differently and the model above does not fully predict
+it: measured resident high-water at 1024 MiB / 128 was 38.8 MiB where the formula implies a
+single-block floor, most likely because replay can borrow invocation-global permits and
+exceed the local window. What the model does predict correctly on that profile is the
+failure boundary: 2048 MiB / 64 keeps the reservation under budget and is clean, while
+2048 MiB / 128 pushes it over and is the configuration that failed to deploy. Treat the
+reserve constant and the window model as calibrated on `mixed` only.
 
 ## Supported Scenarios
 
@@ -440,9 +520,9 @@ Cataloged asset packaging limitations:
 
 ## Diagnostics
 
-The provider emits one sanitized `shin_deployment_summary` per custom-resource request after the CloudFormation callback attempt, plus structured source-scheduler and destination `PutObject` or `CopyObject` diagnostics when applicable. Each extracted deployment also logs the effective source schedule and a final source diagnostics record per source archive. These records include planned entries and blocks, planned and fetched source bytes, source amplification, ranged `GetObject` wire attempts and typed failures, block hits/misses/releases/refetches, split wait counters for in-flight fetches versus source-window capacity, consumed body attempts/replays, per-archive resident source-window high-water, true active ZIP entry reader high-water, and active source GET high-water. The aggregate `shin_deployment_summary` is schema version 5, so `durationMs` and callback telemetry include callback delivery time even when the callback fails. Its `deploymentStatus` reports whether deployment work succeeded before callback delivery; callback delivery has independent counters because a successful deployment can still have a failed callback. The summary adds the actual Lambda memory, invocation-global source budget/current/high-water values, destination metadata/page high-water, catalog trust and fallback work, inferred deletion outcomes, callback attempts, and bounded correlated `PutObject` failure state. It separates logical transfer objects and cancellations from source and destination SDK work; extracted uploads log destination `PutObject` retry settings, throttling, wait time, and sanitized error classifications, while direct copies emit a parallel `CopyObject` diagnostics record and, from schema v5, report the same counters in the summary's `copyObject` section. Its `markerReplacement` object names the strategy and semantics, declares the nominal two passes for an uploaded marker object, and reports actual planning and upload passes for the invocation. The summary excludes bucket names, object keys, account IDs, distribution IDs, URLs, and ETags. Benchmark collectors continue to validate historical schema-v3 and schema-v4 summaries using their original strict shapes; schema v4 added fields only to `putObject`, and schema v5 adds only the `copyObject` section.
+The provider emits one sanitized `shin_deployment_summary` per custom-resource request after the CloudFormation callback attempt, plus structured source-scheduler and destination `PutObject` or `CopyObject` diagnostics when applicable. Each extracted deployment also logs the effective source schedule and a final source diagnostics record per source archive. These records include planned entries and blocks, planned and fetched source bytes, source amplification, ranged `GetObject` wire attempts and typed failures, block hits/misses/releases/refetches, split wait counters for in-flight fetches versus source-window capacity, consumed body attempts/replays, per-archive resident source-window high-water, true active ZIP entry reader high-water, and active source GET high-water. The aggregate `shin_deployment_summary` is schema version 5, so `durationMs` and callback telemetry include callback delivery time even when the callback fails. Its `deploymentStatus` reports whether deployment work succeeded before callback delivery; callback delivery has independent counters because a successful deployment can still have a failed callback. The summary adds the actual Lambda memory, invocation-global source budget/current/high-water values, destination metadata/page high-water, catalog trust and fallback work, inferred deletion outcomes, callback attempts, and bounded correlated `PutObject` failure state. It separates logical transfer objects and cancellations from source and destination SDK work; extracted uploads log destination `PutObject` retry settings, throttling, wait time, and sanitized error classifications, while direct copies emit a parallel `CopyObject` diagnostics record and, from schema v5, report the same counters in the summary's `copyObject` section. Its `markerReplacement` object names the strategy and semantics, declares the nominal two passes for an uploaded marker object, and reports actual planning and upload passes for the invocation. The summary excludes bucket names, object keys, account IDs, distribution IDs, URLs, and ETags. Benchmark collectors accept only the current schema; earlier summaries are not readable and any row carrying one lives in `archive/`.
 
-Detailed failure diagnostics are opt-in through `failureDiagnostics: FailureDiagnostics.DETAILED`; production defaults to `FailureDiagnostics.STANDARD`. Schema v4 exposes that choice as `detailedFailureDiagnosticsEnabled`. Basic aggregate wire, failure, retry, throttle, and wait counters remain enabled in both modes. When detailed mode is disabled, the SDK/service maps and failure-state array are empty and `failureStateOverflowAttempts` is zero, even if `failedAttempts` is nonzero. Standard mode does not allocate per-attempt diagnostic state, track source-capacity waiters, start a per-attempt clock, capture source snapshots, or emit immediate failure events. Handler identity includes the setting, so standard and detailed deployments cannot share a Lambda.
+Detailed failure diagnostics are opt-in through `failureDiagnostics: FailureDiagnostics.DETAILED`; production defaults to `FailureDiagnostics.STANDARD`. The summary exposes that choice as `detailedFailureDiagnosticsEnabled`. Basic aggregate wire, failure, retry, throttle, and wait counters remain enabled in both modes. When detailed mode is disabled, the SDK/service maps and failure-state array are empty and `failureStateOverflowAttempts` is zero, even if `failedAttempts` is nonzero. Standard mode does not allocate per-attempt diagnostic state, track source-capacity waiters, start a per-attempt clock, capture source snapshots, or emit immediate failure events. Handler identity includes the setting, so standard and detailed deployments cannot share a Lambda.
 
 When detailed mode is enabled, every failed extracted `PutObject` SDK attempt also emits a schema-v1 `shin_put_object_attempt_failure` event synchronously in the SDK error path, before provider retry delay or transfer cleanup. This immediate event is the primary failure record when an invocation ends before `shin_deployment_summary` can be emitted. It contains only fixed SDK and dispatch classifications, a bounded sanitized service-code label, attempt elapsed time, body progress/lifecycle state, and an instantaneous source snapshot. It never includes the destination key or bucket, request ID, ARN, ETag, profile name, or an arbitrary SDK error string. A final summary is useful aggregation, not a prerequisite for preserving an immediate attempt event.
 
@@ -581,7 +661,7 @@ Schema-v5 `copyObject` fields (direct-copy deployments):
 
 These mirror the `putObject` counters of the same names. The four `putObject` failure-breakdown fields below have no copy equivalent and are absent from `copyObject`.
 
-Schema-v4 `putObject` failure fields:
+`putObject` failure fields:
 
 | Field | Meaning | Use when debugging |
 | --- | --- | --- |
@@ -592,7 +672,7 @@ Schema-v4 `putObject` failure fields:
 
 Each label-count map contains at most 32 entries and reserves capacity for the `Other` bucket. Each `failureStates` body records whether a body attempt was observed, its attempt/replay number, bytes emitted and remaining, final-frame delivery, producer stage/completion, body error, receiver drop, and whether that drop aborted the producer. Producer stages are fixed values: `awaiting-first-poll`, `reading-source`, `final-frame-ready`, `complete`, `receiver-closed`, `body-error`, or `not-observed`. Retryable SDK clones that are never polled do not start an attempt and cannot replace the consumed attempt's snapshot. The nested source object uses the instantaneous fields above. The immediate event carries one unaggregated state with the same shape (`count=1`); the summary groups compatible states into bounded ranges.
 
-Direct-copy deployments emit a separate `destination CopyObject diagnostics` structured record with the original retry fields. `wireAttempts` counts provider-owned copy attempts with SDK retries disabled; the retry, throttling, and wait fields have the same meanings as above. Schema-v4 correlated failure fields apply only to extracted `PutObject` attempts, so the summary's `copyObject` section carries the seven basic counters and omits the four PutObject-only failure breakdowns rather than reporting them as empty. Before schema v5 these counters appeared only in the structured record, leaving `putObject` zeroed for direct-copy deployments; read `copyObject` for copy retry and throttle pressure and `putObject` for extracted uploads. `counts.copiedObjects` and `bytes.copied` remain the logical-success totals in historical schema-v3, schema-v4, and current schema-v5 summaries.
+Direct-copy deployments emit a separate `destination CopyObject diagnostics` structured record with the original retry fields. `wireAttempts` counts provider-owned copy attempts with SDK retries disabled; the retry, throttling, and wait fields have the same meanings as above. Correlated failure fields apply only to extracted `PutObject` attempts, so the summary's `copyObject` section carries the seven basic counters and omits the four PutObject-only failure breakdowns rather than reporting them as empty. Read `copyObject` for copy retry and throttle pressure and `putObject` for extracted uploads. `counts.copiedObjects` and `bytes.copied` are the logical-success totals.
 
 CloudFormation callback diagnostics field reference:
 

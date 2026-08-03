@@ -4,245 +4,134 @@ This page is the compact benchmark index for `ShinBucketDeployment`. Benchmarks 
 
 Runbooks, evidence collection rules, schema guidance, and sanitization rules live in `.agents/skills/shin-benchmark/SKILL.md`.
 
+Superseded decision write-ups and all pre-schema-v5 result rows live in `archive/` and are not current evidence.
 
 <!-- benchmark-ci:start -->
-## Latest CI benchmark
+## Latest canonical benchmark
 
-The latest complete canonical methodology-v2 run was collected by GitHub Actions on 2026-07-18 from source commit `35f7383`. It contains five sequential repetitions of both canonical profiles across all four phases. The sanitized run UUID is `035f539d-6995-4d10-98a0-b4e9a7c5749e`; raw AWS output remains outside git.
+Collected 2026-08-03 from source commit `5256226`. Five sequential repetitions of the `mixed` profile (442 files, ~50 MB) across all four phases, at three Lambda configurations, against upstream AWS CDK `BucketDeployment` in `eu-central-1`. 120 sanitized rows; raw AWS output remains outside git.
 
 | Field | Value |
 | --- | --- |
 | Region | `eu-central-1` |
-| Lambda configuration | 1024 MiB / 32 Shin transfers |
-| Sanitized rows | 80 |
-| Cleanup | all benchmark stacks destroyed |
+| Configurations | 1024 MiB / 32, 2048 MiB / 64, 4096 MiB / 128 |
+| Sanitized rows | 120 |
+| Cleanup | all benchmark stacks destroyed and confirmed absent |
 
-| Profile | Phase | n | Provider s, Shin / AWS | AWS/Shin | Local wall s, Shin / AWS | Max MiB, Shin / AWS |
-| --- | --- | ---: | ---: | ---: | ---: | ---: |
-| `large-few` | `cold-create` | 5 | 2.484 / 9.169 | 3.691x | 73.637 / 78.814 | 121 / 435 |
-| `large-few` | `unchanged-update` | 5 | 0.32 / 9.231 | 28.847x | 35.53 / 46.286 | 34 / 435 |
-| `large-few` | `changed-update` | 5 | 0.523 / 9.085 | 17.371x | 37.006 / 47.137 | 38 / 434 |
-| `large-few` | `pruned-update` | 5 | 0.762 / 8.86 | 11.627x | 36.402 / 52.421 | 54 / 407 |
-| `tiny-many` | `cold-create` | 5 | 2.629 / 25.648 | 9.756x | 73.078 / 100.336 | 47 / 218 |
-| `tiny-many` | `unchanged-update` | 5 | 0.512 / 26.881 | 52.502x | 35.425 / 62.866 | 36 / 209 |
-| `tiny-many` | `changed-update` | 5 | 0.657 / 26.665 | 40.586x | 36.015 / 68.314 | 36 / 212 |
-| `tiny-many` | `pruned-update` | 5 | 2.978 / 26.204 | 8.799x | 41.753 / 64.044 | 36 / 207 |
+Provider duration, median over `n=5` with `[Q1, Q3]`:
 
-The [complete generated report](../benchmarks/ci-report.md) includes quartiles, end-to-end timings, and per-phase deltas. [Provider telemetry](../benchmarks/ci-telemetry.md) contains the sanitized Shin diagnostic tables.
+| Config | Phase | Shin s | AWS s | AWS/Shin |
+| --- | --- | ---: | ---: | ---: |
+| 1024 / 32 | `cold-create` | 1.267 [1.249, 1.291] | 9.73 [9.64, 9.77] | 7.7x |
+| 1024 / 32 | `unchanged-update` | 0.324 [0.316, 0.336] | 10.07 [9.93, 10.27] | 31.1x |
+| 1024 / 32 | `changed-update` | 0.552 [0.456, 0.573] | 10.18 [9.85, 10.23] | 18.4x |
+| 1024 / 32 | `pruned-update` | 1.187 [1.092, 1.236] | 10.04 [9.75, 10.15] | 8.5x |
+| 2048 / 64 | `cold-create` | 0.802 [0.792, 0.806] | 5.74 [5.69, 5.82] | 7.2x |
+| 2048 / 64 | `unchanged-update` | 0.262 [0.261, 0.270] | 5.67 [5.64, 5.71] | 21.6x |
+| 2048 / 64 | `changed-update` | 0.411 [0.385, 0.474] | 5.53 [5.33, 5.63] | 13.5x |
+| 2048 / 64 | `pruned-update` | 1.138 [1.069, 1.168] | 5.62 [5.61, 5.74] | 4.9x |
+| 4096 / 128 | `cold-create` | 0.782 [0.757, 0.801] | 5.51 [5.43, 5.53] | 7.0x |
+| 4096 / 128 | `unchanged-update` | 0.284 [0.280, 0.294] | 5.63 [5.51, 5.66] | 19.8x |
+| 4096 / 128 | `changed-update` | 0.464 [0.440, 0.474] | 5.65 [5.61, 5.66] | 12.2x |
+| 4096 / 128 | `pruned-update` | 1.162 [1.118, 1.262] | 5.48 [5.45, 5.68] | 4.7x |
 
-![Latest tiny-many CI benchmark](../benchmarks/snapshots/ci-tiny-many-1024mib-32.svg)
+Median peak memory on create: Shin 93 / 105 / 126 MiB against upstream's flat ~275 MiB.
 
-![Latest large-few CI benchmark](../benchmarks/snapshots/ci-large-few-1024mib-32.svg)
+All 60 Shin rows reported zero source `getRetries`/`getErrors`, zero `putObject` throttles and retries, and zero transfer failures, cancellations, or panics.
+
+The [generated report](../benchmarks/ci-report.md) has quartiles, end-to-end timings, and per-phase deltas. [Provider telemetry](../benchmarks/ci-telemetry.md) has the sanitized diagnostic tables.
+
+![mixed 2048 MiB max concurrency 64 benchmark](../benchmarks/snapshots/mixed-2048mib-64.svg)
 <!-- benchmark-ci:end -->
 
-## Methodology v2 status
+## Reading the canonical result
 
-The local methodology-v2 harness is implemented. The Rust module-refactor section below records a complete five-repetition decision run. Existing snapshots remain methodology-v1 historical evidence. Default report generation excludes historical and decision rows; use explicit selectors to inspect or regenerate them.
+Memory scaling saturates well before 4096 MiB. Moving 1024 to 2048 cuts Shin cold-create 37% (1.267 s to 0.802 s); 2048 to 4096 buys a further 2.5% (0.802 s to 0.782 s) while peak memory rises from 105 to 126 MiB. Upstream shows the same knee, so part of this is workload-driven rather than a Shin property. On this profile 2048 MiB / 64 is the value configuration.
 
-Methodology v2 requires five sequential repetitions, opaque UUID run and sample identities, a clean/dirty Git marker, exact package/CDK/provider identities, Lambda architecture, deployed code and Shin bootstrap SHA-256 values, phase-local execution-environment memory scope, and verified cleanup. A scratch resume manifest binds the source, normalized config, phases, destination, and exact sample matrix, while a two-phase ledger digest distinguishes runner persistence from preexisting or external evidence edits. Binary fixtures use deterministic SHA-256 counter bytes and a per-file digest manifest; retained files in prune phases are byte-identical to their baseline versions. AWS CDK rows use `parallel: null`; comparison pairing does not treat Shin parallelism as an upstream input.
+`pruned-update` is consistently Shin's weakest phase relative to upstream (4.7x-8.5x, against 19x-31x on `unchanged-update`). That is the phase carrying stale-object deletion, whose list-then-delete pagination is fully serialized and whose deletes have no provider-owned retry. Treat it as the highest-value optimization target rather than as measurement noise.
+
+## Exploratory sweep: fixed concurrency 128
+
+`configs/concurrency-128-memory-sweep.json`, Shin only, one repetition, decision run `concurrency-128-memory-sweep`. Not performance-acceptance evidence.
+
+| Config | cold-create | unchanged | changed | pruned |
+| --- | ---: | ---: | ---: | ---: |
+| 1024 / 128 | 1.495 | 0.315 | 0.509 | 1.177 |
+| 2048 / 128 | 0.946 | 0.271 | 0.385 | 1.146 |
+| 3072 / 128 | 56.005 | 0.264 | 0.423 | 1.011 |
+
+Raising concurrency to 128 does not pay off on this workload: 1024 / 128 cold-create (1.495 s) is slower than 1024 / 32 (1.267 s), and 2048 / 128 (0.946 s) is slower than 2048 / 64 (0.802 s).
+
+### Request-body starvation under aggregate load
+
+The 3072 / 128 `cold-create` cell took 56.005 s against roughly 1 s for every comparable cell. It is the only row in the ledger with a `putObject` failure, and the cause is neither throttling nor memory exhaustion: peak memory was 128 MiB of 3072 available and `throttledAttempts` is zero.
+
+The provider recorded 27 failed attempts, all `ServiceError` / `RequestTimeout`, each failing after about 55 s having emitted **zero** body bytes, with producers parked in `reading-source` and up to 10 waiters on an 8 MiB local source window. With 128 uploads in flight the source read pipeline could not keep every request body fed, so S3 closed the idle PUTs. Provider-owned retries then completed all 442 objects: correctness held and only latency suffered.
+
+This did not reproduce. Re-running 3072 / 128 alone with `concurrency: 1` (decision run `concurrency-128-isolation`) gave 0.999 s cold-create and zero failures. The distinguishing factor is aggregate load: the sweep ran three 128-transfer configurations concurrently, roughly 384 uploads in flight across the account, where the canonical matrix runs 32 + 64 + 128. The sweep config is therefore pinned to `concurrency: 1`, and benchmark concurrency should not be combined with high per-run transfer concurrency.
+
+Two consequences worth carrying forward. Bounding `MaxParallelTransfers` by Lambda memory would not have prevented this, because memory was never the constraint; the binding resource is the source read pipeline's ability to feed N concurrent request bodies. And a `RequestTimeout` with zero bytes emitted is the signature to look for, distinct from the `SlowDown` throttling signature.
+
+### Targeted source-window fix revalidation
+
+Collected 2026-08-03 from source commit `1c0eae6`, run
+`4d22afb5-6ff5-4673-a1a4-77350f1390c6`. This was one approved, sequential
+`large-few` cold-create sample at 2048 MiB / `maxConcurrency` 128, paired with
+the same-memory upstream AWS CDK baseline. It targets the configuration that had
+previously exhausted retries and failed its deployment; it is availability
+revalidation, not a replacement for the five-repetition canonical matrix.
+
+| Metric | Shin | AWS CDK |
+| --- | ---: | ---: |
+| Provider duration | 1.275 s | 4.975 s |
+| Billed duration | 1.390 s | 5.508 s |
+| Peak memory | 176 MiB | 435 MiB |
+| Destination upload failures / retries / throttles | 0 / 0 / 0 | not exposed |
+
+The fixed provider completed all 32 uploads and emitted no source GET error or
+retry. Its source scheduler reached all eight configured GET slots, retained
+63.8 MiB at high water (approximately the new eight-block feed floor), and
+fetched 84,643,592 bytes for the 84,644,928-byte archive with no replay refetch.
+This sample no longer exhibits the one-block collapse or zero-byte
+`RequestTimeout` signature. Both benchmark stacks were destroyed and confirmed
+absent. A single clean sample confirms the reproduced failure configuration but
+does not establish a general optimum for memory or transfer concurrency.
+
+
+## Methodology
+
+Methodology v2 is the only methodology. It requires five sequential repetitions, opaque UUID run and sample identities, a clean Git tree, exact package/CDK/provider identities, Lambda architecture, deployed code and Shin bootstrap SHA-256 values, phase-local execution-environment memory scope, and verified cleanup. A scratch resume manifest binds the source, normalized config, phases, destination, and exact sample matrix, while a two-phase ledger digest distinguishes runner persistence from preexisting or external evidence edits. Binary fixtures use deterministic SHA-256 counter bytes and a per-file digest manifest; retained files in prune phases are byte-identical to their baseline versions. AWS CDK rows use `parallel: null`; comparison pairing does not treat Shin parallelism as an upstream input.
+
+Diagnostics are always on: a run cannot opt out of detailed failure diagnostics.
 
 AWS evidence remains approval-gated. Run one complete repetition per selected variant first, report elapsed time and the preliminary signal, agree a wall-clock cap, and only then resume repetitions 2–5 with the printed run UUID. Completed sanitized rows are persisted incrementally; raw AWS output remains outside the repository. The cap is enforced before stacks and between phases, at external-command granularity: an active CDK/AWS command may finish after the nominal deadline, after which cleanup begins. Signals terminate the active process group and also route the active stack through cleanup.
-
-## Rust module refactor performance decision
-
-The 2026-07-15 decision run compared the released pre-refactor provider at `ce3db3c`, the Rust module-refactor candidate at `0b63387`, and upstream AWS CDK `BucketDeployment`. The serialized run used deterministic `tiny-many` and `large-few` assets, 1024 MiB Lambda memory, 32 Shin transfers, the same four ordered phases, five repetitions, and the configured test profile in `eu-central-1`. Shin ran on arm64 and upstream ran on its shipped x86_64 default, so the upstream comparison is as shipped rather than architecture-normalized. Its 120 complete methodology-v2 rows are retained in `benchmarks/results.jsonl` under decision-run ID `rust-refactor-acceptance`.
-
-CloudWatch provider duration is shown as median `[Q1, Q3]`, followed by IQR; every cell has `n=5`:
-
-| Profile | Phase | Before seconds [Q1, Q3], IQR | Current seconds [Q1, Q3], IQR | Upstream seconds [Q1, Q3], IQR | Current vs before | Upstream / current |
-| --- | --- | ---: | ---: | ---: | ---: | ---: |
-| `tiny-many` | `cold-create` | 2.731 [2.495, 2.752], 0.257 | 2.957 [2.901, 3.545], 0.644 | 25.771 [25.584, 26.082], 0.498 | +8.3% | 8.7x |
-| `tiny-many` | `unchanged-update` | 0.531 [0.514, 0.543], 0.029 | 0.467 [0.461, 0.482], 0.021 | 27.688 [27.484, 27.842], 0.358 | -12.1% | 59.3x |
-| `tiny-many` | `changed-update` | 0.681 [0.679, 0.683], 0.004 | 0.617 [0.603, 0.638], 0.035 | 26.691 [25.354, 26.970], 1.616 | -9.4% | 43.3x |
-| `tiny-many` | `pruned-update` | 3.256 [3.154, 3.279], 0.125 | 3.135 [3.128, 3.179], 0.051 | 25.457 [25.132, 26.648], 1.516 | -3.7% | 8.1x |
-| `large-few` | `cold-create` | 2.397 [2.325, 2.475], 0.150 | 2.539 [2.499, 2.650], 0.151 | 9.091 [8.897, 9.112], 0.215 | +5.9% | 3.6x |
-| `large-few` | `unchanged-update` | 0.321 [0.307, 0.346], 0.039 | 0.319 [0.282, 0.324], 0.042 | 8.876 [8.874, 9.272], 0.398 | -0.6% | 27.8x |
-| `large-few` | `changed-update` | 0.586 [0.527, 0.604], 0.077 | 0.551 [0.544, 0.552], 0.008 | 9.300 [9.075, 9.367], 0.292 | -6.0% | 16.9x |
-| `large-few` | `pruned-update` | 0.851 [0.777, 0.913], 0.136 | 0.812 [0.811, 0.855], 0.044 | 8.628 [8.625, 8.675], 0.050 | -4.6% | 10.6x |
-
-Median billed duration and peak memory remained comparable to before:
-
-| Profile | Phase | Billed seconds, before / current / upstream | Peak MiB, before / current / upstream |
-| --- | --- | ---: | ---: |
-| `tiny-many` | `cold-create` | 2.880 / 3.112 / 26.289 | 45 / 47 / 217 |
-| `tiny-many` | `unchanged-update` | 0.678 / 0.595 / 28.245 | 36 / 36 / 210 |
-| `tiny-many` | `changed-update` | 0.812 / 0.762 / 27.213 | 36 / 36 / 210 |
-| `tiny-many` | `pruned-update` | 3.374 / 3.289 / 25.966 | 36 / 36 / 209 |
-| `large-few` | `cold-create` | 2.516 / 2.667 / 9.614 | 114 / 118 / 433 |
-| `large-few` | `unchanged-update` | 0.466 / 0.466 / 9.393 | 34 / 34 / 434 |
-| `large-few` | `changed-update` | 0.702 / 0.698 / 9.850 | 36 / 38 / 433 |
-| `large-few` | `pruned-update` | 1.008 / 0.933 / 9.142 | 55 / 54 / 405 |
-
-Six of eight current provider-duration medians improved or stayed effectively flat. The two cold-create medians increased by 5.9% and 8.3%, with overlapping quartile ranges, while median end-to-end local wall time decreased from 65.445 to 64.998 seconds for `tiny-many` and from 65.050 to 64.777 seconds for `large-few`. Current remained 3.6x to 59.3x faster than upstream in provider time across all eight cells.
-
-Before and current performed identical logical work across the 40 Shin phases: 51,005 planned entries, 13,130 uploads, 37,875 skips, 1,315 stale deletions, 37,875 catalog skips, 844,034,960 uploaded bytes, and no marker passes. Both had zero source GET retries/errors, destination throttles, and transfer failures/cancellations/panics. Resident-source high-water was identical at 33,442,577 bytes.
-
-One retained current `tiny-many` cold-create sample encountered nine non-throttling failed PUT attempts. Provider-owned retries completed all 2,584 logical transfers, adding nine source-body replays, eight replay-after-release block refetches, 7,615,416 fetched source bytes, and 1.111 seconds of retry wait relative to the normal path. The other four current samples in that cell and all 40 before samples had zero PUT retries. This isolated destination-request instability explains the high current Q3/IQR and is retained rather than discarded; it does not indicate a new unconditional pass or request in the refactored path.
-
-The complete matrix therefore accepts the structural refactor as having no detected systematic performance regression or new normal-path work. Every sample captured complete provider telemetry, destroyed its benchmark stack, and passed the final scoped cleanup check. Raw AWS output remains outside git.
 
 ## Where To Look
 
 | Artifact | Purpose |
 | --- | --- |
-| `benchmarks/README.md` | Human-viewable benchmark snapshots and links to committed SVG charts. |
-| `benchmarks/telemetry.md` | Historical methodology-v1 Markdown snapshot of Shin provider telemetry grouped by profile, memory, parallelism, and phase. |
+| `benchmarks/README.md` | Human-viewable benchmark snapshot and links to committed SVG charts. |
 | `benchmarks/results.jsonl` | Structured sanitized benchmark result rows used by reports and profile snapshots. |
 | `benchmarks/configs/` | Curated benchmark run matrices. |
 | `benchmarks/src/` | Benchmark runner, collector, table renderer, report renderer, and profile-snapshot renderer. |
 
-## PR #12 Performance Decision Run
-
-PR #12's encryption-aware change was accepted from a controlled three-repetition AWS run on 2026-07-12. The run used the configured test profile in `eu-central-1`, serialized stacks (`concurrency=1`), 2048 MiB Lambda memory, max concurrency 32, identical deterministic assets, and the same four ordered phases for each implementation. Values below are medians from CloudWatch `REPORT` records; memory is peak Lambda memory for the same phase.
-
-The `before` implementation is `8134576`, the universal-checksum PR #12 candidate. The current SSE-S3 implementation is `3bcd033`; the managed-KMS measurements use the provider fix captured by `7a910f4`. Upstream is AWS CDK 2.260.0 `BucketDeployment`. The KMS provider binary was rebuilt from `7a910f4` and staged into the otherwise identical benchmark app.
-
-### SSE-S3 fast path
-
-| Profile | Phase | Provider seconds, before / current / upstream | Current vs before | Upstream / current | Peak MiB, before / current / upstream |
-| --- | --- | ---: | ---: | ---: | ---: |
-| `tiny-many` | `cold-create` | 2.595 / 2.447 / 14.844 | -5.7% | 6.1x | 105 / 89 / 220 |
-| `tiny-many` | `unchanged-update` | 0.426 / 0.354 / 15.208 | -16.9% | 43.0x | 105 / 89 / 220 |
-| `tiny-many` | `changed-update` | 0.570 / 0.513 / 14.966 | -10.0% | 29.2x | 105 / 89 / 220 |
-| `tiny-many` | `pruned-update` | 4.263 / 3.721 / 14.109 | -12.7% | 3.8x | 142 / 112 / 220 |
-| `large-few` | `cold-create` | 1.668 / 1.089 / 4.351 | -34.7% | 4.0x | 231 / 143 / 351 |
-| `large-few` | `unchanged-update` | 0.195 / 0.187 / 4.058 | -4.1% | 21.7x | 231 / 143 / 352 |
-| `large-few` | `changed-update` | 0.398 / 0.379 / 3.974 | -4.8% | 10.5x | 231 / 143 / 352 |
-| `large-few` | `pruned-update` | 1.460 / 1.033 / 3.905 | -29.2% | 3.8x | 231 / 144 / 352 |
-
-All 24 current Shin phase records selected `sse-s3-etag`. They reported zero MD5 comparison-hash attempts, destination PUT retries or throttles, and source GET retries or errors. The unchanged and changed phases used authenticated catalog skips instead of a universal SHA-256 pass; cold and pruned phases calculated MD5 only alongside bytes already being validated and uploaded.
-
-### AWS-managed KMS path
-
-| Phase | Provider seconds, before / current / upstream | Current vs before | Upstream / current | Peak MiB, before / current / upstream |
-| --- | ---: | ---: | ---: | ---: |
-| `cold-create` | 1.695 / 1.708 / 4.362 | +0.8% | 2.6x | 228 / 233 / 352 |
-| `unchanged-update` | 1.523 / 1.489 / 3.907 | -2.2% | 2.6x | 237 / 238 / 352 |
-| `changed-update` | 1.482 / 1.532 / 4.038 | +3.4% | 2.6x | 244 / 249 / 353 |
-| `pruned-update` | 1.441 / 1.441 / 3.901 | 0.0% | 2.7x | 244 / 249 / 353 |
-
-All 12 current Shin phase records selected `kms-sha256` and reported zero PUT retries or throttles and zero source GET retries or errors. The necessary stored-checksum plus independent-digest work therefore stayed within -2.2% to +3.4% of the original PR #12 provider duration and 0.4% to 2.2% of its median peak memory across the four phases. It still completed provider work about 2.6x to 2.7x faster than upstream.
-
-> [!NOTE]
-> These rows predate the withdrawal of SSE-KMS/SSE-DSSE destination support. They are retained as the evidence behind the decision made at the time; `kms-sha256` no longer exists as a strategy.
-
-These rows are decision evidence for the checksum redesign, not a replacement for the repository's canonical snapshot. The temporary before/current and encryption variants do not fit the current JSONL upsert identity without overwriting one another, and broader methodology-v2/CI regression work remains separate. Raw logs and individual rows remain outside git. Every benchmark stack was destroyed, and a final scoped check found none remaining.
-
-## Transfer scheduler performance decision
-
-The 2026-07-13 transfer-scheduler decision run completed five `before` repetitions, five `current` repetitions, and four `upstream` repetitions before the maintainer stopped the final upstream repetition to cap time and cost. The maintainer accepted the completed evidence as sufficient to proceed to PR review. The 112 sanitized phase rows are retained in `benchmarks/results.jsonl` under decision-run ID `transfer-scheduler-2026-07-13`. Each repetition contains `tiny-many` and `large-few` at 2048 MiB with max concurrency 32 across the four ordered phases, with stacks serialized at concurrency 1 in `eu-central-1`.
-
-The benchmark app uses a benchmark-only per-phase custom-resource token so `unchanged-update` always invokes the provider without changing the asset, destination, or provider algorithm. Decision rows include `decisionRunId`, `comparisonVariant`, and `repetition`; these fields are part of the upsert identity so repeated samples cannot replace one another. Canonical snapshot renderers exclude decision rows by default, while the JSONL remains available for later aggregate analysis.
-
-Median CloudWatch provider duration and peak-memory results:
-
-| Profile | Phase | Provider seconds, before / current / upstream | Current vs before | Upstream / current | Peak MiB, before / current / upstream |
-| --- | --- | ---: | ---: | ---: | ---: |
-| `tiny-many` | `cold-create` | 2.570 / 2.376 / 14.409 | -7.5% | 6.1x | 90 / 48 / 221 |
-| `tiny-many` | `unchanged-update` | 0.404 / 0.382 / 14.283 | -5.4% | 37.4x | 90 / 48 / 221 |
-| `tiny-many` | `changed-update` | 0.541 / 0.521 / 14.581 | -3.7% | 28.0x | 90 / 56 / 221 |
-| `tiny-many` | `pruned-update` | 3.699 / 3.664 / 14.024 | -0.9% | 3.8x | 111 / 60 / 221 |
-| `large-few` | `cold-create` | 1.146 / 0.971 / 4.335 | -15.3% | 4.5x | 145 / 97 / 351 |
-| `large-few` | `unchanged-update` | 0.206 / 0.196 / 3.894 | -4.9% | 19.9x | 145 / 97 / 351 |
-| `large-few` | `changed-update` | 0.403 / 0.372 / 3.931 | -7.7% | 10.6x | 145 / 97 / 352 |
-| `large-few` | `pruned-update` | 1.009 / 0.931 / 3.837 | -7.7% | 4.1x | 146 / 97 / 352 |
-
-Current improved on before in every median phase, by 0.9% to 15.3%, while using materially less peak memory. Upstream required 3.8x to 37.4x the current provider duration. Across all 40 current rows, source GET and destination PUT retries, throttled attempts, transfer failures, cancellations, panics, and consumed body replays were zero. Transfer in-flight high-water reached the configured bound of 32 and active readers peaked at 27.
-
-The interrupted fifth upstream repetition is not represented as complete evidence. Raw AWS output remains outside git, every completed repetition performed its own cleanup, the interrupted stack was deleted separately, and the final scoped stack count was zero.
-
-## Marker replacement performance decision
-
-The 2026-07-14 corrected marker-replacement decision run completed one `before`, one `current`, and one `upstream` repetition, as requested for this confirmation. Its nine sanitized rows are retained in `benchmarks/results.jsonl` under decision-run ID `marker-replacement-stable-2026-07-14`. Every variant used the `marker-heavy` profile, a stable 16 MiB marker-bearing object plus four small ordinary files, 2048 MiB Lambda memory, max concurrency 32, serialized stacks, and the same create/unchanged/changed phase order in `eu-central-1`.
-
-The earlier five-repetition fixture padded around unresolved CDK token text. Placeholder lengths could change between syntheses, shifting the resolved marker body by 16 to 32 bytes and causing spurious unchanged uploads: its `before` rows alternated between zero and one marker upload, while its `current` rows alternated in the opposite pattern. The corrected fixture pads against fixed resolved parameter defaults. Both corrected Shin unchanged phases uploaded zero objects and skipped all six. The flawed 45 rows were removed from current-result data.
-
-The `before` provider is benchmark-harness commit `b11e26c`, whose provider source still matches `main` before streaming marker replacement; only the stable fixture was applied in a detached benchmark checkout. The current provider is `3967fec`. Upstream is AWS CDK 2.260.0 `BucketDeployment`. Values are single CloudWatch `REPORT` records per cell, not multi-sample medians.
-
-| Phase | Provider seconds, before / current / upstream | Billed seconds, before / current / upstream | Current vs before | Upstream / current | Peak MiB, before / current / upstream |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| `cold-create` | 3.483 / 0.630 / 5.273 | 3.603 / 0.779 / 5.798 | -81.9% | 8.4x | 66 / 38 / 196 |
-| `unchanged-update` | 3.182 / 0.289 / 4.895 | 3.182 / 0.290 / 4.895 | -90.9% | 16.9x | 71 / 38 / 198 |
-| `changed-update` | 3.522 / 0.551 / 5.002 | 3.523 / 0.551 / 5.003 | -84.4% | 9.1x | 71 / 38 / 199 |
-
-End-to-end timings remained comparable while provider work improved materially:
-
-| Phase | CDK deploy seconds, before / current / upstream | Local wall seconds, before / current / upstream |
-| --- | ---: | ---: |
-| `cold-create` | 55.03 / 54.68 / 54.66 | 68.433 / 66.412 / 72.865 |
-| `unchanged-update` | 11.28 / 11.26 / 11.30 | 21.221 / 19.824 / 19.789 |
-| `changed-update` | 11.23 / 11.18 / 11.26 | 26.239 / 24.899 / 24.477 |
-
-Current telemetry makes the pass tradeoff explicit. Every marker entry used one bounded planning pass to determine exact `Content-Length`, validate source size/CRC/catalog integrity, and calculate the SSE-S3 comparison digest. Cold create and changed update then used one retryable streaming upload pass; unchanged update matched the destination after planning and used no upload pass. Current source fetches were therefore 150,359 bytes for create, 74,308 bytes for unchanged, and 149,046 bytes for changed. The two-pass phases each recorded one deliberate replay-after-release refetch. This is local source-block replay, not S3 pressure: all six Shin rows reported zero source GET retries/errors and zero destination PUT retries/throttles.
-
-The current provider used 42.4% to 46.5% less peak memory than before and was 5.5x to 11.0x faster in provider time. It remained 8.4x to 16.9x faster than upstream while using about one fifth of upstream peak memory. As a historical cross-check, all nine corrected provider-time cells were within 6.1% of the superseded five-run medians. The measured extra read on upload phases is therefore accepted: it removes whole-entry output buffering, preserves exact/retryable `PutObject` bodies, and still improves both time and memory materially.
-
-Raw AWS output remains outside git. Every repetition captured provider telemetry before cleanup, destroyed its stack, and verified stack absence.
-
-## Invocation memory planning performance decision
-
-The corrected 2026-07-14 invocation-memory decision run completed one `before`, one `current`, and one `upstream` repetition. Its nine sanitized rows are retained in `benchmarks/results.jsonl` under decision-run ID `memory-planning-gated-2026-07-14`. Every variant used the `multi-source-prune` profile at 1024 MiB with max concurrency 32, serialized stacks, and the same create, unchanged, and prune phases in `eu-central-1`. Values are single CloudWatch `REPORT` records, not multi-sample medians.
-
-The `before` provider is benchmark-harness commit `add1c20`, whose provider source matches PR #14's merged baseline. The current provider is `af7873d`. Upstream is AWS CDK 2.260.0 `BucketDeployment`. The earlier PR #15 candidate and its unconditional post-transfer destination scan were rejected; its stale rows and claims are not retained.
-
-| Phase | Provider seconds, before / current / upstream | Current vs before | Upstream / current | Peak MiB, before / current / upstream |
-| --- | ---: | ---: | ---: | ---: |
-| `cold-create` | 2.288 / 1.980 / 23.221 | -13.5% | 11.7x | 48 / 50 / 240 |
-| `unchanged-update` | 0.607 / 0.459 / 22.749 | -24.4% | 49.6x | 48 / 51 / 240 |
-| `pruned-update` | 2.747 / 2.755 / 18.796 | +0.3% | 6.8x | 53 / 51 / 240 |
-
-Current bounds retained destination metadata to manifest keys and the page working set to at most 1,000 objects. The initial destination listing now records whether an exact included non-manifest key exists, so the post-transfer page scan runs only when stale cleanup has actual candidates. Cold create retained no destination metadata, unchanged retained 1,284 manifest keys without entering deletion, and prune retained 129 manifest keys while deleting 1,155 stale objects in two batches.
-
-All six Shin rows reported zero source GET retries/errors, destination PUT retries/throttles, transfer failures, cancellations, panics, and consumed body replays. Current source memory returned to zero after every invocation; its high-water remained below the exact 536,870,912-byte global budget. Every benchmark stack was destroyed, and a final scoped check found none remaining. Raw AWS output remains outside git.
-
-## Current Snapshot
-
-> [!CAUTION]
-> The README charts use exploratory single-sample methodology. Do not use them to select production defaults.
-
-| Field | Value |
-| --- | --- |
-| Snapshot date | 2026-07-27 |
-| Source commit | `2e511b6` |
-| Region | `eu-central-1` |
-| Implementations | `shin` and upstream AWS CDK `BucketDeployment` |
-| Asset profile | `tiny-many` |
-| Lambda configurations | 1024 MiB / 32 and 64 Shin transfers; 2048 MiB / 64 and 128 Shin transfers; 4096 MiB / 128 Shin transfers |
-| Phases | `cold-create`, `unchanged-update`, `changed-update`, `pruned-update` |
-| Cleanup | All benchmark stacks destroyed after telemetry collection |
-| Raw evidence | Not committed; raw AWS output remains in scratch only |
-
-The README-linked charts use the 1024 MiB / 32, 2048 MiB / 64, and 4096 MiB / 128 rows. The 1024 and 2048 rows come from the earlier 0.10.4 diagnostic described below. The restored 4096 MiB / 128 chart comes from a clean 0.11.0 run at source commit `462db1f`; it is still exploratory single-sample evidence. The additional 1024 MiB / 64 and 2048 MiB / 128 diagnostics are retained in `benchmarks/results.jsonl`. Provider durations were:
-
-| Lambda configuration | Cold create | Unchanged update | Changed update | Pruned update | Peak memory on create |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| 1024 MiB / 32 transfers | 2.819 s | 0.490 s | 0.750 s | 3.266 s | 44 MiB |
-| 1024 MiB / 64 transfers | 2.603 s | 0.476 s | 0.721 s | 3.122 s | 47 MiB |
-| 2048 MiB / 64 transfers | 1.502 s | 0.488 s | 0.623 s | 3.228 s | 57 MiB |
-| 2048 MiB / 128 transfers | 1.482 s | 0.503 s | 0.546 s | 3.132 s | 68 MiB |
-| 4096 MiB / 128 transfers | 1.251 s | 0.449 s | 0.656 s | 3.164 s | 71 MiB |
-
-Against the previous single-sample README snapshot, 1024 MiB / 32 was slower in all four provider phases by 4.5% to 18.7%. At 2048 MiB / 64, cold create and changed update improved by 3.7% and 10.0%, while unchanged and pruned update were slower by 9.2% and 10.6%. This mixed single-sample signal does not establish a systematic regression, but the consistent 1024 MiB / 32 movement warrants a repeated clean methodology-v2 comparison before performance acceptance. All Shin samples reported zero source GET retries/errors, destination PUT retries/throttles, block refetches, transfer failures, cancellations, and panics.
-
-This methodology-v1 diagnostic records a dirty source tree because its new benchmark config was added before the provenance-bound provider build. The measured provider is still bound to source commit `2e511b6`; use the result for investigation and README illustration, not release-grade acceptance.
-
-The later 4096 MiB / 128 diagnostic captured complete provider telemetry from a clean source tree at `462db1f`. It reported zero source GET retries/errors, destination PUT retries/throttles, block refetches, transfer failures, cancellations, and panics. All benchmark stacks were destroyed and the final scoped cleanup check found none remaining.
-
 ## Reading Results
 
-Use `benchmarks/README.md` first for visual snapshots. The currently committed `benchmarks/telemetry.md` is a historical methodology-v1 view; use it when you need detailed telemetry for those snapshot rows, including runtime timings, provider phase timing, object work, transfer-scheduler completion/cancellation, source range-read diagnostics, bytes/memory windows, consumed body replays, and `PutObject` pressure.
+Use `benchmarks/README.md` for the visual snapshot, then the generated report and telemetry files for quartiles, per-phase deltas, and provider diagnostics: runtime timings, provider phase timing, object work, transfer-scheduler completion/cancellation, source range-read diagnostics, bytes/memory windows, consumed body replays, and `PutObject` pressure.
 
-Regenerate the Shin telemetry Markdown tables from the JSONL source with:
+Regenerate the Shin telemetry tables from the JSONL source with:
 
 ```bash
-pnpm benchmark:telemetry-table -- --methodology-version 1
+pnpm benchmark:telemetry-table -- --run-id <uuid>
 ```
 
 Generate filtered comparison reports with:
 
 ```bash
-pnpm benchmark:comparison-report -- --methodology-version 1 --asset-profile tiny-many --lambda-memory-mb 2048 --transfer-max-concurrency 64
+pnpm benchmark:comparison-report -- --run-id <uuid> --asset-profile mixed --lambda-memory-mb 2048 --transfer-max-concurrency 64
 ```
+
+Rendering validates every required field and the exact matrix from the canonical config before it emits a report, telemetry table, or README snapshot; missing, duplicate, dirty, incomplete, or unplanned cells fail rendering. Tables report `n`, median, Q1, Q3, and IQR.
 
 ## Methodology Summary
 
@@ -252,8 +141,8 @@ The `assets` benchmark scenario generates deterministic bundles under `.benchmar
 
 ## Telemetry Notes
 
-Shin rows may include sanitized `shin_deployment_summary` telemetry. Schema-v3 summaries separate deployment work status from callback delivery, logical transfer objects from source and destination upload wire attempts, and deletion SDK calls from inferred object outcomes. They also expose consumed body replays, typed throttling/errors, cancellations, invocation-global source memory, destination metadata/page high-water, and callback attempts; historical rows may not contain every field. Use `docs/architecture.md` for exact diagnostics meanings.
+Shin rows carry sanitized `shin_deployment_summary` telemetry at schema v5. It separates deployment work status from callback delivery, logical transfer objects from source and destination upload wire attempts, and deletion SDK calls from inferred object outcomes. It also exposes consumed body replays, typed throttling/errors, cancellations, invocation-global source memory, destination metadata/page high-water, callback attempts, bounded sanitized `PutObject` SDK/service classifications with correlated body/source failure groups, and a `copyObject` section carrying direct-copy retry and throttle counters. Use `docs/architecture.md` for exact diagnostics meanings.
 
-Do not infer S3 throttling from source block waits alone. Source S3 pressure requires source `getRetries` or `getErrors`; destination S3 throttling requires `putObject.throttledAttempts` or retry evidence for extracted uploads, and `copyObject.throttledAttempts` or retry evidence for direct copies (schema v5 and later).
+Do not infer S3 throttling from source block waits alone. Source S3 pressure requires source `getRetries` or `getErrors`; destination S3 throttling requires `putObject.throttledAttempts` or retry evidence for extracted uploads, and `copyObject.throttledAttempts` or retry evidence for direct copies.
 
 Do not commit `.benchmark-runs/` or other raw AWS output. Commit only sanitized result rows, Markdown/SVG render outputs, configs, source, and tests.

@@ -12,7 +12,6 @@ import { selectValidatedBenchmarkPreview, selectValidatedBenchmarkRun } from "..
 type RenderOptions = {
   readonly inputFile: string;
   readonly outputFile: string;
-  readonly methodologyVersion?: 1 | 2;
   readonly runId?: string;
   readonly configFile?: string;
   readonly scratchRoot?: string;
@@ -40,7 +39,6 @@ type Column<T> = {
 const CLI_OPTIONS = [
   "config",
   "input-file",
-  "methodology-version",
   "output-file",
   "preview",
   "run-id",
@@ -296,7 +294,6 @@ function main(): void {
 export function renderBenchmarkResultsTable(options: RenderOptions): string {
   const rows = readTelemetryRows(
     options.inputFile,
-    options.methodologyVersion ?? 2,
     options.runId,
     options.configFile,
     options.scratchRoot,
@@ -464,7 +461,6 @@ function renderMarkdownTable<T>(rows: T[], columns: Array<Column<T>>): string {
 
 function readTelemetryRows(
   filePath: string,
-  methodologyVersion: 1 | 2,
   requestedRunId: string | undefined,
   configFile: string | undefined,
   scratchRoot: string | undefined,
@@ -475,7 +471,6 @@ function readTelemetryRows(
   const selectedRecords = new Set(
     selectRecords({
       records: allRows.map(({ record }) => record),
-      methodologyVersion,
       runId: requestedRunId,
       configFile,
       inputFile: filePath,
@@ -524,7 +519,6 @@ function parseArgs(args: string[]): RenderOptions {
   return {
     inputFile: values.get("input-file") ?? "benchmarks/results.jsonl",
     outputFile: values.get("output-file") ?? "benchmarks/telemetry.md",
-    methodologyVersion: parseMethodologyVersion(values.get("methodology-version")),
     runId: values.get("run-id"),
     configFile: values.get("config"),
     scratchRoot: values.get("scratch-root"),
@@ -536,13 +530,6 @@ function parseBoolean(value: string | undefined): boolean | undefined {
   if (value === undefined) return undefined;
   if (value === "true") return true;
   if (value === "false") return false;
-  usage();
-}
-
-function parseMethodologyVersion(value: string | undefined): 1 | 2 | undefined {
-  if (value === undefined) return undefined;
-  if (value === "1") return 1;
-  if (value === "2") return 2;
   usage();
 }
 

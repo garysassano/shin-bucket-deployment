@@ -121,11 +121,9 @@ const PROVIDER_SUMMARY_SCALARS = {
   schemaVersion: "number",
   requestType: "string",
   deploymentStatus: "string",
-  status: "string",
   extract: "boolean",
   destinationChecksumStrategy: "string",
   deleteStaleObjectsOnDeployment: "boolean",
-  prune: "boolean",
   availableMemoryMb: "number",
   maxParallelTransfers: "number",
   detailedFailureDiagnosticsEnabled: "boolean",
@@ -245,12 +243,11 @@ const PROVIDER_SUMMARY_SECTIONS = {
 } as const;
 
 /**
- * Schema v5 adds a `copyObject` section carrying the CopyObject retry and throttle
- * counters that direct-copy (`extract:false`) deployments produce. It is kept out of
- * `PROVIDER_SUMMARY_SECTIONS` because that set drives the v3 required-section loop;
- * adding it there would make every historical v3 and v4 row report a missing section.
+ * The `copyObject` section carries the CopyObject retry and throttle counters that
+ * direct-copy (`extract:false`) deployments produce. It is validated by its own stage
+ * rather than through `PROVIDER_SUMMARY_SECTIONS`, which drives the base shape loop.
  */
-const PROVIDER_SUMMARY_V5_SECTIONS = {
+const PROVIDER_SUMMARY_COPY_SECTIONS = {
   copyObject: {
     wireAttempts: "number",
     failedAttempts: "number",
@@ -264,17 +261,9 @@ const PROVIDER_SUMMARY_V5_SECTIONS = {
 
 const PROVIDER_SUMMARY_ALL_SECTIONS = {
   ...PROVIDER_SUMMARY_SECTIONS,
-  ...PROVIDER_SUMMARY_V5_SECTIONS,
+  ...PROVIDER_SUMMARY_COPY_SECTIONS,
 } as const;
 
-/** The detailed PutObject failure breakdowns arrived in v4 and persist in later versions. */
-function hasDetailedPutObjectFields(schemaVersion: unknown): boolean {
-  return typeof schemaVersion === "number" && schemaVersion >= 4;
-}
-
-const PROVIDER_SUMMARY_V3_SCALARS = Object.keys(PROVIDER_SUMMARY_SCALARS).filter(
-  (name) => name !== "status" && name !== "prune" && name !== "detailedFailureDiagnosticsEnabled",
-);
 const PROVIDER_SUMMARY_FIELDS = new Set([
   ...Object.keys(PROVIDER_SUMMARY_SCALARS),
   ...Object.keys(PROVIDER_SUMMARY_ALL_SECTIONS),
@@ -433,10 +422,10 @@ export function benchmarkResultKey(
 }
 
 export function isCanonicalBenchmarkRecord(record: BenchmarkResultRecord): boolean {
-  return methodologyV2RecordErrors(record).length === 0;
+  return benchmarkRecordErrors(record).length === 0;
 }
 
-export function methodologyV2RecordErrors(
+export function benchmarkRecordErrors(
   record: BenchmarkResultRecord,
   options: { readonly allowPendingCleanup?: boolean } = {},
 ): string[] {
@@ -789,7 +778,7 @@ export function sanitizeProviderSummary(value: unknown): ProviderSummary {
     }
     if (!isObject(section)) throw new Error(`providerSummary.${sectionName} must be an object.`);
     const allowed = new Set(Object.keys(fields));
-    if (sectionName === "putObject" && hasDetailedPutObjectFields(value.schemaVersion)) {
+    if (sectionName === "putObject") {
       for (const name of [
         "failuresBySdkErrorKind",
         "failuresByServiceCode",
@@ -812,7 +801,7 @@ export function sanitizeProviderSummary(value: unknown): ProviderSummary {
           sanitizedValue(section[name], kind, `providerSummary.${sectionName}.${name}`),
         ]),
     ) as Record<string, unknown>;
-    if (sectionName === "putObject" && hasDetailedPutObjectFields(value.schemaVersion)) {
+    if (sectionName === "putObject") {
       sanitizedSection.failuresBySdkErrorKind = sanitizeDiagnosticCountMap(
         section.failuresBySdkErrorKind,
         "providerSummary.putObject.failuresBySdkErrorKind",
@@ -836,47 +825,45 @@ export function sanitizeProviderSummary(value: unknown): ProviderSummary {
   return sanitized as ProviderSummary;
 }
 
+/**
+ * Validates a provider summary against the current schema (v5). Validation runs in three
+ * stages -- copy section, detailed PutObject invariants, then the base shape -- which is a
+ * factoring of one schema, not support for older ones. Only v5 is accepted.
+ */
 export function providerSummaryErrors(summary: ProviderSummary): string[] {
-  if (summary.schemaVersion === 5) return providerSummaryV5Errors(summary);
-  return summary.schemaVersion === 4
-    ? providerSummaryV4Errors(summary)
-    : providerSummaryV3Errors(summary);
+  if (summary.schemaVersion !== 5) {
+    return [`summary schemaVersion must be 5, got ${String(summary.schemaVersion)}`];
+  }
+  return summaryCopyErrors(summary);
 }
 
-/**
- * Validates the v5-only `copyObject` section, then strips it and defers to the v4
- * validator, mirroring how v4 layers over v3. Older rows never reach this path, so
- * they keep validating against their own exact shape.
- */
-export function providerSummaryV5Errors(summary: ProviderSummary): string[] {
+function summaryCopyErrors(summary: ProviderSummary): string[] {
   const errors: string[] = [];
   try {
     sanitizeProviderSummary(summary);
   } catch (error) {
     return [error instanceof Error ? error.message : String(error)];
   }
-  if (summary.schemaVersion !== 5) errors.push("schema-v5 schemaVersion must be 5");
-
   const copyObject = summary.copyObject;
   if (!isObject(copyObject)) {
-    errors.push("schema-v5 summary section copyObject must be an object");
+    errors.push("summary section copyObject must be an object");
   } else {
-    const fields = PROVIDER_SUMMARY_V5_SECTIONS.copyObject;
+    const fields = PROVIDER_SUMMARY_COPY_SECTIONS.copyObject;
     for (const name of Object.keys(fields)) {
       if (!Object.hasOwn(copyObject, name)) {
-        errors.push(`schema-v5 summary is missing copyObject.${name}`);
+        errors.push(`summary is missing copyObject.${name}`);
       } else if (copyObject[name] === null) {
-        errors.push(`schema-v5 summary field copyObject.${name} must not be null`);
+        errors.push(`summary field copyObject.${name} must not be null`);
       } else if (typeof copyObject[name] !== "number" || !Number.isSafeInteger(copyObject[name])) {
         // Safe integers, matching the v3/v4 scalar and section checks. Plain
         // `Number.isInteger` would accept values above 2^53 that have already lost
         // precision in JSON, letting lossy counters into committed evidence.
-        errors.push(`schema-v5 summary field copyObject.${name} must be a safe integer`);
+        errors.push(`summary field copyObject.${name} must be a safe integer`);
       }
     }
     for (const name of Object.keys(copyObject)) {
       if (!Object.hasOwn(fields, name)) {
-        errors.push(`schema-v5 summary contains unexpected field copyObject.${name}`);
+        errors.push(`summary contains unexpected field copyObject.${name}`);
       }
     }
 
@@ -887,74 +874,104 @@ export function providerSummaryV5Errors(summary: ProviderSummary): string[] {
       return typeof value === "number" && Number.isSafeInteger(value) ? value : 0;
     };
     if (counter("failedAttempts") > counter("wireAttempts")) {
-      errors.push("schema-v5 CopyObject failedAttempts exceeds wireAttempts");
+      errors.push("summary CopyObject failedAttempts exceeds wireAttempts");
     }
     if (counter("retryAttempts") > counter("wireAttempts")) {
-      errors.push("schema-v5 CopyObject retryAttempts exceeds wireAttempts");
+      errors.push("summary CopyObject retryAttempts exceeds wireAttempts");
     }
     if (counter("throttledAttempts") > counter("failedAttempts")) {
-      errors.push("schema-v5 CopyObject throttledAttempts exceeds failedAttempts");
+      errors.push("summary CopyObject throttledAttempts exceeds failedAttempts");
     }
   }
 
-  const { copyObject: _copyObject, ...v4Summary } = summary;
-  errors.push(
-    ...providerSummaryV4Errors({ ...v4Summary, schemaVersion: 4 } as ProviderSummary).map((error) =>
-      error.replaceAll("schema-v4", "schema-v5"),
-    ),
-  );
+  errors.push(...summaryShapeErrors(summary));
   return errors;
 }
 
-export function providerSummaryV4Errors(summary: ProviderSummary): string[] {
-  const putObject = isObject(summary.putObject) ? summary.putObject : {};
-  const {
-    failuresBySdkErrorKind: _failuresBySdkErrorKind,
-    failuresByServiceCode: _failuresByServiceCode,
-    failureStates: _failureStates,
-    failureStateOverflowAttempts: _failureStateOverflowAttempts,
-    ...v3PutObject
-  } = putObject;
-  const { detailedFailureDiagnosticsEnabled: _detailedFailureDiagnosticsEnabled, ...commonFields } =
-    summary;
-  const commonSummary = {
-    ...commonFields,
-    schemaVersion: 3,
-    putObject: v3PutObject,
-  } as ProviderSummary;
-  const errors = providerSummaryV3Errors(commonSummary).map((error) =>
-    error.replaceAll("schema-v3", "schema-v4"),
-  );
+function summaryShapeErrors(summary: ProviderSummary): string[] {
+  const errors: string[] = [];
   try {
     sanitizeProviderSummary(summary);
   } catch (error) {
     return [error instanceof Error ? error.message : String(error)];
   }
-  if (summary.schemaVersion !== 4) return ["schema-v4 schemaVersion must be 4"];
-  if (typeof summary.detailedFailureDiagnosticsEnabled !== "boolean") {
-    errors.push("schema-v4 detailedFailureDiagnosticsEnabled must be boolean");
+
+  const expectedTopLevel = new Set([
+    ...Object.keys(PROVIDER_SUMMARY_SCALARS),
+    ...Object.keys(PROVIDER_SUMMARY_SECTIONS),
+  ]);
+  for (const name of Object.keys(summary)) {
+    if (!expectedTopLevel.has(name) && name !== "copyObject") {
+      errors.push(`summary contains unexpected field ${name}`);
+    }
   }
+  for (const name of expectedTopLevel) {
+    if (!Object.hasOwn(summary, name)) errors.push(`summary is missing ${name}`);
+    else if (summary[name as keyof ProviderSummary] === null) {
+      errors.push(`summary field ${name} must not be null`);
+    }
+  }
+
+  if (summary.event !== "shin_deployment_summary") errors.push("summary event is invalid");
+  if (!(["Create", "Update", "Delete"] as const).includes(summary.requestType as never))
+    errors.push("summary requestType is invalid");
+  if (summary.deploymentStatus !== "success")
+    errors.push("summary deploymentStatus must be success");
+  if (summary.destinationChecksumStrategy !== "sse-s3-etag")
+    errors.push("summary destinationChecksumStrategy is invalid");
+  if (typeof summary.detailedFailureDiagnosticsEnabled !== "boolean")
+    errors.push("summary detailedFailureDiagnosticsEnabled must be boolean");
+  if (summary.availableMemoryMb === null || (summary.availableMemoryMb ?? 0) <= 0)
+    errors.push("summary availableMemoryMb must be positive");
+  if (summary.maxParallelTransfers === null || (summary.maxParallelTransfers ?? 0) <= 0)
+    errors.push("summary maxParallelTransfers must be positive");
+  if (summary.markerReplacement?.strategy !== "planning-plus-retryable-stream")
+    errors.push("summary markerReplacement.strategy is invalid");
+  if (summary.markerReplacement?.semantics !== "leftmost-longest-non-recursive")
+    errors.push("summary markerReplacement.semantics is invalid");
+  if (summary.markerReplacement?.plannedPassesPerUpload !== 2)
+    errors.push("summary markerReplacement.plannedPassesPerUpload must be 2");
+
   for (const [name, kind] of Object.entries(PROVIDER_SUMMARY_SCALARS)) {
     const value = summary[name as keyof ProviderSummary];
     if (kind === "number" && typeof value === "number" && !Number.isSafeInteger(value)) {
-      errors.push(`schema-v4 summary field ${name} must be a safe integer`);
+      errors.push(`summary field ${name} must be a safe integer`);
     }
   }
   for (const [sectionName, fields] of Object.entries(PROVIDER_SUMMARY_SECTIONS)) {
     const section = summary[sectionName as keyof ProviderSummary];
-    if (!isObject(section)) continue;
-    for (const [name, kind] of Object.entries(fields)) {
-      const value = section[name];
-      if (kind === "number" && typeof value === "number" && !Number.isSafeInteger(value)) {
-        errors.push(`schema-v4 summary field ${sectionName}.${name} must be a safe integer`);
+    if (!isObject(section)) {
+      errors.push(`summary section ${sectionName} must be an object`);
+      continue;
+    }
+    for (const name of Object.keys(fields)) {
+      if (!Object.hasOwn(section, name)) {
+        errors.push(`summary is missing ${sectionName}.${name}`);
+      } else if (section[name] === null) {
+        errors.push(`summary field ${sectionName}.${name} must not be null`);
+      } else if (typeof section[name] === "number" && !Number.isSafeInteger(section[name])) {
+        errors.push(`summary field ${sectionName}.${name} must be a safe integer`);
       }
     }
   }
-  const put = summary.putObject;
-  if (!isObject(put)) {
-    errors.push("schema-v4 summary section putObject must be an object");
-    return errors;
-  }
+
+  if (summary.extract !== true) errors.push("summary extract must be true");
+  if (summary.deleteStaleObjectsOnDeployment !== true)
+    errors.push("summary deleteStaleObjectsOnDeployment must be true");
+  if (summary.transfer?.failedObjects !== 0)
+    errors.push("summary transfer failedObjects must be zero");
+  if (summary.transfer?.cancelledObjects !== 0)
+    errors.push("summary transfer cancelledObjects must be zero");
+  if (summary.transfer?.panickedObjects !== 0)
+    errors.push("summary transfer panickedObjects must be zero");
+  if (summary.transfer?.scheduledObjects !== summary.transfer?.completedObjects)
+    errors.push("summary transfer scheduledObjects must equal completedObjects");
+  if ((summary.transfer?.inFlightHighWater ?? 0) > (summary.maxParallelTransfers ?? 0))
+    errors.push("summary transfer inFlightHighWater exceeds maxParallelTransfers");
+  if (summary.source?.globalResidentBytesCurrent !== 0)
+    errors.push("summary source globalResidentBytesCurrent must be zero");
+
+  const put = isObject(summary.putObject) ? summary.putObject : {};
   const states = Array.isArray(put.failureStates) ? put.failureStates : [];
   const represented = states.reduce(
     (total, state) => total + safeNonnegativeBigInt(state.count),
@@ -971,144 +988,44 @@ export function providerSummaryV4Errors(summary: ProviderSummary): string[] {
     0n,
   );
   if (summary.detailedFailureDiagnosticsEnabled === true) {
-    if (represented + overflow !== failed) {
-      errors.push(
-        "schema-v4 PutObject failure-state counts plus overflow must equal failedAttempts",
-      );
-    }
-    if (sdkCount !== failed) {
-      errors.push("schema-v4 PutObject SDK-kind counts must equal failedAttempts");
-    }
-    if (serviceCount > failed) {
-      errors.push("schema-v4 PutObject service-code counts exceed failedAttempts");
-    }
+    if (represented + overflow !== failed)
+      errors.push("summary PutObject failure-state counts plus overflow must equal failedAttempts");
+    if (sdkCount !== failed)
+      errors.push("summary PutObject SDK-kind counts must equal failedAttempts");
+    if (serviceCount > failed)
+      errors.push("summary PutObject service-code counts exceed failedAttempts");
   } else if (sdkCount !== 0n || serviceCount !== 0n || states.length !== 0 || overflow !== 0n) {
-    errors.push("schema-v4 disabled detailed failure diagnostics must be empty");
+    errors.push("summary disabled detailed failure diagnostics must be empty");
   }
-  if (
-    ((put.retryAttempts as number | undefined) ?? 0) >
-    ((put.wireAttempts as number | undefined) ?? 0)
-  ) {
-    errors.push("schema-v4 PutObject retryAttempts exceeds wireAttempts");
-  }
-  if (safeNonnegativeBigInt(put.throttledAttempts) > failed) {
-    errors.push("schema-v4 PutObject throttledAttempts exceeds failedAttempts");
-  }
-  return errors;
-}
+  if (safeNonnegativeBigInt(put.failedAttempts) > safeNonnegativeBigInt(put.wireAttempts))
+    errors.push("summary PutObject failedAttempts exceeds wireAttempts");
+  if (safeNonnegativeBigInt(put.retryAttempts) > safeNonnegativeBigInt(put.wireAttempts))
+    errors.push("summary PutObject retryAttempts exceeds wireAttempts");
+  if (safeNonnegativeBigInt(put.throttledAttempts) > failed)
+    errors.push("summary PutObject throttledAttempts exceeds failedAttempts");
 
-export function providerSummaryV3Errors(summary: ProviderSummary): string[] {
-  const errors: string[] = [];
-  try {
-    sanitizeProviderSummary(summary);
-  } catch (error) {
-    errors.push(error instanceof Error ? error.message : String(error));
-    return errors;
-  }
-  const expectedTopLevel = new Set([
-    ...PROVIDER_SUMMARY_V3_SCALARS,
-    ...Object.keys(PROVIDER_SUMMARY_SECTIONS),
-  ]);
-  for (const name of Object.keys(summary)) {
-    if (!expectedTopLevel.has(name))
-      errors.push(`schema-v3 summary contains unexpected field ${name}`);
-  }
-  for (const name of expectedTopLevel) {
-    if (!Object.hasOwn(summary, name)) errors.push(`schema-v3 summary is missing ${name}`);
-  }
-  for (const name of PROVIDER_SUMMARY_V3_SCALARS) {
-    if (summary[name as keyof ProviderSummary] === null) {
-      errors.push(`schema-v3 summary field ${name} must not be null`);
-    }
-  }
-  if (summary.event !== "shin_deployment_summary") errors.push("schema-v3 event is invalid");
-  if (summary.schemaVersion !== 3) errors.push("schema-v3 schemaVersion must be 3");
-  if (!(["Create", "Update", "Delete"] as const).includes(summary.requestType as never))
-    errors.push("schema-v3 requestType is invalid");
-  if (summary.deploymentStatus !== "success")
-    errors.push("schema-v3 deploymentStatus must be success");
-  if (
-    !(["sse-s3-etag", "kms-sha256"] as const).includes(summary.destinationChecksumStrategy as never)
-  )
-    errors.push("schema-v3 destinationChecksumStrategy is invalid");
-  if (summary.availableMemoryMb === null || (summary.availableMemoryMb ?? 0) <= 0)
-    errors.push("schema-v3 availableMemoryMb must be positive");
-  if (summary.maxParallelTransfers === null || (summary.maxParallelTransfers ?? 0) <= 0)
-    errors.push("schema-v3 maxParallelTransfers must be positive");
-  if (summary.markerReplacement?.strategy !== "planning-plus-retryable-stream")
-    errors.push("schema-v3 markerReplacement.strategy is invalid");
-  if (summary.markerReplacement?.semantics !== "leftmost-longest-non-recursive")
-    errors.push("schema-v3 markerReplacement.semantics is invalid");
-  if (summary.markerReplacement?.plannedPassesPerUpload !== 2)
-    errors.push("schema-v3 markerReplacement.plannedPassesPerUpload must be 2");
-  for (const [sectionName, fields] of Object.entries(PROVIDER_SUMMARY_SECTIONS)) {
-    const section = summary[sectionName as keyof ProviderSummary];
-    if (!isObject(section)) {
-      errors.push(`schema-v3 summary section ${sectionName} must be an object`);
-      continue;
-    }
-    for (const name of Object.keys(fields)) {
-      if (!Object.hasOwn(section, name)) {
-        errors.push(`schema-v3 summary is missing ${sectionName}.${name}`);
-      } else if (section[name] === null) {
-        errors.push(`schema-v3 summary field ${sectionName}.${name} must not be null`);
-      } else if (typeof section[name] === "number" && !Number.isInteger(section[name])) {
-        errors.push(`schema-v3 summary field ${sectionName}.${name} must be an integer`);
-      }
-    }
-  }
-  for (const name of [
-    "schemaVersion",
-    "availableMemoryMb",
-    "maxParallelTransfers",
-    "durationMs",
-  ] as const) {
-    if (typeof summary[name] === "number" && !Number.isInteger(summary[name]))
-      errors.push(`schema-v3 summary field ${name} must be an integer`);
-  }
-  if (summary.extract !== true) errors.push("schema-v3 extract must be true");
-  if (summary.deleteStaleObjectsOnDeployment !== true)
-    errors.push("schema-v3 deleteStaleObjectsOnDeployment must be true");
-  if (summary.transfer?.failedObjects !== 0)
-    errors.push("schema-v3 transfer failedObjects must be zero");
-  if (summary.transfer?.cancelledObjects !== 0)
-    errors.push("schema-v3 transfer cancelledObjects must be zero");
-  if (summary.transfer?.panickedObjects !== 0)
-    errors.push("schema-v3 transfer panickedObjects must be zero");
-  if (summary.transfer?.scheduledObjects !== summary.transfer?.completedObjects)
-    errors.push("schema-v3 transfer scheduledObjects must equal completedObjects");
-  if ((summary.transfer?.inFlightHighWater ?? 0) > (summary.maxParallelTransfers ?? 0))
-    errors.push("schema-v3 transfer inFlightHighWater exceeds maxParallelTransfers");
-  if (summary.source?.globalResidentBytesCurrent !== 0)
-    errors.push("schema-v3 source globalResidentBytesCurrent must be zero");
-  if ((summary.putObject?.failedAttempts ?? 0) > (summary.putObject?.wireAttempts ?? 0))
-    errors.push("schema-v3 PutObject failedAttempts exceeds wireAttempts");
-  if ((summary.putObject?.retryAttempts ?? 0) > (summary.putObject?.wireAttempts ?? 0))
-    errors.push("schema-v3 PutObject retryAttempts exceeds wireAttempts");
-  if ((summary.putObject?.throttledAttempts ?? 0) > (summary.putObject?.failedAttempts ?? 0))
-    errors.push("schema-v3 PutObject throttledAttempts exceeds failedAttempts");
   if ((summary.deleteObject?.failedCalls ?? 0) > (summary.deleteObject?.sdkCalls ?? 0))
-    errors.push("schema-v3 DeleteObjects failedCalls exceeds sdkCalls");
+    errors.push("summary DeleteObjects failedCalls exceeds sdkCalls");
   if (
     (summary.deleteObject?.inferredDeletedObjects ?? 0) +
       (summary.deleteObject?.unconfirmedObjects ?? 0) +
       (summary.deleteObject?.noSuchBucketRequestedIdentifiers ?? 0) !==
     summary.deleteObject?.requestedObjects
   ) {
-    errors.push("schema-v3 DeleteObjects outcomes do not equal requestedObjects");
+    errors.push("summary DeleteObjects outcomes do not equal requestedObjects");
   }
   if (summary.callback?.confirmedResponses !== 1)
-    errors.push("schema-v3 callback confirmedResponses must be one");
+    errors.push("summary callback confirmedResponses must be one");
   if ((summary.callback?.wireAttempts ?? 0) < 1)
-    errors.push("schema-v3 callback wireAttempts must be positive");
+    errors.push("summary callback wireAttempts must be positive");
   if (
     (summary.callback?.failedAttempts ?? 0) + (summary.callback?.confirmedResponses ?? 0) !==
     summary.callback?.wireAttempts
   ) {
-    errors.push("schema-v3 callback outcomes do not equal wireAttempts");
+    errors.push("summary callback outcomes do not equal wireAttempts");
   }
   if (summary.callback?.retryAttempts !== (summary.callback?.wireAttempts ?? 0) - 1)
-    errors.push("schema-v3 callback retryAttempts must equal wireAttempts minus one");
+    errors.push("summary callback retryAttempts must equal wireAttempts minus one");
   return errors;
 }
 
@@ -1154,10 +1071,6 @@ export function benchmarkEvidenceSanitizationErrors(
 
 export function isCompleteBenchmarkRecord(record: BenchmarkResultRecord): boolean {
   return record.cleanup === "all benchmark stacks destroyed";
-}
-
-export function benchmarkMethodologyVersion(record: BenchmarkResultRecord): number {
-  return record.methodologyVersion ?? 1;
 }
 
 export function selectBenchmarkRun(

@@ -1,18 +1,30 @@
 use std::collections::HashMap;
+use std::mem::size_of;
+use std::sync::Mutex;
+use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
+use aws_sdk_s3::config::retry::RetryConfig;
 use aws_sdk_s3::error::ProvideErrorMetadata;
+use aws_sdk_s3::error::SdkError;
 use aws_sdk_s3::types::{Delete, ObjectIdentifier};
+use fastrand::Rng;
+use tokio::time::{Instant, sleep_until};
 use tracing::warn;
 
 use crate::request::strip_destination_prefix;
-use crate::types::{AppState, DeploymentManifest, DeploymentRequest, DeploymentStats, Filters};
+use crate::types::{
+    AppState, DeploymentManifest, DeploymentRequest, DeploymentStats, Filters,
+    PutObjectRetryJitter, PutObjectRetryOptions,
+};
 
 const OWNER_TAG_BASE: &str = "aws-cdk:cr-owned";
+const MAX_RETAINED_DELETION_KEY_BYTES: usize = 4 * 1024 * 1024;
 
 pub(super) struct DestinationPlan {
     pub(super) objects: HashMap<String, DestinationObject>,
-    pub(super) has_stale_candidates: bool,
+    current_stale: DeletionCandidates,
+    previous_stale: DeletionCandidates,
 }
 
 #[derive(Clone)]
@@ -35,6 +47,55 @@ struct DestinationRecordContext<'a> {
     detect_stale_candidates: bool,
 }
 
+enum DeletionCandidates {
+    Complete { keys: Vec<String>, bytes: usize },
+    Overflow,
+}
+
+impl Default for DeletionCandidates {
+    fn default() -> Self {
+        Self::Complete {
+            keys: Vec::new(),
+            bytes: 0,
+        }
+    }
+}
+
+impl DeletionCandidates {
+    fn retain(&mut self, key: &str) {
+        let Self::Complete { keys, bytes } = self else {
+            return;
+        };
+        let retained_bytes = key.len().saturating_add(size_of::<String>());
+        let Some(next_bytes) = bytes.checked_add(retained_bytes) else {
+            *self = Self::Overflow;
+            return;
+        };
+        if next_bytes > MAX_RETAINED_DELETION_KEY_BYTES {
+            // Oversized namespaces are re-listed after transfer so planning never
+            // retains an unbounded set of stale keys.
+            *self = Self::Overflow;
+            return;
+        }
+        keys.push(key.to_string());
+        *bytes = next_bytes;
+    }
+
+    fn has_candidates(&self) -> bool {
+        match self {
+            Self::Complete { keys, .. } => !keys.is_empty(),
+            Self::Overflow => true,
+        }
+    }
+
+    fn keys(&self) -> Option<&[String]> {
+        match self {
+            Self::Complete { keys, .. } => Some(keys),
+            Self::Overflow => None,
+        }
+    }
+}
+
 struct UnplannedDeletionContext<'a> {
     bucket: &'a str,
     list_prefix: Option<&'a str>,
@@ -43,6 +104,24 @@ struct UnplannedDeletionContext<'a> {
     filters: Option<&'a Filters>,
     manifest: &'a DeploymentManifest,
     stats: &'a DeploymentStats,
+    delete_current_stale: bool,
+    previous_namespace: Option<&'a str>,
+}
+
+pub(super) struct StaleCleanupContext<'a> {
+    pub(super) request: &'a DeploymentRequest,
+    pub(super) protected_prefix: Option<&'a str>,
+    pub(super) previous_cleanup_prefix: Option<&'a str>,
+    pub(super) filters: &'a Filters,
+    pub(super) manifest: &'a DeploymentManifest,
+    pub(super) destination_plan: &'a DestinationPlan,
+    pub(super) stats: &'a DeploymentStats,
+    pub(super) work_deadline: Instant,
+}
+
+struct DeleteRetryCoordinator {
+    throttle_until: Mutex<Option<Instant>>,
+    jitter: Mutex<Rng>,
 }
 
 pub(crate) async fn delete_prefix(
@@ -50,8 +129,10 @@ pub(crate) async fn delete_prefix(
     bucket: &str,
     prefix: &str,
     stats: Option<&DeploymentStats>,
+    retry: &PutObjectRetryOptions,
+    work_deadline: Instant,
 ) -> Result<u64> {
-    delete_namespace(state, bucket, prefix, None, stats).await
+    delete_namespace(state, bucket, prefix, None, stats, retry, work_deadline).await
 }
 
 pub(crate) async fn delete_prefix_excluding(
@@ -60,8 +141,19 @@ pub(crate) async fn delete_prefix_excluding(
     prefix: &str,
     excluded_prefix: &str,
     stats: Option<&DeploymentStats>,
+    retry: &PutObjectRetryOptions,
+    work_deadline: Instant,
 ) -> Result<u64> {
-    delete_namespace(state, bucket, prefix, Some(excluded_prefix), stats).await
+    delete_namespace(
+        state,
+        bucket,
+        prefix,
+        Some(excluded_prefix),
+        stats,
+        retry,
+        work_deadline,
+    )
+    .await
 }
 
 async fn delete_namespace(
@@ -70,54 +162,21 @@ async fn delete_namespace(
     prefix: &str,
     excluded_prefix: Option<&str>,
     stats: Option<&DeploymentStats>,
+    retry: &PutObjectRetryOptions,
+    work_deadline: Instant,
 ) -> Result<u64> {
     let list_prefix = namespace_list_prefix(prefix);
     let excluded_prefix = excluded_prefix.and_then(namespace_list_prefix);
-    let mut start_after = None;
-    let mut deleted = 0_u64;
-
-    loop {
-        let response = match state
-            .destination_s3
-            .list_objects_v2()
-            .bucket(bucket)
-            .set_prefix(list_prefix.clone())
-            .set_start_after(start_after.clone())
-            .send()
-            .await
-        {
-            Ok(response) => response,
-            Err(error) if service_error_code(&error) == Some("NoSuchBucket") => return Ok(deleted),
-            Err(error) => return Err(error.into()),
-        };
-
-        let mut keys_to_delete = Vec::new();
-        for object in response.contents() {
-            if let Some(key) = object.key()
-                && !key_is_excluded(key, excluded_prefix.as_deref())
-            {
-                keys_to_delete.push(key.to_string());
-            }
-        }
-
-        let last_key = response
-            .contents()
-            .iter()
-            .filter_map(|object| object.key())
-            .next_back()
-            .map(ToOwned::to_owned);
-
-        deleted = deleted.saturating_add(
-            delete_keys_optional_stats(state, bucket, &keys_to_delete, stats).await?,
-        );
-
-        if !response.is_truncated().unwrap_or(false) || last_key.is_none() {
-            break;
-        }
-        start_after = last_key;
-    }
-
-    Ok(deleted)
+    delete_listed_objects(
+        state,
+        bucket,
+        list_prefix.as_deref(),
+        stats,
+        retry,
+        work_deadline,
+        |key| !key_is_excluded(key, excluded_prefix.as_deref()),
+    )
+    .await
 }
 
 pub(crate) async fn bucket_has_competing_owner(
@@ -160,6 +219,7 @@ pub(super) async fn plan_destination(
     state: &AppState,
     request: &DeploymentRequest,
     protected_prefix: Option<&str>,
+    previous_cleanup_prefix: Option<&str>,
     filters: &Filters,
     manifest: &DeploymentManifest,
     stats: &DeploymentStats,
@@ -167,10 +227,12 @@ pub(super) async fn plan_destination(
     let list_prefix = namespace_list_prefix(&request.dest_bucket_prefix);
     let strip_prefix = list_prefix.as_deref().unwrap_or("");
     let protected_namespace = protected_prefix.and_then(namespace_list_prefix);
+    let previous_cleanup_namespace = previous_cleanup_prefix.and_then(namespace_list_prefix);
     let mut start_after = None;
     let mut objects = HashMap::new();
     let mut listed_objects = 0_u64;
-    let mut has_stale_candidates = false;
+    let mut current_stale = DeletionCandidates::default();
+    let mut previous_stale = DeletionCandidates::default();
 
     loop {
         let response = state
@@ -186,7 +248,7 @@ pub(super) async fn plan_destination(
 
         for object in response.contents() {
             let Some(key) = object.key() else { continue };
-            has_stale_candidates |= record_destination_object(
+            let current_key_is_stale = record_destination_object(
                 key,
                 object.e_tag(),
                 object.size().and_then(|size| u64::try_from(size).ok()),
@@ -195,11 +257,20 @@ pub(super) async fn plan_destination(
                     protected_namespace: protected_namespace.as_deref(),
                     filters,
                     manifest,
-                    detect_stale_candidates: request.delete_stale_objects_on_deployment
-                        && !has_stale_candidates,
+                    detect_stale_candidates: request.delete_stale_objects_on_deployment,
                 },
                 &mut objects,
             );
+            if current_key_is_stale {
+                current_stale.retain(key);
+            }
+            if previous_cleanup_namespace
+                .as_deref()
+                .is_some_and(|prefix| key.starts_with(prefix))
+                && unplanned_destination_key(key, strip_prefix, None, None, manifest)
+            {
+                previous_stale.retain(key);
+            }
         }
 
         let last_key = response
@@ -220,21 +291,166 @@ pub(super) async fn plan_destination(
 
     Ok(DestinationPlan {
         objects,
-        has_stale_candidates,
+        current_stale,
+        previous_stale,
     })
 }
 
 pub(super) async fn delete_stale_objects(
     state: &AppState,
+    context: StaleCleanupContext<'_>,
+) -> Result<()> {
+    let StaleCleanupContext {
+        request,
+        protected_prefix,
+        previous_cleanup_prefix,
+        filters,
+        manifest,
+        destination_plan,
+        stats,
+        work_deadline,
+    } = context;
+    let delete_current_stale = request.delete_stale_objects_on_deployment
+        && destination_plan.current_stale.has_candidates();
+    let delete_previous_stale =
+        previous_cleanup_prefix.is_some() && destination_plan.previous_stale.has_candidates();
+
+    let current_cleanup_authorized = if delete_current_stale {
+        if bucket_has_competing_owner(
+            state,
+            &request.dest_bucket_name,
+            &request.dest_bucket_prefix,
+            protected_prefix,
+            request.destination_owner_id.as_deref(),
+        )
+        .await?
+        {
+            warn!(
+                "stale destination objects retained because another custom resource owns an overlapping namespace"
+            );
+            false
+        } else {
+            true
+        }
+    } else {
+        false
+    };
+    let previous_cleanup_authorized = if let Some(prefix) = previous_cleanup_prefix
+        && delete_previous_stale
+    {
+        if bucket_has_competing_owner(
+            state,
+            &request.dest_bucket_name,
+            prefix,
+            None,
+            request.destination_owner_id.as_deref(),
+        )
+        .await?
+        {
+            warn!(
+                "previous destination retained because another custom resource owns an overlapping namespace"
+            );
+            false
+        } else {
+            true
+        }
+    } else {
+        false
+    };
+    if !current_cleanup_authorized && !previous_cleanup_authorized {
+        return Ok(());
+    }
+
+    let started = std::time::Instant::now();
+    let retry_coordinator = DeleteRetryCoordinator::new();
+    let retry = &request.runtime.put_object_retry;
+    delete_stale_objects_with_retry(
+        state,
+        request,
+        protected_prefix,
+        previous_cleanup_prefix,
+        current_cleanup_authorized,
+        previous_cleanup_authorized,
+        filters,
+        manifest,
+        destination_plan,
+        stats,
+        retry,
+        &retry_coordinator,
+        work_deadline,
+    )
+    .await?;
+    let elapsed = crate::util::duration_ms(started.elapsed());
+    if current_cleanup_authorized {
+        stats.add_delete_millis(elapsed);
+    } else {
+        stats.add_old_prefix_delete_millis(elapsed);
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn delete_stale_objects_with_retry(
+    state: &AppState,
     request: &DeploymentRequest,
     protected_prefix: Option<&str>,
+    previous_cleanup_prefix: Option<&str>,
+    delete_current_stale: bool,
+    delete_previous_stale: bool,
     filters: &Filters,
     manifest: &DeploymentManifest,
+    destination_plan: &DestinationPlan,
     stats: &DeploymentStats,
-) -> Result<()> {
+    retry: &PutObjectRetryOptions,
+    retry_coordinator: &DeleteRetryCoordinator,
+    work_deadline: Instant,
+) -> Result<u64> {
     let list_prefix = namespace_list_prefix(&request.dest_bucket_prefix);
     let strip_prefix = list_prefix.as_deref().unwrap_or("");
     let protected_namespace = protected_prefix.and_then(namespace_list_prefix);
+    let previous_namespace = previous_cleanup_prefix.and_then(namespace_list_prefix);
+
+    let retained_current = delete_current_stale
+        .then(|| destination_plan.current_stale.keys())
+        .flatten();
+    let retained_previous = delete_previous_stale
+        .then(|| destination_plan.previous_stale.keys())
+        .flatten();
+    if (!delete_current_stale || retained_current.is_some())
+        && (!delete_previous_stale || retained_previous.is_some())
+    {
+        let mut deleted = 0_u64;
+        if let Some(keys) = retained_current {
+            deleted = deleted.saturating_add(
+                delete_keys_optional_stats(
+                    state,
+                    &request.dest_bucket_name,
+                    keys,
+                    Some(stats),
+                    retry,
+                    retry_coordinator,
+                    work_deadline,
+                )
+                .await?,
+            );
+        }
+        if let Some(keys) = retained_previous {
+            deleted = deleted.saturating_add(
+                delete_keys_optional_stats(
+                    state,
+                    &request.dest_bucket_name,
+                    keys,
+                    Some(stats),
+                    retry,
+                    retry_coordinator,
+                    work_deadline,
+                )
+                .await?,
+            );
+        }
+        return Ok(deleted);
+    }
+
     delete_unplanned_objects(
         state,
         UnplannedDeletionContext {
@@ -245,70 +461,111 @@ pub(super) async fn delete_stale_objects(
             filters: Some(filters),
             manifest,
             stats,
+            delete_current_stale,
+            previous_namespace: delete_previous_stale
+                .then_some(previous_namespace.as_deref())
+                .flatten(),
         },
+        retry,
+        retry_coordinator,
+        work_deadline,
     )
-    .await?;
-    Ok(())
-}
-
-pub(super) async fn delete_unplanned_objects_in_namespace(
-    state: &AppState,
-    request: &DeploymentRequest,
-    prefix: &str,
-    manifest: &DeploymentManifest,
-    stats: &DeploymentStats,
-) -> Result<()> {
-    let current_list_prefix = namespace_list_prefix(&request.dest_bucket_prefix);
-    let previous_list_prefix = namespace_list_prefix(prefix);
-    delete_unplanned_objects(
-        state,
-        UnplannedDeletionContext {
-            bucket: &request.dest_bucket_name,
-            list_prefix: previous_list_prefix.as_deref(),
-            strip_prefix: current_list_prefix.as_deref().unwrap_or(""),
-            protected_namespace: None,
-            filters: None,
-            manifest,
-            stats,
-        },
-    )
-    .await?;
-    Ok(())
+    .await
 }
 
 async fn delete_unplanned_objects(
     state: &AppState,
     context: UnplannedDeletionContext<'_>,
+    retry: &PutObjectRetryOptions,
+    retry_coordinator: &DeleteRetryCoordinator,
+    work_deadline: Instant,
 ) -> Result<u64> {
-    let mut start_after = None;
+    delete_listed_objects_with_coordinator(
+        state,
+        context.bucket,
+        context.list_prefix,
+        Some(context.stats),
+        retry,
+        retry_coordinator,
+        work_deadline,
+        |key| unplanned_cleanup_key(key, &context),
+    )
+    .await
+}
+
+fn unplanned_cleanup_key(key: &str, context: &UnplannedDeletionContext<'_>) -> bool {
+    let current_stale = context.delete_current_stale
+        && unplanned_destination_key(
+            key,
+            context.strip_prefix,
+            context.protected_namespace,
+            context.filters,
+            context.manifest,
+        );
+    let previous_stale = context
+        .previous_namespace
+        .is_some_and(|prefix| key.starts_with(prefix))
+        && unplanned_destination_key(key, context.strip_prefix, None, None, context.manifest);
+    current_stale || previous_stale
+}
+
+async fn delete_listed_objects<F>(
+    state: &AppState,
+    bucket: &str,
+    list_prefix: Option<&str>,
+    stats: Option<&DeploymentStats>,
+    retry: &PutObjectRetryOptions,
+    work_deadline: Instant,
+    should_delete: F,
+) -> Result<u64>
+where
+    F: Fn(&str) -> bool,
+{
+    let retry_coordinator = DeleteRetryCoordinator::new();
+    delete_listed_objects_with_coordinator(
+        state,
+        bucket,
+        list_prefix,
+        stats,
+        retry,
+        &retry_coordinator,
+        work_deadline,
+        should_delete,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn delete_listed_objects_with_coordinator<F>(
+    state: &AppState,
+    bucket: &str,
+    list_prefix: Option<&str>,
+    stats: Option<&DeploymentStats>,
+    retry: &PutObjectRetryOptions,
+    retry_coordinator: &DeleteRetryCoordinator,
+    work_deadline: Instant,
+    should_delete: F,
+) -> Result<u64>
+where
+    F: Fn(&str) -> bool,
+{
+    let list_prefix = list_prefix.map(ToOwned::to_owned);
+    let mut response = match list_destination_page(state, bucket, list_prefix.clone(), None).await?
+    {
+        Some(response) => response,
+        None => return Ok(0),
+    };
     let mut deleted = 0_u64;
 
     loop {
-        let response = state
-            .destination_s3
-            .list_objects_v2()
-            .bucket(context.bucket)
-            .set_prefix(context.list_prefix.map(ToOwned::to_owned))
-            .set_start_after(start_after.clone())
-            .send()
-            .await?;
-        context
-            .stats
-            .record_destination_page_objects(response.contents().len() as u64);
-
+        if let Some(stats) = stats {
+            stats.record_destination_page_objects(response.contents().len() as u64);
+        }
         let keys_to_delete = response
             .contents()
             .iter()
             .filter_map(|object| object.key())
-            .filter(|key| {
-                unplanned_destination_key(
-                    key,
-                    context.strip_prefix,
-                    context.protected_namespace,
-                    context.filters,
-                    context.manifest,
-                )
-            })
+            .filter(|key| should_delete(key))
             .map(ToOwned::to_owned)
             .collect::<Vec<_>>();
         let last_key = response
@@ -317,19 +574,69 @@ async fn delete_unplanned_objects(
             .filter_map(|object| object.key())
             .next_back()
             .map(ToOwned::to_owned);
+        let next_start_after = response
+            .is_truncated()
+            .unwrap_or(false)
+            .then_some(last_key)
+            .flatten();
 
-        deleted = deleted.saturating_add(
-            delete_keys_optional_stats(state, context.bucket, &keys_to_delete, Some(context.stats))
+        if let Some(start_after) = next_start_after {
+            // The cursor is fixed by the current page, so listing the next page is
+            // independent of deleting keys behind that cursor.
+            let (next_page, deleted_page) = tokio::join!(
+                list_destination_page(state, bucket, list_prefix.clone(), Some(start_after)),
+                delete_keys_optional_stats(
+                    state,
+                    bucket,
+                    &keys_to_delete,
+                    stats,
+                    retry,
+                    retry_coordinator,
+                    work_deadline,
+                ),
+            );
+            deleted = deleted.saturating_add(deleted_page?);
+            response = match next_page? {
+                Some(response) => response,
+                None => return Ok(deleted),
+            };
+        } else {
+            deleted = deleted.saturating_add(
+                delete_keys_optional_stats(
+                    state,
+                    bucket,
+                    &keys_to_delete,
+                    stats,
+                    retry,
+                    retry_coordinator,
+                    work_deadline,
+                )
                 .await?,
-        );
-
-        if !response.is_truncated().unwrap_or(false) || last_key.is_none() {
-            break;
+            );
+            return Ok(deleted);
         }
-        start_after = last_key;
     }
+}
 
-    Ok(deleted)
+async fn list_destination_page(
+    state: &AppState,
+    bucket: &str,
+    prefix: Option<String>,
+    start_after: Option<String>,
+) -> Result<Option<aws_sdk_s3::operation::list_objects_v2::ListObjectsV2Output>> {
+    match state
+        .destination_s3
+        .list_objects_v2()
+        .bucket(bucket)
+        .set_prefix(prefix)
+        .set_start_after(start_after)
+        .send()
+        .await
+    {
+        Ok(response) => Ok(Some(response)),
+        Err(error) if service_error_code(&error) == Some("NoSuchBucket") => Ok(None),
+        Err(error) => Err(error.into()),
+    }
 }
 
 async fn delete_keys_optional_stats(
@@ -337,13 +644,59 @@ async fn delete_keys_optional_stats(
     bucket: &str,
     keys: &[String],
     stats: Option<&DeploymentStats>,
+    retry: &PutObjectRetryOptions,
+    retry_coordinator: &DeleteRetryCoordinator,
+    work_deadline: Instant,
 ) -> Result<u64> {
     let mut deleted = 0_u64;
     for chunk in keys.chunks(1000) {
         if chunk.is_empty() {
             continue;
         }
-        let objects: Vec<ObjectIdentifier> = chunk
+        let (chunk_deleted, bucket_missing) = delete_key_chunk(
+            state,
+            bucket,
+            chunk,
+            stats,
+            retry,
+            retry_coordinator,
+            work_deadline,
+        )
+        .await?;
+        deleted = deleted.saturating_add(chunk_deleted);
+        if bucket_missing {
+            return Ok(deleted);
+        }
+    }
+
+    Ok(deleted)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn delete_key_chunk(
+    state: &AppState,
+    bucket: &str,
+    keys: &[String],
+    stats: Option<&DeploymentStats>,
+    retry: &PutObjectRetryOptions,
+    retry_coordinator: &DeleteRetryCoordinator,
+    work_deadline: Instant,
+) -> Result<(u64, bool)> {
+    let mut pending = keys.to_vec();
+    let mut deleted = 0_u64;
+    let max_attempts = retry.max_attempts.max(1);
+
+    for attempt in 1..=max_attempts {
+        if !retry_coordinator
+            .wait_for_throttle_cooldown_before_deadline(work_deadline)
+            .await
+        {
+            return Err(anyhow!(
+                "destination DeleteObjects throttle cooldown reaches or exceeds the deployment work deadline"
+            ));
+        }
+
+        let objects = pending
             .iter()
             .map(|key| ObjectIdentifier::builder().key(key).build())
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -351,60 +704,270 @@ async fn delete_keys_optional_stats(
             .set_objects(Some(objects))
             .quiet(true)
             .build()?;
-
         if let Some(stats) = stats {
-            stats.record_delete_sdk_call(chunk.len() as u64);
+            stats.record_delete_sdk_call(pending.len() as u64);
         }
-        let response = match state
+
+        let response = state
             .destination_s3
             .delete_objects()
             .bucket(bucket)
             .delete(delete)
+            .customize()
+            .config_override(
+                aws_sdk_s3::config::Builder::new().retry_config(RetryConfig::disabled()),
+            )
             .send()
-            .await
-        {
-            Ok(response) => response,
+            .await;
+
+        match response {
+            Ok(response) => {
+                let (inferred_deleted, unconfirmed) =
+                    inferred_delete_counts(pending.len() as u64, response.errors().len() as u64);
+                if let Some(stats) = stats {
+                    stats.record_delete_response(inferred_deleted, unconfirmed);
+                }
+                deleted = deleted.saturating_add(inferred_deleted);
+                if response.errors().is_empty() {
+                    return Ok((deleted, false));
+                }
+
+                let retryable = response.errors().iter().all(|error| {
+                    error.code().is_some_and(is_retryable_delete_service_code)
+                        && error.key().is_some()
+                });
+                let throttled = response.errors().iter().any(|error| {
+                    error
+                        .code()
+                        .is_some_and(crate::util::is_throttle_error_code)
+                });
+                if retryable && attempt < max_attempts {
+                    if !wait_for_delete_retry_before_deadline(
+                        retry_coordinator,
+                        retry,
+                        attempt,
+                        throttled,
+                        work_deadline,
+                    )
+                    .await
+                    {
+                        return Err(partial_delete_error(bucket, response.errors())).context(
+                            "not retrying destination DeleteObjects because its retry wait reaches or exceeds the deployment work deadline",
+                        );
+                    }
+                    pending = response
+                        .errors()
+                        .iter()
+                        .filter_map(|error| error.key().map(ToOwned::to_owned))
+                        .collect();
+                    warn!(
+                        attempt,
+                        max_attempts,
+                        remaining_objects = pending.len(),
+                        "destination DeleteObjects response contained retryable object errors; retrying"
+                    );
+                    continue;
+                }
+                return Err(partial_delete_error(bucket, response.errors()));
+            }
             Err(error) if service_error_code(&error) == Some("NoSuchBucket") => {
                 if let Some(stats) = stats {
-                    stats.record_delete_no_such_bucket(chunk.len() as u64);
+                    stats.record_delete_no_such_bucket(pending.len() as u64);
                 }
-                return Ok(deleted);
+                return Ok((deleted, true));
             }
             Err(error) => {
                 if let Some(stats) = stats {
-                    stats.record_delete_failure(chunk.len() as u64);
+                    stats.record_delete_failure(pending.len() as u64);
+                }
+                let throttled =
+                    service_error_code(&error).is_some_and(crate::util::is_throttle_error_code);
+                if is_retryable_delete_error(&error) && attempt < max_attempts {
+                    if !wait_for_delete_retry_before_deadline(
+                        retry_coordinator,
+                        retry,
+                        attempt,
+                        throttled,
+                        work_deadline,
+                    )
+                    .await
+                    {
+                        return Err(error).with_context(|| {
+                            "not retrying destination DeleteObjects because its retry wait reaches or exceeds the deployment work deadline"
+                        });
+                    }
+                    warn!(
+                        attempt,
+                        max_attempts,
+                        error_code = ?service_error_code(&error),
+                        "destination DeleteObjects attempt failed; retrying"
+                    );
+                    continue;
                 }
                 return Err(error)
                     .with_context(|| format!("failed to delete objects from bucket {bucket}"));
             }
-        };
-
-        let (inferred_deleted, unconfirmed) =
-            inferred_delete_counts(chunk.len() as u64, response.errors().len() as u64);
-        if let Some(stats) = stats {
-            stats.record_delete_response(inferred_deleted, unconfirmed);
-        }
-        deleted = deleted.saturating_add(inferred_deleted);
-
-        if unconfirmed > 0 {
-            let details = response
-                .errors()
-                .iter()
-                .map(|error| {
-                    let key = error.key().unwrap_or("<unknown-key>");
-                    let code = error.code().unwrap_or("<unknown-code>");
-                    let message = error.message().unwrap_or("<no-message>");
-                    format!("{key}: {code} ({message})")
-                })
-                .collect::<Vec<_>>()
-                .join(", ");
-            return Err(anyhow!(
-                "failed to delete some objects from bucket {bucket}: {details}"
-            ));
         }
     }
 
-    Ok(deleted)
+    Err(anyhow!("failed to delete objects from bucket {bucket}"))
+}
+
+fn partial_delete_error(bucket: &str, errors: &[aws_sdk_s3::types::Error]) -> anyhow::Error {
+    let details = errors
+        .iter()
+        .map(|error| {
+            let key = error.key().unwrap_or("<unknown-key>");
+            let code = error.code().unwrap_or("<unknown-code>");
+            let message = error.message().unwrap_or("<no-message>");
+            format!("{key}: {code} ({message})")
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    anyhow!("failed to delete some objects from bucket {bucket}: {details}")
+}
+
+fn is_retryable_delete_service_code(code: &str) -> bool {
+    crate::util::is_throttle_error_code(code)
+        || matches!(
+            code,
+            "InternalError" | "RequestTimeout" | "RequestTimeoutException" | "ServiceUnavailable"
+        )
+}
+
+fn is_retryable_delete_error<E: ProvideErrorMetadata>(error: &SdkError<E>) -> bool {
+    match error {
+        SdkError::ServiceError(service) => {
+            let status = service.raw().status().as_u16();
+            status == 408
+                || status == 429
+                || status >= 500
+                || service
+                    .err()
+                    .code()
+                    .is_some_and(is_retryable_delete_service_code)
+        }
+        SdkError::TimeoutError(_) | SdkError::DispatchFailure(_) => true,
+        SdkError::ResponseError(response) => {
+            let status = response.raw().status().as_u16();
+            status == 408 || status == 429 || status >= 500
+        }
+        SdkError::ConstructionFailure(_) => false,
+        _ => false,
+    }
+}
+
+fn delete_retry_cap_millis(attempt: usize, throttled: bool, retry: &PutObjectRetryOptions) -> u64 {
+    let (base, max) = if throttled {
+        (
+            retry.slowdown_retry_base_delay_ms,
+            retry.slowdown_retry_max_delay_ms,
+        )
+    } else {
+        (retry.retry_base_delay_ms, retry.retry_max_delay_ms)
+    };
+    let shift = u32::try_from(attempt.saturating_sub(1)).unwrap_or(u32::MAX);
+    base.saturating_mul(1_u64.checked_shl(shift).unwrap_or(u64::MAX))
+        .min(max)
+}
+
+async fn wait_for_delete_retry_before_deadline(
+    coordinator: &DeleteRetryCoordinator,
+    retry: &PutObjectRetryOptions,
+    attempt: usize,
+    throttled: bool,
+    work_deadline: Instant,
+) -> bool {
+    let delay = coordinator.retry_delay(attempt, throttled, retry);
+    if throttled {
+        coordinator.extend_throttle_cooldown(delay);
+        coordinator
+            .wait_for_throttle_cooldown_before_deadline(work_deadline)
+            .await
+    } else {
+        let now = Instant::now();
+        let Some(wake) = now.checked_add(delay) else {
+            return false;
+        };
+        if wake >= work_deadline {
+            return false;
+        }
+        sleep_until(wake).await;
+        true
+    }
+}
+
+impl DeleteRetryCoordinator {
+    fn new() -> Self {
+        Self {
+            throttle_until: Mutex::new(None),
+            jitter: Mutex::new(Rng::new()),
+        }
+    }
+
+    async fn wait_for_throttle_cooldown_before_deadline(&self, work_deadline: Instant) -> bool {
+        loop {
+            let wait = {
+                let throttle_until = self
+                    .throttle_until
+                    .lock()
+                    .expect("delete retry coordinator mutex should not be poisoned");
+                throttle_until.and_then(|deadline| {
+                    deadline
+                        .checked_duration_since(Instant::now())
+                        .map(|delay| (deadline, delay))
+                })
+            };
+            let Some((wake, delay)) = wait else {
+                return true;
+            };
+            if delay.is_zero() {
+                return true;
+            }
+            if wake >= work_deadline {
+                return false;
+            }
+            sleep_until(wake).await;
+        }
+    }
+
+    fn retry_delay(
+        &self,
+        attempt: usize,
+        throttled: bool,
+        retry: &PutObjectRetryOptions,
+    ) -> Duration {
+        let cap_millis = delete_retry_cap_millis(attempt, throttled, retry);
+        match retry.jitter {
+            PutObjectRetryJitter::Full if cap_millis > 0 => {
+                Duration::from_millis(self.next_jitter() % cap_millis.saturating_add(1))
+            }
+            PutObjectRetryJitter::Full => Duration::ZERO,
+            PutObjectRetryJitter::None => Duration::from_millis(cap_millis),
+        }
+    }
+
+    fn extend_throttle_cooldown(&self, delay: Duration) {
+        if delay.is_zero() {
+            return;
+        }
+        let now = Instant::now();
+        let deadline = now.checked_add(delay).unwrap_or(now);
+        let mut throttle_until = self
+            .throttle_until
+            .lock()
+            .expect("delete retry coordinator mutex should not be poisoned");
+        if throttle_until.is_none_or(|current| deadline > current) {
+            *throttle_until = Some(deadline);
+        }
+    }
+
+    fn next_jitter(&self) -> u64 {
+        self.jitter
+            .lock()
+            .expect("delete retry jitter mutex should not be poisoned")
+            .u64(..)
+    }
 }
 
 fn inferred_delete_counts(requested: u64, service_errors: u64) -> (u64, u64) {
@@ -585,14 +1148,24 @@ fn unplanned_destination_key(
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::time::Duration;
+
+    use aws_sdk_s3::primitives::SdkBody;
+    use aws_smithy_http_client::test_util::{ReplayEvent, StaticReplayClient};
+    use http::{Request, Response};
 
     use super::{
-        DestinationObject, DestinationRecordContext, inferred_delete_counts, key_is_excluded,
-        namespace_list_prefix, normalize_etag, owner_tag_overlaps_cleanup, parse_owner_tag,
-        record_destination_object, stale_destination_key, unplanned_destination_key,
+        DeleteRetryCoordinator, DeletionCandidates, DestinationObject, DestinationRecordContext,
+        UnplannedDeletionContext, delete_key_chunk, delete_listed_objects, inferred_delete_counts,
+        key_is_excluded, namespace_list_prefix, normalize_etag, owner_tag_overlaps_cleanup,
+        parse_owner_tag, record_destination_object, stale_destination_key, unplanned_cleanup_key,
+        unplanned_destination_key,
     };
     use crate::request::compile_filters;
-    use crate::types::{DeploymentManifest, PlannedAction, PlannedObject};
+    use crate::types::{
+        AppState, DeploymentManifest, PlannedAction, PlannedObject, PutObjectRetryJitter,
+        PutObjectRetryOptions,
+    };
 
     #[test]
     fn namespace_list_prefix_adds_trailing_slash() {
@@ -604,6 +1177,205 @@ mod tests {
         assert_eq!(inferred_delete_counts(1_000, 0), (1_000, 0));
         assert_eq!(inferred_delete_counts(1_000, 3), (997, 3));
         assert_eq!(inferred_delete_counts(2, 4), (0, 2));
+    }
+
+    #[test]
+    fn retained_deletion_candidates_fall_back_after_the_memory_cap() {
+        let mut candidates = DeletionCandidates::default();
+        let key = "x".repeat(1024);
+        while candidates.keys().is_some() {
+            candidates.retain(&key);
+        }
+
+        assert!(candidates.has_candidates());
+        assert!(candidates.keys().is_none());
+    }
+
+    #[test]
+    fn fused_cleanup_keeps_current_and_previous_authorization_scopes_separate() {
+        let filters = compile_filters(&[], &[]).unwrap();
+        let manifest = DeploymentManifest::new();
+        let stats = crate::types::DeploymentStats::default();
+        let current_only = UnplannedDeletionContext {
+            bucket: "destination",
+            list_prefix: Some("site/"),
+            strip_prefix: "site/",
+            protected_namespace: Some("site/initial/"),
+            filters: Some(&filters),
+            manifest: &manifest,
+            stats: &stats,
+            delete_current_stale: true,
+            previous_namespace: None,
+        };
+        let previous_only = UnplannedDeletionContext {
+            delete_current_stale: false,
+            previous_namespace: Some("site/initial/"),
+            ..current_only
+        };
+
+        assert!(!unplanned_cleanup_key(
+            "site/initial/old.txt",
+            &current_only
+        ));
+        assert!(unplanned_cleanup_key("site/other.txt", &current_only));
+        assert!(unplanned_cleanup_key(
+            "site/initial/old.txt",
+            &previous_only
+        ));
+        assert!(!unplanned_cleanup_key("site/other.txt", &previous_only));
+    }
+
+    #[tokio::test]
+    async fn retained_candidates_delete_without_a_second_list() {
+        let replay = StaticReplayClient::new(vec![delete_success_event()]);
+        let state = replay_app_state(replay.clone());
+        let retry = retry_options(1, 0);
+        let coordinator = DeleteRetryCoordinator::new();
+        let keys = vec!["site/stale.txt".to_string()];
+
+        let deleted = super::delete_keys_optional_stats(
+            &state,
+            "destination",
+            &keys,
+            None,
+            &retry,
+            &coordinator,
+            tokio::time::Instant::now() + Duration::from_secs(10),
+        )
+        .await
+        .expect("retained planning candidates should delete directly");
+
+        assert_eq!(deleted, 1);
+        assert_eq!(
+            replay
+                .actual_requests()
+                .map(|request| request.method().to_string())
+                .collect::<Vec<_>>(),
+            ["POST"]
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_objects_retries_a_transient_request_failure() {
+        let replay = StaticReplayClient::new(vec![
+            error_event(500, "InternalError"),
+            delete_success_event(),
+        ]);
+        let state = replay_app_state(replay.clone());
+        let retry = retry_options(2, 0);
+        let coordinator = DeleteRetryCoordinator::new();
+        let keys = vec!["site/a.txt".to_string(), "site/b.txt".to_string()];
+
+        let deleted = delete_key_chunk(
+            &state,
+            "destination",
+            &keys,
+            None,
+            &retry,
+            &coordinator,
+            tokio::time::Instant::now() + Duration::from_secs(10),
+        )
+        .await
+        .expect("transient DeleteObjects failure should be retried");
+
+        assert_eq!(deleted, (2, false));
+        assert_eq!(
+            replay
+                .actual_requests()
+                .map(|request| request.method().to_string())
+                .collect::<Vec<_>>(),
+            ["POST", "POST"]
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_objects_retries_only_retryable_object_errors() {
+        let replay = StaticReplayClient::new(vec![
+            delete_partial_error_event("site/retry.txt", "SlowDown"),
+            delete_success_event(),
+        ]);
+        let state = replay_app_state(replay.clone());
+        let retry = retry_options(2, 0);
+        let coordinator = DeleteRetryCoordinator::new();
+        let keys = vec!["site/done.txt".to_string(), "site/retry.txt".to_string()];
+
+        let deleted = delete_key_chunk(
+            &state,
+            "destination",
+            &keys,
+            None,
+            &retry,
+            &coordinator,
+            tokio::time::Instant::now() + Duration::from_secs(10),
+        )
+        .await
+        .expect("retryable per-object errors should be retried");
+
+        assert_eq!(deleted, (2, false));
+        let requests = replay.actual_requests().collect::<Vec<_>>();
+        let first_body = request_body(requests[0]);
+        let second_body = request_body(requests[1]);
+        assert!(first_body.contains("site/done.txt"));
+        assert!(first_body.contains("site/retry.txt"));
+        assert!(!second_body.contains("site/done.txt"));
+        assert!(second_body.contains("site/retry.txt"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn delete_objects_does_not_wait_past_the_work_deadline() {
+        let replay = StaticReplayClient::new(vec![error_event(500, "InternalError")]);
+        let state = replay_app_state(replay.clone());
+        let retry = retry_options(2, 30_000);
+        let coordinator = DeleteRetryCoordinator::new();
+
+        let error = delete_key_chunk(
+            &state,
+            "destination",
+            &["site/a.txt".to_string()],
+            None,
+            &retry,
+            &coordinator,
+            tokio::time::Instant::now() + Duration::from_secs(1),
+        )
+        .await
+        .expect_err("a retry beyond the work deadline must fail");
+
+        let message = format!("{error:#}");
+        assert!(message.contains("not retrying destination DeleteObjects"));
+        assert!(message.contains("InternalError"));
+        assert_eq!(replay.actual_requests().count(), 1);
+    }
+
+    #[tokio::test]
+    async fn pagination_starts_the_next_list_before_deleting_the_current_page() {
+        let replay = StaticReplayClient::new(vec![
+            list_page_event("site/a.txt", true),
+            list_page_event("site/b.txt", false),
+            delete_success_event(),
+            delete_success_event(),
+        ]);
+        let state = replay_app_state(replay.clone());
+
+        let deleted = delete_listed_objects(
+            &state,
+            "destination",
+            Some("site/"),
+            None,
+            &retry_options(1, 0),
+            tokio::time::Instant::now() + Duration::from_secs(10),
+            |_| true,
+        )
+        .await
+        .expect("two paginated pages should be deleted");
+
+        assert_eq!(deleted, 2);
+        assert_eq!(
+            replay
+                .actual_requests()
+                .map(|request| request.method().to_string())
+                .collect::<Vec<_>>(),
+            ["GET", "GET", "POST", "POST"]
+        );
     }
 
     #[test]
@@ -906,5 +1678,107 @@ mod tests {
         assert!(!key_is_excluded("site/v1/index.html", Some("site/v2/")));
         assert!(!key_is_excluded("site/v2", Some("site/v2/")));
         assert!(!key_is_excluded("site/v2/index.html", None));
+    }
+
+    fn replay_app_state(replay: StaticReplayClient) -> AppState {
+        let s3 = aws_sdk_s3::Client::from_conf(
+            aws_sdk_s3::Config::builder()
+                .behavior_version_latest()
+                .region(aws_sdk_s3::config::Region::new("us-east-1"))
+                .credentials_provider(aws_sdk_s3::config::Credentials::new(
+                    "test-access-key",
+                    "test-secret-key",
+                    None,
+                    None,
+                    "shin-bucket-deployment-test",
+                ))
+                .endpoint_url("https://s3.test")
+                .force_path_style(true)
+                .retry_config(
+                    aws_sdk_s3::config::retry::RetryConfig::standard().with_max_attempts(3),
+                )
+                .http_client(replay)
+                .build(),
+        );
+        AppState {
+            source_s3: s3.clone(),
+            destination_s3: s3,
+            cloudfront: aws_sdk_cloudfront::Client::from_conf(
+                aws_sdk_cloudfront::Config::builder()
+                    .behavior_version_latest()
+                    .region(aws_sdk_cloudfront::config::Region::new("us-east-1"))
+                    .credentials_provider(aws_sdk_cloudfront::config::Credentials::new(
+                        "test-access-key",
+                        "test-secret-key",
+                        None,
+                        None,
+                        "shin-bucket-deployment-test",
+                    ))
+                    .build(),
+            ),
+            http: reqwest::Client::new(),
+            detailed_failure_diagnostics: false,
+        }
+    }
+
+    fn retry_options(max_attempts: usize, delay_ms: u64) -> PutObjectRetryOptions {
+        PutObjectRetryOptions {
+            max_attempts,
+            retry_base_delay_ms: delay_ms,
+            retry_max_delay_ms: delay_ms,
+            slowdown_retry_base_delay_ms: delay_ms,
+            slowdown_retry_max_delay_ms: delay_ms,
+            jitter: PutObjectRetryJitter::None,
+        }
+    }
+
+    fn replay_event(status: u16, body: impl Into<Vec<u8>>) -> ReplayEvent {
+        ReplayEvent::new(
+            Request::builder()
+                .uri("https://s3.test/expected")
+                .body(SdkBody::empty())
+                .unwrap(),
+            Response::builder()
+                .status(status)
+                .header("content-type", "application/xml")
+                .body(SdkBody::from(body.into()))
+                .unwrap(),
+        )
+    }
+
+    fn error_event(status: u16, code: &str) -> ReplayEvent {
+        replay_event(
+            status,
+            format!("<Error><Code>{code}</Code><Message>test error</Message></Error>"),
+        )
+    }
+
+    fn delete_success_event() -> ReplayEvent {
+        replay_event(
+            200,
+            br#"<DeleteResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"/>"#.to_vec(),
+        )
+    }
+
+    fn delete_partial_error_event(key: &str, code: &str) -> ReplayEvent {
+        replay_event(
+            200,
+            format!(
+                "<DeleteResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"><Error><Key>{key}</Key><Code>{code}</Code><Message>retry</Message></Error></DeleteResult>"
+            ),
+        )
+    }
+
+    fn list_page_event(key: &str, truncated: bool) -> ReplayEvent {
+        replay_event(
+            200,
+            format!(
+                "<ListBucketResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"><Name>destination</Name><Prefix>site/</Prefix><MaxKeys>1000</MaxKeys><IsTruncated>{truncated}</IsTruncated><Contents><Key>{key}</Key><Size>1</Size></Contents></ListBucketResult>"
+            ),
+        )
+    }
+
+    fn request_body(request: &aws_sdk_s3::config::http::HttpRequest) -> String {
+        String::from_utf8_lossy(request.body().bytes().unwrap_or_default()).into_owned()
     }
 }
