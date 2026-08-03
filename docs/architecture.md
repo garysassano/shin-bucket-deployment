@@ -130,12 +130,26 @@ Confirmed consequences of a collapsed window, all from the same rows:
   memory budget itself.
 - Provider duration for `cold-create` rises 18.0% at 1024 MiB and 18.0% at 2048 MiB, two
   independent memory settings producing the same figure.
-- Under sufficient additional load, request bodies starve outright: one observation at
-  3072 MiB / 128 produced 27 `PutObject` failures with service code `RequestTimeout`, each
-  after about 55 s having emitted zero body bytes, with producers in the `reading-source`
-  stage. `putObject.throttledAttempts` was zero, so this is not S3 throttling. Provider
-  retries completed every object, so the effect is latency rather than data loss. It did
-  not reproduce when the same configuration ran alone.
+- Request bodies can starve outright, producing `PutObject` failures with service code
+  `RequestTimeout` after about 55 s having emitted zero body bytes, with producers in the
+  `reading-source` stage. `putObject.throttledAttempts` is zero in these observations, so
+  this is not S3 throttling. Provider-owned retries sometimes absorb it and sometimes do
+  not:
+
+  | Workload | Configuration | Outcome |
+  | --- | --- | --- |
+  | `mixed` (442 files, 17.5 MiB) | 3072 MiB / 128, run beside two other 128-transfer stacks | 27 failures, all objects completed, 56 s |
+  | `mixed` | 3072 MiB / 128, run alone | clean, 0.999 s |
+  | `large-few` (32 files, 2-12 MB each) | **1024 MiB / 32 (the shipped defaults)** | 6 failures, retries completed, 56.3 s |
+  | `large-few` | 1024 MiB / 128 | 5 failures, retries completed, 56.2 s |
+  | `large-few` | 2048 MiB / 64 | clean, 1.179 s |
+  | `large-few` | **2048 MiB / 128** | **retries exhausted; `CREATE_FAILED`, deployment failed** |
+  | `large-few` | 4096 MiB / 128 | clean, 0.962 s |
+
+  The 2048 MiB / 128 case is a hard failure, not a slow success: CloudFormation reported
+  `CREATE_FAILED` with `failed to upload ...: RequestTimeout`. Both settings are within the
+  documented range (`maxConcurrency` accepts up to 256). Retries are therefore not a
+  guaranteed backstop for this condition.
 
 Reserve calibration measured on the same rows, fitting peak Lambda memory against
 concurrency and window (residual under 1 MiB across all six configurations):
@@ -151,8 +165,15 @@ Because the reserve is multiplied by a caller-controlled value, the window thres
 this profile lands at approximately 33 transfers at 1024 MiB, 73 at 2048 MiB, 116 at
 3072 MiB, and 159 at 4096 MiB. `DEFAULT_TRANSFER_MAX_CONCURRENCY` is 32 and
 `DEFAULT_PROVIDER_LAMBDA_MEMORY_SIZE_MIB` is 1024, so the shipped default sits immediately
-below the threshold on this profile. Treat the reserve constant as unvalidated against
-profiles with large individual entries until measured there.
+below the threshold on this profile.
+
+On `large-few` the reserve behaves differently and the model above does not fully predict
+it: measured resident high-water at 1024 MiB / 128 was 38.8 MiB where the formula implies a
+single-block floor, most likely because replay can borrow invocation-global permits and
+exceed the local window. What the model does predict correctly on that profile is the
+failure boundary: 2048 MiB / 64 keeps the reservation under budget and is clean, while
+2048 MiB / 128 pushes it over and is the configuration that failed to deploy. Treat the
+reserve constant and the window model as calibrated on `mixed` only.
 
 ## Supported Scenarios
 
