@@ -127,6 +127,35 @@ P-1 is therefore accepted for its simpler single-frame allocation path with no
 measurable performance or pressure regression; it must not be presented as a
 benchmark speedup.
 
+### P-2 marker replacement baseline
+
+Collected 2026-08-03 from source commit `d7aec44`, run
+`5bfec7df-3076-4a81-b346-1fd8974ab10b`. This is P-2's before baseline, not
+acceptance evidence for the proposed per-source `MarkerReplacements` cache.
+Five repetitions of the `marker-heavy` profile at 2048 MiB /
+`maxConcurrency` 32 were paired with the same-memory upstream AWS CDK baseline
+across create, unchanged update, and changed update. All 30 sanitized rows have
+complete provider telemetry; every stack was destroyed and confirmed absent.
+
+Provider duration, median over `n=5` with `[Q1, Q3]`:
+
+| Phase | Shin | AWS CDK | AWS/Shin |
+| --- | ---: | ---: | ---: |
+| `cold-create` | 0.607 s [0.604, 0.616] | 5.264 s [5.130, 5.330] | 8.7x |
+| `unchanged-update` | 0.377 s [0.366, 0.387] | 5.302 s [5.248, 5.317] | 14.1x |
+| `changed-update` | 0.640 s [0.631, 0.667] | 5.303 s [5.220, 5.306] | 8.3x |
+
+Create and changed update each recorded one marker planning pass and one upload
+pass per invocation. Unchanged update recorded one planning pass and no upload
+pass. Create and changed update also recorded the expected single source-block
+refetch and replay claim after release from the current two-pass marker path;
+consumed request-body replays remained zero. Every Shin row reported zero
+source GET errors/retries, zero destination upload retries/throttles, and zero
+transfer failures. Median peak memory was 37 MiB on create, 33 MiB on unchanged
+update, and 36 MiB on changed update, against 194 MiB for upstream in every
+phase. P-2 requires a separate five-repetition after run with the same matrix
+and upstream control before its performance decision can be made.
+
 
 ## Methodology
 
