@@ -97,6 +97,36 @@ This sample no longer exhibits the one-block collapse or zero-byte
 absent. A single clean sample confirms the reproduced failure configuration but
 does not establish a general optimum for memory or transfer concurrency.
 
+### P-1 single-copy upload decision
+
+Collected 2026-08-03 as decision run `single-copy-upload-2026-08-03` from the
+exact parent commit `fa30b5d` and implementation commit `23620d1`. Both variants
+used five repetitions of `mixed` at 2048 MiB / `maxConcurrency` 64, paired with
+the same upstream AWS CDK baseline across all four phases. The 80 sanitized rows
+have complete provider telemetry; every stack was destroyed and confirmed absent.
+
+The implementation reads decompressed bytes directly into 256 KiB SDK frames and
+holds back the final frame, removing the intermediate 64 KiB read/pending buffers
+and the per-frame `Bytes::copy_from_slice`. The measured result is performance-
+neutral, not a demonstrated latency win:
+
+| Cold-create metric, median [Q1, Q3] | Before | After |
+| --- | ---: | ---: |
+| Provider duration | 0.935 s [0.871, 0.953] | 0.936 s [0.907, 0.964] |
+| Transfer phase | 587 ms [566, 594] | 594 ms [520, 600] |
+| Billed duration | 1.092 s [1.005, 1.103] | 1.056 s [1.027, 1.084] |
+| Peak memory | 100 MiB [97, 100] | 100 MiB [97, 100] |
+| Source read amplification | 1.0008x | 1.0008x |
+
+The maximum observed Shin memory fell from 103 MiB to 101 MiB, but the median
+did not move. Upstream cold-create shifted from 5.846 s to 5.634 s between runs,
+so changes this small are environmental noise rather than attributable speedups.
+Every Shin row reported zero source GET errors/retries, zero destination upload
+retries/throttles, zero block refetches, and zero replay claims after release.
+P-1 is therefore accepted for its simpler single-frame allocation path with no
+measurable performance or pressure regression; it must not be presented as a
+benchmark speedup.
+
 
 ## Methodology
 
