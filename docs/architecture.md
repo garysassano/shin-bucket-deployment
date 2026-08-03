@@ -97,6 +97,63 @@ sum(resident source block bytes across archives) <= globalSourceBudgetBytes
 
 `transfer.advancedTuning.sourceWindowMemoryBudgetMiB` can lower `globalSourceBudgetBytes`; it cannot raise the half-memory cap. The final local-window `max` ensures at least one validated source block can be admitted, while the `min(sourceZipBytes)` clamp avoids planning a larger local window than the archive can contain. The global semaphore, not the sum of local-window values, is the aggregate bound.
 
+### Observed source-window behavior
+
+Measured 2026-08-03 at provider commit `20313b6`, `mixed` profile (442 files, 17.5 MiB
+archive), five repetitions per canonical configuration. Evidence rows are in
+`benchmarks/results.jsonl`.
+
+The reservation above scales with `maxConcurrency`, and `capacityBytes` saturates at zero.
+Once `reservedBytes` exceeds `globalSourceBudgetBytes`, the final `max` is what sets the
+window, so it drops to a single `sourceBlockBytes` block and remains there for the rest of
+the invocation. This is the intended floor -- at least one block must be admissible or no
+entry can be read -- but the transition is a cliff rather than a taper, and nothing in the
+summary states that it happened. `source.residentBytesHighWater` collapsing to roughly one
+block is the signal to read.
+
+Predicted versus measured `residentBytesHighWater`:
+
+| Configuration | reservedBytes | budget | predicted window | measured |
+| --- | ---: | ---: | ---: | ---: |
+| 1024 MiB / 32 | 481 MiB | 512 MiB | 17.5 MiB (whole archive) | 19.0 MiB |
+| 2048 MiB / 64 | 897 MiB | 1024 MiB | 17.5 MiB (whole archive) | 19.0 MiB |
+| 4096 MiB / 128 | 1665 MiB | 2048 MiB | 17.5 MiB (whole archive) | 19.0 MiB |
+| 1024 MiB / 128 | 1633 MiB | 512 MiB | 8 MiB (floor) | 7.8 MiB |
+| 2048 MiB / 128 | 1665 MiB | 1024 MiB | 8 MiB (floor) | 7.8 MiB |
+| 3072 MiB / 128 | 1665 MiB | 1536 MiB | 8 MiB (floor) | 7.8 MiB |
+
+Confirmed consequences of a collapsed window, all from the same rows:
+
+- `activeGetsHighWater` falls from 3 to 1: the reader stops running ahead.
+- `blockWaits` rises about 2.4x (62-64 to 152-153), entirely `blockWaitsFetching`.
+  `blockWaitsCapacity` is zero in every observation, so the provider never waits on the
+  memory budget itself.
+- Provider duration for `cold-create` rises 18.0% at 1024 MiB and 18.0% at 2048 MiB, two
+  independent memory settings producing the same figure.
+- Under sufficient additional load, request bodies starve outright: one observation at
+  3072 MiB / 128 produced 27 `PutObject` failures with service code `RequestTimeout`, each
+  after about 55 s having emitted zero body bytes, with producers in the `reading-source`
+  stage. `putObject.throttledAttempts` was zero, so this is not S3 throttling. Provider
+  retries completed every object, so the effect is latency rather than data loss. It did
+  not reproduce when the same configuration ran alone.
+
+Reserve calibration measured on the same rows, fitting peak Lambda memory against
+concurrency and window (residual under 1 MiB across all six configurations):
+
+```text
+peakMemoryMiB = 67.4 + (0.342 * maxConcurrency) + (0.79 * sourceWindowMiB)
+```
+
+The 64 MiB base reserve matches the measured 67.4 MiB. The 12 MiB transfer-worker reserve
+does not match the measured 0.342 MiB marginal cost per worker on this profile; the
+structural per-worker buffers described above total about 1.3 MiB even at worst case.
+Because the reserve is multiplied by a caller-controlled value, the window threshold on
+this profile lands at approximately 33 transfers at 1024 MiB, 73 at 2048 MiB, 116 at
+3072 MiB, and 159 at 4096 MiB. `DEFAULT_TRANSFER_MAX_CONCURRENCY` is 32 and
+`DEFAULT_PROVIDER_LAMBDA_MEMORY_SIZE_MIB` is 1024, so the shipped default sits immediately
+below the threshold on this profile. Treat the reserve constant as unvalidated against
+profiles with large individual entries until measured there.
+
 ## Supported Scenarios
 
 Scenarios are driven through the repository runner. Verification mode runs every default correctness scenario when no name is provided; benchmark mode runs the selected benchmark scenario across the requested config matrix.
