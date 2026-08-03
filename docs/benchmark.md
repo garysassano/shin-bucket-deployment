@@ -72,6 +72,31 @@ This did not reproduce. Re-running 3072 / 128 alone with `concurrency: 1` (decis
 
 Two consequences worth carrying forward. Bounding `MaxParallelTransfers` by Lambda memory would not have prevented this, because memory was never the constraint; the binding resource is the source read pipeline's ability to feed N concurrent request bodies. And a `RequestTimeout` with zero bytes emitted is the signature to look for, distinct from the `SlowDown` throttling signature.
 
+### Targeted source-window fix revalidation
+
+Collected 2026-08-03 from source commit `1c0eae6`, run
+`4d22afb5-6ff5-4673-a1a4-77350f1390c6`. This was one approved, sequential
+`large-few` cold-create sample at 2048 MiB / `maxConcurrency` 128, paired with
+the same-memory upstream AWS CDK baseline. It targets the configuration that had
+previously exhausted retries and failed its deployment; it is availability
+revalidation, not a replacement for the five-repetition canonical matrix.
+
+| Metric | Shin | AWS CDK |
+| --- | ---: | ---: |
+| Provider duration | 1.275 s | 4.975 s |
+| Billed duration | 1.390 s | 5.508 s |
+| Peak memory | 176 MiB | 435 MiB |
+| Destination upload failures / retries / throttles | 0 / 0 / 0 | not exposed |
+
+The fixed provider completed all 32 uploads and emitted no source GET error or
+retry. Its source scheduler reached all eight configured GET slots, retained
+63.8 MiB at high water (approximately the new eight-block feed floor), and
+fetched 84,643,592 bytes for the 84,644,928-byte archive with no replay refetch.
+This sample no longer exhibits the one-block collapse or zero-byte
+`RequestTimeout` signature. Both benchmark stacks were destroyed and confirmed
+absent. A single clean sample confirms the reproduced failure configuration but
+does not establish a general optimum for memory or transfer concurrency.
+
 
 ## Methodology
 
