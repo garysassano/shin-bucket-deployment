@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::task::{Context as TaskContext, Poll};
 
 use aws_sdk_s3::primitives::{ByteStream, SdkBody};
-use bytes::Bytes;
+use bytes::{BufMut, Bytes, BytesMut};
 use crc32fast::Hasher as Crc32Hasher;
 use futures_util::FutureExt;
 use http_body::{Body, Frame, SizeHint};
@@ -760,28 +760,50 @@ async fn send_zip_entry_chunks_inner(
     let mut md5 = Md5::new();
     let mut crc32 = Crc32Hasher::new();
     let mut bytes = 0_u64;
-    let mut buffer = vec![0_u8; ZIP_ENTRY_READ_CHUNK_BYTES];
-    let mut body_chunk = Vec::with_capacity(ZIP_ENTRY_BODY_CHUNK_BYTES);
-    let mut pending = Vec::with_capacity(ZIP_ENTRY_READ_CHUNK_BYTES);
+    let mut frame = BytesMut::with_capacity(ZIP_ENTRY_BODY_CHUNK_BYTES);
+    let mut held_frame = None;
 
     loop {
-        let bytes_read = reader.read(&mut buffer).await.map_err(boxed_body_error)?;
+        let frame_start = frame.len();
+        let frame_remaining = ZIP_ENTRY_BODY_CHUNK_BYTES - frame_start;
+        let bytes_read = reader
+            .read_buf(&mut (&mut frame).limit(frame_remaining))
+            .await
+            .map_err(boxed_body_error)?;
         if bytes_read == 0 {
             break;
         }
-        if !pending.is_empty()
-            && !append_and_send_body_chunks(&mut body_chunk, &pending, &sender).await?
+        let next_bytes = bytes.saturating_add(bytes_read as u64);
+        validate_zip_entry_size_not_exceeded(&plan, next_bytes).map_err(boxed_body_error)?;
+        let read_bytes = &frame[frame_start..];
+        md5.update(read_bytes);
+        crc32.update(read_bytes);
+        bytes = next_bytes;
+
+        if frame.len() == ZIP_ENTRY_BODY_CHUNK_BYTES {
+            let completed = std::mem::replace(
+                &mut frame,
+                BytesMut::with_capacity(ZIP_ENTRY_BODY_CHUNK_BYTES),
+            )
+            .freeze();
+            if let Some(previous) = held_frame.replace(completed)
+                && sender.send(Ok(BodyFrame::Data(previous))).await.is_err()
+            {
+                body_state
+                    .record_producer_stage(attempt_number, UploadProducerStage::ReceiverClosed);
+                return Ok(());
+            }
+        }
+    }
+
+    if !frame.is_empty() {
+        let completed = frame.freeze();
+        if let Some(previous) = held_frame.replace(completed)
+            && sender.send(Ok(BodyFrame::Data(previous))).await.is_err()
         {
             body_state.record_producer_stage(attempt_number, UploadProducerStage::ReceiverClosed);
             return Ok(());
         }
-        let next_bytes = bytes.saturating_add(bytes_read as u64);
-        validate_zip_entry_size_not_exceeded(&plan, next_bytes).map_err(boxed_body_error)?;
-        md5.update(&buffer[..bytes_read]);
-        crc32.update(&buffer[..bytes_read]);
-        pending.clear();
-        pending.extend_from_slice(&buffer[..bytes_read]);
-        bytes = next_bytes;
     }
 
     validate_zip_entry_output(&plan, bytes, crc32.finalize()).map_err(boxed_body_error)?;
@@ -795,7 +817,14 @@ async fn send_zip_entry_chunks_inner(
     // visible so a fixed-length HTTP consumer can safely stop polling after it.
     drop(reader);
     body_state.record_producer_stage(attempt_number, UploadProducerStage::FinalFrameReady);
-    send_final_body_chunks(&mut body_chunk, &pending, &sender).await?;
+    match held_frame {
+        Some(final_frame) => {
+            let _ = sender.send(Ok(BodyFrame::Final(final_frame))).await;
+        }
+        None => {
+            let _ = sender.send(Ok(BodyFrame::Complete)).await;
+        }
+    }
     body_state.record_producer_stage(attempt_number, UploadProducerStage::Complete);
 
     Ok(())
@@ -973,71 +1002,6 @@ impl ZipEntryInputValidator<'_> {
         }
         Ok(())
     }
-}
-
-async fn append_and_send_body_chunks(
-    body_chunk: &mut Vec<u8>,
-    bytes: &[u8],
-    sender: &mpsc::Sender<std::result::Result<BodyFrame, BodyError>>,
-) -> std::result::Result<bool, BodyError> {
-    let mut remaining = bytes;
-    while !remaining.is_empty() {
-        let available = ZIP_ENTRY_BODY_CHUNK_BYTES - body_chunk.len();
-        let take = available.min(remaining.len());
-        body_chunk.extend_from_slice(&remaining[..take]);
-        remaining = &remaining[take..];
-
-        if body_chunk.len() == ZIP_ENTRY_BODY_CHUNK_BYTES {
-            if sender
-                .send(Ok(BodyFrame::Data(Bytes::copy_from_slice(
-                    body_chunk.as_slice(),
-                ))))
-                .await
-                .is_err()
-            {
-                return Ok(false);
-            }
-            body_chunk.clear();
-        }
-    }
-
-    Ok(true)
-}
-
-async fn send_final_body_chunks(
-    body_chunk: &mut Vec<u8>,
-    bytes: &[u8],
-    sender: &mpsc::Sender<std::result::Result<BodyFrame, BodyError>>,
-) -> std::result::Result<(), BodyError> {
-    let mut remaining = bytes;
-    while !remaining.is_empty() {
-        let available = ZIP_ENTRY_BODY_CHUNK_BYTES - body_chunk.len();
-        let take = available.min(remaining.len());
-        body_chunk.extend_from_slice(&remaining[..take]);
-        remaining = &remaining[take..];
-
-        if body_chunk.len() == ZIP_ENTRY_BODY_CHUNK_BYTES {
-            let bytes = Bytes::copy_from_slice(body_chunk.as_slice());
-            body_chunk.clear();
-            let frame = if remaining.is_empty() {
-                BodyFrame::Final(bytes)
-            } else {
-                BodyFrame::Data(bytes)
-            };
-            if sender.send(Ok(frame)).await.is_err() {
-                return Ok(());
-            }
-        }
-    }
-
-    if !body_chunk.is_empty() {
-        let bytes = Bytes::copy_from_slice(body_chunk.as_slice());
-        body_chunk.clear();
-        let _ = sender.send(Ok(BodyFrame::Final(bytes))).await;
-    } else if bytes.is_empty() {
-        let _ = sender.send(Ok(BodyFrame::Complete)).await;
-    }
-    Ok(())
 }
 
 impl Body for ReceiverBody {

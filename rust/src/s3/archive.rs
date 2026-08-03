@@ -1945,6 +1945,7 @@ mod tests {
     use tokio::time::Instant;
     use zip::write::{SimpleFileOptions, ZipWriter};
 
+    use super::entry::BodyFrame;
     use super::{
         LOCAL_FILE_HEADER_LEN, SourceClient, SourceDiagnostics, UploadBodyState,
         block_indices_for_span, marker_zip_entry_body, plan_marker_zip_entry, plan_source_blocks,
@@ -2400,6 +2401,42 @@ mod tests {
             .expect("SSE-S3 stream");
 
         assert!(state.etag_md5().is_some());
+    }
+
+    #[tokio::test]
+    async fn direct_stream_frames_preserve_body_boundaries() {
+        let frame_bytes = crate::s3::ZIP_ENTRY_BODY_CHUNK_BYTES;
+        for (size, expected_frames) in [
+            (frame_bytes - 1, vec![(false, frame_bytes - 1)]),
+            (frame_bytes, vec![(false, frame_bytes)]),
+            (
+                frame_bytes * 2 + 17,
+                vec![(true, frame_bytes), (true, frame_bytes), (false, 17)],
+            ),
+        ] {
+            let contents = vec![b'x'; size];
+            let zip = zip_from_entry("boundaries.bin", &contents);
+            let plan = zip_plan_from_archive(&zip, "boundaries.bin");
+            let store = ready_store_for_plan(&zip, &plan);
+            let (sender, mut receiver) = tokio::sync::mpsc::channel(expected_frames.len());
+
+            send_zip_entry_chunks(store, plan, sender, Arc::new(UploadBodyState::default()))
+                .await
+                .expect("direct stream");
+
+            let mut actual_frames = Vec::new();
+            while let Ok(frame) = receiver.try_recv() {
+                let frame = frame.expect("valid body frame");
+                let classification = match frame {
+                    BodyFrame::Data(bytes) => (true, bytes.len()),
+                    BodyFrame::Final(bytes) => (false, bytes.len()),
+                    BodyFrame::Complete => (false, 0),
+                };
+                assert!(classification.1 <= frame_bytes);
+                actual_frames.push(classification);
+            }
+            assert_eq!(actual_frames, expected_frames, "entry size {size}");
+        }
     }
 
     #[tokio::test]
