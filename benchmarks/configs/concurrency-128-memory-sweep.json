@@ -2,7 +2,7 @@
   "$schema": "../schemas/asset-benchmark-config.schema.json",
   "repetitions": 1,
   "region": "eu-central-1",
-  "concurrency": 3,
+  "concurrency": 1,
   "assetProfiles": ["mixed"],
   "implementations": ["shin"],
   "lambdaConfigs": [

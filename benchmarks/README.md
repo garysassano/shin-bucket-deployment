@@ -2,7 +2,9 @@
 
 This folder contains committed benchmark support assets, sanitized current result rows, and report/render tooling. Raw benchmark evidence stays outside the repo.
 
-`results.jsonl` is currently empty. Every earlier row predates the current provider summary schema, so all of it — with the generated reports, telemetry, and chart snapshots — moved to [`../archive/`](../archive/README.md) and is not current evidence.
+Every row predating the current provider summary schema — with the reports, telemetry, and chart snapshots generated from it — moved to [`../archive/`](../archive/README.md) and is not current evidence.
+
+`configs/concurrency-128-memory-sweep.json` is an exploratory Shin-only sweep at a fixed `maxConcurrency` of 128. It runs sequentially (`concurrency: 1`) on purpose: running several 128-transfer configurations at once puts roughly 384 uploads in flight across the account and has been observed to starve request bodies (see the note in [`../docs/benchmark.md`](../docs/benchmark.md)).
 
 Deployable benchmark CDK apps live in `benchmarks/apps/**`. Curated benchmark matrices live in `benchmarks/configs/**`, shared JSON Schemas live in `benchmarks/schemas/**`, and benchmark configs are run through `pnpm benchmark:run-assets -- --config <path>`.
 
@@ -22,7 +24,7 @@ Run IDs are opaque UUIDs. The scratch directory contains a resume manifest bindi
 
 The runner adds a benchmark-only invocation token to the deployment custom resource for every phase. This guarantees that `unchanged-update` measures an actual provider invocation even when the deterministic asset and all functional deployment properties are unchanged; the token does not change the asset, destination, or provider algorithm.
 
-Repeated decision runs belong in `results.jsonl` too. Their `decisionRunId`, `comparisonVariant`, and `repetition` fields preserve every sample instead of replacing an earlier repetition. Canonical runs use the general `runId`, `sampleId`, and `repetition` identity instead, and snapshot renderers exclude decision rows by default.
+Repeated decision runs belong in `results.jsonl` too. Their `decisionRunId`, `comparisonVariant`, and `repetition` fields preserve every sample instead of replacing an earlier repetition. Canonical runs use the general `runId`, `sampleId`, and `repetition` identity instead. Renderers do not filter decision rows: once the ledger holds more than one run, every report, telemetry, and snapshot command needs an explicit `--run-id`.
 
 Before any report, telemetry table, or README snapshot is rendered, every required field and the exact matrix from the canonical config are validated; missing, duplicate, dirty, incomplete, or unplanned cells fail rendering. Tables report `n`, median, Q1, Q3, and IQR.
 
