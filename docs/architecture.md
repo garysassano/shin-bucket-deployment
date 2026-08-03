@@ -90,12 +90,13 @@ if capacityBytes > 512 MiB:
   capacityBytes -= 384 MiB
 
 sourceWindowBytes = min(capacityBytes, 512 MiB)
-sourceWindowBytes = max(sourceWindowBytes, min(sourceBlockBytes, sourceZipBytes))
+minimumFeedWindowBytes = min(sourceGetConcurrency * sourceBlockBytes, sourceZipBytes)
+sourceWindowBytes = max(sourceWindowBytes, minimumFeedWindowBytes)
 
 sum(resident source block bytes across archives) <= globalSourceBudgetBytes
 ```
 
-`transfer.advancedTuning.sourceWindowMemoryBudgetMiB` can lower `globalSourceBudgetBytes`; it cannot raise the half-memory cap. The final local-window `max` ensures at least one validated source block can be admitted, while the `min(sourceZipBytes)` clamp avoids planning a larger local window than the archive can contain. The global semaphore, not the sum of local-window values, is the aggregate bound.
+`transfer.advancedTuning.sourceWindowMemoryBudgetMiB` can lower `globalSourceBudgetBytes`; it cannot raise the half-memory cap. The final local-window `max` preserves enough blocks to use the configured source GET concurrency, while the `min(sourceZipBytes)` clamp avoids planning a larger local window than the archive can contain. `sourceBlockBytes * sourceGetConcurrency` is already validated to fit the global budget. The global semaphore, not the sum of local-window values, is the aggregate bound.
 
 ### Observed source-window behavior
 
@@ -103,15 +104,16 @@ Measured 2026-08-03 at provider commit `20313b6`, `mixed` profile (442 files, 17
 archive), five repetitions per canonical configuration. Evidence rows are in
 `benchmarks/results.jsonl`.
 
-The reservation above scales with `maxConcurrency`, and `capacityBytes` saturates at zero.
-Once `reservedBytes` exceeds `globalSourceBudgetBytes`, the final `max` is what sets the
-window, so it drops to a single `sourceBlockBytes` block and remains there for the rest of
-the invocation. This is the intended floor -- at least one block must be admissible or no
-entry can be read -- but the transition is a cliff rather than a taper, and nothing in the
-summary states that it happened. `source.residentBytesHighWater` collapsing to roughly one
-block is the signal to read.
+At the measured provider commit, the reservation above scaled with `maxConcurrency`, and
+`capacityBytes` saturated at zero. Once `reservedBytes` exceeded
+`globalSourceBudgetBytes`, the then-current final `max` dropped the window to a single
+`sourceBlockBytes` block. That floor could not sustain the configured source GET pipeline.
+The current formula instead preserves `sourceGetConcurrency` blocks, subject to archive
+size and the existing global budget validation. The measurements below describe the
+pre-fix single-block behavior; `source.residentBytesHighWater` collapsing to roughly one
+block was its signal.
 
-Predicted versus measured `residentBytesHighWater`:
+Pre-fix predicted versus measured `residentBytesHighWater`:
 
 | Configuration | reservedBytes | budget | predicted window | measured |
 | --- | ---: | ---: | ---: | ---: |
