@@ -302,8 +302,18 @@ describe("benchmark methodology v2", () => {
     ).not.toBe(digest);
   });
 
-  test("rejects benchmark concurrency above one", () => {
-    expect(() => parseBenchmarkRunOptions(["--concurrency", "2"])).toThrow("sequential execution");
+  test("bounds benchmark concurrency and keeps it in configuration identity", () => {
+    expect(parseBenchmarkRunOptions(["--concurrency", "3"]).concurrency).toBe(3);
+    expect(() => parseBenchmarkRunOptions(["--concurrency", "5"])).toThrow(
+      "concurrency must not exceed 4",
+    );
+    const sequential = parseBenchmarkRunOptions([
+      "--run-id",
+      "00000000-0000-4000-a000-000000000031",
+    ]);
+    expect(benchmarkConfigurationSha256({ ...sequential, concurrency: 3 })).not.toBe(
+      benchmarkConfigurationSha256(sequential),
+    );
   });
 
   test("rejects non-opaque run identities", () => {
@@ -988,7 +998,7 @@ describe("benchmark methodology v2", () => {
     const runId = "00000000-0000-4000-a000-000000000003";
     const options = parseBenchmarkRunOptions([
       "--config",
-      "benchmarks/configs/methodology-v2-1024-32.json",
+      "benchmarks/configs/canonical.json",
       "--run-id",
       runId,
       "--snapshot-date",
@@ -1001,14 +1011,14 @@ describe("benchmark methodology v2", () => {
     const records = createBenchmarkPlan(options).flatMap((sample) =>
       options.phases.map((phase) => canonicalRecord(options, sample, phase)),
     );
-    expect(selectValidatedBenchmarkRun({ records, runId })).toHaveLength(80);
+    expect(selectValidatedBenchmarkRun({ records, runId })).toHaveLength(120);
     const previewRecords = records.filter((record) => record.repetition === 1);
     expect(
       selectValidatedBenchmarkPreview({
         records: previewRecords,
         runId,
       }),
-    ).toHaveLength(16);
+    ).toHaveLength(24);
     expect(() =>
       selectValidatedBenchmarkRun({
         records: previewRecords,
@@ -1065,7 +1075,7 @@ describe("benchmark methodology v2", () => {
     const options: BenchmarkRunOptions = {
       ...parseBenchmarkRunOptions([
         "--config",
-        "benchmarks/configs/methodology-v2-1024-32.json",
+        "benchmarks/configs/canonical.json",
         "--run-id",
         runId,
         "--snapshot-date",
@@ -1094,11 +1104,11 @@ describe("benchmark methodology v2", () => {
       selectValidatedBenchmarkRun({
         records: readBenchmarkResultRecords(outputFile),
         runId,
-        configFile: "benchmarks/configs/methodology-v2-1024-32.json",
+        configFile: "benchmarks/configs/canonical.json",
         inputFile: outputFile,
         scratchRoot,
       }),
-    ).toHaveLength(80);
+    ).toHaveLength(120);
   });
 });
 

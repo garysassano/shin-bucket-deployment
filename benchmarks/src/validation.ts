@@ -5,7 +5,7 @@ import { benchmarkRecordErrors, implementationLabel, selectBenchmarkRun } from "
 import { createBenchmarkPlan } from "./plan";
 import { assertBenchmarkLedgerMatchesManifest } from "./resume";
 
-export const CANONICAL_BENCHMARK_CONFIG = "benchmarks/configs/methodology-v2-1024-32.json";
+export const CANONICAL_BENCHMARK_CONFIG = "benchmarks/configs/canonical.json";
 
 type BenchmarkSelectionArgs = {
   readonly records: readonly BenchmarkResultRecord[];

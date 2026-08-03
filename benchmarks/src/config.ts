@@ -43,12 +43,14 @@ export type BenchmarkRunOptions = {
   readonly scratchRoot: string;
   readonly runToken: string;
   readonly snapshotDate: string;
-  readonly concurrency: 1;
+  readonly concurrency: number;
   readonly destinationPrefix: string;
   readonly phases: PhaseConfig[];
   readonly decisionRunId?: string;
   readonly comparisonVariant?: string;
 };
+
+const MAX_BENCHMARK_CONCURRENCY = 4;
 
 const positiveIntegerSchema = z.number().int().positive();
 const nonEmptyStringSchema = z.string().min(1);
@@ -152,8 +154,13 @@ export function parseBenchmarkRunOptions(args: string[]): BenchmarkRunOptions {
     values.get("concurrency") ?? String(config.concurrency ?? 1),
     "concurrency",
   );
-  if (concurrency !== 1) {
-    throw new Error("Benchmark methodology requires sequential execution with concurrency 1.");
+  // Concurrency groups independent memory configurations; phases within a configuration
+  // stay ordered because each mutates the same stack. It is part of the configuration
+  // digest, so runs at different concurrency are never pooled as the same configuration.
+  if (concurrency > MAX_BENCHMARK_CONCURRENCY) {
+    throw new Error(
+      `concurrency must not exceed ${MAX_BENCHMARK_CONCURRENCY}; each unit deploys its own stack.`,
+    );
   }
   const repetitions = positiveInteger(
     values.get("repetitions") ?? String(config.repetitions ?? 5),
@@ -225,7 +232,7 @@ export function parseBenchmarkRunOptions(args: string[]): BenchmarkRunOptions {
     scratchRoot,
     runToken,
     snapshotDate,
-    concurrency: 1,
+    concurrency,
     destinationPrefix:
       values.get("destination-prefix") ?? config.destinationPrefix ?? "benchmark-site",
     phases,
@@ -359,6 +366,6 @@ function isIsoDate(value: string): boolean {
 }
 function usage(): never {
   throw new Error(
-    "Usage: benchmark:run-assets --config <file> [--run-id <uuid>] [--repetitions 5] [--start-repetition 1] [--approved-through-repetition <n>] [--max-wall-clock-minutes <minutes>] [--preserve-on-failure true|false] [--detailed-failure-diagnostics true|false] [--concurrency 1]",
+    "Usage: benchmark:run-assets --config <file> [--run-id <uuid>] [--repetitions 5] [--start-repetition 1] [--approved-through-repetition <n>] [--max-wall-clock-minutes <minutes>] [--preserve-on-failure true|false] [--detailed-failure-diagnostics true|false] [--concurrency <1-4>]",
   );
 }

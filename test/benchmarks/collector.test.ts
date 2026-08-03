@@ -560,7 +560,7 @@ describe("benchmark result collector", () => {
     expect(report.endsWith("\n\n")).toBe(false);
     expect(report).toContain("## Scope");
     expect(report).toContain("## ShinBucketDeployment vs AWS BucketDeployment");
-    expect(report).toContain("tiny-many");
+    expect(report).toContain("mixed");
     expect(report).toContain("cold-create");
     expect(report).not.toContain("## Visual Summary");
     expect(existsSync(join(dir, "report-assets"))).toBe(false);
@@ -587,7 +587,7 @@ describe("benchmark result collector", () => {
 
     expect(readFileSync(outputFile, "utf8")).toEqual(table);
     expect(table).toContain("# Shin Provider Benchmark Telemetry");
-    expect(table).toContain("## tiny-many / 1024 MiB / max concurrency 32");
+    expect(table).toContain("## mixed / 1024 MiB / max concurrency 32");
     expect(table).toContain("### Runtime");
     expect(table).toContain("### Provider Phase Timing");
     expect(table).toContain("### Catalog Trust And Fallback");

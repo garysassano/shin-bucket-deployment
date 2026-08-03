@@ -123,36 +123,72 @@ async function main(signal: AbortSignal): Promise<void> {
     }
 
     const startedAtMs = Date.now();
-    for (const run of runs) {
-      if (wallClockCapReached(startedAtMs, options.maxWallClockMinutes)) {
-        console.log("benchmark wall-clock cap reached; no additional stack will be started");
-        break;
-      }
-      await assertSourceUnchanged(sourceMetadata, options);
-      try {
-        await runBenchmarkStack({
-          sourceMetadata,
-          options,
-          run,
-          resumeSession,
-          bundles,
-          signal,
-          startedAtMs,
-        });
-      } catch (error) {
-        if (error instanceof WallClockCapError) {
-          console.log(
-            "benchmark wall-clock cap reached between phases; active stack was cleaned up",
-          );
-          break;
+    // Samples sharing a memory configuration reuse the same stack shape and must stay
+    // ordered; different memory configurations are independent stacks and can overlap.
+    // Provider duration and peak memory come from the CloudWatch REPORT record, so they
+    // stay comparable across concurrent configurations.
+    const configurationQueue = groupRunsByMemoryConfiguration(runs);
+    let capReached = false;
+    let failure: unknown;
+    const worker = async (): Promise<void> => {
+      for (;;) {
+        const group = configurationQueue.shift();
+        if (group === undefined) return;
+        for (const run of group) {
+          if (capReached || failure !== undefined || signal.aborted) return;
+          if (wallClockCapReached(startedAtMs, options.maxWallClockMinutes)) {
+            capReached = true;
+            return;
+          }
+          await assertSourceUnchanged(sourceMetadata, options);
+          try {
+            await runBenchmarkStack({
+              sourceMetadata,
+              options,
+              run,
+              resumeSession,
+              bundles,
+              signal,
+              startedAtMs,
+            });
+          } catch (error) {
+            if (error instanceof WallClockCapError) {
+              capReached = true;
+              return;
+            }
+            failure = error;
+            return;
+          }
         }
-        throw error;
       }
+    };
+    const workers = Math.max(1, Math.min(options.concurrency, configurationQueue.length));
+    await Promise.all(Array.from({ length: workers }, () => worker()));
+    if (failure !== undefined) throw failure;
+    if (capReached) {
+      console.log("benchmark wall-clock cap reached; no additional stack was started");
     }
     console.log(`wrote sanitized benchmark rows to ${options.outputFile}`);
   } finally {
     resumeSession.close();
   }
+}
+
+/**
+ * Buckets planned samples by the stack shape they deploy. Samples in one bucket run in
+ * order; buckets run concurrently up to `concurrency`.
+ */
+export function groupRunsByMemoryConfiguration(
+  runs: readonly PlannedBenchmarkRun[],
+): PlannedBenchmarkRun[][] {
+  const groups = new Map<string, PlannedBenchmarkRun[]>();
+  for (const run of runs) {
+    const key = `${run.memoryMb}\u0000${run.parallel ?? "na"}\u0000${run.implementation}`;
+    const group = groups.get(key);
+    if (group === undefined) groups.set(key, [run]);
+    else group.push(run);
+  }
+  return [...groups.values()];
 }
 
 export function benchmarkProviderBuildArgs(

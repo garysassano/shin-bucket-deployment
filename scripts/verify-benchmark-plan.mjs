@@ -9,12 +9,12 @@ import { validateMethodologyV2Run } from "../dist/benchmarks/src/validation.js";
 const runId = "00000000-0000-4000-a000-000000000001";
 const options = parseBenchmarkRunOptions([
   "--config",
-  "benchmarks/configs/methodology-v2-1024-32.json",
+  "benchmarks/configs/canonical.json",
   "--run-id",
   runId,
 ]);
 const plan = createBenchmarkPlan(options);
-const expectedSamples = 5 * (2 + 2);
+const expectedSamples = 5 * (3 + 3);
 if (plan.length !== expectedSamples) {
   throw new Error(
     `Canonical benchmark plan has ${plan.length} samples; expected ${expectedSamples}.`,
