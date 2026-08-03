@@ -161,6 +161,10 @@ pub(crate) async fn deploy(
             state,
             request,
             overlapping_previous_cleanup.map(OverlappingPreviousCleanup::prefix),
+            overlapping_previous_cleanup.and_then(|cleanup| match cleanup {
+                OverlappingPreviousCleanup::DeleteStale { prefix } => Some(prefix.as_str()),
+                OverlappingPreviousCleanup::Retain { .. } => None,
+            }),
             &filters,
             &deployment_manifest,
             &stats,
@@ -201,76 +205,29 @@ pub(crate) async fn deploy(
     }
     stats.add_transfer_millis(crate::util::duration_ms(started.elapsed()));
 
-    if request.delete_stale_objects_on_deployment && destination_plan.has_stale_candidates {
-        let competing_owner = timeout_at(
-            deadlines.work(),
-            destination::bucket_has_competing_owner(
-                state,
-                &request.dest_bucket_name,
-                &request.dest_bucket_prefix,
-                overlapping_previous_cleanup.map(OverlappingPreviousCleanup::prefix),
-                request.destination_owner_id.as_deref(),
-            ),
-        )
-        .await
-        .context("stale S3 ownership check exceeded the deployment work deadline")??;
-        if competing_owner {
-            tracing::warn!(
-                "stale destination objects retained because another custom resource owns an overlapping namespace"
-            );
-        } else {
-            let started = std::time::Instant::now();
-            timeout_at(
-                deadlines.work(),
-                destination::delete_stale_objects(
-                    state,
-                    request,
-                    overlapping_previous_cleanup.map(OverlappingPreviousCleanup::prefix),
-                    &filters,
-                    &deployment_manifest,
-                    &stats,
-                ),
-            )
-            .await
-            .context("stale S3 object cleanup exceeded the deployment work deadline")??;
-            stats.add_delete_millis(crate::util::duration_ms(started.elapsed()));
-        }
-    }
-
-    if let Some(OverlappingPreviousCleanup::DeleteStale { prefix }) = overlapping_previous_cleanup {
-        let competing_owner = timeout_at(
-            deadlines.work(),
-            destination::bucket_has_competing_owner(
-                state,
-                &request.dest_bucket_name,
-                prefix,
-                None,
-                request.destination_owner_id.as_deref(),
-            ),
-        )
-        .await
-        .context("previous S3 ownership check exceeded the deployment work deadline")??;
-        if competing_owner {
-            tracing::warn!(
-                "previous destination retained because another custom resource owns an overlapping namespace"
-            );
-        } else {
-            let started = std::time::Instant::now();
-            timeout_at(
-                deadlines.work(),
-                destination::delete_unplanned_objects_in_namespace(
-                    state,
-                    request,
-                    prefix,
-                    &deployment_manifest,
-                    &stats,
-                ),
-            )
-            .await
-            .context("previous S3 object cleanup exceeded the deployment work deadline")??;
-            stats.add_old_prefix_delete_millis(crate::util::duration_ms(started.elapsed()));
-        }
-    }
+    let previous_cleanup_prefix = overlapping_previous_cleanup.and_then(|cleanup| match cleanup {
+        OverlappingPreviousCleanup::DeleteStale { prefix } => Some(prefix.as_str()),
+        OverlappingPreviousCleanup::Retain { .. } => None,
+    });
+    timeout_at(
+        deadlines.work(),
+        destination::delete_stale_objects(
+            state,
+            destination::StaleCleanupContext {
+                request,
+                protected_prefix: overlapping_previous_cleanup
+                    .map(OverlappingPreviousCleanup::prefix),
+                previous_cleanup_prefix,
+                filters: &filters,
+                manifest: &deployment_manifest,
+                destination_plan: &destination_plan,
+                stats: &stats,
+                work_deadline: deadlines.work(),
+            },
+        ),
+    )
+    .await
+    .context("stale S3 object cleanup exceeded the deployment work deadline")??;
 
     Ok(())
 }

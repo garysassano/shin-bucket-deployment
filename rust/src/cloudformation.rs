@@ -543,6 +543,8 @@ async fn process_request_inner(
                     &request.dest_bucket_name,
                     &request.dest_bucket_prefix,
                     Some(&stats),
+                    &request.runtime.put_object_retry,
+                    deadlines.work(),
                 ),
             )
             .await?
@@ -596,6 +598,8 @@ async fn process_request_inner(
                                     &plan.previous.bucket_prefix,
                                     excluded_prefix,
                                     Some(&stats),
+                                    &request.runtime.put_object_retry,
+                                    deadlines.work(),
                                 ),
                             )
                             .await?
@@ -608,6 +612,8 @@ async fn process_request_inner(
                                     &plan.previous.bucket_name,
                                     &plan.previous.bucket_prefix,
                                     Some(&stats),
+                                    &request.runtime.put_object_retry,
+                                    deadlines.work(),
                                 ),
                             )
                             .await?
