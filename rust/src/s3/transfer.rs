@@ -12,7 +12,6 @@ use aws_sdk_s3::error::ProvideErrorMetadata;
 use aws_sdk_s3::error::SdkError;
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::MetadataDirective;
-#[cfg(test)]
 use bytes::Bytes;
 use crc32fast::Hasher as Crc32Hasher;
 use fastrand::Rng;
@@ -55,7 +54,8 @@ const COPY_RECONCILIATION_METADATA_KEY: &str = "shin-copy-identity";
 const COPY_RECONCILIATION_TOKEN_VERSION: &str = "shin-copy-v1";
 
 enum UploadPayload {
-    #[cfg(test)]
+    /// A fully materialized body. Produced by the comparison pass when a small entry was
+    /// spooled, and by tests.
     Bytes {
         bytes: Bytes,
         body_state: Arc<UploadBodyState>,
@@ -83,6 +83,13 @@ impl UploadPayload {
         Self::Bytes {
             bytes: Bytes::from(bytes),
             body_state,
+        }
+    }
+
+    fn from_spooled_bytes(bytes: Bytes, detailed_failure_diagnostics: bool) -> Self {
+        Self::Bytes {
+            bytes,
+            body_state: Arc::new(UploadBodyState::new(detailed_failure_diagnostics)),
         }
     }
 
@@ -124,7 +131,6 @@ impl UploadPayload {
 
     fn content_length(&self) -> u64 {
         match self {
-            #[cfg(test)]
             UploadPayload::Bytes { bytes, .. } => u64::try_from(bytes.len()).unwrap_or(u64::MAX),
             UploadPayload::ZipEntry { content_length, .. } => *content_length,
         }
@@ -132,17 +138,13 @@ impl UploadPayload {
 
     fn body_state(&self) -> &UploadBodyState {
         match self {
-            #[cfg(test)]
             UploadPayload::Bytes { body_state, .. }
             | UploadPayload::ZipEntry { body_state, .. } => body_state,
-            #[cfg(not(test))]
-            UploadPayload::ZipEntry { body_state, .. } => body_state,
         }
     }
 
     fn source_attempt_snapshot(&self) -> Option<super::archive::SourceAttemptSnapshot> {
         match self {
-            #[cfg(test)]
             UploadPayload::Bytes { .. } => None,
             UploadPayload::ZipEntry { store, .. } => Some(store.attempt_snapshot()),
         }
@@ -156,6 +158,9 @@ impl UploadPayload {
 struct PreparedUploadPayload {
     payload: UploadPayload,
     etag: Option<String>,
+    /// The payload already holds the decoded bytes, so the upload will not read the
+    /// archive again.
+    spooled: bool,
 }
 
 struct WriteDiagnostics {
@@ -319,8 +324,10 @@ pub(super) async fn upload_zip_entries(
         deadlines,
     );
     let task_drain_budget = scheduler.task_drain_budget();
+    let spool_limit_bytes = comparison_spool_limit_bytes(request.runtime.max_parallel_transfers);
     tracing::info!(
         source_global_budget_bytes = source_budget.limit_bytes(),
+        comparison_spool_limit_bytes = spool_limit_bytes,
         "configured invocation-global source byte budget"
     );
 
@@ -396,6 +403,7 @@ pub(super) async fn upload_zip_entries(
                             marker_replacements,
                             destination_object.as_ref(),
                             &stats,
+                            spool_limit_bytes,
                         )
                         .await?
                         else {
@@ -476,6 +484,7 @@ async fn prepare_zip_entry_upload(
     marker_replacements: Option<Arc<MarkerReplacements>>,
     destination_object: Option<&DestinationObject>,
     stats: &Arc<DeploymentStats>,
+    spool_limit_bytes: u64,
 ) -> Result<Option<UploadPayload>> {
     if marker_replacements.is_none() && !should_compare_marker_free_entry(plan, destination_object)
     {
@@ -492,8 +501,14 @@ async fn prepare_zip_entry_upload(
     } else {
         stats.add_md5_hash_attempt();
     }
-    let prepared =
-        prepare_zip_entry_for_comparison(store.clone(), plan, marker_replacements, stats).await?;
+    let prepared = prepare_zip_entry_for_comparison(
+        store.clone(),
+        plan,
+        marker_replacements,
+        stats,
+        spool_limit_bytes,
+    )
+    .await?;
 
     if prepared
         .etag
@@ -505,12 +520,26 @@ async fn prepare_zip_entry_upload(
         return Ok(None);
     }
 
-    store.retain_zip_entry_for_replay(plan);
+    // A spooled payload no longer reads the archive, so the source blocks behind it must
+    // not be pinned for a replay that will never happen.
+    if !prepared.spooled {
+        store.retain_zip_entry_for_replay(plan);
+    }
 
     if let Some(etag) = prepared.etag {
         prepared.payload.body_state().record_etag_md5(etag);
     }
     Ok(Some(prepared.payload))
+}
+
+/// Total bytes the comparison pass may hold across all in-flight entries. Each scheduled
+/// entry spools at most `spool_limit_bytes`, and the scheduler admits at most
+/// `max_parallel_transfers` of them, so dividing the two bounds the whole deployment
+/// without any runtime accounting.
+const COMPARISON_SPOOL_TOTAL_BUDGET_BYTES: u64 = 16 * 1024 * 1024;
+
+fn comparison_spool_limit_bytes(max_parallel_transfers: usize) -> u64 {
+    COMPARISON_SPOOL_TOTAL_BUDGET_BYTES / (max_parallel_transfers.max(1) as u64)
 }
 
 fn should_compare_marker_free_entry(
@@ -776,6 +805,7 @@ async fn prepare_zip_entry_for_comparison(
     plan: &ZipEntryPlan,
     marker_replacements: Option<Arc<MarkerReplacements>>,
     stats: &Arc<DeploymentStats>,
+    spool_limit_bytes: u64,
 ) -> Result<PreparedUploadPayload> {
     if let Some(replacements) = marker_replacements {
         // PutObject requires an exact length before its retryable body starts. This
@@ -795,17 +825,30 @@ async fn prepare_zip_entry_for_comparison(
                 stats.detailed_failure_diagnostics_enabled(),
             ),
             etag,
+            spooled: false,
         })
     } else {
-        let etag = hash_zip_entry_reader(store.clone(), plan.clone()).await?;
-        Ok(PreparedUploadPayload {
-            payload: UploadPayload::from_zip_entry(
+        // Marker entries keep both passes on purpose: the retryable upload body is
+        // regenerated from the source, and the marker diagnostics contract describes that
+        // as `planning-plus-retryable-stream`. Only the marker-free path spools here.
+        let hashed = hash_zip_entry_reader(store.clone(), plan.clone(), spool_limit_bytes).await?;
+        let spooled = hashed.spooled.is_some();
+        let payload = match hashed.spooled {
+            Some(bytes) => UploadPayload::from_spooled_bytes(
+                bytes,
+                stats.detailed_failure_diagnostics_enabled(),
+            ),
+            None => UploadPayload::from_zip_entry(
                 store,
                 plan.clone(),
                 plan.size,
                 stats.detailed_failure_diagnostics_enabled(),
             ),
-            etag: Some(etag),
+        };
+        Ok(PreparedUploadPayload {
+            payload,
+            etag: Some(hashed.etag),
+            spooled,
         })
     }
 }
@@ -992,7 +1035,6 @@ fn is_retryable_conditional_write_conflict<E: ProvideErrorMetadata>(error: &SdkE
 
 fn payload_body(payload: &UploadPayload) -> ByteStream {
     match payload {
-        #[cfg(test)]
         UploadPayload::Bytes { bytes, .. } => ByteStream::from(bytes.clone()),
         UploadPayload::ZipEntry {
             store,
@@ -1085,20 +1127,40 @@ fn validate_put_object_size(plan: &ZipEntryPlan, output_len: u64) -> Result<()> 
     Ok(())
 }
 
-async fn hash_zip_entry_reader(store: Arc<SourceBlockStore>, plan: ZipEntryPlan) -> Result<String> {
+async fn hash_zip_entry_reader(
+    store: Arc<SourceBlockStore>,
+    plan: ZipEntryPlan,
+    spool_limit_bytes: u64,
+) -> Result<HashedZipEntry> {
     let reader = zip_entry_reader(store, plan.clone())?;
-    let (etag, _, _) = digest_async_reader(reader, &plan).await?;
-    Ok(etag)
+    let (etag, _, _, spooled) = digest_async_reader(reader, &plan, spool_limit_bytes).await?;
+    Ok(HashedZipEntry {
+        etag,
+        spooled: spooled.map(Bytes::from),
+    })
+}
+
+struct HashedZipEntry {
+    etag: String,
+    /// Decoded output, retained only when the entry fit the spool limit. Reusing it turns
+    /// the comparison pass and the upload into one decode instead of two.
+    spooled: Option<Bytes>,
 }
 
 async fn digest_async_reader(
     mut reader: Pin<Box<dyn AsyncRead + Send>>,
     plan: &ZipEntryPlan,
-) -> Result<(String, u64, u32)> {
+    spool_limit_bytes: u64,
+) -> Result<(String, u64, u32, Option<Vec<u8>>)> {
     let mut hasher = Md5::new();
     let mut crc32 = Crc32Hasher::new();
     let mut bytes = 0_u64;
     let mut buffer = vec![0; ZIP_ENTRY_READ_CHUNK_BYTES];
+    // The declared size is authoritative here: `validate_zip_entry_output` rejects any
+    // entry whose decoded length disagrees with it, so a hostile archive cannot use a
+    // small declared size to spool a large body.
+    let mut spool = (plan.size <= spool_limit_bytes)
+        .then(|| Vec::with_capacity(usize::try_from(plan.size).unwrap_or(0)));
 
     loop {
         let bytes_read = reader.read(&mut buffer).await?;
@@ -1109,6 +1171,9 @@ async fn digest_async_reader(
         validate_zip_entry_size_not_exceeded(plan, next_bytes)?;
         hasher.update(&buffer[..bytes_read]);
         crc32.update(&buffer[..bytes_read]);
+        if let Some(spool) = spool.as_mut() {
+            spool.extend_from_slice(&buffer[..bytes_read]);
+        }
         bytes = next_bytes;
     }
 
@@ -1116,7 +1181,7 @@ async fn digest_async_reader(
     validate_zip_entry_output(plan, bytes, crc32)?;
     let md5 = finalize_md5(hasher);
     plan.validate_trusted_md5(&md5)?;
-    Ok((md5, bytes, crc32))
+    Ok((md5, bytes, crc32, spool))
 }
 
 #[cfg(test)]
@@ -1822,8 +1887,9 @@ mod tests {
     use crate::util::duration_ms;
 
     use super::{
-        COPY_RECONCILIATION_METADATA_KEY, CopyContext, CopyOutcome, PutContext, UploadPayload,
-        WriteDiagnostics, WriteDiagnosticsSnapshot, WriteRetryCoordinator, catalog_skips_zip_entry,
+        COMPARISON_SPOOL_TOTAL_BUDGET_BYTES, COPY_RECONCILIATION_METADATA_KEY, CopyContext,
+        CopyOutcome, PutContext, UploadPayload, WriteDiagnostics, WriteDiagnosticsSnapshot,
+        WriteRetryCoordinator, catalog_skips_zip_entry, comparison_spool_limit_bytes,
         compile_marker_replacements, copy_reconciliation_identity, copy_source_object,
         digest_async_reader, dispatch_failure_kind, log_copy_diagnostics, md5_hex, quoted_etag,
         read_async_reader_to_vec, record_bounded_diagnostic_count, record_copy_outcome,
@@ -2683,12 +2749,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn comparison_pass_spools_only_entries_within_the_limit() {
+        let bytes = b"comparison output bytes";
+        let plan = integrity_plan(bytes, None);
+
+        let (_, _, _, spooled) =
+            digest_async_reader(Box::pin(Cursor::new(bytes)), &plan, bytes.len() as u64)
+                .await
+                .expect("entry at the limit is spooled");
+        assert_eq!(spooled.as_deref(), Some(&bytes[..]));
+
+        let (_, _, _, not_spooled) =
+            digest_async_reader(Box::pin(Cursor::new(bytes)), &plan, bytes.len() as u64 - 1)
+                .await
+                .expect("entry over the limit still hashes");
+        assert!(not_spooled.is_none());
+    }
+
+    #[test]
+    fn comparison_spool_limit_bounds_the_whole_deployment() {
+        for concurrency in [1_usize, 32, 64, 128, 256] {
+            let per_entry = comparison_spool_limit_bytes(concurrency);
+            assert!(
+                per_entry * concurrency as u64 <= COMPARISON_SPOOL_TOTAL_BUDGET_BYTES,
+                "concurrency {concurrency} exceeds the total spool budget"
+            );
+        }
+        // Degenerate configurations must not divide by zero or spool without bound.
+        assert_eq!(
+            comparison_spool_limit_bytes(0),
+            COMPARISON_SPOOL_TOTAL_BUDGET_BYTES
+        );
+    }
+
+    #[tokio::test]
     async fn trusted_md5_is_checked_for_comparison_and_marker_materialization_reads() {
         let bytes = b"authenticated bytes";
         let correct = md5_hex(bytes);
         let valid = integrity_plan(bytes, Some(correct));
 
-        digest_async_reader(Box::pin(Cursor::new(bytes)), &valid)
+        digest_async_reader(Box::pin(Cursor::new(bytes)), &valid, 0)
             .await
             .expect("comparison read should validate");
         read_async_reader_to_vec(Box::pin(Cursor::new(bytes)), &valid)
@@ -2696,7 +2796,7 @@ mod tests {
             .expect("marker materialization read should validate");
 
         let invalid = integrity_plan(bytes, Some("00000000000000000000000000000000".to_string()));
-        let comparison_error = digest_async_reader(Box::pin(Cursor::new(bytes)), &invalid)
+        let comparison_error = digest_async_reader(Box::pin(Cursor::new(bytes)), &invalid, 0)
             .await
             .expect_err("comparison read must reject mismatched bytes");
         let marker_error = read_async_reader_to_vec(Box::pin(Cursor::new(bytes)), &invalid)
