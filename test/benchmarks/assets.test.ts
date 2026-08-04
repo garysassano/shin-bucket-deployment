@@ -1,6 +1,14 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { gzipSync } from "node:zlib";
@@ -171,9 +179,12 @@ describe("benchmark assets", () => {
 
   it("keeps the committed snapshot inventory equal to tracked Markdown references", () => {
     const repositoryRoot = join(__dirname, "..", "..");
-    const snapshots = readdirSync(join(repositoryRoot, "benchmarks", "snapshots"))
-      .filter((path) => path.endsWith(".svg"))
-      .sort();
+    const snapshotDirectory = join(repositoryRoot, "benchmarks", "snapshots");
+    const snapshots = existsSync(snapshotDirectory)
+      ? readdirSync(snapshotDirectory)
+          .filter((path) => path.endsWith(".svg"))
+          .sort()
+      : [];
     const trackedMarkdown = execFileSync("git", ["ls-files", "--", "*.md"], {
       cwd: repositoryRoot,
       encoding: "utf8",
