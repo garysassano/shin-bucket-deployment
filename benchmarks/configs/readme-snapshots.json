@@ -7,6 +7,10 @@
   "implementations": ["shin", "aws"],
   "lambdaConfigs": [
     {
+      "memoryMb": 1024,
+      "parallel": 32
+    },
+    {
       "memoryMb": 2048,
       "parallel": 64
     }
