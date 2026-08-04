@@ -555,6 +555,7 @@ mod tests {
             "SourceBucketNames": ["source"],
             "SourceObjectKeys": ["asset.zip"],
             "DestinationBucketName": "destination",
+            "DestinationOwnerId": "callback-owner",
             "MaxUncompressedEntryBytes": 1073741824,
             "MaxCompressionRatio": 100,
             "DistributionId": "distribution",

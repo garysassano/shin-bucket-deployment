@@ -22,8 +22,8 @@ use crate::lifecycle::{
 };
 use crate::request::{RawDeploymentRequest, parse_old_destination, parse_request};
 use crate::s3::{
-    OverlappingPreviousCleanup, bucket_has_competing_owner, delete_prefix, delete_prefix_excluding,
-    deploy,
+    GuardedDeleteContext, GuardedDeleteOutcome, OverlappingPreviousCleanup, deploy,
+    guarded_delete_namespace,
 };
 use crate::types::{AppState, DeploymentStats, ResponsePayload};
 use crate::util::{
@@ -359,7 +359,7 @@ async fn process_request(
 ) -> Result<ProcessedRequest> {
     let request = parse_request(resource_properties)?;
     let physical_resource_id =
-        response_physical_resource_id(request_type, identity, physical_resource_id, &request)?;
+        response_physical_resource_id(request_type, physical_resource_id, &request)?;
     let success = success_payload(&request, physical_resource_id.clone())?;
     let success_body = serialize_response(
         identity.stack_id,
@@ -370,7 +370,9 @@ async fn process_request(
     )?;
     validate_response_body_size(&success_body, request.output_object_keys)?;
 
-    let previous_destination = old_resource_properties.map(parse_old_destination);
+    let previous_destination = old_resource_properties
+        .map(parse_old_destination)
+        .transpose()?;
     preflight_invalidation_requests(request_type, &request, previous_destination.as_ref())?;
 
     let stats = Arc::new(DeploymentStats::new(state.detailed_failure_diagnostics));
@@ -530,39 +532,31 @@ async fn process_request_inner(
         });
 
     if request_type == "Delete" && request.delete_current_objects_on_delete {
-        if run_work(
+        match run_work(
             deadlines,
-            "destination ownership check",
-            bucket_has_competing_owner(
+            "guarded current destination cleanup",
+            guarded_delete_namespace(
                 state,
-                &request.dest_bucket_name,
-                &request.dest_bucket_prefix,
-                None,
-                request.destination_owner_id.as_deref(),
+                GuardedDeleteContext {
+                    bucket: &request.dest_bucket_name,
+                    prefix: &request.dest_bucket_prefix,
+                    excluded_prefix: None,
+                    current_owner_id: &request.destination_owner_id,
+                    stats: Some(&stats),
+                    retry: &request.runtime.put_object_retry,
+                    work_deadline: deadlines.work(),
+                },
             ),
         )
         .await?
         {
-            tracing::warn!(
+            GuardedDeleteOutcome::Retained => tracing::warn!(
                 "destination cleanup retained because another custom resource owns an overlapping namespace"
-            );
-        } else {
-            let started = Instant::now();
-            deleted_current_destination = run_work(
-                deadlines,
-                "current destination cleanup",
-                delete_prefix(
-                    state,
-                    &request.dest_bucket_name,
-                    &request.dest_bucket_prefix,
-                    Some(&stats),
-                    &request.runtime.put_object_retry,
-                    deadlines.work(),
-                ),
-            )
-            .await?
-                > 0;
-            stats.add_delete_millis(duration_ms(started.elapsed()));
+            ),
+            GuardedDeleteOutcome::Deleted { objects, elapsed } => {
+                deleted_current_destination = objects > 0;
+                stats.add_delete_millis(duration_ms(elapsed));
+            }
         }
     }
 
@@ -582,58 +576,32 @@ async fn process_request_inner(
             DestinationChangeCleanupDecision::Delete(plan) => {
                 if let PreviousCleanupStrategy::DeleteNamespace { excluded_prefix } = &plan.strategy
                 {
-                    let competing_owner = run_work(
+                    match run_work(
                         deadlines,
-                        "previous destination ownership check",
-                        bucket_has_competing_owner(
+                        "guarded previous destination cleanup",
+                        guarded_delete_namespace(
                             state,
-                            &plan.previous.bucket_name,
-                            &plan.previous.bucket_prefix,
-                            excluded_prefix.as_deref(),
-                            request.destination_owner_id.as_deref(),
+                            GuardedDeleteContext {
+                                bucket: &plan.previous.bucket_name,
+                                prefix: &plan.previous.bucket_prefix,
+                                excluded_prefix: excluded_prefix.as_deref(),
+                                current_owner_id: &request.destination_owner_id,
+                                stats: Some(&stats),
+                                retry: &request.runtime.put_object_retry,
+                                work_deadline: deadlines.work(),
+                            },
                         ),
                     )
-                    .await?;
-
-                    if competing_owner {
-                        tracing::warn!(
+                    .await?
+                    {
+                        GuardedDeleteOutcome::Retained => tracing::warn!(
                             "previous destination retained because another custom resource owns an overlapping namespace"
-                        );
-                    } else {
-                        let started = Instant::now();
-                        let deleted = if let Some(excluded_prefix) = excluded_prefix.as_deref() {
-                            run_work(
-                                deadlines,
-                                "overlapping previous destination cleanup",
-                                delete_prefix_excluding(
-                                    state,
-                                    &plan.previous.bucket_name,
-                                    &plan.previous.bucket_prefix,
-                                    excluded_prefix,
-                                    Some(&stats),
-                                    &request.runtime.put_object_retry,
-                                    deadlines.work(),
-                                ),
-                            )
-                            .await?
-                        } else {
-                            run_work(
-                                deadlines,
-                                "previous destination cleanup",
-                                delete_prefix(
-                                    state,
-                                    &plan.previous.bucket_name,
-                                    &plan.previous.bucket_prefix,
-                                    Some(&stats),
-                                    &request.runtime.put_object_retry,
-                                    deadlines.work(),
-                                ),
-                            )
-                            .await?
-                        };
-                        stats.add_old_prefix_delete_millis(duration_ms(started.elapsed()));
-                        if deleted > 0 {
-                            cleaned_previous_destination = Some(plan.previous);
+                        ),
+                        GuardedDeleteOutcome::Deleted { objects, elapsed } => {
+                            stats.add_old_prefix_delete_millis(duration_ms(elapsed));
+                            if objects > 0 {
+                                cleaned_previous_destination = Some(plan.previous);
+                            }
                         }
                     }
                 }
@@ -768,23 +736,10 @@ fn cloudfront_caller_reference(
     format!("shin-bucket-deployment-{}", finalize_md5(hasher))
 }
 
-fn destination_physical_resource_id(
-    identity: RequestIdentity<'_>,
-    request: &crate::types::DeploymentRequest,
-) -> String {
+fn destination_physical_resource_id(request: &crate::types::DeploymentRequest) -> String {
     let mut hasher = Sha256::new();
     hash_identity_field(&mut hasher, "shin-bucket-deployment-physical-resource-v1");
-    match request.destination_owner_id.as_deref() {
-        Some(owner_id) => {
-            hasher.update([1]);
-            hash_identity_field(&mut hasher, owner_id);
-        }
-        None => {
-            hasher.update([0]);
-            hash_identity_field(&mut hasher, identity.stack_id);
-            hash_identity_field(&mut hasher, identity.logical_resource_id);
-        }
-    }
+    hash_identity_field(&mut hasher, &request.destination_owner_id);
     hash_identity_field(&mut hasher, &request.dest_bucket_name);
     hash_identity_field(&mut hasher, &request.dest_bucket_prefix);
 
@@ -796,12 +751,11 @@ fn destination_physical_resource_id(
 
 fn response_physical_resource_id(
     request_type: &str,
-    identity: RequestIdentity<'_>,
     physical_resource_id: Option<&str>,
     request: &crate::types::DeploymentRequest,
 ) -> Result<String> {
     match request_type {
-        "Create" => Ok(destination_physical_resource_id(identity, request)),
+        "Create" => Ok(destination_physical_resource_id(request)),
         "Update" | "Delete" => physical_resource_id
             .map(ToOwned::to_owned)
             .ok_or_else(|| anyhow!("PhysicalResourceId is required for {request_type}")),
@@ -845,7 +799,7 @@ mod tests {
     use crate::types::AppState;
 
     use super::{
-        EnvelopeResponseTarget, RESOURCE_TYPE, RequestIdentity, cloudfront_caller_reference,
+        EnvelopeResponseTarget, RESOURCE_TYPE, cloudfront_caller_reference,
         decode_deployment_request, decode_request_envelope, decode_resource_properties,
         destination_physical_resource_id, merge_distribution_paths,
         preflight_invalidation_requests, response_physical_resource_id, response_target,
@@ -857,6 +811,7 @@ mod tests {
             "SourceBucketNames": ["source"],
             "SourceObjectKeys": ["asset.zip"],
             "DestinationBucketName": "destination",
+            "DestinationOwnerId": "summary-owner",
             "MaxUncompressedEntryBytes": 1073741824,
             "MaxCompressionRatio": 100,
             "DistributionId": "distribution",
@@ -869,7 +824,7 @@ mod tests {
     fn deployment_request_for_destination(
         bucket: &str,
         prefix: &str,
-        owner_id: Option<&str>,
+        owner_id: &str,
     ) -> crate::types::DeploymentRequest {
         let raw: RawDeploymentRequest =
             serde_json::from_value(deployment_request_properties(bucket, prefix, owner_id))
@@ -877,19 +832,16 @@ mod tests {
         parse_request_with_memory(raw, "1024").expect("valid request")
     }
 
-    fn deployment_request_properties(bucket: &str, prefix: &str, owner_id: Option<&str>) -> Value {
-        let mut value = json!({
+    fn deployment_request_properties(bucket: &str, prefix: &str, owner_id: &str) -> Value {
+        json!({
             "SourceBucketNames": ["source"],
             "SourceObjectKeys": ["asset.zip"],
             "DestinationBucketName": bucket,
             "DestinationBucketKeyPrefix": prefix,
+            "DestinationOwnerId": owner_id,
             "MaxUncompressedEntryBytes": 1073741824,
             "MaxCompressionRatio": 100
-        });
-        if let Some(owner_id) = owner_id {
-            value["DestinationOwnerId"] = json!(owner_id);
-        }
-        value
+        })
     }
 
     #[test]
@@ -1155,6 +1107,7 @@ mod tests {
                 "SourceBucketNames": ["source"],
                 "SourceObjectKeys": ["asset.zip"],
                 "DestinationBucketName": "destination",
+                "DestinationOwnerId": "resource-type-owner",
                 "MaxUncompressedEntryBytes": 1073741824,
                 "MaxCompressionRatio": 100
             }
@@ -1175,6 +1128,7 @@ mod tests {
                 "SourceBucketNames": ["source"],
                 "SourceObjectKeys": ["asset.zip"],
                 "DestinationBucketName": "destination",
+                "DestinationOwnerId": "invalid-delete-owner",
                 "MaxUncompressedEntryBytes": 1073741824,
                 "MaxCompressionRatio": 100
             }
@@ -1200,6 +1154,7 @@ mod tests {
                 "SourceBucketNames": ["source"],
                 "SourceObjectKeys": ["asset.zip"],
                 "DestinationBucketName": "destination",
+                "DestinationOwnerId": "invalid-resource-owner",
                 "MaxUncompressedEntryBytes": 1073741824,
                 "MaxCompressionRatio": 100
             }
@@ -1226,6 +1181,7 @@ mod tests {
                 "SourceBucketNames": ["source"],
                 "SourceObjectKeys": ["asset.zip"],
                 "DestinationBucketName": "destination",
+                "DestinationOwnerId": "hostile-resource-owner",
                 "MaxUncompressedEntryBytes": 1073741824,
                 "MaxCompressionRatio": 100
             }
@@ -1254,6 +1210,7 @@ mod tests {
                 "SourceBucketNames": ["source"],
                 "SourceObjectKeys": ["asset.zip"],
                 "DestinationBucketName": "destination",
+                "DestinationOwnerId": "delete-schema-owner",
                 "MaxUncompressedEntryBytes": 1073741824,
                 "MaxCompressionRatio": 100,
                 // One catalog descriptor for two declared sources: a Delete envelope has
@@ -1301,20 +1258,10 @@ mod tests {
 
     #[test]
     fn physical_resource_id_is_stable_for_the_same_owned_destination() {
-        let request = deployment_request_for_destination("destination", "site", Some("owner-a"));
-        let first_identity = RequestIdentity {
-            stack_id: "stack-a",
-            request_id: "request-a",
-            logical_resource_id: "DeployA",
-        };
-        let replacement_identity = RequestIdentity {
-            stack_id: "stack-a",
-            request_id: "request-b",
-            logical_resource_id: "DeployA",
-        };
+        let request = deployment_request_for_destination("destination", "site", "owner-a");
 
-        let first = destination_physical_resource_id(first_identity, &request);
-        let replacement = destination_physical_resource_id(replacement_identity, &request);
+        let first = destination_physical_resource_id(&request);
+        let replacement = destination_physical_resource_id(&request);
 
         assert_eq!(first, replacement);
         assert!(first.starts_with("aws.cdk.shinbucketdeployment."));
@@ -1323,60 +1270,45 @@ mod tests {
 
     #[test]
     fn create_physical_resource_id_changes_with_destination_identity() {
-        let identity = RequestIdentity {
-            stack_id: "stack-a",
-            request_id: "request-a",
-            logical_resource_id: "Deploy",
-        };
-        let baseline = deployment_request_for_destination("destination", "site", Some("owner-a"));
+        let baseline = deployment_request_for_destination("destination", "site", "owner-a");
         let changed_bucket =
-            deployment_request_for_destination("other-destination", "site", Some("owner-a"));
+            deployment_request_for_destination("other-destination", "site", "owner-a");
         let changed_prefix =
-            deployment_request_for_destination("destination", "other-site", Some("owner-a"));
-        let changed_owner =
-            deployment_request_for_destination("destination", "site", Some("owner-b"));
+            deployment_request_for_destination("destination", "other-site", "owner-a");
+        let changed_owner = deployment_request_for_destination("destination", "site", "owner-b");
 
-        let baseline_id = destination_physical_resource_id(identity, &baseline);
+        let baseline_id = destination_physical_resource_id(&baseline);
         assert_ne!(
             baseline_id,
-            destination_physical_resource_id(identity, &changed_bucket)
+            destination_physical_resource_id(&changed_bucket)
         );
         assert_ne!(
             baseline_id,
-            destination_physical_resource_id(identity, &changed_prefix)
+            destination_physical_resource_id(&changed_prefix)
         );
         assert_ne!(
             baseline_id,
-            destination_physical_resource_id(identity, &changed_owner)
+            destination_physical_resource_id(&changed_owner)
         );
     }
 
     #[test]
     fn update_protocol_preserves_physical_resource_id_across_destination_moves() {
-        let identity = RequestIdentity {
-            stack_id: "stack-a",
-            request_id: "request-a",
-            logical_resource_id: "Deploy",
-        };
-
         for (previous_bucket, previous_prefix, current_bucket, current_prefix) in [
             ("destination", "site", "destination", "site/assets"),
             ("destination", "site/assets", "destination", "site"),
             ("destination", "site/left", "destination", "site/right"),
             ("destination", "site", "other-destination", "site"),
         ] {
-            let previous = deployment_request_for_destination(
-                previous_bucket,
-                previous_prefix,
-                Some("owner-a"),
-            );
+            let previous =
+                deployment_request_for_destination(previous_bucket, previous_prefix, "owner-a");
             let current =
-                deployment_request_for_destination(current_bucket, current_prefix, Some("owner-a"));
-            let incoming_id = destination_physical_resource_id(identity, &previous);
+                deployment_request_for_destination(current_bucket, current_prefix, "owner-a");
+            let incoming_id = destination_physical_resource_id(&previous);
 
             assert_ne!(
                 incoming_id,
-                destination_physical_resource_id(identity, &current),
+                destination_physical_resource_id(&current),
                 "the regression requires a destination change that alters the derived ID"
             );
 
@@ -1391,12 +1323,12 @@ mod tests {
                 "ResourceProperties": deployment_request_properties(
                     current_bucket,
                     current_prefix,
-                    Some("owner-a"),
+                    "owner-a",
                 ),
                 "OldResourceProperties": deployment_request_properties(
                     previous_bucket,
                     previous_prefix,
-                    Some("owner-a"),
+                    "owner-a",
                 ),
             }))
             .expect("Update envelope");
@@ -1418,7 +1350,6 @@ mod tests {
 
             let response_id = response_physical_resource_id(
                 decoded.request_type,
-                decoded.identity,
                 decoded.physical_resource_id,
                 &decoded_current,
             )
@@ -1446,52 +1377,18 @@ mod tests {
 
     #[test]
     fn create_derives_and_delete_preserves_the_physical_resource_id() {
-        let identity = RequestIdentity {
-            stack_id: "stack-a",
-            request_id: "request-a",
-            logical_resource_id: "Deploy",
-        };
-        let request = deployment_request_for_destination("destination", "site", Some("owner-a"));
-        let derived_id = destination_physical_resource_id(identity, &request);
+        let request = deployment_request_for_destination("destination", "site", "owner-a");
+        let derived_id = destination_physical_resource_id(&request);
 
         assert_eq!(
-            response_physical_resource_id("Create", identity, None, &request)
+            response_physical_resource_id("Create", None, &request)
                 .expect("Create physical resource ID"),
             derived_id
         );
         assert_eq!(
-            response_physical_resource_id("Delete", identity, Some(&derived_id), &request)
+            response_physical_resource_id("Delete", Some(&derived_id), &request)
                 .expect("Delete physical resource ID"),
             derived_id
-        );
-    }
-
-    #[test]
-    fn physical_resource_id_falls_back_to_cloudformation_identity_without_an_owner() {
-        let request = deployment_request_for_destination("destination", "", None);
-        let first = RequestIdentity {
-            stack_id: "stack-a",
-            request_id: "request-a",
-            logical_resource_id: "DeployA",
-        };
-        let retry = RequestIdentity {
-            stack_id: "stack-a",
-            request_id: "request-b",
-            logical_resource_id: "DeployA",
-        };
-        let other_resource = RequestIdentity {
-            stack_id: "stack-a",
-            request_id: "request-c",
-            logical_resource_id: "DeployB",
-        };
-
-        assert_eq!(
-            destination_physical_resource_id(first, &request),
-            destination_physical_resource_id(retry, &request)
-        );
-        assert_ne!(
-            destination_physical_resource_id(first, &request),
-            destination_physical_resource_id(other_resource, &request)
         );
     }
 

@@ -2041,7 +2041,7 @@ mod tests {
             include: Vec::new(),
             output_object_keys: true,
             destination_bucket_arn: None,
-            destination_owner_id: Some("test-owner".to_string()),
+            destination_owner_id: "test-owner".to_string(),
             delete_previous_objects_on_change: None,
             invalidate_previous_distribution_on_change: None,
             archive_expansion: archive_expansion_limits(),

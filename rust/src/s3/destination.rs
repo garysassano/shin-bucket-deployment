@@ -125,36 +125,50 @@ struct DeleteRetryCoordinator {
     jitter: Mutex<Rng>,
 }
 
-pub(crate) async fn delete_prefix(
-    state: &AppState,
-    bucket: &str,
-    prefix: &str,
-    stats: Option<&DeploymentStats>,
-    retry: &PutObjectRetryOptions,
-    work_deadline: Instant,
-) -> Result<u64> {
-    delete_namespace(state, bucket, prefix, None, stats, retry, work_deadline).await
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) enum GuardedDeleteOutcome {
+    Retained,
+    Deleted { objects: u64, elapsed: Duration },
 }
 
-pub(crate) async fn delete_prefix_excluding(
+pub(crate) struct GuardedDeleteContext<'a> {
+    pub(crate) bucket: &'a str,
+    pub(crate) prefix: &'a str,
+    pub(crate) excluded_prefix: Option<&'a str>,
+    pub(crate) current_owner_id: &'a str,
+    pub(crate) stats: Option<&'a DeploymentStats>,
+    pub(crate) retry: &'a PutObjectRetryOptions,
+    pub(crate) work_deadline: Instant,
+}
+
+pub(crate) async fn guarded_delete_namespace(
     state: &AppState,
-    bucket: &str,
-    prefix: &str,
-    excluded_prefix: &str,
-    stats: Option<&DeploymentStats>,
-    retry: &PutObjectRetryOptions,
-    work_deadline: Instant,
-) -> Result<u64> {
-    delete_namespace(
+    context: GuardedDeleteContext<'_>,
+) -> Result<GuardedDeleteOutcome> {
+    let owner_tags = read_bucket_owner_tags(state, context.bucket).await?;
+    if owner_tags.has_competing_owner(
+        context.prefix,
+        context.excluded_prefix,
+        context.current_owner_id,
+    ) {
+        return Ok(GuardedDeleteOutcome::Retained);
+    }
+
+    let started = std::time::Instant::now();
+    let objects = delete_namespace(
         state,
-        bucket,
-        prefix,
-        Some(excluded_prefix),
-        stats,
-        retry,
-        work_deadline,
+        context.bucket,
+        context.prefix,
+        context.excluded_prefix,
+        context.stats,
+        context.retry,
+        context.work_deadline,
     )
-    .await
+    .await?;
+    Ok(GuardedDeleteOutcome::Deleted {
+        objects,
+        elapsed: started.elapsed(),
+    })
 }
 
 async fn delete_namespace(
@@ -191,7 +205,7 @@ impl BucketOwnerTags {
         &self,
         prefix: &str,
         excluded_prefix: Option<&str>,
-        current_owner_id: Option<&str>,
+        current_owner_id: &str,
     ) -> bool {
         self.keys
             .iter()
@@ -235,18 +249,6 @@ pub(super) async fn read_bucket_owner_tags(
             })
         }
     }
-}
-
-pub(crate) async fn bucket_has_competing_owner(
-    state: &AppState,
-    bucket: &str,
-    prefix: &str,
-    excluded_prefix: Option<&str>,
-    current_owner_id: Option<&str>,
-) -> Result<bool> {
-    Ok(read_bucket_owner_tags(state, bucket)
-        .await?
-        .has_competing_owner(prefix, excluded_prefix, current_owner_id))
 }
 
 pub(super) async fn plan_destination(
@@ -362,7 +364,7 @@ pub(super) async fn delete_stale_objects(
             if tags.has_competing_owner(
                 &request.dest_bucket_prefix,
                 protected_prefix,
-                request.destination_owner_id.as_deref(),
+                &request.destination_owner_id,
             ) =>
         {
             warn!(
@@ -378,7 +380,7 @@ pub(super) async fn delete_stale_objects(
         .zip(owner_tags.as_ref())
     {
         Some((prefix, tags))
-            if tags.has_competing_owner(prefix, None, request.destination_owner_id.as_deref()) =>
+            if tags.has_competing_owner(prefix, None, &request.destination_owner_id) =>
         {
             warn!(
                 "previous destination retained because another custom resource owns an overlapping namespace"
@@ -1071,12 +1073,12 @@ fn owner_tag_overlaps_cleanup(
     tag_key: &str,
     cleanup_prefix: &str,
     excluded_prefix: Option<&str>,
-    current_owner_id: Option<&str>,
+    current_owner_id: &str,
 ) -> bool {
     let Some((owner_prefix, owner_id)) = parse_owner_tag(tag_key) else {
         return false;
     };
-    if current_owner_id == Some(owner_id) {
+    if current_owner_id == owner_id {
         return false;
     }
 
@@ -1187,9 +1189,10 @@ mod tests {
 
     use super::{
         DeleteRetryCoordinator, DeletionCandidates, DestinationObject, DestinationRecordContext,
-        UnplannedDeletionContext, delete_key_chunk, delete_listed_objects, inferred_delete_counts,
-        key_is_excluded, namespace_list_prefix, normalize_etag, owner_tag_overlaps_cleanup,
-        parse_owner_tag, record_destination_object, stale_destination_key, unplanned_cleanup_key,
+        GuardedDeleteContext, GuardedDeleteOutcome, UnplannedDeletionContext, delete_key_chunk,
+        delete_listed_objects, guarded_delete_namespace, inferred_delete_counts, key_is_excluded,
+        namespace_list_prefix, normalize_etag, owner_tag_overlaps_cleanup, parse_owner_tag,
+        record_destination_object, stale_destination_key, unplanned_cleanup_key,
         unplanned_destination_key,
     };
     use crate::request::compile_filters;
@@ -1254,6 +1257,74 @@ mod tests {
             &previous_only
         ));
         assert!(!unplanned_cleanup_key("site/other.txt", &previous_only));
+    }
+
+    #[tokio::test]
+    async fn guarded_delete_stops_after_a_competing_owner_is_found() {
+        let replay =
+            StaticReplayClient::new(vec![tagging_event("aws-cdk:cr-owned:site:other-owner")]);
+        let state = replay_app_state(replay.clone());
+
+        let outcome = guarded_delete_namespace(
+            &state,
+            GuardedDeleteContext {
+                bucket: "destination",
+                prefix: "site",
+                excluded_prefix: None,
+                current_owner_id: "current-owner",
+                stats: None,
+                retry: &retry_options(1, 0),
+                work_deadline: tokio::time::Instant::now() + Duration::from_secs(10),
+            },
+        )
+        .await
+        .expect("ownership check should complete");
+
+        assert_eq!(outcome, GuardedDeleteOutcome::Retained);
+        assert_eq!(
+            replay
+                .actual_requests()
+                .map(|request| request.method().to_string())
+                .collect::<Vec<_>>(),
+            ["GET"]
+        );
+    }
+
+    #[tokio::test]
+    async fn guarded_delete_authorizes_before_listing_and_deleting() {
+        let replay = StaticReplayClient::new(vec![
+            tagging_event("aws-cdk:cr-owned:site:current-owner"),
+            list_page_event("site/stale.txt", false),
+            delete_success_event(),
+        ]);
+        let state = replay_app_state(replay.clone());
+
+        let outcome = guarded_delete_namespace(
+            &state,
+            GuardedDeleteContext {
+                bucket: "destination",
+                prefix: "site",
+                excluded_prefix: None,
+                current_owner_id: "current-owner",
+                stats: None,
+                retry: &retry_options(1, 0),
+                work_deadline: tokio::time::Instant::now() + Duration::from_secs(10),
+            },
+        )
+        .await
+        .expect("owned namespace should be deleted");
+
+        assert!(matches!(
+            outcome,
+            GuardedDeleteOutcome::Deleted { objects: 1, .. }
+        ));
+        assert_eq!(
+            replay
+                .actual_requests()
+                .map(|request| request.method().to_string())
+                .collect::<Vec<_>>(),
+            ["GET", "GET", "POST"]
+        );
     }
 
     #[tokio::test]
@@ -1663,19 +1734,19 @@ mod tests {
             "aws-cdk:cr-owned:site:other",
             "site",
             None,
-            Some("current")
+            "current"
         ));
         assert!(!owner_tag_overlaps_cleanup(
             "aws-cdk:cr-owned:site2:other",
             "site",
             None,
-            Some("current")
+            "current"
         ));
         assert!(!owner_tag_overlaps_cleanup(
             "aws-cdk:cr-owned:site:current",
             "site",
             None,
-            Some("current")
+            "current"
         ));
     }
 
@@ -1685,19 +1756,19 @@ mod tests {
             "aws-cdk:cr-owned:site/v2:other",
             "site",
             Some("site/v2"),
-            Some("current")
+            "current"
         ));
         assert!(owner_tag_overlaps_cleanup(
             "aws-cdk:cr-owned:site/v1:other",
             "site",
             Some("site/v2"),
-            Some("current")
+            "current"
         ));
         assert!(owner_tag_overlaps_cleanup(
             "aws-cdk:cr-owned:site:other",
             "site",
             Some("site/v2"),
-            Some("current")
+            "current"
         ));
     }
 
@@ -1796,6 +1867,15 @@ mod tests {
             200,
             format!(
                 "<DeleteResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"><Error><Key>{key}</Key><Code>{code}</Code><Message>retry</Message></Error></DeleteResult>"
+            ),
+        )
+    }
+
+    fn tagging_event(key: &str) -> ReplayEvent {
+        replay_event(
+            200,
+            format!(
+                "<Tagging xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"><TagSet><Tag><Key>{key}</Key><Value>owned</Value></Tag></TagSet></Tagging>"
             ),
         )
     }
