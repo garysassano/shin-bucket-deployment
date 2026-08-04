@@ -9,7 +9,7 @@ Provider-summary schema-5 result rows, their generated reports, and their chart 
 <!-- benchmark-ci:start -->
 ## Latest Canonical Benchmark
 
-No current provider-summary schema-6 canonical run is published. The active ledger is empty, and reports, telemetry tables, and charts will be regenerated only from a completed approved run. Archived schema-5 evidence is not used for current claims.
+No completed provider-summary schema-6 canonical run is published. The active ledger holds repetition 1 only, so reports, telemetry tables, and charts will be regenerated from a completed approved run. Archived schema-5 evidence is not used for current claims.
 <!-- benchmark-ci:end -->
 
 ## Methodology

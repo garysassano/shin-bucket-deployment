@@ -38,7 +38,7 @@ Resume the printed smoke UUID with `--run-id <uuid> --start-repetition 2 --repet
 
 README benchmark snapshots use sanitized records from `benchmarks/results.jsonl`. Snapshot filenames follow `<profile>-<memory>mib-<max-concurrency>.svg`, for example `tiny-many-1024mib-32.svg`.
 
-Only README-linked snapshot SVGs are committed under `benchmarks/snapshots`. No current snapshot exists while the active ledger is empty. Temporary alternate layouts can be regenerated locally with `benchmarks/src/render/readme-snapshot.ts`, but should not be kept as committed design history.
+Only README-linked snapshot SVGs are committed under `benchmarks/snapshots`. The current set is `mixed`, `tiny-many`, and `large-few` at 2048 MiB / max concurrency 64, rendered in preview mode from repetition 1 and replaced once repetitions 2–5 complete. Temporary alternate layouts can be regenerated locally with `benchmarks/src/render/readme-snapshot.ts`, but should not be kept as committed design history.
 
 <!-- benchmark-ci:start -->
 ## Latest Methodology-v2 CI Benchmark
@@ -48,6 +48,6 @@ No run is published yet. The next canonical run regenerates this section and its
 
 ## Shin Provider Telemetry
 
-Structured JSONL source: [`results.jsonl`](results.jsonl), currently empty. Regenerate the telemetry tables with `pnpm benchmark:telemetry-table`. Provider diagnostics require schema v6, including the invocation-global source release anomaly counter alongside deployment/callback, scheduler, source, deletion, replay, marker, `PutObject`, and `CopyObject` diagnostics. The exact fields and interpretation are documented in [`docs/architecture.md`](../docs/architecture.md#diagnostics).
+Structured JSONL source: [`results.jsonl`](results.jsonl), currently 48 repetition-1 rows for `main` commit `808f2b6`. Regenerate the telemetry tables with `pnpm benchmark:telemetry-table`. Provider diagnostics require schema v6, including the invocation-global source release anomaly counter alongside deployment/callback, scheduler, source, deletion, replay, marker, `PutObject`, and `CopyObject` diagnostics. The exact fields and interpretation are documented in [`docs/architecture.md`](../docs/architecture.md#diagnostics).
 
 For failed deploys, the runner waits until the phase's Lambda `REPORT` event is visible and then writes three independent CloudWatch captures under the external scratch sample directory: an unfiltered phase-scoped raw event export, `shin_put_object_attempt_failure` events, and `shin_deployment_summary` events when present. The immediate failure event is emitted before provider retry/backoff or transfer cleanup and does not depend on the final summary. Abruptly terminated invocations may have no summary; that absence must not discard an immediate attempt event. Raw CloudWatch exports, resource descriptions, log metadata, preservation manifests, and any identifiers remain outside git. A preserved stack/log group also permits later recapture when log ingestion is delayed.
