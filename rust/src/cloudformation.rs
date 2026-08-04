@@ -26,13 +26,15 @@ use crate::s3::{
     deploy,
 };
 use crate::types::{AppState, DeploymentStats, ResponsePayload};
-use crate::util::{duration_ms, finalize_md5, lower_hex};
+use crate::util::{
+    MAX_DIAGNOSTIC_VALUE_BYTES, duration_ms, finalize_md5, lower_hex, sanitize_diagnostic,
+};
 
 mod callback;
 
 use callback::{
-    physical_resource_id, response_target, send_response, serialize_failure_response,
-    serialize_response, truncate_failure_reason, validate_response_body_size,
+    physical_resource_id, response_target, sanitize_failure_reason, send_response,
+    serialize_failure_response, serialize_response, validate_response_body_size,
     validate_response_url,
 };
 
@@ -145,9 +147,8 @@ pub(crate) async fn handle_event(
                 .await
                 .context("failed to send success response"),
                 Err(err) => {
-                    let full_reason = format!("{err:#}");
-                    let reason = truncate_failure_reason(&full_reason);
-                    error!(error = %full_reason, "request failed");
+                    let reason = sanitize_failure_reason(&format!("{err:#}"));
+                    error!(error = %reason, "request failed");
                     let failure = ResponsePayload {
                         physical_resource_id: physical_resource_id(&request)
                             .map(ToOwned::to_owned)
@@ -181,9 +182,8 @@ pub(crate) async fn handle_event(
             callback_result?;
         }
         Err(err) => {
-            let full_reason = format!("{err:#}");
-            let reason = truncate_failure_reason(&full_reason);
-            error!(error = %full_reason, "request failed");
+            let reason = sanitize_failure_reason(&format!("{err:#}"));
+            error!(error = %reason, "request failed");
             let failure = ResponsePayload {
                 physical_resource_id: physical_resource_id(&request)
                     .map(ToOwned::to_owned)
@@ -218,20 +218,20 @@ async fn report_envelope_failure(
     let Some(target) = target else {
         return Err(error.into());
     };
-    let full_reason = format!("{error:#}");
+    let reason = sanitize_failure_reason(&format!("{error:#}"));
     // Without this the `?` would surface only the URL error and drop the envelope
     // failure we were called to report. `validate_response_url` deliberately does not
     // echo the URL, and this same reason is logged and returned to CloudFormation
     // whenever the URL is usable, so carrying it here matches the exposure the
     // success path already accepts.
     let response_url = validate_response_url(&target.response_url)
-        .with_context(|| format!("while reporting envelope failure: {full_reason}"))?;
-    error!(error = %full_reason, "request envelope failed");
+        .with_context(|| format!("while reporting envelope failure: {reason}"))?;
+    error!(error = %reason, "request envelope failed");
     let failure = ResponsePayload {
         physical_resource_id: target
             .physical_resource_id
             .unwrap_or_else(|| target.request_id.clone()),
-        reason: Some(truncate_failure_reason(&full_reason)),
+        reason: Some(reason),
         data: Map::new(),
     };
     let body = serialize_failure_response(
@@ -408,7 +408,8 @@ fn validate_resource_type(request: &RequestEnvelope) -> Result<()> {
 
     ensure!(
         resource_type == RESOURCE_TYPE,
-        "unexpected CloudFormation ResourceType `{resource_type}`; expected the Shin custom resource protocol"
+        "unexpected CloudFormation ResourceType `{}`; expected the Shin custom resource protocol",
+        sanitize_diagnostic(resource_type, MAX_DIAGNOSTIC_VALUE_BYTES)
     );
     Ok(())
 }
@@ -826,7 +827,10 @@ fn log_deployment_summary(
 ) {
     match serde_json::to_string(&stats.snapshot(request_type, deployment_status, request)) {
         Ok(summary) => tracing::info!(summary, "shin deployment summary"),
-        Err(error) => tracing::warn!(error = %error, "failed to serialize shin deployment summary"),
+        Err(error) => {
+            let error = sanitize_diagnostic(&error.to_string(), MAX_DIAGNOSTIC_VALUE_BYTES);
+            tracing::warn!(error = %error, "failed to serialize shin deployment summary");
+        }
     }
 }
 
@@ -1199,6 +1203,29 @@ mod tests {
                 .to_string()
                 .contains("unexpected CloudFormation ResourceType")
         );
+
+        let hostile_type = format!("Custom::Wrong\r\nforged\u{2028}{}", "x".repeat(400));
+        let hostile = decode_request_envelope(json!({
+            "RequestType": "Create",
+            "RequestId": "request-hostile",
+            "ResponseURL": "https://example.com/response",
+            "StackId": "stack-123",
+            "ResourceType": hostile_type,
+            "LogicalResourceId": "Deploy",
+            "ResourceProperties": {
+                "SourceBucketNames": ["source"],
+                "SourceObjectKeys": ["asset.zip"],
+                "DestinationBucketName": "destination"
+            }
+        }))
+        .expect("hostile resource type still forms an envelope");
+        let error = validate_resource_type(&hostile)
+            .expect_err("hostile resource type must fail")
+            .to_string();
+        assert!(error.contains("Custom::Wrong\\r\\nforged\\u{2028}"));
+        assert!(error.contains(" ... [truncated]"));
+        assert!(!error.chars().any(char::is_control));
+        assert!(error.len() < 400);
     }
 
     #[test]

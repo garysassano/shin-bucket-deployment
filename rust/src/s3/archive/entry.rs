@@ -25,7 +25,7 @@ use super::super::{
     ZIP_ENTRY_READ_CHUNK_BYTES,
 };
 use super::{EntryAttemptClaim, SourceAttemptSnapshot, SourceBlockStore};
-use crate::util::{finalize_md5, lock_telemetry};
+use crate::util::{MAX_DIAGNOSTIC_VALUE_BYTES, finalize_md5, lock_telemetry, sanitize_diagnostic};
 
 const LOCAL_FILE_HEADER_SIGNATURE: u32 = 0x0403_4b50;
 pub(super) const LOCAL_FILE_HEADER_LEN: usize = 30;
@@ -1274,7 +1274,7 @@ fn invalid_entry(plan: &ZipEntryPlan, reason: impl Into<String>) -> io::Error {
         io::ErrorKind::InvalidData,
         format!(
             "invalid ZIP entry `{}`: {}",
-            plan.relative_key,
+            sanitize_diagnostic(&plan.relative_key, MAX_DIAGNOSTIC_VALUE_BYTES),
             reason.into()
         ),
     )
@@ -1330,4 +1330,31 @@ fn zip_entry_size_error(plan: &ZipEntryPlan, bytes: u64) -> io::Error {
 
 fn boxed_body_error(error: impl std::error::Error + Send + Sync + 'static) -> BodyError {
     Box::new(error)
+}
+
+#[cfg(test)]
+mod diagnostic_tests {
+    use super::*;
+
+    #[test]
+    fn invalid_entry_diagnostic_escapes_and_caps_the_zip_path() {
+        let plan = ZipEntryPlan {
+            source_index: 0,
+            relative_key: format!("zip/\r\nforged\u{2028}{}", "x".repeat(400)),
+            destination_key: "destination".to_string(),
+            size: 1,
+            compressed_size: 1,
+            compression_code: 0,
+            crc32: 0,
+            trusted_integrity: None,
+            source_offset: 0,
+            source_span_end: 1,
+        };
+
+        let error = invalid_entry(&plan, "invalid metadata").to_string();
+        assert!(error.contains("zip/\\r\\nforged\\u{2028}"));
+        assert!(error.contains(" ... [truncated]"));
+        assert!(!error.chars().any(char::is_control));
+        assert!(error.len() < 400);
+    }
 }

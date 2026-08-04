@@ -1,10 +1,73 @@
 //! Small helpers shared across modules.
 
+use std::fmt::Write as _;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use md5::{Digest, Md5};
 use serde::Deserializer;
+
+pub(crate) const MAX_DIAGNOSTIC_VALUE_BYTES: usize = 256;
+const DIAGNOSTIC_TRUNCATION_SUFFIX: &str = " ... [truncated]";
+
+/// Escapes log-forging characters and bounds the escaped UTF-8 representation.
+///
+/// The result is stable when sanitized again. Callers can therefore sanitize an
+/// attacker-controlled value at an error boundary and safely sanitize the complete
+/// error chain again before logging or returning it to CloudFormation.
+pub(crate) fn sanitize_diagnostic(value: &str, max_bytes: usize) -> String {
+    if max_bytes == 0 {
+        return String::new();
+    }
+
+    let mut escaped = String::with_capacity(value.len().min(max_bytes));
+    for character in value.chars() {
+        push_diagnostic_character(&mut escaped, character);
+        if escaped.len() > max_bytes {
+            return truncated_diagnostic(value, max_bytes);
+        }
+    }
+    escaped
+}
+
+fn truncated_diagnostic(value: &str, max_bytes: usize) -> String {
+    if max_bytes <= DIAGNOSTIC_TRUNCATION_SUFFIX.len() {
+        return DIAGNOSTIC_TRUNCATION_SUFFIX[..max_bytes].to_string();
+    }
+
+    let prefix_limit = max_bytes - DIAGNOSTIC_TRUNCATION_SUFFIX.len();
+    let mut truncated = String::with_capacity(max_bytes);
+    for character in value.chars() {
+        let previous_len = truncated.len();
+        push_diagnostic_character(&mut truncated, character);
+        if truncated.len() > prefix_limit {
+            truncated.truncate(previous_len);
+            break;
+        }
+    }
+    truncated.push_str(DIAGNOSTIC_TRUNCATION_SUFFIX);
+    truncated
+}
+
+fn push_diagnostic_character(output: &mut String, character: char) {
+    match character {
+        '\0' => output.push_str("\\0"),
+        '\u{0008}' => output.push_str("\\b"),
+        '\t' => output.push_str("\\t"),
+        '\n' => output.push_str("\\n"),
+        '\u{000c}' => output.push_str("\\f"),
+        '\r' => output.push_str("\\r"),
+        '\u{2028}' | '\u{2029}' => {
+            write!(output, "\\u{{{:04x}}}", character as u32)
+                .expect("writing to a String cannot fail");
+        }
+        _ if character.is_control() => {
+            write!(output, "\\u{{{:04x}}}", character as u32)
+                .expect("writing to a String cannot fail");
+        }
+        _ => output.push(character),
+    }
+}
 
 /// Lowercase hex encoding.
 ///
@@ -105,7 +168,34 @@ mod tests {
 
     use md5::{Digest, Md5};
 
-    use super::{finalize_md5, lock_telemetry, lower_hex};
+    use super::{finalize_md5, lock_telemetry, lower_hex, sanitize_diagnostic};
+
+    #[test]
+    fn diagnostic_sanitization_escapes_control_and_line_separator_characters() {
+        let input = "plain\0\u{0008}\t\n\u{000c}\r\u{001b}\u{007f}\u{0085}\u{2028}\u{2029}é";
+
+        assert_eq!(
+            sanitize_diagnostic(input, 256),
+            "plain\\0\\b\\t\\n\\f\\r\\u{001b}\\u{007f}\\u{0085}\\u{2028}\\u{2029}é"
+        );
+    }
+
+    #[test]
+    fn diagnostic_sanitization_caps_escaped_bytes_on_complete_chunks() {
+        let sanitized = sanitize_diagnostic("é\n".repeat(100).as_str(), 32);
+
+        assert_eq!(sanitized.len(), 32);
+        assert_eq!(sanitized, "é\\né\\né\\né\\n ... [truncated]");
+        assert!(!sanitized.contains('\n'));
+        assert!(sanitized.is_char_boundary(sanitized.len()));
+    }
+
+    #[test]
+    fn diagnostic_sanitization_is_stable_when_applied_again() {
+        let sanitized = sanitize_diagnostic("first\nsecond\u{2028}third", 24);
+
+        assert_eq!(sanitize_diagnostic(&sanitized, 24), sanitized);
+    }
 
     #[test]
     fn lower_hex_pads_each_byte_to_two_lowercase_digits() {

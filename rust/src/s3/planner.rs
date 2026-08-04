@@ -14,6 +14,7 @@ use crate::types::{
     AppState, DeploymentManifest, DeploymentRequest, DeploymentStats, Filters, PlannedAction,
     PlannedObject, SourceArchive, TrustedEntryIntegrity,
 };
+use crate::util::{MAX_DIAGNOSTIC_VALUE_BYTES, sanitize_diagnostic};
 
 use super::archive::{
     SourceBlockOptions, SourceBlockStore, SourceByteBudget, prepare_source_zip,
@@ -90,7 +91,7 @@ impl ZipEntryPlan {
             io::ErrorKind::InvalidData,
             format!(
                 "authenticated catalog entry does not match source ZIP bytes for `{}`",
-                self.relative_key
+                sanitize_diagnostic(&self.relative_key, MAX_DIAGNOSTIC_VALUE_BYTES)
             ),
         ))
     }
@@ -230,13 +231,13 @@ pub(super) fn collect_copy_plans(
                 let expected_etag = planned.expected_etag.clone().ok_or_else(|| {
                     anyhow!(
                         "source metadata for `{}` did not contain a usable ETag",
-                        planned.relative_key
+                        sanitize_diagnostic(&planned.relative_key, MAX_DIAGNOSTIC_VALUE_BYTES)
                     )
                 })?;
                 let size = size.ok_or_else(|| {
                     anyhow!(
                         "source metadata for `{}` did not contain a valid content length",
-                        planned.relative_key
+                        sanitize_diagnostic(&planned.relative_key, MAX_DIAGNOSTIC_VALUE_BYTES)
                     )
                 })?;
                 let destination_object = destination_objects.get(&planned.relative_key);
@@ -437,7 +438,10 @@ async fn add_archive_entries_to_manifest(
             continue;
         }
         if !seen.insert(relative_key.clone().into_owned()) {
-            return Err(anyhow!("duplicate ZIP file path `{relative_key}`"));
+            return Err(anyhow!(
+                "duplicate ZIP file path `{}`",
+                sanitize_diagnostic(&relative_key, MAX_DIAGNOSTIC_VALUE_BYTES)
+            ));
         }
         validate_stored_file_entry(stored, &relative_key)?;
         if !filters.should_include(&relative_key) {
@@ -451,7 +455,8 @@ async fn add_archive_entries_to_manifest(
         let source_offset = stored.header_offset();
         if source_offset >= source.len() {
             return Err(anyhow!(
-                "local file header offset {source_offset} for `{relative_key}` is outside source ZIP length {}",
+                "local file header offset {source_offset} for `{}` is outside source ZIP length {}",
+                sanitize_diagnostic(&relative_key, MAX_DIAGNOSTIC_VALUE_BYTES),
                 source.len()
             ));
         }
@@ -470,7 +475,8 @@ async fn add_archive_entries_to_manifest(
             .min(central_directory_start);
         if source_span_end <= source_offset {
             return Err(anyhow!(
-                "local file source span {source_offset}..{source_span_end} for `{relative_key}` is empty"
+                "local file source span {source_offset}..{source_span_end} for `{}` is empty",
+                sanitize_diagnostic(&relative_key, MAX_DIAGNOSTIC_VALUE_BYTES)
             ));
         }
 
@@ -504,8 +510,10 @@ fn insert_manifest_object(manifest: &mut DeploymentManifest, planned: PlannedObj
     let relative_key = planned.relative_key.clone();
     let replacement_source_index = planned_action_source_index(&planned.action);
     if let Some(previous) = manifest.insert(relative_key.clone(), planned) {
+        let destination_relative_key =
+            sanitize_diagnostic(&relative_key, MAX_DIAGNOSTIC_VALUE_BYTES);
         tracing::warn!(
-            destination_relative_key = %relative_key,
+            destination_relative_key = %destination_relative_key,
             previous_source_index = planned_action_source_index(&previous.action),
             replacement_source_index,
             "later source replaces an earlier source destination key"
@@ -787,12 +795,14 @@ fn zip_entry_plan(
     let source_offset = stored.header_offset();
     if source_offset >= source_len {
         return Err(anyhow!(
-            "local file header offset {source_offset} for `{relative_key}` is outside source ZIP length {source_len}"
+            "local file header offset {source_offset} for `{}` is outside source ZIP length {source_len}",
+            sanitize_diagnostic(&relative_key, MAX_DIAGNOSTIC_VALUE_BYTES)
         ));
     }
     if source_span_end > source_len || source_span_end <= source_offset {
         return Err(anyhow!(
-            "local file source span {source_offset}..{source_span_end} for `{relative_key}` is outside source ZIP length {source_len}"
+            "local file source span {source_offset}..{source_span_end} for `{}` is outside source ZIP length {source_len}",
+            sanitize_diagnostic(&relative_key, MAX_DIAGNOSTIC_VALUE_BYTES)
         ));
     }
 
@@ -813,12 +823,10 @@ fn zip_entry_plan(
 /// Borrows out of `stored` when the entry path is already canonical, so the callers that
 /// only compare or look the path up never allocate.
 fn stored_zip_file_path(stored: &StoredZipEntry) -> Result<Option<Cow<'_, str>>> {
-    let raw_path = stored.filename().as_str().map_err(|err| {
-        anyhow!(
-            "invalid ZIP entry path {:?}: {err}",
-            stored.filename().as_bytes()
-        )
-    })?;
+    let raw_path = stored
+        .filename()
+        .as_str()
+        .map_err(|err| anyhow!("invalid UTF-8 ZIP entry path: {err}"))?;
     let normalized = normalize_archive_key(raw_path)?;
     if raw_path.ends_with('/') {
         Ok(None)
@@ -832,7 +840,8 @@ fn validate_stored_file_entry(stored: &StoredZipEntry, path: &str) -> Result<()>
         Compression::Stored | Compression::Deflate => {}
         other => {
             return Err(anyhow!(
-                "unsupported compression method {other:?} for `{path}`"
+                "unsupported compression method {other:?} for `{}`",
+                sanitize_diagnostic(path, MAX_DIAGNOSTIC_VALUE_BYTES)
             ));
         }
     }
@@ -840,7 +849,8 @@ fn validate_stored_file_entry(stored: &StoredZipEntry, path: &str) -> Result<()>
     let size = stored.uncompressed_size();
     if size > S3_SINGLE_PUT_LIMIT {
         return Err(anyhow!(
-            "entry `{path}` is {size} bytes, larger than the S3 single PutObject limit"
+            "entry `{}` is {size} bytes, larger than the S3 single PutObject limit",
+            sanitize_diagnostic(path, MAX_DIAGNOSTIC_VALUE_BYTES)
         ));
     }
 
@@ -857,7 +867,7 @@ pub(super) fn validate_deployment_preflight(
         if key_bytes > S3_OBJECT_KEY_MAX_BYTES {
             return Err(anyhow!(
                 "destination key for `{}` is {key_bytes} UTF-8 bytes, larger than the S3 1024-byte limit",
-                planned.relative_key
+                sanitize_diagnostic(&planned.relative_key, MAX_DIAGNOSTIC_VALUE_BYTES)
             ));
         }
 
@@ -881,7 +891,7 @@ pub(super) fn validate_deployment_preflight(
                 if size > S3_SINGLE_PUT_LIMIT {
                     return Err(anyhow!(
                         "entry `{}` is {size} bytes, larger than the S3 single PutObject limit",
-                        planned.relative_key
+                        sanitize_diagnostic(&planned.relative_key, MAX_DIAGNOSTIC_VALUE_BYTES)
                     ));
                 }
             }
@@ -943,11 +953,15 @@ fn checked_archive_totals(
 
 fn validate_copy_object_size(path: &str, size: Option<u64>) -> Result<()> {
     let size = size.ok_or_else(|| {
-        anyhow!("source object `{path}` metadata did not contain a valid content length")
+        anyhow!(
+            "source object `{}` metadata did not contain a valid content length",
+            sanitize_diagnostic(path, MAX_DIAGNOSTIC_VALUE_BYTES)
+        )
     })?;
     if size > S3_SINGLE_COPY_LIMIT {
         return Err(anyhow!(
-            "source object `{path}` is {size} bytes, larger than the S3 single CopyObject limit"
+            "source object `{}` is {size} bytes, larger than the S3 single CopyObject limit",
+            sanitize_diagnostic(path, MAX_DIAGNOSTIC_VALUE_BYTES)
         ));
     }
 
@@ -1073,6 +1087,43 @@ mod tests {
         assert!(output.contains("destination_relative_key=shared/index.html"));
         assert!(output.contains("previous_source_index=2"));
         assert!(output.contains("replacement_source_index=7"));
+    }
+
+    #[test]
+    fn duplicate_destination_log_escapes_and_caps_hostile_keys_on_one_line() {
+        let logs = TestWriter::default();
+        let subscriber = tracing_subscriber::registry().with(
+            tracing_subscriber::fmt::layer()
+                .without_time()
+                .with_ansi(false)
+                .with_writer(logs.clone()),
+        );
+        let hostile_key = format!("site/\r\nforged\u{2028}{}", "x".repeat(400));
+        let mut manifest = DeploymentManifest::new();
+
+        tracing::subscriber::with_default(subscriber, || {
+            for source_index in [0, 1] {
+                insert_manifest_object(
+                    &mut manifest,
+                    PlannedObject {
+                        relative_key: hostile_key.clone(),
+                        expected_etag: None,
+                        action: PlannedAction::CopyObject {
+                            source_index,
+                            size: Some(1),
+                        },
+                    },
+                );
+            }
+        });
+
+        let output = String::from_utf8(logs.0.lock().expect("test log buffer").clone())
+            .expect("UTF-8 tracing output");
+        assert_eq!(output.lines().count(), 1);
+        assert!(output.contains("site/\\r\\nforged\\u{2028}"));
+        assert!(output.contains(" ... [truncated]"));
+        assert!(!output.contains("\r\nforged"));
+        assert!(output.len() < 600);
     }
 
     #[test]
