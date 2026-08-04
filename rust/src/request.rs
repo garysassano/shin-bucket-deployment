@@ -135,6 +135,13 @@ pub(crate) struct RawDeploymentRequest {
     pub(crate) put_object_slowdown_retry_max_delay_ms: Option<u64>,
     #[serde(default)]
     pub(crate) put_object_retry_jitter: Option<PutObjectRetryJitter>,
+    /// Opaque redeploy trigger. CloudFormation only re-invokes a custom resource when
+    /// some property changes, so a caller that needs a fresh invocation without changing
+    /// any real input varies this instead. It is parsed and then ignored: it reaches no
+    /// planning, transfer, or cleanup decision. Declaring it keeps `deny_unknown_fields`
+    /// strict for every other field rather than reopening the request to arbitrary keys.
+    #[serde(default)]
+    pub(crate) deployment_nonce: Option<String>,
 }
 
 impl Filters {
@@ -1179,6 +1186,29 @@ mod tests {
             .expect_err("a misspelled destructive-default property must fail closed");
 
         assert!(error.to_string().contains("DeleteStaleObjectOnDeployment"));
+    }
+
+    #[test]
+    fn deployment_nonce_is_accepted_and_changes_no_parsed_input() {
+        let mut props = minimal_request();
+        props["DeploymentNonce"] = json!("run-7:2:unchanged-update");
+
+        let raw: RawDeploymentRequest = serde_json::from_value(props)
+            .expect("a declared redeploy trigger must not fail the strict request decode");
+
+        assert_eq!(
+            raw.deployment_nonce.as_deref(),
+            Some("run-7:2:unchanged-update")
+        );
+
+        // The trigger exists to change the CloudFormation diff, never the deployment. Parsing
+        // it must produce exactly the request that omitting it produces.
+        let baseline: RawDeploymentRequest = serde_json::from_value(minimal_request()).unwrap();
+        let parsed = parse_request_with_memory(raw, "1024").expect("nonce request parses");
+        let parsed_baseline =
+            parse_request_with_memory(baseline, "1024").expect("baseline request parses");
+
+        assert_eq!(format!("{parsed:?}"), format!("{parsed_baseline:?}"));
     }
 
     #[cfg(unix)]

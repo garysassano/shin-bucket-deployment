@@ -467,6 +467,7 @@ mod aws_integration_tests {
                     put_object_slowdown_retry_base_delay_ms: Some(100),
                     put_object_slowdown_retry_max_delay_ms: Some(1_000),
                     put_object_retry_jitter: None,
+                    deployment_nonce: None,
                 },
                 "128",
             )?;

@@ -21,8 +21,8 @@ for (const path of templates) {
   if (customResources.length !== 1) {
     throw new Error(`Expected one ${resourceType} in ${path}, found ${customResources.length}.`);
   }
-  if (customResources[0].Properties?.BenchmarkInvocationToken !== "no-aws-synth-invocation") {
-    throw new Error(`Benchmark invocation token is missing from ${path}.`);
+  if (customResources[0].Properties?.DeploymentNonce !== "no-aws-synth-invocation") {
+    throw new Error(`Benchmark deployment nonce is missing from ${path}.`);
   }
   const handlerId = customResources[0].Properties?.ServiceToken?.["Fn::GetAtt"]?.[0];
   const handler = template.Resources?.[handlerId];
