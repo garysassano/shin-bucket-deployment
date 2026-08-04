@@ -3261,6 +3261,7 @@ mod tests {
             "SourceBucketNames": ["source"],
             "SourceObjectKeys": ["archive.zip"],
             "DestinationBucketName": "destination",
+            "DestinationOwnerId": "summary-owner",
             "MaxUncompressedEntryBytes": 1073741824,
             "MaxCompressionRatio": 100,
             "Extract": false

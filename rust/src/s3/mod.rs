@@ -13,7 +13,9 @@ mod destination;
 mod planner;
 mod transfer;
 
-pub(crate) use destination::{bucket_has_competing_owner, delete_prefix, delete_prefix_excluding};
+pub(crate) use destination::{
+    GuardedDeleteContext, GuardedDeleteOutcome, guarded_delete_namespace,
+};
 
 pub(crate) const DEFAULT_TRANSFER_MAX_CONCURRENCY: usize = 32;
 pub(crate) const DEFAULT_SOURCE_BLOCK_BYTES: usize = 8 * 1024 * 1024;
@@ -314,6 +316,7 @@ mod tests {
             "SourceBucketNames": [],
             "SourceObjectKeys": [],
             "DestinationBucketName": "destination",
+            "DestinationOwnerId": "integration-owner",
             "MaxUncompressedEntryBytes": 1073741824,
             "MaxCompressionRatio": 100,
             "DeleteStaleObjectsOnDeployment": true
@@ -447,7 +450,7 @@ mod aws_integration_tests {
                     include: Vec::new(),
                     output_object_keys: true,
                     destination_bucket_arn: None,
-                    destination_owner_id: Some("integration-owner".to_string()),
+                    destination_owner_id: "integration-owner".to_string(),
                     delete_previous_objects_on_change: None,
                     invalidate_previous_distribution_on_change: None,
                     max_uncompressed_entry_bytes: 1024 * 1024 * 1024,

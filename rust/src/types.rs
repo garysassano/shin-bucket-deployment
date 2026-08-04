@@ -108,7 +108,7 @@ pub(crate) struct DeploymentRequest {
     pub(crate) include: Vec<String>,
     pub(crate) output_object_keys: bool,
     pub(crate) destination_bucket_arn: Option<String>,
-    pub(crate) destination_owner_id: Option<String>,
+    pub(crate) destination_owner_id: String,
     pub(crate) delete_previous_objects_on_change: Option<DeletePreviousObjectsOnChange>,
     pub(crate) invalidate_previous_distribution_on_change: Option<String>,
     pub(crate) archive_expansion: ArchiveExpansionLimits,
@@ -143,7 +143,7 @@ pub(crate) struct PreviousDestination {
     pub(crate) bucket_prefix: String,
     pub(crate) distribution_id: Option<String>,
     pub(crate) distribution_paths: Vec<String>,
-    pub(crate) owner_id: Option<String>,
+    pub(crate) owner_id: String,
 }
 
 #[derive(Clone, Debug)]

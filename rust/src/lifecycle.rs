@@ -73,11 +73,7 @@ pub(crate) fn plan_destination_change_cleanup(
         return DestinationChangeCleanupDecision::Retain(RetainReason::AuthorizationMismatch);
     }
 
-    if let (Some(current_owner), Some(previous_owner)) = (
-        current.destination_owner_id.as_deref(),
-        previous.owner_id.as_deref(),
-    ) && current_owner != previous_owner
-    {
+    if current.destination_owner_id != previous.owner_id {
         return DestinationChangeCleanupDecision::Retain(RetainReason::OwnerMismatch);
     }
 
@@ -185,7 +181,7 @@ mod tests {
             include: Vec::new(),
             output_object_keys: true,
             destination_bucket_arn: None,
-            destination_owner_id: Some("owner".to_string()),
+            destination_owner_id: "owner".to_string(),
             delete_previous_objects_on_change: None,
             invalidate_previous_distribution_on_change: None,
             archive_expansion: ArchiveExpansionLimits {
@@ -218,7 +214,7 @@ mod tests {
             bucket_prefix: prefix.to_string(),
             distribution_id: None,
             distribution_paths: vec!["/*".to_string()],
-            owner_id: Some("owner".to_string()),
+            owner_id: "owner".to_string(),
         }
     }
 
@@ -438,7 +434,7 @@ mod tests {
         let mut previous = previous("old", "site");
         authorize(&mut request, &previous);
 
-        previous.owner_id = Some("different-owner".to_string());
+        previous.owner_id = "different-owner".to_string();
         assert_eq!(
             plan_destination_change_cleanup(&request, &previous),
             DestinationChangeCleanupDecision::Retain(RetainReason::OwnerMismatch)

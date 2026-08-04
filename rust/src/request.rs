@@ -102,8 +102,7 @@ pub(crate) struct RawDeploymentRequest {
     pub(crate) output_object_keys: bool,
     #[serde(default)]
     pub(crate) destination_bucket_arn: Option<String>,
-    #[serde(default)]
-    pub(crate) destination_owner_id: Option<String>,
+    pub(crate) destination_owner_id: String,
     #[serde(default)]
     pub(crate) delete_previous_objects_on_change: Option<RawDeletePreviousObjectsOnChange>,
     #[serde(default)]
@@ -161,6 +160,7 @@ pub(crate) fn parse_request_with_memory(
     raw: RawDeploymentRequest,
     lambda_memory: &str,
 ) -> Result<DeploymentRequest> {
+    validate_destination_owner_id(&raw.destination_owner_id)?;
     let source_catalogs = parse_source_catalogs(&raw)?;
     let archive_expansion = archive_expansion_limits(&raw)?;
     let runtime = runtime_options_with_memory(&raw, lambda_memory)?;
@@ -463,13 +463,14 @@ fn validate_u64_range(name: &str, value: u64, minimum: u64, maximum: u64) -> Res
     Ok(())
 }
 
-pub(crate) fn parse_old_destination(raw: &RawDeploymentRequest) -> PreviousDestination {
+pub(crate) fn parse_old_destination(raw: &RawDeploymentRequest) -> Result<PreviousDestination> {
+    validate_destination_owner_id(&raw.destination_owner_id)?;
     let old_prefix = normalize_destination_prefix(
         raw.destination_bucket_key_prefix
             .clone()
             .unwrap_or_default(),
     );
-    PreviousDestination {
+    Ok(PreviousDestination {
         bucket_name: raw.destination_bucket_name.clone(),
         bucket_prefix: old_prefix.clone(),
         distribution_id: raw.distribution_id.clone(),
@@ -478,7 +479,15 @@ pub(crate) fn parse_old_destination(raw: &RawDeploymentRequest) -> PreviousDesti
             .clone()
             .unwrap_or_else(|| vec![default_distribution_path(&old_prefix)]),
         owner_id: raw.destination_owner_id.clone(),
-    }
+    })
+}
+
+fn validate_destination_owner_id(owner_id: &str) -> Result<()> {
+    ensure!(
+        !owner_id.is_empty() && !owner_id.contains(':'),
+        "DestinationOwnerId must be non-empty and must not contain ':'"
+    );
+    Ok(())
 }
 
 pub(crate) fn compile_filters(exclude: &[String], include: &[String]) -> Result<Filters> {
@@ -865,6 +874,7 @@ mod tests {
             "SourceBucketNames": ["source-bucket"],
             "SourceObjectKeys": ["source.zip"],
             "DestinationBucketName": "dest-bucket",
+            "DestinationOwnerId": "owner-123",
             "MaxUncompressedEntryBytes": 1073741824,
             "MaxCompressionRatio": 100,
         })
@@ -884,7 +894,7 @@ mod tests {
         assert!(!request.delete_current_objects_on_delete);
         assert!(request.delete_stale_objects_on_deployment);
         assert!(request.output_object_keys);
-        assert!(request.destination_owner_id.is_none());
+        assert_eq!(request.destination_owner_id, "owner-123");
         assert!(request.delete_previous_objects_on_change.is_none());
         assert!(request.invalidate_previous_distribution_on_change.is_none());
         assert_eq!(request.source_catalogs, vec![None]);
@@ -907,6 +917,34 @@ mod tests {
             request.runtime.put_object_retry.jitter,
             PutObjectRetryJitter::Full
         );
+    }
+
+    #[test]
+    fn destination_owner_id_is_required_by_the_current_protocol() {
+        let mut props = minimal_request();
+        props
+            .as_object_mut()
+            .expect("request is an object")
+            .remove("DestinationOwnerId");
+
+        let error = serde_json::from_value::<RawDeploymentRequest>(props)
+            .expect_err("a request without its owner identity must fail");
+
+        assert!(error.to_string().contains("DestinationOwnerId"));
+    }
+
+    #[test]
+    fn destination_owner_id_must_be_nonempty_and_unambiguous() {
+        for owner_id in ["", "owner:ambiguous"] {
+            let mut props = minimal_request();
+            props["DestinationOwnerId"] = json!(owner_id);
+            let raw: RawDeploymentRequest =
+                serde_json::from_value(props).expect("owner shape is validated after decoding");
+
+            let error = parse_test_request(raw).expect_err("invalid owner identity must fail");
+
+            assert!(error.to_string().contains("DestinationOwnerId"));
+        }
     }
 
     #[test]
@@ -1334,7 +1372,7 @@ mod tests {
     #[test]
     fn deserializes_previous_destination_delete_authorization() {
         let mut props = minimal_request();
-        props["DestinationOwnerId"] = json!("owner-123");
+        props["DestinationOwnerId"] = json!("owner-456");
         props["DeletePreviousObjectsOnChange"] = json!({
             "DestinationBucketName": "old-bucket"
         });
@@ -1343,7 +1381,7 @@ mod tests {
         let raw: RawDeploymentRequest = serde_json::from_value(props).unwrap();
         let request = parse_test_request(raw).expect("valid request");
 
-        assert_eq!(request.destination_owner_id.as_deref(), Some("owner-123"));
+        assert_eq!(request.destination_owner_id, "owner-456");
         assert_eq!(
             request.delete_previous_objects_on_change,
             Some(DeletePreviousObjectsOnChange {
