@@ -1,11 +1,24 @@
 # Agent Instructions
 
-Use the repo-local skill files before benchmark or verification work:
+## Engineering approach
+
+- While the package major version is `0`, backward compatibility is not a default requirement. Prefer removing obsolete paths over adding compatibility layers, fallbacks, aliases, or migrations. Breaking changes must still have a concrete benefit, and all in-repo callers, tests, and documentation must move to the new contract together. This policy expires when the package reaches `1.0.0`; from that point, preserve compatibility according to semantic versioning and documented commitments.
+- Before designing a solution, check how upstream AWS CDK `BucketDeployment` and other established projects solve the same problem, and adopt proven patterns when they fit this package's constraints.
+
+## Required skills
+
+Read the relevant repo-local skill before benchmark or verification work:
 
 - Benchmark and AWS CDK `BucketDeployment` comparison tasks: read `.agents/skills/shin-benchmark/SKILL.md`.
 - Correctness verification tasks: read `.agents/skills/shin-verification/SKILL.md`.
 
-AWS correctness verification is opt-in, cost-bearing, and maintainer-run through `pnpm verify`; there is no hosted full-matrix workflow. Run local gates first and use the smallest relevant named verification group for a narrow deployed change. Use `--groups` with bounded `--concurrency` only for independent groups; phases inside a group remain ordered. Reserve the full suite for changes spanning several groups, shared provider/runner/assertion behavior, or an intentionally selected release candidate. Do not recreate automatic push, pull-request, merge, or schedule verification. A future hosted workflow requires an explicit maintainer decision covering cost, least-privilege deployment access, and definitive cleanup access. Do not run AWS for docs, formatting, workflow syntax, local validation, or synthesis-only changes whose deployed behavior is proven unchanged.
+## Correctness verification
+
+AWS correctness verification is opt-in, cost-bearing, and maintainer-run through `pnpm verify`; there is no hosted full-matrix workflow. Run local gates first and use the smallest relevant named verification group for a narrow deployed change. Reserve the full suite for changes spanning several groups, shared provider/runner/assertion behavior, or an intentionally selected release candidate. Do not recreate automatic push, pull-request, merge, or schedule verification; a future hosted workflow requires an explicit maintainer decision covering cost, least-privilege deployment access, and definitive cleanup access. Do not run AWS for docs, formatting, workflow syntax, local validation, or synthesis-only changes whose deployed behavior is proven unchanged.
+
+Name ordered verification scenario templates with `-initial` and `-updated` suffixes. Do not use `v1`/`v2`, `alpha`/`beta`, or other release-like labels for scenario phases. Use a descriptive suffix such as `-bucket-only` for terminal shape changes.
+
+## Evidence handling
 
 Keep benchmark evidence and verification evidence separate:
 
@@ -13,13 +26,7 @@ Keep benchmark evidence and verification evidence separate:
 - `docs/verification.md` is the latest `ShinBucketDeployment` correctness snapshot.
 - Do not use benchmark rows or upstream AWS `BucketDeployment` comparison rows as verification evidence.
 
-Treat performance as a primary product constraint. Shin must materially outperform upstream AWS CDK `BucketDeployment` on its target workloads; correctness alone is not sufficient for a performance-sensitive data-path change.
-
-- Do not add an unmeasured per-byte or per-object pass, hash, network request, payload copy, allocation, or whole-entry materialization to a normal path.
-- Reuse bytes, digests, listings, and validation work already produced by the transfer path whenever possible.
-- Before merging or releasing a performance-relevant provider change, collect comparable before/after Shin evidence and an upstream AWS CDK baseline with the relevant provider telemetry. If evidence is still pending, say so explicitly instead of presenting the change as performance-accepted.
-- Persist every completed AWS benchmark run used to evaluate a change as validated sanitized rows in `benchmarks/results.jsonl`. Each Shin row must identify the exact clean measured commit in `providerImplementationCommit`. Prefer committing the rows in the same PR before merge; if the benchmark runs after the implementation PR merges, immediately open and merge a follow-up evidence PR. Do not call the workstream complete or performance-accepted until the rows are committed on `main`, the measured commit is an ancestor of the implementation merge commit, and the committed rows retain the run UUID, provenance, telemetry, and cleanup outcome.
-- Keep those measurements in benchmark evidence; correctness scenarios and `docs/verification.md` do not establish a performance win.
+Keep raw AWS output in scratch directories outside the repo. Commit only sanitized docs, benchmark result rows, source, tests, and scenarios.
 
 Never commit raw AWS evidence or identifiers:
 
@@ -29,6 +36,7 @@ Never commit raw AWS evidence or identifiers:
 - CloudFront distribution IDs
 - stack-specific physical IDs
 - request IDs
+- object keys from private/user data
 - ETags
 - raw CDK deploy logs
 - raw CloudWatch log exports
@@ -36,7 +44,19 @@ Never commit raw AWS evidence or identifiers:
 
 Treat maintainer-supplied AWS profile names as local-only command inputs. Do not repeat them in committed docs, PR text, evidence summaries, or final reports; refer to the configured test profile generically.
 
-Name ordered verification scenario templates with `-initial` and `-updated` suffixes. Do not use `v1`/`v2`, `alpha`/`beta`, or other release-like labels for scenario phases. Use a descriptive suffix such as `-bucket-only` for terminal shape changes.
+## Performance and benchmarks
+
+Treat performance as a primary product constraint. Shin must materially outperform upstream AWS CDK `BucketDeployment` on its target workloads; correctness alone is not sufficient for a performance-sensitive data-path change.
+
+- Do not add an unmeasured per-byte or per-object pass, hash, network request, payload copy, allocation, or whole-entry materialization to a normal path.
+- Reuse bytes, digests, listings, and validation work already produced by the transfer path whenever possible.
+- Before merging or releasing a performance-relevant provider change, collect comparable before/after Shin evidence and an upstream AWS CDK baseline with the relevant provider telemetry. If evidence is still pending, say so explicitly instead of presenting the change as performance-accepted.
+- Persist every completed AWS benchmark run used to evaluate a change as validated sanitized rows in `benchmarks/results.jsonl`. Each Shin row must identify the exact clean measured commit in `providerImplementationCommit`. Prefer committing the rows in the same PR before merge; if the benchmark runs after the implementation PR merges, immediately open and merge a follow-up evidence PR. Do not call the workstream complete or performance-accepted until the rows are committed on `main`, the measured commit is an ancestor of the implementation merge commit, and the committed rows retain the run UUID, provenance, telemetry, and cleanup outcome.
+- Keep those measurements in benchmark evidence; correctness scenarios and `docs/verification.md` do not establish a performance win.
+
+For benchmark telemetry interpretation, use the `docs/architecture.md` Diagnostics field reference. Do not infer S3 throttling from source block refetches or waits unless the provider summary also shows source `getRetries`/`getErrors` or destination `putObject.throttledAttempts`/`retryAttempts`.
+
+## Destination lifecycle API
 
 Keep destructive destination behavior under the phase-oriented `destinationLifecycle` API:
 
@@ -47,18 +67,12 @@ Keep destructive destination behavior under the phase-oriented `destinationLifec
 
 Do not reintroduce the public `prune`, `retainOnDelete`, or flat lifecycle aliases. CloudFormation supplies the previous prefix at runtime through `OldResourceProperties`; changed previous buckets and distributions remain explicit synthesis-time inputs for IAM and dependencies.
 
-Keep raw AWS output in scratch directories outside the repo. Commit only sanitized docs, benchmark result rows, source, tests, and scenarios.
-
-For benchmark telemetry interpretation, use the `docs/architecture.md` Diagnostics field reference. Do not infer S3 throttling from source block refetches or waits unless the provider summary also shows source `getRetries`/`getErrors` or destination `putObject.throttledAttempts`/`retryAttempts`.
-
-## Toolchain and package compatibility policy
+## Toolchain and package compatibility
 
 This repo is a CDK construct library, not a bundled application. Keep local development defaults separate from the published npm package contract:
 
-- Use `mise.toml` as the source of truth for contributor tools. Internal development and CI should run on Node.js 24 or newer because Node.js 20 is end-of-life.
-- Keep `package.json` `engines.node` as the consumer contract for the published construct package. It should allow Node.js 22 or newer unless the emitted package code starts requiring a newer runtime.
-- Do not add `devEngines` for the Node version while `mise.toml` already expresses the local toolchain. Avoid maintaining the same internal runtime rule in two places.
-- Build the published TypeScript package for Node.js 22 compatibility. Use an ES2022 package target, matching current upstream AWS CDK construct-library practice.
-- Keep the published JavaScript CommonJS-compatible. Current upstream AWS CDK construct packages use `module: "Node20"` with no package-level `"type": "module"`; that models modern Node package rules while still emitting CommonJS-shaped `.js` for this package shape.
-- Avoid legacy TypeScript 7 settings such as `moduleResolution: "node"` or `"node10"`. They are deprecated. Prefer `module: "Node20"` for package output and omit `moduleResolution` unless there is a concrete compiler error that requires an explicit modern resolver.
-- For app/scenario/test code, `tsconfig.json` may stay more modern than the published package config. The package config is the npm compatibility boundary.
+- `mise.toml` is the source of truth for contributor tools; internal development and CI run on Node.js 24 or newer. Do not add `devEngines` for the Node version — it would duplicate that rule.
+- `package.json` `engines.node` is the consumer contract for the published package. Allow Node.js 22 or newer unless the emitted package code starts requiring a newer runtime.
+- Build the published package for Node.js 22 with an ES2022 target and CommonJS-compatible output: `module: "Node20"`, no package-level `"type": "module"`, matching current upstream AWS CDK construct-library practice.
+- Avoid deprecated `moduleResolution: "node"`/`"node10"`. Omit `moduleResolution` unless a concrete compiler error requires an explicit modern resolver.
+- App/scenario/test code in `tsconfig.json` may stay more modern; the package config is the npm compatibility boundary.
