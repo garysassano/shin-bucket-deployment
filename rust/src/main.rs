@@ -27,6 +27,13 @@ use crate::types::{AppState, detailed_failure_diagnostics_from_env};
 const RESPONSE_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const RESPONSE_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const CALLBACK_SENSITIVE_LOG_TARGETS: &[&str] = &[
+    "aws_config",
+    "aws_credential_types",
+    "aws_runtime",
+    "aws_sdk",
+    "aws_sigv4",
+    "aws_smithy",
+    "aws_types",
     "lambda_runtime",
     "lambda_runtime_api_client",
     "reqwest",
@@ -148,7 +155,7 @@ mod tests {
         let subscriber = tracing_subscriber::registry()
             .with(
                 harden_callback_log_targets(EnvFilter::new(
-                    "trace,lambda_runtime=trace,reqwest=trace",
+                    "trace,aws_config=trace,aws_runtime=trace,aws_sdk=trace,aws_smithy=trace,lambda_runtime=trace,reqwest=trace",
                 ))
                 .expect("callback-sensitive directives must parse"),
             )
@@ -162,6 +169,10 @@ mod tests {
         tracing::subscriber::with_default(subscriber, || {
             tracing::trace!(target: "lambda_runtime::runtime", response_url = SECRET, "raw event");
             tracing::trace!(target: "reqwest::connect", url = SECRET, "HTTP request");
+            tracing::trace!(target: "aws_config::meta::region", response_url = SECRET, "AWS config");
+            tracing::trace!(target: "aws_runtime::auth", response_url = SECRET, "AWS runtime");
+            tracing::trace!(target: "aws_sdk_s3::client", response_url = SECRET, "AWS SDK request");
+            tracing::trace!(target: "aws_smithy_runtime::client", response_url = SECRET, "Smithy request");
             tracing::trace!(target: "shin_bucket_deployment_handler", "provider trace retained");
         });
 
@@ -170,6 +181,10 @@ mod tests {
         assert!(!output.contains(SECRET));
         assert!(!output.contains("raw event"));
         assert!(!output.contains("HTTP request"));
+        assert!(!output.contains("AWS config"));
+        assert!(!output.contains("AWS runtime"));
+        assert!(!output.contains("AWS SDK request"));
+        assert!(!output.contains("Smithy request"));
         assert!(output.contains("provider trace retained"));
     }
 
