@@ -25,7 +25,7 @@ use super::super::{
     ZIP_ENTRY_READ_CHUNK_BYTES,
 };
 use super::{EntryAttemptClaim, SourceAttemptSnapshot, SourceBlockStore};
-use crate::util::finalize_md5;
+use crate::util::{finalize_md5, lock_telemetry};
 
 const LOCAL_FILE_HEADER_SIGNATURE: u32 = 0x0403_4b50;
 pub(super) const LOCAL_FILE_HEADER_LEN: usize = 30;
@@ -155,10 +155,7 @@ impl UploadBodyState {
         let Some(detailed) = &self.detailed_attempt else {
             return;
         };
-        let mut published = detailed
-            .attempt_snapshot
-            .lock()
-            .expect("upload body snapshot mutex should not be poisoned");
+        let mut published = lock_telemetry(&detailed.attempt_snapshot);
         let (attempt_number, producer_stage) =
             UploadProducerStage::decode(detailed.attempt_state.load(Ordering::Acquire));
         if attempt_number != snapshot.attempt_number {
@@ -170,10 +167,7 @@ impl UploadBodyState {
 
     pub(crate) fn attempt_snapshot(&self) -> Option<UploadBodyAttemptSnapshot> {
         let detailed = self.detailed_attempt.as_ref()?;
-        let published = detailed
-            .attempt_snapshot
-            .lock()
-            .expect("upload body snapshot mutex should not be poisoned");
+        let published = lock_telemetry(&detailed.attempt_snapshot);
         let mut snapshot = published.clone()?;
         let (attempt_number, producer_stage) =
             UploadProducerStage::decode(detailed.attempt_state.load(Ordering::Acquire));
@@ -450,13 +444,13 @@ async fn open_entry_data_reader_with_claim(
 ///
 /// **The current planner never produces such a split**, and this is defense in depth
 /// rather than a fix for a reachable failure. `plan_source_blocks` extends a coalesced
-/// span only while the span stays within `block_bytes`, so every span is either one whole
-/// block or a single oversized entry tiled from its own `source_offset`. Either way an
-/// entry's header sits at the start of a block, and `MIN_SOURCE_BLOCK_BYTES` keeps blocks
-/// at least header-sized. Relax the coalescing rule — for instance to cut GET count by
-/// merging past `block_bytes` — and the split becomes immediately reachable on completely
-/// valid archives. Stitching here removes that trap so the entry reader no longer depends
-/// on an unwritten planner invariant.
+/// span only while the span stays within `block_bytes`. A bounded coalesced span becomes
+/// one block, so every entry header in it is wholly contained even when a later entry does
+/// not start the block. A single oversized entry is tiled from its own `source_offset`, and
+/// `MIN_SOURCE_BLOCK_BYTES` keeps its first block header-sized. Relax the coalescing rule —
+/// for instance to cut GET count by merging past `block_bytes` — and the split becomes
+/// immediately reachable on completely valid archives. Stitching here removes that trap
+/// so the entry reader no longer depends on an unwritten planner invariant.
 ///
 /// The loop terminates because every iteration either copies at least one byte or errors:
 /// `slice_from` fails when no planned block covers `position`.

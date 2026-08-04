@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use crate::util::duration_ms;
+use crate::util::{duration_ms, lock_telemetry};
 use aws_sdk_cloudfront::Client as CloudFrontClient;
 use aws_sdk_s3::Client as S3Client;
 use reqwest::Client as HttpClient;
@@ -1035,36 +1035,24 @@ impl DeploymentStats {
                 throttle_cooldown_wait_ms: self
                     .put_throttle_cooldown_wait_millis
                     .load(Ordering::Relaxed),
-                failures_by_sdk_error_kind: self.detailed_put_object.as_ref().map_or_else(
-                    BTreeMap::new,
-                    |detailed| {
-                        detailed
-                            .failures_by_sdk_error_kind
-                            .lock()
-                            .expect("PutObject SDK-error-kind mutex should not be poisoned")
-                            .clone()
-                    },
-                ),
-                failures_by_service_code: self.detailed_put_object.as_ref().map_or_else(
-                    BTreeMap::new,
-                    |detailed| {
-                        detailed
-                            .failures_by_service_code
-                            .lock()
-                            .expect("PutObject service-code mutex should not be poisoned")
-                            .clone()
-                    },
-                ),
-                failure_states: self.detailed_put_object.as_ref().map_or_else(
-                    Vec::new,
-                    |detailed| {
-                        detailed
-                            .failure_states
-                            .lock()
-                            .expect("PutObject failure-state mutex should not be poisoned")
-                            .clone()
-                    },
-                ),
+                failures_by_sdk_error_kind: self
+                    .detailed_put_object
+                    .as_ref()
+                    .map_or_else(BTreeMap::new, |detailed| {
+                        lock_telemetry(&detailed.failures_by_sdk_error_kind).clone()
+                    }),
+                failures_by_service_code: self
+                    .detailed_put_object
+                    .as_ref()
+                    .map_or_else(BTreeMap::new, |detailed| {
+                        lock_telemetry(&detailed.failures_by_service_code).clone()
+                    }),
+                failure_states: self
+                    .detailed_put_object
+                    .as_ref()
+                    .map_or_else(Vec::new, |detailed| {
+                        lock_telemetry(&detailed.failure_states).clone()
+                    }),
                 failure_state_overflow_attempts: self.detailed_put_object.as_ref().map_or(
                     0,
                     |detailed| {
@@ -1109,9 +1097,7 @@ fn merge_diagnostic_counts(
     destination: &Mutex<BTreeMap<String, u64>>,
     source: &BTreeMap<String, u64>,
 ) {
-    let mut destination = destination
-        .lock()
-        .expect("diagnostic count mutex should not be poisoned");
+    let mut destination = lock_telemetry(destination);
     for (key, count) in source {
         let key = if destination.contains_key(key)
             || (key != OTHER_DIAGNOSTIC_LABEL
@@ -1130,9 +1116,7 @@ fn merge_failure_states(
     destination: &Mutex<Vec<PutObjectFailureStateStats>>,
     source: &[PutObjectFailureStateStats],
 ) -> u64 {
-    let mut destination = destination
-        .lock()
-        .expect("PutObject failure-state mutex should not be poisoned");
+    let mut destination = lock_telemetry(destination);
     let mut overflow = 0_u64;
     for failure in source {
         if let Some(existing) = destination

@@ -1,5 +1,6 @@
 //! Small helpers shared across modules.
 
+use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use md5::{Digest, Md5};
@@ -86,11 +87,25 @@ pub(crate) fn duration_ms(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
+/// Locks observational telemetry without turning an earlier worker panic into a
+/// second panic while reporting the original failure.
+///
+/// Only use this for diagnostics whose partially updated value remains safe to
+/// inspect or overwrite. Control and resource-state mutexes must continue to
+/// fail closed because a panic may have interrupted an invariant-preserving
+/// mutation.
+pub(crate) fn lock_telemetry<T>(telemetry: &Mutex<T>) -> MutexGuard<'_, T> {
+    telemetry.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
 #[cfg(test)]
 mod tests {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::sync::Mutex;
+
     use md5::{Digest, Md5};
 
-    use super::{finalize_md5, lower_hex};
+    use super::{finalize_md5, lock_telemetry, lower_hex};
 
     #[test]
     fn lower_hex_pads_each_byte_to_two_lowercase_digits() {
@@ -107,5 +122,20 @@ mod tests {
         let mut hasher = Md5::new();
         hasher.update(b"abc");
         assert_eq!(finalize_md5(hasher), "900150983cd24fb0d6963f7d28e17f72");
+    }
+
+    #[test]
+    fn telemetry_lock_preserves_best_effort_data_after_poisoning() {
+        let telemetry = Mutex::new(vec!["before"]);
+        let panic = catch_unwind(AssertUnwindSafe(|| {
+            let mut values = telemetry.lock().expect("initial telemetry lock");
+            values.push("during");
+            panic!("injected telemetry writer panic");
+        }));
+        assert!(panic.is_err());
+
+        let mut values = lock_telemetry(&telemetry);
+        values.push("after");
+        assert_eq!(*values, ["before", "during", "after"]);
     }
 }
