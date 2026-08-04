@@ -24,7 +24,7 @@ use super::super::{
     S3_SINGLE_PUT_LIMIT, ZIP_ENTRY_BODY_CHUNK_BYTES, ZIP_ENTRY_BODY_PIPE_CHUNKS,
     ZIP_ENTRY_READ_CHUNK_BYTES,
 };
-use super::{EntryAttemptClaim, SourceAttemptSnapshot, SourceBlockStore};
+use super::block_store::{EntryAttemptClaim, SourceAttemptSnapshot, SourceBlockStore};
 use crate::util::{MAX_DIAGNOSTIC_VALUE_BYTES, finalize_md5, lock_telemetry, sanitize_diagnostic};
 
 const LOCAL_FILE_HEADER_SIGNATURE: u32 = 0x0403_4b50;

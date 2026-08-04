@@ -3,7 +3,9 @@ use std::collections::BTreeMap;
 use anyhow::{Context, Result, anyhow, ensure};
 use bytes::Bytes;
 
-use super::{S3RangeReader, SourceByteBudget, SourceClient, SourcePlanningPermit, align_down};
+use super::SourceClient;
+use super::budget::{SourceByteBudget, SourcePlanningPermit};
+use super::range_reader::{S3RangeReader, align_down};
 
 const EOCD_SIGNATURE: [u8; 4] = 0x0605_4b50_u32.to_le_bytes();
 const ZIP64_LOCATOR_SIGNATURE: [u8; 4] = 0x0706_4b50_u32.to_le_bytes();
