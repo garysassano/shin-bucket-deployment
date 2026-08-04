@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { App, Aws, CfnParameter, RemovalPolicy, Stack, Tags } from "aws-cdk-lib";
-import { Match, Template } from "aws-cdk-lib/assertions";
+import { Annotations, Match, Template } from "aws-cdk-lib/assertions";
 import { AllowedMethods, Distribution, ViewerProtocolPolicy } from "aws-cdk-lib/aws-cloudfront";
 import { S3BucketOrigin } from "aws-cdk-lib/aws-cloudfront-origins";
 import { Bucket, type CfnBucket } from "aws-cdk-lib/aws-s3";
@@ -948,11 +948,50 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     });
   });
 
+  test("warns when transfer concurrency exceeds measured guidance", () => {
+    const app = new App();
+    const stack = new Stack(app, "HighConcurrency");
+    const destinationBucket = new Bucket(stack, "Dest");
+
+    new ShinBucketDeployment(stack, "Deploy", {
+      sources: [Source.data("index.html", "ok")],
+      destination: { bucket: destinationBucket },
+      providerLambda: { localBuild: testLocalProviderBuild() },
+      transfer: { maxConcurrency: 65 },
+    });
+
+    Annotations.fromStack(stack).hasWarning(
+      "/HighConcurrency/Deploy",
+      Match.stringLikeRegexp(
+        "transfer\\.maxConcurrency=65 is above the current measured guidance ceiling of 64.*128 slowed cold-create by 18%.*benchmarking your workload",
+      ),
+    );
+  });
+
+  test("does not warn at the measured concurrency guidance boundary", () => {
+    const app = new App();
+    const stack = new Stack(app, "GuidanceBoundary");
+    const destinationBucket = new Bucket(stack, "Dest");
+
+    new ShinBucketDeployment(stack, "Deploy", {
+      sources: [Source.data("index.html", "ok")],
+      destination: { bucket: destinationBucket },
+      providerLambda: { localBuild: testLocalProviderBuild() },
+      transfer: { maxConcurrency: 64 },
+    });
+
+    Annotations.fromStack(stack).hasNoWarning(
+      "/GuidanceBoundary/Deploy",
+      Match.stringLikeRegexp("transfer\\.maxConcurrency"),
+    );
+  });
+
   test("defers unresolved numeric tuning to provider validation", () => {
     const stack = new Stack();
     const destinationBucket = new Bucket(stack, "Dest");
     const memory = new CfnParameter(stack, "Memory", { type: "Number" });
     const block = new CfnParameter(stack, "Block", { type: "Number" });
+    const maxConcurrency = new CfnParameter(stack, "MaxConcurrency", { type: "Number" });
 
     new ShinBucketDeployment(stack, "Deploy", {
       sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
@@ -964,13 +1003,21 @@ describe("ShinBucketDeployment validation and option coverage", () => {
         localBuild: testLocalProviderBuild(),
       },
       transfer: {
+        maxConcurrency: maxConcurrency.valueAsNumber,
         advancedTuning: {
           sourceBlockBytes: block.valueAsNumber,
         },
       },
     });
 
+    expect(customResourceProperties(stack).MaxParallelTransfers).toEqual({
+      Ref: "MaxConcurrency",
+    });
     expect(customResourceProperties(stack).SourceBlockBytes).toEqual({ Ref: "Block" });
+    Annotations.fromStack(stack).hasNoWarning(
+      "/Default/Deploy",
+      Match.stringLikeRegexp("transfer\\.maxConcurrency"),
+    );
   });
 
   test("rejects invalid runtime tuning values", () => {
