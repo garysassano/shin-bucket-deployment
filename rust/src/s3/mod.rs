@@ -317,7 +317,7 @@ mod tests {
             "DeleteStaleObjectsOnDeployment": true
         }))
         .expect("empty source request should deserialize");
-        let request = parse_request(&raw).expect("empty source request should reach deploy guard");
+        let request = parse_request(raw).expect("empty source request should reach deploy guard");
 
         let error = deploy(
             &state,
@@ -425,7 +425,7 @@ mod aws_integration_tests {
             )
             .await?;
 
-            let request = parse_request(&RawDeploymentRequest {
+            let request = parse_request(RawDeploymentRequest {
                 source_bucket_names: vec![source_bucket.clone(), source_bucket.clone()],
                 source_object_keys: vec![plain_zip_key.to_string(), marker_zip_key.to_string()],
                 source_catalogs: None,

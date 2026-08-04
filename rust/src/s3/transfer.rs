@@ -3130,7 +3130,7 @@ mod tests {
             "Extract": false
         }))
         .expect("raw deployment request");
-        crate::request::parse_request(&raw).expect("valid request")
+        crate::request::parse_request(raw).expect("valid request")
     }
 
     /// Drives a real replayed copy (one failure, one success) so the counters come

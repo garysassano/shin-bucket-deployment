@@ -151,57 +151,56 @@ impl Filters {
     }
 }
 
-pub(crate) fn parse_request(raw: &RawDeploymentRequest) -> Result<DeploymentRequest> {
-    let mut source_markers = raw.source_markers.clone();
-    let mut source_markers_config = raw.source_markers_config.clone();
-    let source_catalogs = parse_source_catalogs(raw)?;
+/// Takes the raw request by value so every owned field moves into the parsed request.
+/// The two `&raw` helpers below run first, while the whole value is still intact.
+pub(crate) fn parse_request(raw: RawDeploymentRequest) -> Result<DeploymentRequest> {
+    let source_catalogs = parse_source_catalogs(&raw)?;
+    let runtime = runtime_options(&raw)?;
+
+    let source_count = raw.source_bucket_names.len();
+    let mut source_markers = raw.source_markers;
+    let mut source_markers_config = raw.source_markers_config;
 
     if source_markers.is_empty() {
-        source_markers = vec![HashMap::new(); raw.source_bucket_names.len()];
+        source_markers = vec![HashMap::new(); source_count];
     }
     if source_markers_config.is_empty() {
-        source_markers_config = vec![MarkerConfig::default(); raw.source_bucket_names.len()];
+        source_markers_config = vec![MarkerConfig::default(); source_count];
     }
 
-    let dest_bucket_prefix = normalize_destination_prefix(
-        raw.destination_bucket_key_prefix
-            .clone()
-            .unwrap_or_default(),
-    );
+    let dest_bucket_prefix =
+        normalize_destination_prefix(raw.destination_bucket_key_prefix.unwrap_or_default());
 
     let default_distribution_path = default_distribution_path(&dest_bucket_prefix);
 
     Ok(DeploymentRequest {
-        source_bucket_names: raw.source_bucket_names.clone(),
-        source_object_keys: raw.source_object_keys.clone(),
+        source_bucket_names: raw.source_bucket_names,
+        source_object_keys: raw.source_object_keys,
         source_catalogs,
         source_markers,
         source_markers_config,
-        dest_bucket_name: raw.destination_bucket_name.clone(),
+        dest_bucket_name: raw.destination_bucket_name,
         dest_bucket_prefix,
         extract: raw.extract,
         delete_current_objects_on_delete: raw.delete_current_objects_on_delete,
-        distribution_id: raw.distribution_id.clone(),
+        distribution_id: raw.distribution_id,
         distribution_paths: raw
             .distribution_paths
-            .clone()
             .unwrap_or_else(|| vec![default_distribution_path]),
         wait_for_distribution_invalidation: raw.wait_for_distribution_invalidation,
         delete_stale_objects_on_deployment: raw.delete_stale_objects_on_deployment,
-        exclude: raw.exclude.clone(),
-        include: raw.include.clone(),
+        exclude: raw.exclude,
+        include: raw.include,
         output_object_keys: raw.output_object_keys,
-        destination_bucket_arn: raw.destination_bucket_arn.clone(),
-        destination_owner_id: raw.destination_owner_id.clone(),
-        delete_previous_objects_on_change: raw.delete_previous_objects_on_change.as_ref().map(
-            |previous| DeletePreviousObjectsOnChange {
-                bucket_name: previous.destination_bucket_name.clone(),
-            },
-        ),
-        invalidate_previous_distribution_on_change: raw
-            .invalidate_previous_distribution_on_change
-            .clone(),
-        runtime: runtime_options(raw)?,
+        destination_bucket_arn: raw.destination_bucket_arn,
+        destination_owner_id: raw.destination_owner_id,
+        delete_previous_objects_on_change: raw.delete_previous_objects_on_change.map(|previous| {
+            DeletePreviousObjectsOnChange {
+                bucket_name: previous.destination_bucket_name,
+            }
+        }),
+        invalidate_previous_distribution_on_change: raw.invalidate_previous_distribution_on_change,
+        runtime,
     })
 }
 
@@ -709,7 +708,7 @@ mod tests {
     fn deserializes_minimal_request_with_defaults() {
         let raw: RawDeploymentRequest =
             serde_json::from_value(minimal_request()).expect("minimal request should deserialize");
-        let request = parse_request(&raw).expect("valid request");
+        let request = parse_request(raw).expect("valid request");
 
         assert!(request.extract);
         assert!(!request.delete_current_objects_on_delete);
@@ -844,7 +843,7 @@ mod tests {
             props["DestinationChecksumStrategy"] = json!(stale);
             let raw: RawDeploymentRequest =
                 serde_json::from_value(props).expect("an unknown field must not fail the request");
-            assert!(parse_request(&raw).is_ok());
+            assert!(parse_request(raw).is_ok());
         }
     }
 
@@ -860,7 +859,7 @@ mod tests {
         ]);
 
         let raw: RawDeploymentRequest = serde_json::from_value(props).unwrap();
-        let request = parse_request(&raw).expect("valid catalog descriptors");
+        let request = parse_request(raw).expect("valid catalog descriptors");
 
         assert!(request.source_catalogs[0].is_none());
         assert_eq!(
@@ -887,7 +886,7 @@ mod tests {
             let mut props = minimal_request();
             props["SourceCatalogs"] = catalogs;
             let raw: RawDeploymentRequest = serde_json::from_value(props).unwrap();
-            assert!(parse_request(&raw).is_err());
+            assert!(parse_request(raw).is_err());
         }
     }
 
@@ -928,7 +927,7 @@ mod tests {
         }]);
         let raw: RawDeploymentRequest = serde_json::from_value(props).unwrap();
 
-        let error = parse_request(&raw).expect_err("uppercase digest must fail");
+        let error = parse_request(raw).expect_err("uppercase digest must fail");
 
         assert!(!error.to_string().contains(&secret_digest));
     }
@@ -965,7 +964,7 @@ mod tests {
 
         let raw: RawDeploymentRequest = serde_json::from_value(props)
             .expect("marker config string booleans should deserialize");
-        let request = parse_request(&raw).expect("valid request");
+        let request = parse_request(raw).expect("valid request");
 
         assert!(request.source_markers_config[0].json_escape);
     }
@@ -989,7 +988,7 @@ mod tests {
 
         let raw: RawDeploymentRequest =
             serde_json::from_value(props).expect("string booleans should deserialize");
-        let request = parse_request(&raw).expect("valid request");
+        let request = parse_request(raw).expect("valid request");
 
         assert!(request.extract);
         assert!(request.delete_current_objects_on_delete);
@@ -1016,7 +1015,7 @@ mod tests {
         props["PutObjectRetryJitter"] = json!("none");
 
         let raw: RawDeploymentRequest = serde_json::from_value(props).unwrap();
-        let request = parse_request(&raw).expect("valid request");
+        let request = parse_request(raw).expect("valid request");
 
         assert_eq!(request.runtime.available_memory_mb, 1024);
         assert_eq!(request.runtime.max_parallel_transfers, 12);
@@ -1058,7 +1057,7 @@ mod tests {
         props["InvalidatePreviousDistributionOnChange"] = json!("old-distribution");
 
         let raw: RawDeploymentRequest = serde_json::from_value(props).unwrap();
-        let request = parse_request(&raw).expect("valid request");
+        let request = parse_request(raw).expect("valid request");
 
         assert_eq!(request.destination_owner_id.as_deref(), Some("owner-123"));
         assert_eq!(
@@ -1092,7 +1091,7 @@ mod tests {
         props["SourceBlockBytes"] = json!("1");
 
         let raw: RawDeploymentRequest = serde_json::from_value(props).unwrap();
-        let error = parse_request(&raw).expect_err("undersized source block must fail");
+        let error = parse_request(raw).expect_err("undersized source block must fail");
 
         assert!(error.to_string().contains("SourceBlockBytes"));
     }
