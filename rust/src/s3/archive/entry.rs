@@ -377,20 +377,7 @@ async fn open_entry_data_reader_with_claim(
         ));
     }
 
-    let header = store
-        .slice_from(plan.source_offset, header_end)
-        .await?
-        .bytes;
-    // `slice_from` is block-local. The span check above proves the ZIP contains
-    // 30 logical header bytes, but a small block size or unlucky boundary can
-    // still make this slice short. Guard the fixed-index reads below so that
-    // degrades to a clean error instead of a panic.
-    if header.len() < LOCAL_FILE_HEADER_LEN {
-        return Err(invalid_entry(
-            &plan,
-            "local file header was not fully readable from a single source block",
-        ));
-    }
+    let header = read_local_file_header(&store, &plan, header_end).await?;
     let signature = u32::from_le_bytes([header[0], header[1], header[2], header[3]]);
     if signature != LOCAL_FILE_HEADER_SIGNATURE {
         return Err(invalid_entry(
@@ -452,6 +439,51 @@ async fn open_entry_data_reader_with_claim(
     }
 
     EntryDataReader::new(store, attempt_claim, data_offset, data_end)
+}
+
+/// Reads the 30-byte local file header, stitching it across source blocks if it straddles
+/// a boundary.
+///
+/// `slice_from` is block-local: it returns a short slice whenever the requested range
+/// crosses into the next block. This used to treat that short slice as a malformed entry
+/// and fail the whole deployment.
+///
+/// **The current planner never produces such a split**, and this is defense in depth
+/// rather than a fix for a reachable failure. `plan_source_blocks` extends a coalesced
+/// span only while the span stays within `block_bytes`, so every span is either one whole
+/// block or a single oversized entry tiled from its own `source_offset`. Either way an
+/// entry's header sits at the start of a block, and `MIN_SOURCE_BLOCK_BYTES` keeps blocks
+/// at least header-sized. Relax the coalescing rule — for instance to cut GET count by
+/// merging past `block_bytes` — and the split becomes immediately reachable on completely
+/// valid archives. Stitching here removes that trap so the entry reader no longer depends
+/// on an unwritten planner invariant.
+///
+/// The loop terminates because every iteration either copies at least one byte or errors:
+/// `slice_from` fails when no planned block covers `position`.
+async fn read_local_file_header(
+    store: &Arc<SourceBlockStore>,
+    plan: &ZipEntryPlan,
+    header_end: u64,
+) -> io::Result<[u8; LOCAL_FILE_HEADER_LEN]> {
+    let mut header = [0_u8; LOCAL_FILE_HEADER_LEN];
+    let mut filled = 0_usize;
+    let mut position = plan.source_offset;
+
+    while filled < LOCAL_FILE_HEADER_LEN {
+        let slice = store.slice_from(position, header_end).await?.bytes;
+        if slice.is_empty() {
+            return Err(invalid_entry(
+                plan,
+                "source block returned no local file header bytes",
+            ));
+        }
+        let take = slice.len().min(LOCAL_FILE_HEADER_LEN - filled);
+        header[filled..filled + take].copy_from_slice(&slice[..take]);
+        filled += take;
+        position += take as u64;
+    }
+
+    Ok(header)
 }
 
 impl EntryDataReader {
