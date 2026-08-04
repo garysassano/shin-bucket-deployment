@@ -43,8 +43,9 @@ fn parse_detailed_failure_diagnostics(value: Option<impl AsRef<OsStr>>) -> io::R
 #[cfg(test)]
 mod detailed_failure_diagnostics_tests {
     use std::ffi::{OsStr, OsString};
+    use std::sync::atomic::Ordering;
 
-    use super::parse_detailed_failure_diagnostics;
+    use super::{DeploymentStats, parse_detailed_failure_diagnostics};
 
     #[test]
     fn detailed_failure_diagnostics_default_to_disabled() {
@@ -62,6 +63,22 @@ mod detailed_failure_diagnostics_tests {
                 .expect_err("all non-exact values must fail closed");
             assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
         }
+    }
+
+    #[test]
+    fn source_global_release_saturates_and_records_anomaly() {
+        let stats = DeploymentStats::default();
+        stats.acquire_source_global_bytes(8);
+
+        stats.release_source_global_bytes(12);
+
+        assert_eq!(stats.source_global_resident_bytes_current(), 0);
+        assert_eq!(
+            stats
+                .source_global_release_anomalies
+                .load(Ordering::Relaxed),
+            1
+        );
     }
 }
 
@@ -95,18 +112,6 @@ pub(crate) struct DeploymentRequest {
     pub(crate) delete_previous_objects_on_change: Option<DeletePreviousObjectsOnChange>,
     pub(crate) invalidate_previous_distribution_on_change: Option<String>,
     pub(crate) runtime: RuntimeOptions,
-}
-
-/// How the provider proves a destination object's content.
-///
-/// Only SSE-S3 destinations are supported, so this has one variant. It stays an enum
-/// rather than collapsing into nothing because it is part of the serialized request
-/// contract: an unrecognised value — including the withdrawn `kms-sha256` — must be
-/// rejected rather than silently defaulted.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub(crate) enum DestinationChecksumStrategy {
-    SseS3Etag,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -269,6 +274,7 @@ pub(crate) struct DeploymentStats {
     source_global_budget_bytes: AtomicU64,
     source_global_resident_bytes: AtomicU64,
     source_global_resident_bytes_high_water: AtomicU64,
+    source_global_release_anomalies: AtomicU64,
     transfer_scheduled_objects: AtomicU64,
     transfer_completed_objects: AtomicU64,
     transfer_failed_objects: AtomicU64,
@@ -314,7 +320,6 @@ pub(crate) struct DeploymentStatsSnapshot<'a> {
     pub(crate) request_type: &'a str,
     pub(crate) deployment_status: &'a str,
     pub(crate) extract: bool,
-    pub(crate) destination_checksum_strategy: DestinationChecksumStrategy,
     pub(crate) delete_stale_objects_on_deployment: bool,
     pub(crate) available_memory_mb: u64,
     pub(crate) max_parallel_transfers: usize,
@@ -407,6 +412,7 @@ pub(crate) struct SourceStats {
     pub(crate) global_budget_bytes: u64,
     pub(crate) global_resident_bytes_current: u64,
     pub(crate) global_resident_bytes_high_water: u64,
+    pub(crate) global_release_anomalies: u64,
 }
 
 #[derive(Serialize)]
@@ -801,13 +807,22 @@ impl DeploymentStats {
     }
 
     pub(crate) fn release_source_global_bytes(&self, bytes: u64) {
-        let previous = self
-            .source_global_resident_bytes
-            .fetch_sub(bytes, Ordering::AcqRel);
-        debug_assert!(
-            previous >= bytes,
-            "global source byte accounting underflowed"
-        );
+        let previous = match self.source_global_resident_bytes.fetch_update(
+            Ordering::AcqRel,
+            Ordering::Acquire,
+            |resident| Some(resident.saturating_sub(bytes)),
+        ) {
+            Ok(previous) | Err(previous) => previous,
+        };
+        if previous < bytes {
+            self.source_global_release_anomalies
+                .fetch_add(1, Ordering::Relaxed);
+            tracing::warn!(
+                released_bytes = bytes,
+                accounted_bytes = previous,
+                "source global byte accounting release exceeded resident bytes"
+            );
+        }
     }
 
     pub(crate) fn source_global_resident_bytes_current(&self) -> u64 {
@@ -908,13 +923,10 @@ impl DeploymentStats {
     ) -> DeploymentStatsSnapshot<'a> {
         DeploymentStatsSnapshot {
             event: "shin_deployment_summary",
-            schema_version: 5,
+            schema_version: 6,
             request_type,
             deployment_status,
             extract: request.extract,
-            // Only one strategy exists; the field stays in the record so historical
-            // benchmark rows keep validating against the same schema.
-            destination_checksum_strategy: DestinationChecksumStrategy::SseS3Etag,
             delete_stale_objects_on_deployment: request.delete_stale_objects_on_deployment,
             available_memory_mb: request.runtime.available_memory_mb,
             max_parallel_transfers: request.runtime.max_parallel_transfers,
@@ -1023,6 +1035,9 @@ impl DeploymentStats {
                     .load(Ordering::Relaxed),
                 global_resident_bytes_high_water: self
                     .source_global_resident_bytes_high_water
+                    .load(Ordering::Relaxed),
+                global_release_anomalies: self
+                    .source_global_release_anomalies
                     .load(Ordering::Relaxed),
             },
             put_object: PutObjectStats {

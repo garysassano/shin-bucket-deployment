@@ -94,7 +94,7 @@ Use a targeted group when a change affects a narrow AWS boundary. Examples inclu
 - S3 object or lifecycle behavior: the directly affected create/update/delete chain
 - destination identity, lifecycle, or ownership: `replacement-safety`
 - CloudFront invalidation: `cloudfront-sync` or `cloudfront-async`
-- KMS or DSSE behavior: the affected encryption scenario
+- destination-encryption validation or IAM: local synthesis and policy tests
 - scenario assertions or IAM: the scenarios whose verifier or grants changed
 
 Run the full suite only when a change crosses several scenario groups, changes shared provider or scenario-runner behavior, changes the common assertion/cleanup infrastructure, or is an intentionally selected release candidate that needs a fresh combined snapshot. A release does not require a full rerun when no relevant deployed boundary changed after the latest successful evidence.
@@ -132,7 +132,7 @@ The default suite includes:
 - explicit previous-object deletion on destination change and current-object deletion on Delete
 - duplicate source overwrite order
 - larger archive ranged-read path
-- customer-managed KMS, AWS-managed KMS, and managed DSSE destination buckets
+- synthesis-time rejection of unsupported destination encryption modes
 - CloudFront sync/async invalidation with explicit and default invalidation paths
 
 Lifecycle scenarios and assertions must use the public phase names `onDeploy`, `onChange`, and `onDelete`. Use `deleteStaleObjects`, `onChange.deletePreviousObjects`, `onChange.previousBucket`, `onChange.invalidatePreviousDistribution`, and `onDelete.deleteCurrentObjects` for the actions and cross-bucket target. Do not describe the public behavior as `prune` or `retainOnDelete`.

@@ -837,7 +837,7 @@ mod tests {
     use serde_json::{Value, json};
 
     use crate::deadline::InvocationDeadlines;
-    use crate::request::{RawDeploymentRequest, parse_request};
+    use crate::request::{RawDeploymentRequest, parse_request_with_memory};
     use crate::types::AppState;
 
     use super::{
@@ -853,12 +853,11 @@ mod tests {
             "SourceBucketNames": ["source"],
             "SourceObjectKeys": ["asset.zip"],
             "DestinationBucketName": "destination",
-            "DestinationChecksumStrategy": "sse-s3-etag",
             "DistributionId": "distribution",
             "DistributionPaths": paths
         }))
         .expect("raw deployment request");
-        parse_request(raw).expect("valid request")
+        parse_request_with_memory(raw, "1024").expect("valid request")
     }
 
     fn deployment_request_for_destination(
@@ -869,7 +868,7 @@ mod tests {
         let raw: RawDeploymentRequest =
             serde_json::from_value(deployment_request_properties(bucket, prefix, owner_id))
                 .expect("raw deployment request");
-        parse_request(raw).expect("valid request")
+        parse_request_with_memory(raw, "1024").expect("valid request")
     }
 
     fn deployment_request_properties(bucket: &str, prefix: &str, owner_id: Option<&str>) -> Value {
@@ -877,8 +876,7 @@ mod tests {
             "SourceBucketNames": ["source"],
             "SourceObjectKeys": ["asset.zip"],
             "DestinationBucketName": bucket,
-            "DestinationBucketKeyPrefix": prefix,
-            "DestinationChecksumStrategy": "sse-s3-etag"
+            "DestinationBucketKeyPrefix": prefix
         });
         if let Some(owner_id) = owner_id {
             value["DestinationOwnerId"] = json!(owner_id);
@@ -887,7 +885,7 @@ mod tests {
     }
 
     #[test]
-    fn deployment_summary_uses_diagnostics_schema_v5() {
+    fn deployment_summary_uses_diagnostics_schema_v6() {
         let request = deployment_request_with_paths(vec!["/*".to_string()]);
         let stats = crate::types::DeploymentStats::new(true);
         stats.add_marker_planning_pass();
@@ -917,7 +915,7 @@ mod tests {
         let summary = serde_json::to_value(stats.snapshot("Create", "success", &request))
             .expect("serializable summary");
 
-        assert_eq!(summary["schemaVersion"], 5);
+        assert_eq!(summary["schemaVersion"], 6);
 
         // Copy diagnostics aggregate into their own section and stay independent of
         // the PutObject counters, which remain zero for an `extract:false` deployment.
@@ -971,6 +969,7 @@ mod tests {
         assert_eq!(summary["source"]["globalBudgetBytes"], 0);
         assert_eq!(summary["source"]["globalResidentBytesCurrent"], 0);
         assert_eq!(summary["source"]["globalResidentBytesHighWater"], 0);
+        assert_eq!(summary["source"]["globalReleaseAnomalies"], 0);
         assert_eq!(summary["counts"]["destinationMetadataRetained"], 0);
         assert_eq!(summary["counts"]["destinationPageObjectsHighWater"], 0);
         assert_eq!(summary["putObject"]["wireAttempts"], 0);
@@ -1126,7 +1125,7 @@ mod tests {
 
         let summary = serde_json::to_value(stats.snapshot("Create", "failed", &request))
             .expect("serializable summary");
-        assert_eq!(summary["schemaVersion"], 5);
+        assert_eq!(summary["schemaVersion"], 6);
         assert_eq!(summary["detailedFailureDiagnosticsEnabled"], false);
         assert_eq!(summary["putObject"]["failedAttempts"], 1);
         assert_eq!(summary["putObject"]["failuresBySdkErrorKind"], json!({}));
@@ -1165,8 +1164,7 @@ mod tests {
             "ResourceProperties": {
                 "SourceBucketNames": ["source"],
                 "SourceObjectKeys": ["asset.zip"],
-                "DestinationBucketName": "destination",
-                "DestinationChecksumStrategy": "sse-s3-etag"
+                "DestinationBucketName": "destination"
             }
         }))
         .expect("invalid Delete resource type still forms an envelope");
@@ -1224,7 +1222,7 @@ mod tests {
         }))
         .expect("Delete envelope");
         let decoded = decode_deployment_request(&request).expect("current resource type");
-        let error = parse_request(decoded.resource_properties)
+        let error = parse_request_with_memory(decoded.resource_properties, "1024")
             .expect_err("Delete must not relax the current request schema");
 
         assert!(
@@ -1362,12 +1360,13 @@ mod tests {
             }))
             .expect("Update envelope");
             let decoded = decode_deployment_request(&envelope).expect("decoded Update request");
-            let decoded_current = parse_request(decoded.resource_properties)
+            let decoded_current = parse_request_with_memory(decoded.resource_properties, "1024")
                 .expect("decoded current deployment request");
-            let decoded_previous = parse_request(
+            let decoded_previous = parse_request_with_memory(
                 decoded
                     .old_resource_properties
                     .expect("Update OldResourceProperties"),
+                "1024",
             )
             .expect("decoded previous deployment request");
 

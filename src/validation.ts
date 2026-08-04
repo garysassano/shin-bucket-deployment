@@ -34,26 +34,6 @@ const ROOT_KEYS = [
   "destinationLifecycle",
 ] as const;
 
-const REMOVED_ROOT_PROPERTY_MIGRATIONS = {
-  destinationBucket: "destination.bucket",
-  destinationKeyPrefix: "destination.keyPrefix",
-  extract: "sourceProcessing.extract",
-  include: "sourceProcessing.include",
-  exclude: "sourceProcessing.exclude",
-  providerScope: "providerLambda.sharing",
-  architecture: "providerLambda.architecture",
-  memoryLimit: "providerLambda.memorySize",
-  failureDiagnostics: "providerLambda.failureDiagnostics",
-  role: "providerLambda.role",
-  logGroup: "providerLambda.logGroup",
-  vpc: "providerLambda.vpc",
-  vpcSubnets: "providerLambda.vpcSubnets",
-  securityGroups: "providerLambda.securityGroups",
-  localProviderBuild: "providerLambda.localBuild",
-  maxParallelTransfers: "transfer.maxConcurrency",
-  advancedRuntimeTuning: "transfer.advancedTuning",
-} as const;
-
 const PROVIDER_LAMBDA_KEYS = [
   "sharing",
   "architecture",
@@ -73,7 +53,6 @@ export function destinationOwnerPrefix(prefix: string | undefined): string {
 
 export function validateDeploymentProps(scope: Construct, props: ShinBucketDeploymentProps): void {
   const rawProps = requireObject(scope, props, "props");
-  rejectKnownFormerRootProperties(scope, rawProps);
   rejectUnknownKeys(scope, rawProps, "props", ROOT_KEYS);
 
   if (!Array.isArray(rawProps.sources)) {
@@ -109,7 +88,6 @@ export function validateDeploymentProps(scope: Construct, props: ShinBucketDeplo
     rawProps.providerLambda,
     "providerLambda",
     PROVIDER_LAMBDA_KEYS,
-    { scope: "sharing" },
   );
   const localBuild = optionalObjectGroup(
     scope,
@@ -158,13 +136,10 @@ export function validateDeploymentProps(scope: Construct, props: ShinBucketDeplo
     ["beforeBundling", "afterBundling"],
   );
 
-  const transfer = optionalObjectGroup(
-    scope,
-    rawProps.transfer,
-    "transfer",
-    ["maxConcurrency", "advancedTuning"],
-    { maxParallelTransfers: "maxConcurrency" },
-  );
+  const transfer = optionalObjectGroup(scope, rawProps.transfer, "transfer", [
+    "maxConcurrency",
+    "advancedTuning",
+  ]);
   const advancedTuning = optionalObjectGroup(
     scope,
     transfer?.advancedTuning,
@@ -177,10 +152,6 @@ export function validateDeploymentProps(scope: Construct, props: ShinBucketDeplo
       "sourceWindowMemoryBudgetMiB",
       "destinationWriteRetry",
     ],
-    {
-      putObjectRetry: "destinationWriteRetry",
-      sourceWindowMemoryBudgetMb: "sourceWindowMemoryBudgetMiB",
-    },
   );
   optionalObjectGroup(
     scope,
@@ -207,11 +178,6 @@ export function validateDeploymentProps(scope: Construct, props: ShinBucketDeplo
     rawProps.destinationLifecycle,
     "destinationLifecycle",
     ["onDeploy", "onChange", "onDelete"],
-    {
-      deleteDestinationObjectsOnDelete: "onDelete.deleteCurrentObjects",
-      deletePreviousDestinationObjectsOnUpdate: "onChange.deletePreviousObjects",
-      onDeployment: "onDeploy",
-    },
   );
   const onDeploy = optionalObjectGroup(
     scope,
@@ -224,18 +190,12 @@ export function validateDeploymentProps(scope: Construct, props: ShinBucketDeplo
     destinationLifecycle?.onChange,
     "destinationLifecycle.onChange",
     ["deletePreviousObjects", "previousBucket", "invalidatePreviousDistribution"],
-    {
-      deleteObjects: "deletePreviousObjects",
-      fromBucket: "previousBucket",
-      invalidateDistribution: "invalidatePreviousDistribution",
-    },
   );
   const onDelete = optionalObjectGroup(
     scope,
     destinationLifecycle?.onDelete,
     "destinationLifecycle.onDelete",
     ["deleteCurrentObjects"],
-    { deleteObjects: "deleteCurrentObjects" },
   );
 
   validateOptionalBoolean(scope, sourceProcessing?.extract, "sourceProcessing.extract");
@@ -377,106 +337,11 @@ export function validateDeploymentProps(scope: Construct, props: ShinBucketDeplo
   validateSourceMemoryProps(scope, props.providerLambda?.memorySize, advancedTransferTuning);
 }
 
-function rejectKnownFormerRootProperties(scope: Construct, props: Record<string, unknown>): void {
-  for (const [formerPath, replacementPath] of Object.entries(REMOVED_ROOT_PROPERTY_MIGRATIONS)) {
-    if (hasOwn(props, formerPath)) {
-      throw new ValidationError(
-        "ShinBucketDeploymentRemovedProperty",
-        `${formerPath} has moved to ${replacementPath}.`,
-        scope,
-      );
-    }
-  }
-
-  const replacedProperties: ReadonlyArray<readonly [string, string]> = [
-    ["prune", "destinationLifecycle.onDeploy.deleteStaleObjects"],
-    [
-      "retainOnDelete",
-      "destinationLifecycle.onChange.deletePreviousObjects and destinationLifecycle.onDelete.deleteCurrentObjects",
-    ],
-    ["distribution", "cloudfrontInvalidation.distribution"],
-    ["distributionPaths", "cloudfrontInvalidation.paths"],
-    ["waitForDistributionInvalidation", "cloudfrontInvalidation.waitForCompletion"],
-    ["shareHandler", "providerLambda.sharing"],
-    ["detailedFailureDiagnostics", "providerLambda.failureDiagnostics"],
-    ["rustProjectPath", "providerLambda.localBuild.projectPath"],
-    ["bundling", "providerLambda.localBuild.bundling"],
-    ["logRetention", "providerLambda.logGroup"],
-  ];
-  for (const [formerPath, replacementPath] of replacedProperties) {
-    if (hasOwn(props, formerPath)) {
-      throw new ValidationError(
-        "ShinBucketDeploymentRemovedProperty",
-        `${formerPath} has been replaced by ${replacementPath}.`,
-        scope,
-      );
-    }
-  }
-
-  if (hasOwn(props, "outputObjectKeys")) {
-    throw new ValidationError(
-      "ShinBucketDeploymentOutputObjectKeysRemoved",
-      "Remove outputObjectKeys; Shin returns object keys only when the objectKeys property is accessed.",
-      scope,
-    );
-  }
-
-  const unsupportedProperties: ReadonlyArray<readonly [string, string]> = [
-    [
-      "useEfs",
-      "ShinBucketDeployment does not support useEfs; the provider uses bounded ranged reads without staging archives or extracted files on disk.",
-    ],
-    [
-      "signContent",
-      "ShinBucketDeployment does not support signContent; the provider uses AWS SDK operations rather than the upstream AWS CLI upload path.",
-    ],
-    [
-      "serverSideEncryptionCustomerAlgorithm",
-      "ShinBucketDeployment does not support serverSideEncryptionCustomerAlgorithm; SSE-C is not supported and destinations always use SSE-S3.",
-    ],
-    [
-      "expires",
-      "ShinBucketDeployment does not support expires; configurable per-object metadata is outside its deployment contract.",
-    ],
-    [
-      "ephemeralStorageSize",
-      "ShinBucketDeployment does not support ephemeralStorageSize because the provider does not use Lambda temporary storage.",
-    ],
-  ];
-  for (const [property, message] of unsupportedProperties) {
-    if (hasOwn(props, property)) {
-      throw new ValidationError("ShinBucketDeploymentUnsupportedProperty", message, scope);
-    }
-  }
-
-  const removedContentSettings = [
-    "accessControl",
-    "cacheControl",
-    "contentDisposition",
-    "contentEncoding",
-    "contentLanguage",
-    "contentType",
-    "metadata",
-    "serverSideEncryption",
-    "serverSideEncryptionAwsKmsKeyId",
-    "storageClass",
-    "websiteRedirectLocation",
-  ].filter((property) => hasOwn(props, property));
-  if (removedContentSettings.length > 0) {
-    throw new ValidationError(
-      "ShinBucketDeploymentContentSettingsUnsupported",
-      `ShinBucketDeployment does not support ${removedContentSettings.join(", ")}. Destinations always use SSE-S3, which S3 applies by default, so there is no encryption to choose; configure cache/storage/lifecycle policy on the bucket or in CloudFront. Shin does not deploy configurable object metadata and infers content type from each object key.`,
-      scope,
-    );
-  }
-}
-
 function requireObjectGroup(
   scope: Construct,
   value: unknown,
   path: string,
   allowedKeys: readonly string[],
-  migrations: Readonly<Record<string, string>> = {},
 ): Record<string, unknown> {
   if (value === undefined || value === null) {
     throw new ValidationError(
@@ -485,7 +350,7 @@ function requireObjectGroup(
       scope,
     );
   }
-  return validateObjectGroup(scope, value, path, allowedKeys, migrations);
+  return validateObjectGroup(scope, value, path, allowedKeys);
 }
 
 function optionalObjectGroup(
@@ -493,10 +358,9 @@ function optionalObjectGroup(
   value: unknown,
   path: string,
   allowedKeys: readonly string[],
-  migrations: Readonly<Record<string, string>> = {},
 ): Record<string, unknown> | undefined {
   if (value === undefined) return undefined;
-  return validateObjectGroup(scope, value, path, allowedKeys, migrations);
+  return validateObjectGroup(scope, value, path, allowedKeys);
 }
 
 function validateObjectGroup(
@@ -504,18 +368,8 @@ function validateObjectGroup(
   value: unknown,
   path: string,
   allowedKeys: readonly string[],
-  migrations: Readonly<Record<string, string>>,
 ): Record<string, unknown> {
   const group = requireObject(scope, value, path);
-  for (const [formerName, replacementName] of Object.entries(migrations)) {
-    if (hasOwn(group, formerName)) {
-      throw new ValidationError(
-        "ShinBucketDeploymentRemovedProperty",
-        `${path}.${formerName} has been replaced by ${path}.${replacementName}.`,
-        scope,
-      );
-    }
-  }
   rejectUnknownKeys(scope, group, path, allowedKeys);
   return group;
 }
@@ -548,10 +402,6 @@ function rejectUnknownKeys(
       scope,
     );
   }
-}
-
-function hasOwn(value: Record<string, unknown>, key: string): boolean {
-  return Object.hasOwn(value, key);
 }
 
 function validateSources(scope: Construct, sources: unknown[]): void {

@@ -7,7 +7,6 @@ import { Bucket, type CfnBucket } from "aws-cdk-lib/aws-s3";
 import { describe, expect, test } from "vitest";
 import {
   DestinationWriteRetryJitter,
-  ProviderSharing,
   ShinBucketDeployment,
   type ShinBucketDeploymentProps,
   Source,
@@ -546,87 +545,6 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     }
   });
 
-  test.each([
-    ["accessControl", "public-read", /does not support accessControl/],
-    ["cacheControl", [], /does not support cacheControl/],
-    ["contentDisposition", "inline", /does not support contentDisposition/],
-    ["contentEncoding", "gzip", /does not support contentEncoding/],
-    ["contentLanguage", "en", /does not support contentLanguage/],
-    ["contentType", "text/plain", /does not support contentType/],
-    ["metadata", { release: "stable" }, /does not support metadata/],
-    ["serverSideEncryption", "AES256", /does not support serverSideEncryption/],
-    ["serverSideEncryptionAwsKmsKeyId", "key", /serverSideEncryptionAwsKmsKeyId/],
-    ["storageClass", "STANDARD", /does not support storageClass/],
-    ["websiteRedirectLocation", "/index.html", /does not support websiteRedirectLocation/],
-    ["useEfs", true, /does not support useEfs/],
-    ["signContent", true, /does not support signContent/],
-    ["logRetention", 7, /providerLambda\.logGroup/],
-    ["ephemeralStorageSize", {}, /does not support ephemeralStorageSize/],
-    [
-      "serverSideEncryptionCustomerAlgorithm",
-      "AES256",
-      /does not support serverSideEncryptionCustomerAlgorithm/,
-    ],
-    ["expires", { toString: (): string => "tomorrow" }, /does not support expires/],
-    ["prune", false, /destinationLifecycle\.onDeploy\.deleteStaleObjects/],
-    ["retainOnDelete", false, /destinationLifecycle\.onChange\.deletePreviousObjects/],
-    ["distributionPaths", ["/*"], /cloudfrontInvalidation/],
-    ["outputObjectKeys", false, /objectKeys property is accessed/],
-    ["shareHandler", false, /providerLambda\.sharing/],
-    ["detailedFailureDiagnostics", true, /providerLambda\.failureDiagnostics/],
-    ["rustProjectPath", "/tmp/rust", /providerLambda\.localBuild/],
-    ["bundling", {}, /providerLambda\.localBuild/],
-  ] as const)("rejects unsupported prop %s", (propName, value, pattern) => {
-    const stack = new Stack();
-    const destinationBucket = new Bucket(stack, "Dest");
-
-    expect(() => {
-      new ShinBucketDeployment(stack, "Deploy", {
-        sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
-        destination: {
-          bucket: destinationBucket,
-        },
-        [propName]: value,
-      } as never);
-    }).toThrow(pattern);
-  });
-
-  test.each([
-    ["destinationBucket", "destination.bucket"],
-    ["destinationKeyPrefix", "destination.keyPrefix"],
-    ["extract", "sourceProcessing.extract"],
-    ["include", "sourceProcessing.include"],
-    ["exclude", "sourceProcessing.exclude"],
-    ["providerScope", "providerLambda.sharing"],
-    ["architecture", "providerLambda.architecture"],
-    ["memoryLimit", "providerLambda.memorySize"],
-    ["failureDiagnostics", "providerLambda.failureDiagnostics"],
-    ["role", "providerLambda.role"],
-    ["logGroup", "providerLambda.logGroup"],
-    ["vpc", "providerLambda.vpc"],
-    ["vpcSubnets", "providerLambda.vpcSubnets"],
-    ["securityGroups", "providerLambda.securityGroups"],
-    ["localProviderBuild", "providerLambda.localBuild"],
-    ["maxParallelTransfers", "transfer.maxConcurrency"],
-    ["advancedRuntimeTuning", "transfer.advancedTuning"],
-  ] as const)("rejects former root property %s with exact migration guidance", (former, next) => {
-    const stack = new Stack();
-    const destinationBucket = new Bucket(stack, "Dest");
-
-    expect(() => {
-      new ShinBucketDeployment(stack, "Deploy", {
-        sources: [Source.data("index.html", "ok")],
-        destination: { bucket: destinationBucket },
-        [former]: undefined,
-      } as never);
-    }).toThrow(new RegExp(`${former} has moved to ${next.replaceAll(".", "\\.")}\\.`));
-    expect(
-      stack.node
-        .findAll()
-        .some((construct) => construct.node.id.startsWith("ShinBucketDeploymentHandler")),
-    ).toBe(false);
-  });
-
   test("rejects malformed required objects before provider creation", () => {
     const stack = new Stack();
     const destinationBucket = new Bucket(stack, "Dest");
@@ -725,83 +643,6 @@ describe("ShinBucketDeployment validation and option coverage", () => {
         new RegExp(`Unknown ShinBucketDeployment property ${path.replaceAll(".", "\\.")}`),
       );
     }
-  });
-
-  test.each([
-    [
-      "providerLambda.scope",
-      { providerLambda: { scope: ProviderSharing.STACK } },
-      /providerLambda\.sharing/,
-    ],
-    [
-      "transfer.maxParallelTransfers",
-      { transfer: { maxParallelTransfers: 8 } },
-      /transfer\.maxConcurrency/,
-    ],
-    [
-      "transfer.advancedTuning.putObjectRetry",
-      { transfer: { advancedTuning: { putObjectRetry: { maxAttempts: 4 } } } },
-      /destinationWriteRetry/,
-    ],
-    [
-      "transfer.advancedTuning.sourceWindowMemoryBudgetMb",
-      { transfer: { advancedTuning: { sourceWindowMemoryBudgetMb: 256 } } },
-      /sourceWindowMemoryBudgetMiB/,
-    ],
-  ] as const)("rejects replaced nested property %s", (_path, invalid, expected) => {
-    const stack = new Stack();
-    const destinationBucket = new Bucket(stack, "Dest");
-
-    expect(() => {
-      new ShinBucketDeployment(stack, "Deploy", {
-        sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
-        destination: {
-          bucket: destinationBucket,
-        },
-        ...invalid,
-      } as never);
-    }).toThrow(expected);
-  });
-
-  test("rejects the obsolete flat destination lifecycle shape", () => {
-    const stack = new Stack();
-    const destinationBucket = new Bucket(stack, "Dest");
-
-    expect(() => {
-      new ShinBucketDeployment(stack, "Deploy", {
-        sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
-        destination: {
-          bucket: destinationBucket,
-        },
-        destinationLifecycle: {
-          deleteDestinationObjectsOnDelete: true,
-        },
-      } as never);
-    }).toThrow(/onDelete\.deleteCurrentObjects/);
-  });
-
-  test.each([
-    ["onChange.deleteObjects", { onChange: { deleteObjects: true } }, /deletePreviousObjects/],
-    ["onChange.fromBucket", { onChange: { fromBucket: true } }, /previousBucket/],
-    [
-      "onChange.invalidateDistribution",
-      { onChange: { invalidateDistribution: true } },
-      /invalidatePreviousDistribution/,
-    ],
-    ["onDelete.deleteObjects", { onDelete: { deleteObjects: true } }, /deleteCurrentObjects/],
-  ] as const)("rejects ambiguous destination lifecycle name %s", (_name, lifecycle, expected) => {
-    const stack = new Stack();
-    const destinationBucket = new Bucket(stack, "Dest");
-
-    expect(() => {
-      new ShinBucketDeployment(stack, "Deploy", {
-        sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
-        destination: {
-          bucket: destinationBucket,
-        },
-        destinationLifecycle: lifecycle,
-      } as never);
-    }).toThrow(expected);
   });
 
   test("rejects previousBucket without deletePreviousObjects", () => {

@@ -255,9 +255,6 @@ function validateMethodologyV2Records(
     if (record.providerSummary?.requestType !== expectedRequestType) {
       errors.push(`${record.sampleId}/${record.phase}: summary requestType mismatch`);
     }
-    if (record.providerSummary?.destinationChecksumStrategy !== "sse-s3-etag") {
-      errors.push(`${record.sampleId}/${record.phase}: summary checksum strategy mismatch`);
-    }
     if (
       Math.abs(
         (record.providerSummary?.durationMs ?? Number.POSITIVE_INFINITY) / 1000 -

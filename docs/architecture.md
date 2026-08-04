@@ -8,7 +8,7 @@ This document is the source of truth for the current `ShinBucketDeployment` prov
 
 The public configuration has seven root components: `sources`, `destination`, `sourceProcessing`, `providerLambda`, `transfer`, `cloudfrontInvalidation`, and `destinationLifecycle`. These groups are plain configuration values. They do not create constructs, scopes, child IDs, Lambda functions, or protocol objects.
 
-`providerLambda` is the resource-identity boundary. Its architecture, memory, diagnostics, role, log group, networking, security groups, and build identity configure or select the backing Lambda. `providerLambda.sharing` chooses compatible stack sharing or deployment isolation. `transfer` is request-scoped: concurrency, source-window tuning, and destination-write retry values are serialized on each custom resource and may differ between deployments sharing one compatible handler.
+`providerLambda` is the resource-identity boundary. Its architecture, memory, diagnostics, role, log group, networking, security groups, and build identity configure or select the backing Lambda. `providerLambda.sharing` chooses stack sharing or deployment isolation. `transfer` is request-scoped: concurrency, source-window tuning, and destination-write retry values are serialized on each custom resource and may differ between deployments sharing one identically configured handler.
 
 The provider Lambda:
 
@@ -98,85 +98,6 @@ sum(resident source block bytes across archives) <= globalSourceBudgetBytes
 
 `transfer.advancedTuning.sourceWindowMemoryBudgetMiB` can lower `globalSourceBudgetBytes`; it cannot raise the half-memory cap. The final local-window `max` preserves enough blocks to use the configured source GET concurrency, while the `min(sourceZipBytes)` clamp avoids planning a larger local window than the archive can contain. `sourceBlockBytes * sourceGetConcurrency` is already validated to fit the global budget. The global semaphore, not the sum of local-window values, is the aggregate bound.
 
-### Observed source-window behavior
-
-Measured 2026-08-03 at provider commit `20313b6`, `mixed` profile (442 files, 17.5 MiB
-archive), five repetitions per canonical configuration. Evidence rows are in
-`benchmarks/results.jsonl`.
-
-At the measured provider commit, the reservation above scaled with `maxConcurrency`, and
-`capacityBytes` saturated at zero. Once `reservedBytes` exceeded
-`globalSourceBudgetBytes`, the then-current final `max` dropped the window to a single
-`sourceBlockBytes` block. That floor could not sustain the configured source GET pipeline.
-The current formula instead preserves `sourceGetConcurrency` blocks, subject to archive
-size and the existing global budget validation. The measurements below describe the
-pre-fix single-block behavior; `source.residentBytesHighWater` collapsing to roughly one
-block was its signal.
-
-Pre-fix predicted versus measured `residentBytesHighWater`:
-
-| Configuration | reservedBytes | budget | predicted window | measured |
-| --- | ---: | ---: | ---: | ---: |
-| 1024 MiB / 32 | 481 MiB | 512 MiB | 17.5 MiB (whole archive) | 19.0 MiB |
-| 2048 MiB / 64 | 897 MiB | 1024 MiB | 17.5 MiB (whole archive) | 19.0 MiB |
-| 4096 MiB / 128 | 1665 MiB | 2048 MiB | 17.5 MiB (whole archive) | 19.0 MiB |
-| 1024 MiB / 128 | 1633 MiB | 512 MiB | 8 MiB (floor) | 7.8 MiB |
-| 2048 MiB / 128 | 1665 MiB | 1024 MiB | 8 MiB (floor) | 7.8 MiB |
-| 3072 MiB / 128 | 1665 MiB | 1536 MiB | 8 MiB (floor) | 7.8 MiB |
-
-Confirmed consequences of a collapsed window, all from the same rows:
-
-- `activeGetsHighWater` falls from 3 to 1: the reader stops running ahead.
-- `blockWaits` rises about 2.4x (62-64 to 152-153), entirely `blockWaitsFetching`.
-  `blockWaitsCapacity` is zero in every observation, so the provider never waits on the
-  memory budget itself.
-- Provider duration for `cold-create` rises 18.0% at 1024 MiB and 18.0% at 2048 MiB, two
-  independent memory settings producing the same figure.
-- Request bodies can starve outright, producing `PutObject` failures with service code
-  `RequestTimeout` after about 55 s having emitted zero body bytes, with producers in the
-  `reading-source` stage. `putObject.throttledAttempts` is zero in these observations, so
-  this is not S3 throttling. Provider-owned retries sometimes absorb it and sometimes do
-  not:
-
-  | Workload | Configuration | Outcome |
-  | --- | --- | --- |
-  | `mixed` (442 files, 17.5 MiB) | 3072 MiB / 128, run beside two other 128-transfer stacks | 27 failures, all objects completed, 56 s |
-  | `mixed` | 3072 MiB / 128, run alone | clean, 0.999 s |
-  | `large-few` (32 files, 2-12 MB each) | **1024 MiB / 32 (the shipped defaults)** | 6 failures, retries completed, 56.3 s |
-  | `large-few` | 1024 MiB / 128 | 5 failures, retries completed, 56.2 s |
-  | `large-few` | 2048 MiB / 64 | clean, 1.179 s |
-  | `large-few` | **2048 MiB / 128** | **retries exhausted; `CREATE_FAILED`, deployment failed** |
-  | `large-few` | 4096 MiB / 128 | clean, 0.962 s |
-
-  The 2048 MiB / 128 case is a hard failure, not a slow success: CloudFormation reported
-  `CREATE_FAILED` with `failed to upload ...: RequestTimeout`. Both settings are within the
-  documented range (`maxConcurrency` accepts up to 256). Retries are therefore not a
-  guaranteed backstop for this condition.
-
-Reserve calibration measured on the same rows, fitting peak Lambda memory against
-concurrency and window (residual under 1 MiB across all six configurations):
-
-```text
-peakMemoryMiB = 67.4 + (0.342 * maxConcurrency) + (0.79 * sourceWindowMiB)
-```
-
-The 64 MiB base reserve matches the measured 67.4 MiB. The 12 MiB transfer-worker reserve
-does not match the measured 0.342 MiB marginal cost per worker on this profile; the
-structural per-worker buffers described above total about 1.3 MiB even at worst case.
-Because the reserve is multiplied by a caller-controlled value, the window threshold on
-this profile lands at approximately 33 transfers at 1024 MiB, 73 at 2048 MiB, 116 at
-3072 MiB, and 159 at 4096 MiB. `DEFAULT_TRANSFER_MAX_CONCURRENCY` is 32 and
-`DEFAULT_PROVIDER_LAMBDA_MEMORY_SIZE_MIB` is 1024, so the shipped default sits immediately
-below the threshold on this profile.
-
-On `large-few` the reserve behaves differently and the model above does not fully predict
-it: measured resident high-water at 1024 MiB / 128 was 38.8 MiB where the formula implies a
-single-block floor, most likely because replay can borrow invocation-global permits and
-exceed the local window. What the model does predict correctly on that profile is the
-failure boundary: 2048 MiB / 64 keeps the reservation under budget and is clean, while
-2048 MiB / 128 pushes it over and is the configuration that failed to deploy. Treat the
-reserve constant and the window model as calibrated on `mixed` only.
-
 ## Supported Scenarios
 
 Scenarios are driven through the repository runner. Verification mode runs every default correctness scenario when no name is provided; benchmark mode runs the selected benchmark scenario across the requested config matrix.
@@ -221,9 +142,6 @@ AWS verification is cost-bearing and deliberately maintainer-run; there is no ho
 | `replacement-safety-initial` / `replacement-safety-updated` | `scenarios/apps/retention/replacement-safety-initial-app.ts`, `scenarios/apps/retention/replacement-safety-updated-app.ts` | Ordered handler-memory replacement plus self-verifying child-to-parent, parent-to-child, sibling-prefix, and cross-bucket moves with destructive Delete enabled, previous cleanup explicitly disabled and enabled, and exact initial/current/retained/deleted object-state assertions. |
 | `extract-false` | `scenarios/apps/basic/extract-false-app.ts` | Direct archive copy mode with `extract=false`, provider-owned retry settings, destination guards, and opaque lost-response reconciliation metadata. |
 | `large-archive` | `scenarios/apps/scale/large-archive-app.ts` | Larger archive ranged-read path. |
-| `kms-destination` | `scenarios/apps/security/kms-destination-app.ts` | KMS-encrypted destination bucket. |
-| `kms-managed-destination` | `scenarios/apps/security/kms-managed-destination-app.ts` | AWS-managed S3 KMS destination for the stored-checksum path. |
-| `dsse-managed-destination` | `scenarios/apps/security/dsse-managed-destination-app.ts` | Managed DSSE destination for the stored-checksum path. |
 | `cloudfront-sync` | `scenarios/apps/cloudfront/cloudfront-sync-app.ts` | CloudFront invalidation with explicit paths and synchronous stack wait. |
 | `cloudfront-async` | `scenarios/apps/cloudfront/cloudfront-async-app.ts` | CloudFront invalidation with default paths and asynchronous stack completion. |
 | `assets` | `benchmarks/apps/assets-app.ts` | Deterministic benchmark asset bundles. |
@@ -269,13 +187,13 @@ flowchart TD
   R -. "CloudFront error" .-> X
 ```
 
-By default, compatible deployments create a stack-scoped handler whose construct ID hashes its Lambda settings and source identity. Prebuilt source identity includes the package version, architecture, and exact bootstrap archive SHA-256. Local compilation includes the package version and manifest path, while normalized bundling settings remain part of the complete handler identity. Distinct installed package/provider copies therefore cannot silently bind different request shapes to whichever shared handler was created first. Package or provider identity changes replace the shared handler by design; the release introducing this identity performs that handoff once for each previous shared handler.
+By default, deployments with identical provider configuration create a stack-scoped handler whose construct ID hashes its Lambda settings and source identity. Prebuilt source identity includes the package version, architecture, and exact bootstrap archive SHA-256. Local compilation includes the package version and manifest path, while normalized bundling settings remain part of the complete handler identity. Distinct installed package/provider copies therefore cannot silently bind different request shapes to whichever shared handler was created first. Package or provider identity changes replace the shared handler by design.
 
-Deployments sharing a handler also share its role, which accumulates permissions from every source, destination, KMS key, lifecycle transition, and CloudFront distribution used by those deployments. Every `transfer` field remains request-scoped and can differ between deployments using the same compatible handler.
+Deployments sharing a handler also share its role, which accumulates permissions from every source, source KMS key, destination, lifecycle transition, and CloudFront distribution used by those deployments. Source bindings may grant source-key decryption when required. Destinations must use SSE-S3 and add no destination KMS authority. Every `transfer` field remains request-scoped and can differ between deployments using the same handler.
 
-`providerLambda.sharing: ProviderSharing.DEPLOYMENT` instead creates a stable handler child beneath that deployment construct. Construct-generated roles and log destinations are consequently deployment-scoped, and the provider policy receives only that deployment's source, destination, lifecycle, KMS, and CloudFront grants. Explicit `providerLambda.role` or `providerLambda.logGroup` values remain caller-owned and may intentionally be reused. Isolation trades more functions, roles, log resources, and independent cold starts for smaller permission and mutation blast radii; operational cost follows their separate invocations, logs, and any caller-configured provisioned concurrency.
+`providerLambda.sharing: ProviderSharing.DEPLOYMENT` instead creates a stable handler child beneath that deployment construct. Construct-generated roles and log destinations are consequently deployment-scoped, and the provider policy receives only that deployment's source, source-key, destination, lifecycle, and CloudFront grants. Explicit `providerLambda.role` or `providerLambda.logGroup` values remain caller-owned and may intentionally be reused. Isolation trades more functions, roles, log resources, and independent cold starts for smaller permission and mutation blast radii; operational cost follows their separate invocations, logs, and any caller-configured provisioned concurrency.
 
-The construct uses the modeled `AWS::CloudFormation::CustomResource` type and includes the handler identity in the custom resource's logical identity. A changed shared Lambda service token therefore creates a replacement instead of attempting the unsupported in-place token update. Isolated handler settings update the stable deployment-scoped function in place. Each custom-resource generation receives a distinct destination-owner identity, while retries of the same generation return the same deterministic physical resource ID. During replacement, the destination bucket's ownership tag is updated before the previous generation is deleted; the previous handler sees the replacement as an overlapping owner and retains the live namespace. Create derives that deterministic ID from the owner and destination, while Update reuses CloudFormation's incoming ID so a bucket or prefix change remains an in-place update governed by `onChange` rather than triggering a cleanup-phase Delete. The package-aware identity transition is therefore safe even when `onDelete.deleteCurrentObjects` is enabled. Create, Update, and Delete all require this one current resource type and request schema.
+The construct uses the modeled `AWS::CloudFormation::CustomResource` type and includes the handler identity in the custom resource's logical identity. A changed shared Lambda service token therefore creates a replacement instead of attempting the unsupported in-place token update. Isolated handler settings update the stable deployment-scoped function in place. Each custom-resource generation receives a distinct destination-owner identity, while retries of the same generation return the same deterministic physical resource ID. During replacement, the destination bucket's ownership tag is updated before the previous generation is deleted; the previous handler sees the replacement as an overlapping owner and retains the live namespace. Create derives that deterministic ID from the owner and destination, while Update reuses CloudFormation's incoming ID so a bucket or prefix change remains an in-place update governed by `onChange` rather than triggering a cleanup-phase Delete. Package-aware identity replacement is therefore safe even when `onDelete.deleteCurrentObjects` is enabled. Create, Update, and Delete all require this one current resource type and request schema.
 
 ## Destination Lifecycle
 
@@ -295,13 +213,13 @@ Parent/child prefix changes are segment-aware, and slash runs are exact key byte
 
 `OldResourceProperties` exists only in the runtime Update event. CDK cannot use it during synthesis to add IAM permissions or construct dependencies. The provider can derive the previous prefix at runtime, and CDK can reuse current bucket and distribution permissions when those resources did not change. A changed bucket or distribution instead needs an explicit previous-resource reference in the new template.
 
-Because the previous prefix is unknown during synthesis, enabling previous-object deletion grants List/Delete and ownership-tag access across the selected bucket. The provider limits runtime work to the previous prefix from `OldResourceProperties`, but the execution role's S3 permission remains broader while that option is in the template. Remove `onChange.deletePreviousObjects` and `previousBucket` after a one-time transition if that authority is no longer needed.
+Because the previous prefix is unknown during synthesis, enabling previous-object deletion grants List/Delete and ownership-tag access across the selected bucket. The provider limits runtime work to the previous prefix from `OldResourceProperties`, but the execution role's S3 permission remains broader while that option is in the template. Remove `onChange.deletePreviousObjects` and `previousBucket` after the destination change if that authority is no longer needed.
 
-Fully automatic cross-bucket cleanup would require wildcard permissions over buckets absent from the synthesized construct graph, weakening least privilege, omitting useful CloudFormation dependencies, and granting authority unrelated to the declared migration. Shin instead requires an explicit previous `IBucket` and scopes the additional grant to it. Changed CloudFront distributions likewise require an explicit previous `IDistributionRef` and receive distribution-specific invalidation permissions.
+Fully automatic cross-bucket cleanup would require wildcard permissions over buckets absent from the synthesized construct graph, weakening least privilege, omitting useful CloudFormation dependencies, and granting authority unrelated to the declared destination change. Shin instead requires an explicit previous `IBucket` and scopes the additional grant to it. Changed CloudFront distributions likewise require an explicit previous `IDistributionRef` and receive distribution-specific invalidation permissions.
 
 ## Upstream `BucketDeployment` lifecycle comparison
 
-This comparison was checked against AWS CDK `main` commit [`2b1c632dc2ab754882bdae066555879d8c702944`](https://github.com/aws/aws-cdk/tree/2b1c632dc2ab754882bdae066555879d8c702944). It is intentionally balanced: upstream's delete-previous-first order avoids the specific former Shin regression where deploy-then-sweep could erase newly written child content. Shin keeps new content available and makes the cleanup decision more precise.
+This comparison was checked against AWS CDK `main` commit [`2b1c632dc2ab754882bdae066555879d8c702944`](https://github.com/aws/aws-cdk/tree/2b1c632dc2ab754882bdae066555879d8c702944). Upstream's delete-previous-first order prevents a deploy-then-sweep sequence from erasing newly written child content. Shin keeps new content available and makes the cleanup decision more precise.
 
 Upstream's Python handler:
 
@@ -338,13 +256,12 @@ For `extract=true`:
 8. Preflight every final UTF-8 destination key, single-request object size, archive span, and aggregate output total before destination mutation.
 9. Coalesce planned source spans into shared source blocks, locate intersecting blocks with indexed interval boundaries, prefetch them with bounded source GET concurrency, and release blocks after all active readers consume their claims. All archives borrow fairly from the invocation-global source budget. Every provider-owned ranged-read attempt disables SDK retries; transient transport, timeout, throttling, retryable 5xx, and incomplete-body failures can use the remaining three-total-attempt budget, while permanent 4xx and validation failures stop immediately.
 10. List the destination prefix for comparison. Count all listed objects, but retain size and `ETag` metadata only for keys in the manifest.
-11. On SSE-S3 destinations, skip existing marker-free trusted entries when destination size and `ETag` match the authenticated catalog. Existing untrusted entries are read/decompressed once for CRC/size/MD5 comparison; missing entries avoid that precomparison pass.
-12. On KMS/DSSE destinations, do not use destination `ETag` as plaintext MD5 and do not perform a useless precomparison read. Trusted entries still validate their catalog MD5 while streaming; untrusted entries do not compute MD5.
-13. Stream every marker-bearing entry through a deterministic planning pass. Simultaneous replacements use leftmost-longest matching, lexicographic token order for equal-length ties, and never rescan replacement bytes. The pass validates source size/CRC/catalog MD5, enforces the expanded size limit, determines exact `Content-Length`, and calculates final MD5 only for SSE-S3 destinations.
-14. Skip an unchanged SSE-S3 marker object after that planning pass. Otherwise reopen the entry for a retryable streaming upload pass; each consumed retry body repeats only that bounded upload pass. Hold back the final output frame until source validation and the planning-pass length/digest checks succeed.
-15. Set inferred `Content-Type` on every PUT. SSE-S3 uploads retain streamed MD5 for ambiguous-write reconciliation without storing another checksum. KMS/DSSE uploads request stored full-object SHA-256 and calculate the independent expected digest while streaming.
-16. Admit at most `transfer.maxConcurrency` logical object tasks, continuously drain completed joins, and stop admission on the first observed error or panic. Abort and drain outstanding work before stale deletion or invalidation can run.
-17. When stale deletion is enabled and the comparison list found a stale candidate, list the destination again after successful transfers and delete non-manifest keys from each page before requesting the next page.
+11. Skip existing marker-free trusted entries when destination size and `ETag` match the authenticated catalog. Existing untrusted entries are read/decompressed once for CRC/size/MD5 comparison; missing entries avoid that precomparison pass.
+12. Stream every marker-bearing entry through a deterministic planning pass. Simultaneous replacements use leftmost-longest matching, lexicographic token order for equal-length ties, and never rescan replacement bytes. The pass validates source size/CRC/catalog MD5, enforces the expanded size limit, determines exact `Content-Length`, and calculates final MD5.
+13. Skip an unchanged marker object after that planning pass. Otherwise reopen the entry for a retryable streaming upload pass; each consumed retry body repeats only that bounded upload pass. Hold back the final output frame until source validation and the planning-pass length/digest checks succeed.
+14. Set inferred `Content-Type` on every PUT and retain streamed MD5 for ambiguous-write reconciliation without storing another checksum.
+15. Admit at most `transfer.maxConcurrency` logical object tasks, continuously drain completed joins, and stop admission on the first observed error or panic. Abort and drain outstanding work before stale deletion or invalidation can run.
+16. When stale deletion is enabled and the comparison list found a stale candidate, list the destination again after successful transfers and delete non-manifest keys from each page before requesting the next page.
 
 For `extract=false`:
 
@@ -352,7 +269,7 @@ For `extract=false`:
 2. Build copy plans using the source object `ETag` as the expected content identity.
 3. Preflight final keys and known source sizes.
 4. List the destination prefix for comparison, retaining metadata only for manifest keys.
-5. On SSE-S3 destinations, skip copies whose destination `ETag` matches the source identity. On KMS/DSSE destinations, copy because encrypted destination `ETag`s do not provide that comparison.
+5. Skip copies whose destination `ETag` matches the source identity.
 6. Run copies with source and destination preconditions, `MetadataDirective=REPLACE`, inferred `Content-Type`, and an opaque reconciliation identity in user metadata. Every provider attempt disables SDK retries. No unused copy checksum is requested.
 7. When stale deletion is enabled and the comparison list found a stale candidate, perform the same post-transfer page-streamed destination scan and deletion.
 
@@ -363,9 +280,7 @@ The comparison scan retains at most one destination metadata record per manifest
 ```mermaid
 flowchart LR
   A["Planned object"] --> B["Destination ListObjectsV2 content identity"]
-  B --> C{"Destination strategy"}
-  C -->|"KMS or DSSE"| K["Upload or copy without ETag precomparison"]
-  C -->|"default or SSE-S3"| D{"Destination object exists?"}
+  B --> D{"Destination object exists?"}
   D -->|No| E["Upload without pre-hashing"]
   D -->|Yes| F{"Planned object type"}
   F -->|"extract=false"| G["Expected ETag from source HeadObject"]
@@ -377,22 +292,22 @@ flowchart LR
   I --> L
   J --> L
   L -->|Yes| M["Skip upload or copy"]
-  L -->|No| K
+  L -->|No| K["Upload or copy"]
 ```
 
 The provider's skip identity is content only. It does not expose deployment-wide object metadata overrides and does not parse `OldResourceProperties` for object settings. Every PUT and COPY infers `Content-Type` from the deployed object's file extension with an `application/octet-stream` fallback; cache behavior belongs in CloudFront, while encryption, storage, and lifecycle defaults belong on the bucket.
 
-`ListObjectsV2` exposes destination `ETag`, but not the actual checksum value needed to compare stored SHA-256. Performing one checksum-mode `HeadObject` per destination object would defeat the bounded comparison model. Shin therefore uses catalog/MD5 skips only for default/SSE-S3 destinations and reserves checksum-mode `HeadObject` for reconciling ambiguous KMS/DSSE writes. The optional second list runs only when the comparison list found a stale candidate; it is a page-streamed cleanup pass and retains no comparison metadata.
+`ListObjectsV2` exposes the destination `ETag` used for SSE-S3 content comparison. The optional second list runs only when the comparison list found a stale candidate; it is a page-streamed cleanup pass and retains no comparison metadata.
 
-Directory `Source.asset` inputs are packaged with an authenticated source MD5 catalog. On SSE-S3 destinations, marker-free entries with trusted MD5s and matching destination size can be skipped without reading ZIP entry bytes. Without a trusted catalog match, existing marker-free entries are read and decompressed to compute MD5; missing entries stream straight to upload. On KMS/DSSE destinations, entries stream without a destination-comparison pass because encrypted `ETag`s are not plaintext MD5. ZIP entry reads always validate declared uncompressed size and CRC32, and validate authenticated MD5 whenever present, before the final upload chunk is released.
+Directory `Source.asset` inputs are packaged with an authenticated source MD5 catalog. Marker-free entries with trusted MD5s and matching destination size can be skipped without reading ZIP entry bytes. Without a trusted catalog match, existing marker-free entries are read and decompressed to compute MD5; missing entries stream straight to upload. ZIP entry reads always validate declared uncompressed size and CRC32, and validate authenticated MD5 whenever present, before the final upload chunk is released.
 
-That comparison read is the uncataloged fallback cost, and it is a real one: an existing marker-free entry whose destination size matches is decompressed once to compute MD5, and on a mismatch its bytes are needed a second time for the upload. To avoid paying for the same decode twice, the comparison pass spools its decoded output when the entry is small enough, and a mismatching entry then uploads straight from those bytes without re-reading the archive. The per-entry threshold is derived, not configured: a fixed 16 MiB deployment-wide spool budget divided by `transfer.maxConcurrency`, which is the number of entries the scheduler can have in flight. At the default concurrency of 32 that is 512 KiB per entry, and at 128 it is 128 KiB. Larger entries keep the previous behavior and are decompressed twice; a spooled entry additionally does not pin its source blocks for replay, so the spool partly pays for itself. Marker entries deliberately keep both passes, because their upload body is regenerated from the source to stay retryable.
+That comparison read is the uncataloged fallback cost: an existing marker-free entry whose destination size matches is decompressed once to compute MD5, and on a mismatch its bytes are needed a second time for the upload. To avoid paying for the same decode twice, the comparison pass spools its decoded output when the entry is small enough, and a mismatching entry then uploads straight from those bytes without re-reading the archive. The per-entry threshold is derived, not configured: a fixed 16 MiB deployment-wide spool budget divided by `transfer.maxConcurrency`, which is the number of entries the scheduler can have in flight. At the default concurrency of 32 that is 512 KiB per entry, and at 128 it is 128 KiB. Larger entries are decompressed twice; a spooled entry additionally does not pin its source blocks for replay, so the spool partly pays for itself. Marker entries deliberately keep both passes, because their upload body is regenerated from the source to stay retryable.
 
 Marker entries use a compiled multi-pattern automaton with simultaneous, non-recursive semantics. The earliest input match wins; at that position the longest token wins; equal-length tokens are ordered lexicographically. Replacement values, including JSON-escaped values, are written directly and are never searched again. Input carry is bounded by the longest token, so matches may cross any decompression chunk without whole-entry buffering.
 
-S3 requires exact `Content-Length` before `PutObject` starts. Marker entries therefore use one bounded planning pass. If an existing SSE-S3 object has the resulting MD5, deployment stops there. An object that needs upload uses a second bounded pass whose body can be reopened for application or SDK replay. KMS/DSSE marker entries necessarily use both passes because destination `ETag` is not a plaintext identity. The corrected stable-payload decision run in [benchmark](./benchmark.md#marker-replacement-performance-decision) accepted this conditional extra read: current provider time improved 81.9% to 90.9% and peak memory fell 42.4% to 46.5% versus whole-entry materialization while remaining 8.4x to 16.9x faster than upstream.
+S3 requires exact `Content-Length` before `PutObject` starts. Marker entries therefore use one bounded planning pass. If an existing object has the resulting MD5, deployment stops there. An object that needs upload uses a second bounded pass whose body can be reopened for application or SDK replay.
 
-`extract=false` copies use source and destination `ETag` comparison only on SSE-S3 destinations. Source object `ETag` and exact content length come from a source `HeadObject`; destination `ETag` comes from the single destination list. Missing source identity fails before mutation. KMS/DSSE destinations copy without treating their destination `ETag` as plaintext identity.
+`extract=false` copies compare source and destination `ETag` values. Source object `ETag` and exact content length come from a source `HeadObject`; destination `ETag` comes from the single destination list. Missing source identity fails before mutation.
 
 ## Authenticated Catalog Trust
 
@@ -440,21 +355,19 @@ The memory claim is intentionally scoped: Shin performs no whole-asset or whole-
 
 Extracted uploads and direct copies use destination preconditions derived from the destination listing. Missing destination keys are written with `If-None-Match: *`; existing destination keys with a listed `ETag` use `If-Match` for that `ETag`; existing keys without a usable `ETag` fall back to an unguarded write. Every provider-owned `PutObject` and `CopyObject` attempt disables SDK retries, so permanent 4xx responses and source CRC/archive validation failures cannot be replayed underneath the typed retry policy. Transient transport, timeout, HTTP 408/429/5xx, S3 `InternalError`/request-timeout, and throttling failures use capped backoff and the shared throttle cooldown. A copy-specific 409 is retried after reconciliation finds no completed write; other conditional conflicts fail closed when reconciliation does not match.
 
-The construct requires the destination bucket to use SSE-S3, and validates that against the bucket's synthesized encryption rule. Default or `AES256` encryption is accepted; `aws:kms` and `aws:kms:dsse` are refused at synthesis. That refusal is a deliberate scope choice, not an inspection limit. Every skip decision compares a destination `ETag` from a single `ListObjectsV2` page against a known plaintext MD5. A KMS or DSSE object's `ETag` is not that digest, and listings carry no checksum, so proving those objects unchanged would require a per-object `HeadObject` plus a stored-digest scheme maintained in parallel with the `ETag` one — a second reconciliation path across both the upload and copy flows. Shin declines to carry it; without it, every deployment silently re-uploads every object, which is the behaviour that motivated the removal. Validation is deferred to synthesis so post-construction L1 or Aspect mutations are visible; imported buckets and tokenized, unknown, or multi-rule encryption are rejected because no public declaration or runtime guess can safely replace inspection. Because SSE-S3 needs no key access, the provider role is granted no KMS actions at all. The runtime does not call `GetBucketEncryption`.
+The construct requires the destination bucket to use SSE-S3, and validates that against the bucket's synthesized encryption rule. Default or `AES256` encryption is accepted; `aws:kms` and `aws:kms:dsse` are refused at synthesis. Every skip decision compares a destination `ETag` from a single `ListObjectsV2` page against a known plaintext MD5. Supporting other destination encryption modes would require a separate reconciliation path, so they are outside the contract. Validation is deferred to synthesis so post-construction L1 or Aspect mutations are visible; imported buckets and tokenized, unknown, or multi-rule encryption are rejected because no public declaration or runtime guess can safely replace inspection. Because SSE-S3 needs no destination key access, the provider role is granted no destination KMS actions. The runtime does not call `GetBucketEncryption`.
 
 The upload stream computes MD5 alongside required source validation and does not request an optional SDK checksum. An ambiguous conditional `409` or `412` uses ordinary `HeadObject` and reports success only when content length and the single-part destination `ETag` match. Reconciliation reads no object or bucket ACLs. Missing evidence or any content difference fails closed.
 
-The normal SSE-S3 path performs no Shin SHA-256 pass and disables optional SDK checksum calculation. The KMS/DSSE path necessarily performs both the provider digest used independently after a lost response and the SDK's stored-checksum calculation. The controlled PR #12 run in [benchmark](./benchmark.md#pr-12-performance-decision-run) measured that KMS-only cost within -2.2% to +3.4% of the earlier provider duration while retaining a 2.6x to 2.7x provider-time advantage over upstream.
+The upload path performs no Shin SHA-256 pass and disables optional SDK checksum calculation.
 
 The source ZIP ranged-read path still uses source `If-Match` when the source object has an `ETag`; that protects a single deployment from reading a source archive that changes while it is being streamed. Shin owns the complete three-total-attempt ranged-read policy. Every attempt disables AWS SDK retries, retries only typed transient/throttling failures or incomplete bodies, and never replays permanent 4xx responses, request construction failures, or local range validation errors.
 
 Transfer scheduling is bounded by `transfer.maxConcurrency`, including comparison/hash work as well as upload or copy work. Completed joins are removed while new objects are admitted, so task-handle memory is O(configured concurrency), not O(object count). The first observed transfer error or panic closes admission, aborts and drains outstanding transfer tasks, cancels source schedulers, wakes source-block and capacity waiters, and leaves later stale deletion and CloudFront invalidation unreachable. Retryable ZIP bodies share an attempt counter across application and SDK clones but do not start a decompressor, activate a source reader, or add replay claims until the body is first polled.
 
-`extract=false` remains on the `CopyObject` path. SSE-S3 skip decisions use `ETag`; KMS/DSSE copies do not use encrypted destination `ETag`s as plaintext identity. Each copy atomically replaces metadata with the inferred content type plus an opaque `shin-copy-identity` SHA-256 token bound to the source bucket/key/ETag/length and destination bucket/key. A conditional conflict or final ambiguous response uses ordinary `HeadObject` and succeeds only when that exact token and length match. This proves the intended operation without downloading the source, relying on encryption-sensitive destination `ETag`s, or requesting a checksum that normal copies do not consume. A concurrent or unrelated destination value lacks the token and fails closed.
+`extract=false` remains on the `CopyObject` path. Each copy atomically replaces metadata with the inferred content type plus an opaque `shin-copy-identity` SHA-256 token bound to the source bucket/key/ETag/length and destination bucket/key. A conditional conflict or final ambiguous response uses ordinary `HeadObject` and succeeds only when that exact token and length match. This proves the intended operation without downloading the source or requesting a checksum that normal copies do not consume. A concurrent or unrelated destination value lacks the token and fails closed.
 
-The same token also retires unchanged copies that the listing-only `ETag` comparison structurally cannot. A multipart source `ETag` is `<md5>-<parts>` while `CopyObject` writes a single-part destination whose `ETag` is a plain MD5, so the comparison never matches and an unchanged multipart source would be re-copied on every deployment. An SSE-S3 copy plan that survives the fast path with a multipart source `ETag` therefore carries one `HeadObject` probe, but only when a destination object of exactly the source's length already exists. Everything else — a matching single-part `ETag`, a length change, an absent destination — is decided from the listing alone and costs nothing. The probe skips the copy only when `shin-copy-identity` and the content length both match what this exact plan would write; a missing token, a token written by an older provider or another writer, or a failed `HeadObject` falls through to a normal `CopyObject` that still carries the listed destination `ETag` as its `If-Match` guard. A skipped copy counts as a skipped object rather than a copied one.
-
-KMS/DSSE destinations defeat the `ETag` comparison too, but they stay on the unconditional-recopy path. The token binds the source and destination identity and length, not encryption state, and a copy inherits whatever default encryption the destination bucket has at copy time. Probing there would silently retain objects still encrypted under a rotated or replaced key, so the extra copies are accepted as the cost of keeping destination encryption current.
+The token also identifies unchanged copies that the listing-only `ETag` comparison structurally cannot. A multipart source `ETag` is `<md5>-<parts>` while `CopyObject` writes a single-part destination whose `ETag` is a plain MD5, so the comparison never matches. A copy plan that survives the fast path with a multipart source `ETag` therefore carries one `HeadObject` probe, but only when a destination object of exactly the source's length already exists. Everything else — a matching single-part `ETag`, a length change, an absent destination — is decided from the listing alone. The probe skips the copy only when `shin-copy-identity` and the content length both match what this exact plan would write; a missing token, a token written by another writer, or a failed `HeadObject` falls through to a normal `CopyObject` that still carries the listed destination `ETag` as its `If-Match` guard. A skipped copy counts as a skipped object rather than a copied one.
 
 CloudFront invalidations use a bounded caller reference hash derived from the CloudFormation request identity (`StackId`, `RequestId`, and logical resource id) plus the distribution id and invalidation paths. CloudFormation documents `StackId` plus `RequestId` as a way to uniquely identify a request on a custom resource, and CloudFront documents `CallerReference` as the idempotency value that prevents accidentally resubmitting an identical invalidation request. If Lambda retries the same custom-resource event after creating the invalidation but before sending the CloudFormation response, CloudFront returns the existing invalidation instead of creating a duplicate. The upstream CDK `BucketDeployment` provider currently uses a fresh `uuid4()` caller reference for each invocation; this provider intentionally uses the request-derived caller reference to make same-event retries idempotent at the CloudFront API boundary.
 
@@ -474,15 +387,13 @@ The callback target is parsed and shape-validated before request processing can 
 
 ## IAM Shape
 
-The provider role uses source grants from each bound CDK source and destination grants from the target bucket. Destination `GetObject`/`PutObject` access and `ListBucket` are scoped to `destination.keyPrefix`; unresolved prefixes are rejected before provider resources are created. `DeleteObject` and `GetBucketTagging` are added only when `onDeploy.deleteStaleObjects` or `onDelete.deleteCurrentObjects` can delete from the current namespace. Customer KMS keys receive only the CDK grants needed for `Decrypt` and `GenerateDataKey`; no legal-hold, retention, object-tagging, multipart-abort, KMS describe, encrypt, or re-encrypt action is part of the provider contract. Every handler also receives an AWS-managed S3 KMS statement limited by key ARN, `alias/aws/s3`, and `kms:ViaService`; it is inert for other keys/services and preserves `GenerateDataKey`/`Decrypt` authorization across a late transition to the managed key. Reconciliation does not require `GetObjectAcl` or `GetBucketAcl`. A root prefix requires bucket-wide object/list scope.
+The provider role uses source grants from each bound CDK source and destination grants from the target bucket. Source bindings may grant source-key `Decrypt` access when required by the source asset. Destination `GetObject`/`PutObject` access and `ListBucket` are scoped to `destination.keyPrefix`; unresolved prefixes are rejected before provider resources are created. `DeleteObject` and `GetBucketTagging` are added only when `onDeploy.deleteStaleObjects` or `onDelete.deleteCurrentObjects` can delete from the current namespace. Destinations must use SSE-S3, so the provider receives no destination KMS authority. No legal-hold, retention, object-tagging, multipart-abort, destination KMS, `GetObjectAcl`, or `GetBucketAcl` action is part of the provider contract. A root prefix requires bucket-wide object/list scope.
 
-`onChange.deletePreviousObjects` deliberately grants `ListBucket`, `DeleteObject`, and `GetBucketTagging` across the selected previous bucket because `OldResourceProperties` does not reveal the previous prefix until runtime. This breadth is also required for same-bucket prefix changes and is inherited by deployments that share the handler role. The provider derives the actual prefix from the Update event and validates the selected bucket before using the grant. Omitting `previousBucket` reuses the current bucket; a changed previous bucket must be passed explicitly. Remove the option after a one-time transition if that broader authority is no longer needed. Current CloudFront permissions cover an unchanged distribution, while `onChange.invalidatePreviousDistribution` grants distribution-specific invalidation access independently of object deletion.
+`onChange.deletePreviousObjects` deliberately grants `ListBucket`, `DeleteObject`, and `GetBucketTagging` across the selected previous bucket because `OldResourceProperties` does not reveal the previous prefix until runtime. This breadth is also required for same-bucket prefix changes and is inherited by deployments that share the handler role. The provider derives the actual prefix from the Update event and validates the selected bucket before using the grant. Omitting `previousBucket` reuses the current bucket; a changed previous bucket must be passed explicitly. Remove the option after destination-change cleanup if that broader authority is no longer needed. Current CloudFront permissions cover an unchanged distribution, while `onChange.invalidatePreviousDistribution` grants distribution-specific invalidation access independently of object deletion.
 
-## Engine Transition
+## Engine Shape
 
-The older extract path downloaded each source ZIP from S3, wrote the full archive to Lambda `/tmp`, opened it with `ZipArchive`, and reread the temporary file for planning, fallback hashing, and upload streaming.
-
-The current path reads the ZIP central directory and entry bodies through S3 ranges. It bounds classic and ZIP64 directory metadata before parser allocation, and supports external archives whose local extra fields differ from their central records. Directory assets use a compact v1 size/MD5 catalog with an additional template-bound SHA-256 trust layer. Entry source spans are planned into coalesced blocks, prefetched with bounded source GET concurrency, shared by concurrent readers, retained while claimed, and reopened for retryable upload bodies. Readers discard their final `Bytes` slice before the corresponding global permit is released. This removes the full-archive ephemeral-storage dependency and makes source ZIP and marker-expanded entry size independent of Lambda `/tmp` and whole-entry memory.
+The provider reads the ZIP central directory and entry bodies through S3 ranges. It bounds classic and ZIP64 directory metadata before parser allocation, and supports external archives whose local extra fields differ from their central records. Directory assets use a compact v1 size/MD5 catalog with an additional template-bound SHA-256 trust layer. Entry source spans are planned into coalesced blocks, prefetched with bounded source GET concurrency, shared by concurrent readers, retained while claimed, and reopened for retryable upload bodies. Readers discard their final `Bytes` slice before the corresponding global permit is released. Source ZIP and marker-expanded entry size are independent of Lambda `/tmp` and whole-entry memory.
 
 The current implementation:
 
@@ -509,7 +420,7 @@ The current implementation:
 - derive source GET concurrency, the half-memory global cap, and local source windows from actual Lambda memory unless valid lower tuning is configured
 - emit structured source scheduler and destination `PutObject`/`CopyObject` diagnostics as provider logs
 
-The remaining catalog caveat is packaging compatibility. Cataloged directory assets are produced by this construct's `Source.asset` wrapper. If callers need CDK asset bundling or symlink-following behavior that the wrapper does not currently implement, they can pass `embeddedCatalog: false` and use the upstream CDK asset path without trusted catalog sparse skips.
+Cataloged directory assets are produced by this construct's `Source.asset` wrapper. If callers need CDK asset bundling or symlink-following behavior that the wrapper does not implement, they can pass `embeddedCatalog: false` and use the upstream CDK asset path without trusted catalog sparse skips.
 
 Cataloged asset packaging limitations:
 
@@ -518,11 +429,11 @@ Cataloged asset packaging limitations:
 - CDK asset `bundling` is not run by the cataloged wrapper. Use a pre-bundled directory or `embeddedCatalog: false`.
 - Symlinks and non-regular files are rejected by cataloged packaging until explicit materialization semantics are implemented.
 - The cataloged wrapper creates a temporary directory, then delegates ZIP and ZIP64 creation to CDK; the catalog changes the staged asset hash compared with upstream packaging.
-- Authenticated catalog MD5 entries enable sparse skips only for marker-free files on SSE-S3 destinations. Marker inputs are validated before replacement; final replaced MD5 is used for SSE-S3 comparison and omitted on untrusted KMS/DSSE paths.
+- Authenticated catalog MD5 entries enable sparse skips only for marker-free files. Marker inputs are validated before replacement; final replaced MD5 is used for destination comparison.
 
 ## Diagnostics
 
-The provider emits one sanitized `shin_deployment_summary` per custom-resource request after the CloudFormation callback attempt, plus structured source-scheduler and destination `PutObject` or `CopyObject` diagnostics when applicable. Each extracted deployment also logs the effective source schedule and a final source diagnostics record per source archive. These records include planned entries and blocks, planned and fetched source bytes, source amplification, ranged `GetObject` wire attempts and typed failures, block hits/misses/releases/refetches, split wait counters for in-flight fetches versus source-window capacity, consumed body attempts/replays, per-archive resident source-window high-water, true active ZIP entry reader high-water, and active source GET high-water. The aggregate `shin_deployment_summary` is schema version 5, so `durationMs` and callback telemetry include callback delivery time even when the callback fails. Its `deploymentStatus` reports whether deployment work succeeded before callback delivery; callback delivery has independent counters because a successful deployment can still have a failed callback. The summary adds the actual Lambda memory, invocation-global source budget/current/high-water values, destination metadata/page high-water, catalog trust and fallback work, inferred deletion outcomes, callback attempts, and bounded correlated `PutObject` failure state. It separates logical transfer objects and cancellations from source and destination SDK work; extracted uploads log destination `PutObject` retry settings, throttling, wait time, and sanitized error classifications, while direct copies emit a parallel `CopyObject` diagnostics record and, from schema v5, report the same counters in the summary's `copyObject` section. Its `markerReplacement` object names the strategy and semantics, declares the nominal two passes for an uploaded marker object, and reports actual planning and upload passes for the invocation. The summary excludes bucket names, object keys, account IDs, distribution IDs, URLs, and ETags. Benchmark collectors accept only the current schema; earlier summaries are not readable and any row carrying one lives in `archive/`.
+The provider emits one sanitized `shin_deployment_summary` per custom-resource request after the CloudFormation callback attempt, plus structured source-scheduler and destination `PutObject` or `CopyObject` diagnostics when applicable. Each extracted deployment also logs the effective source schedule and a final source diagnostics record per source archive. These records include planned entries and blocks, planned and fetched source bytes, source amplification, ranged `GetObject` wire attempts and typed failures, block hits/misses/releases/refetches, split wait counters for in-flight fetches versus source-window capacity, consumed body attempts/replays, per-archive resident source-window high-water, true active ZIP entry reader high-water, and active source GET high-water. The aggregate `shin_deployment_summary` is schema version 6, so `durationMs` and callback telemetry include callback delivery time even when the callback fails. Its `deploymentStatus` reports whether deployment work succeeded before callback delivery; callback delivery has independent counters because a successful deployment can still have a failed callback. The summary adds the actual Lambda memory, invocation-global source budget/current/high-water values and release anomalies, destination metadata/page high-water, catalog trust and fallback work, inferred deletion outcomes, callback attempts, and bounded correlated `PutObject` failure state. It separates logical transfer objects and cancellations from source and destination SDK work; extracted uploads log destination `PutObject` retry settings, throttling, wait time, and sanitized error classifications, while direct copies emit a parallel `CopyObject` diagnostics record and report the same basic counters in the summary's `copyObject` section. Its `markerReplacement` object names the strategy and semantics, declares the nominal two passes for an uploaded marker object, and reports actual planning and upload passes for the invocation. The summary excludes bucket names, object keys, account IDs, distribution IDs, URLs, and ETags. Benchmark collectors accept only schema 6; rows carrying any other summary schema live in `archive/`.
 
 Detailed failure diagnostics are opt-in through `failureDiagnostics: FailureDiagnostics.DETAILED`; production defaults to `FailureDiagnostics.STANDARD`. The summary exposes that choice as `detailedFailureDiagnosticsEnabled`. Basic aggregate wire, failure, retry, throttle, and wait counters remain enabled in both modes. When detailed mode is disabled, the SDK/service maps and failure-state array are empty and `failureStateOverflowAttempts` is zero, even if `failedAttempts` is nonzero. Standard mode does not allocate per-attempt diagnostic state, track source-capacity waiters, start a per-attempt clock, capture source snapshots, or emit immediate failure events. Handler identity includes the setting, so standard and detailed deployments cannot share a Lambda.
 
@@ -586,6 +497,7 @@ Source diagnostics field reference:
 | `globalBudgetBytes` | Invocation-global source block budget derived from actual Lambda memory and optional lower tuning. | Verify every archive shares the intended cap. |
 | `globalResidentBytesCurrent` | Globally admitted source block bytes still held when the summary is emitted. | Detect leaked permits; successful requests should report zero. |
 | `globalResidentBytesHighWater` | Peak source block bytes admitted across all archives in the invocation. | Prove aggregate use stayed at or below `globalBudgetBytes`. |
+| `globalReleaseAnomalies` | Source-budget releases that exceeded the currently accounted resident bytes and were saturated at zero. | Detect internal claim-accounting defects without wrapping the resident-byte counter. Successful requests should report zero. |
 
 Correlated `PutObject` failure source fields are instantaneous observations, unlike the cumulative and high-water source fields above:
 
@@ -649,7 +561,7 @@ Destination upload diagnostics field reference:
 | `throttleCooldownWaits` | Worker waits caused by shared throttle cooldown. | Diagnose throttle fan-out control. |
 | `throttleCooldownWaitMs` | Milliseconds spent in shared throttle cooldown waits. | Estimate throttle cooldown cost. |
 
-Schema-v5 `copyObject` fields (direct-copy deployments):
+`copyObject` fields (direct-copy deployments):
 
 | Field | Meaning | Use when debugging |
 | --- | --- | --- |
@@ -672,7 +584,7 @@ These mirror the `putObject` counters of the same names. The four `putObject` fa
 | `failureStates` | Up to 32 correlated failure groups. A group key combines SDK/dispatch/service classifications with categorical body/source state; `count` is the represented attempt count. Numeric observations use `{min,max,total}` ranges across the group. | Correlate transport classification with body progress and source pressure while keeping the final event bounded. |
 | `failureStateOverflowAttempts` | Failed attempts omitted because the 32-group bound was reached. Represented group counts plus this value equal `failedAttempts`. | Detect aggregation loss explicitly. |
 
-Each label-count map contains at most 32 entries and reserves capacity for the `Other` bucket. Each `failureStates` body records whether a body attempt was observed, its attempt/replay number, bytes emitted and remaining, final-frame delivery, producer stage/completion, body error, receiver drop, and whether that drop aborted the producer. Producer stages are fixed values: `awaiting-first-poll`, `reading-source`, `final-frame-ready`, `complete`, `receiver-closed`, `body-error`, or `not-observed`. Retryable SDK clones that are never polled do not start an attempt and cannot replace the consumed attempt's snapshot. The nested source object uses the instantaneous fields above. The immediate event carries one unaggregated state with the same shape (`count=1`); the summary groups compatible states into bounded ranges.
+Each label-count map contains at most 32 entries and reserves capacity for the `Other` bucket. Each `failureStates` body records whether a body attempt was observed, its attempt/replay number, bytes emitted and remaining, final-frame delivery, producer stage/completion, body error, receiver drop, and whether that drop aborted the producer. Producer stages are fixed values: `awaiting-first-poll`, `reading-source`, `final-frame-ready`, `complete`, `receiver-closed`, `body-error`, or `not-observed`. Retryable SDK clones that are never polled do not start an attempt and cannot replace the consumed attempt's snapshot. The nested source object uses the instantaneous fields above. The immediate event carries one unaggregated state with the same shape (`count=1`); the summary groups states with the same categorical fields into bounded ranges.
 
 Direct-copy deployments emit a separate `destination CopyObject diagnostics` structured record with the original retry fields. `wireAttempts` counts provider-owned copy attempts with SDK retries disabled; the retry, throttling, and wait fields have the same meanings as above. Correlated failure fields apply only to extracted `PutObject` attempts, so the summary's `copyObject` section carries the seven basic counters and omits the four PutObject-only failure breakdowns rather than reporting them as empty. Read `copyObject` for copy retry and throttle pressure and `putObject` for extracted uploads. `counts.copiedObjects` and `bytes.copied` are the logical-success totals.
 
@@ -686,7 +598,7 @@ CloudFormation callback diagnostics field reference:
 | `retryAttempts` | Callback wire attempts after the first. | Measure provider-owned callback retries. |
 | `confirmedResponses` | Callback attempts that received a successful HTTP response. | Confirm the response endpoint acknowledged the final response body. |
 
-## Compatibility Tradeoffs
+## Engine Boundaries
 
 | CDK behavior | Engine impact |
 | --- | --- |
@@ -703,7 +615,7 @@ CloudFormation callback diagnostics field reference:
 
 - SSE-S3 byte-skip decisions assume simple single-part static objects where S3 `ETag` is the MD5 of object bytes.
 - Without an authenticated source MD5 catalog match, unchanged existing SSE-S3 ZIP entries must be read and hashed during deployment.
-- KMS/DSSE destinations do not use destination `ETag` as plaintext identity and can perform extra transfers; SSE-C is unsupported.
+- Destination buckets must use SSE-S3; SSE-C, SSE-KMS, and SSE-DSSE are unsupported.
 - Imported buckets and tokenized, unknown, or multi-rule synthesized encryption configurations are rejected.
 - Source ZIP archives and marker-expanded entries do not need to fit in Lambda memory or ephemeral storage; both stream in bounded chunks.
 - Each extracted ZIP entry, including marker-expanded output, must be no larger than 5 GiB because uploads currently use single-request `PutObject`, not multipart upload.
@@ -722,4 +634,4 @@ CloudFormation callback diagnostics field reference:
 The highest-value architecture work is now:
 
 1. Promote the benchmark methodology to repeated canonical runs and add CI regression checks that can detect provider-time, memory, transfer, retry, and request-count regressions without committing raw AWS evidence.
-2. Add cataloged packaging support for CDK asset bundling or keep the current explicit fallback if the compatibility surface is too large.
+2. Add cataloged packaging support for CDK asset bundling or keep `embeddedCatalog: false` as the explicit uncataloged path.

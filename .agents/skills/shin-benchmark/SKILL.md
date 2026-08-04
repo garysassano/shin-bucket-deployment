@@ -228,7 +228,7 @@ Do not infer S3 throttling from local source block counters alone:
 
 For parameter sweeps, report both performance and pressure counters. For `maxConcurrency` sweeps, include at least provider duration, billed duration, max memory, CDK deploy time, local wall time, source fetched bytes, block waits split by reason when available, block refetches, replay claims after release, active reader high-water, resident bytes high-water, and PutObject retry/throttle counters.
 
-For checksum/encryption-path changes, record `destinationChecksumStrategy` and keep SSE-S3 and KMS/DSSE results separate. Include the transferred/skipped object counts, MD5/catalog skip counters, source fetched bytes, provider duration, and memory so strategy-specific extra passes or transfers remain visible.
+For destination identity changes, include transferred/skipped object counts, MD5/catalog skip counters, source fetched bytes, provider duration, and memory. Benchmark destinations use SSE-S3; unsupported destination encryption modes are synthesis validation, not benchmark variants.
 
 ## Benchmark Human Page
 

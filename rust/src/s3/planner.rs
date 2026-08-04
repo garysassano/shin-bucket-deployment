@@ -191,8 +191,8 @@ pub(super) async fn plan_deployment(
             )
             .await?;
 
-            manifest.insert(
-                relative_key.clone(),
+            insert_manifest_object(
+                &mut manifest,
                 PlannedObject {
                     relative_key,
                     expected_etag: Some(expected_etag),
@@ -494,10 +494,30 @@ async fn add_archive_entries_to_manifest(
                 source_span_end,
             },
         };
-        manifest.insert(relative_key, planned);
+        insert_manifest_object(manifest, planned);
     }
 
     Ok(())
+}
+
+fn insert_manifest_object(manifest: &mut DeploymentManifest, planned: PlannedObject) {
+    let relative_key = planned.relative_key.clone();
+    let replacement_source_index = planned_action_source_index(&planned.action);
+    if let Some(previous) = manifest.insert(relative_key.clone(), planned) {
+        tracing::warn!(
+            destination_relative_key = %relative_key,
+            previous_source_index = planned_action_source_index(&previous.action),
+            replacement_source_index,
+            "later source replaces an earlier source destination key"
+        );
+    }
+}
+
+fn planned_action_source_index(action: &PlannedAction) -> usize {
+    match action {
+        PlannedAction::CopyObject { source_index, .. }
+        | PlannedAction::ZipEntry { source_index, .. } => *source_index,
+    }
 }
 
 async fn load_authenticated_catalog(
@@ -957,9 +977,12 @@ fn ensure_unique_source_offsets(sorted_offsets: &[u64]) -> Result<()> {
 mod tests {
     use std::collections::HashMap;
     use std::io::{Cursor, Write};
+    use std::sync::{Arc, Mutex};
 
     use async_zip::base::read::seek::ZipFileReader;
     use sha2::{Digest, Sha256};
+    use tracing_subscriber::fmt::MakeWriter;
+    use tracing_subscriber::layer::SubscriberExt;
     use zip::write::{SimpleFileOptions, ZipWriter};
 
     use super::{
@@ -968,7 +991,8 @@ mod tests {
         authenticate_catalog_bytes, authenticated_catalog_entry, catalog_budget_error,
         catalog_memory_estimate, catalog_source_block_bytes, checked_archive_totals,
         collect_copy_plans, collect_zip_entry_plans, ensure_unique_source_offsets,
-        validate_archive_directory, validate_catalog_entries, validate_deployment_preflight,
+        insert_manifest_object, validate_archive_directory, validate_catalog_entries,
+        validate_deployment_preflight,
     };
     use crate::request::compile_filters;
     use crate::s3::archive::SourceByteBudget;
@@ -978,6 +1002,78 @@ mod tests {
         DeploymentManifest, DeploymentRequest, MarkerConfig, PlannedAction, PlannedObject,
         PutObjectRetryJitter, PutObjectRetryOptions, RuntimeOptions,
     };
+
+    #[derive(Clone, Default)]
+    struct TestWriter(Arc<Mutex<Vec<u8>>>);
+
+    struct TestWriterGuard(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for TestWriterGuard {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0
+                .lock()
+                .expect("test log buffer")
+                .extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'writer> MakeWriter<'writer> for TestWriter {
+        type Writer = TestWriterGuard;
+
+        fn make_writer(&'writer self) -> Self::Writer {
+            TestWriterGuard(Arc::clone(&self.0))
+        }
+    }
+
+    #[test]
+    fn later_source_replaces_collision_and_logs_both_source_indices() {
+        let logs = TestWriter::default();
+        let subscriber = tracing_subscriber::registry().with(
+            tracing_subscriber::fmt::layer()
+                .without_time()
+                .with_ansi(false)
+                .with_writer(logs.clone()),
+        );
+        let mut manifest = DeploymentManifest::new();
+
+        tracing::subscriber::with_default(subscriber, || {
+            for source_index in [2, 7] {
+                insert_manifest_object(
+                    &mut manifest,
+                    PlannedObject {
+                        relative_key: "shared/index.html".to_string(),
+                        expected_etag: Some(format!("etag-{source_index}")),
+                        action: PlannedAction::CopyObject {
+                            source_index,
+                            size: Some(1),
+                        },
+                    },
+                );
+            }
+        });
+
+        let retained = manifest
+            .get("shared/index.html")
+            .expect("collision keeps one planned object");
+        assert!(matches!(
+            retained.action,
+            PlannedAction::CopyObject {
+                source_index: 7,
+                ..
+            }
+        ));
+        let output = String::from_utf8(logs.0.lock().expect("test log buffer").clone())
+            .expect("UTF-8 tracing output");
+        assert!(output.contains("later source replaces an earlier source destination key"));
+        assert!(output.contains("destination_relative_key=shared/index.html"));
+        assert!(output.contains("previous_source_index=2"));
+        assert!(output.contains("replacement_source_index=7"));
+    }
 
     #[test]
     fn zip_entry_plans_are_grouped_and_sorted_by_source_offset() {
@@ -1380,7 +1476,7 @@ mod tests {
     }
 
     #[test]
-    fn the_former_hang_band_now_errors_instead_of_waiting_forever() {
+    fn an_unfulfillable_planning_reservation_errors_instead_of_waiting_forever() {
         // The reported defect: a catalog estimate that exceeds what remains after
         // planning, but is still under the whole budget, used to await a permit that
         // nothing would ever release, because planning is sequential.

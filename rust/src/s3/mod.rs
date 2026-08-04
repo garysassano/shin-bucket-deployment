@@ -246,7 +246,7 @@ mod tests {
     use tokio::time::Instant as TokioInstant;
 
     use crate::deadline::InvocationDeadlines;
-    use crate::request::{RawDeploymentRequest, parse_request};
+    use crate::request::{RawDeploymentRequest, parse_request_with_memory};
     use crate::types::{AppState, DeploymentStats};
 
     use super::{adaptive_source_window_bytes, deploy};
@@ -317,7 +317,8 @@ mod tests {
             "DeleteStaleObjectsOnDeployment": true
         }))
         .expect("empty source request should deserialize");
-        let request = parse_request(raw).expect("empty source request should reach deploy guard");
+        let request = parse_request_with_memory(raw, "1024")
+            .expect("empty source request should reach deploy guard");
 
         let error = deploy(
             &state,
@@ -356,7 +357,7 @@ mod aws_integration_tests {
     use zip::write::{SimpleFileOptions, ZipWriter};
 
     use crate::deadline::InvocationDeadlines;
-    use crate::request::{RawDeploymentRequest, parse_request};
+    use crate::request::{RawDeploymentRequest, parse_request_with_memory};
     use crate::types::{AppState, MarkerConfig};
 
     use super::deploy;
@@ -425,41 +426,43 @@ mod aws_integration_tests {
             )
             .await?;
 
-            let request = parse_request(RawDeploymentRequest {
-                source_bucket_names: vec![source_bucket.clone(), source_bucket.clone()],
-                source_object_keys: vec![plain_zip_key.to_string(), marker_zip_key.to_string()],
-                source_catalogs: None,
-                source_markers: vec![HashMap::new(), marker_map()],
-                source_markers_config: vec![MarkerConfig::default(), MarkerConfig::default()],
-                destination_bucket_name: destination_bucket.clone(),
-                destination_bucket_key_prefix: Some(prefix.clone()),
-                extract: true,
-                delete_current_objects_on_delete: false,
-                distribution_id: None,
-                distribution_paths: None,
-                wait_for_distribution_invalidation: true,
-                delete_stale_objects_on_deployment: true,
-                exclude: Vec::new(),
-                include: Vec::new(),
-                output_object_keys: true,
-                destination_bucket_arn: None,
-                destination_owner_id: Some("integration-owner".to_string()),
-                delete_previous_objects_on_change: None,
-                invalidate_previous_distribution_on_change: None,
-                available_memory_mb: Some(128),
-                max_parallel_transfers: Some(8),
-                source_block_bytes: Some(64 * 1024),
-                source_block_merge_gap_bytes: Some(4 * 1024),
-                source_get_concurrency: Some(2),
-                source_window_bytes: Some(128 * 1024),
-                source_window_memory_budget_mb: Some(64),
-                put_object_max_attempts: Some(3),
-                put_object_retry_base_delay_ms: Some(50),
-                put_object_retry_max_delay_ms: Some(500),
-                put_object_slowdown_retry_base_delay_ms: Some(100),
-                put_object_slowdown_retry_max_delay_ms: Some(1_000),
-                put_object_retry_jitter: None,
-            })?;
+            let request = parse_request_with_memory(
+                RawDeploymentRequest {
+                    source_bucket_names: vec![source_bucket.clone(), source_bucket.clone()],
+                    source_object_keys: vec![plain_zip_key.to_string(), marker_zip_key.to_string()],
+                    source_catalogs: None,
+                    source_markers: vec![HashMap::new(), marker_map()],
+                    source_markers_config: vec![MarkerConfig::default(), MarkerConfig::default()],
+                    destination_bucket_name: destination_bucket.clone(),
+                    destination_bucket_key_prefix: Some(prefix.clone()),
+                    extract: true,
+                    delete_current_objects_on_delete: false,
+                    distribution_id: None,
+                    distribution_paths: None,
+                    wait_for_distribution_invalidation: true,
+                    delete_stale_objects_on_deployment: true,
+                    exclude: Vec::new(),
+                    include: Vec::new(),
+                    output_object_keys: true,
+                    destination_bucket_arn: None,
+                    destination_owner_id: Some("integration-owner".to_string()),
+                    delete_previous_objects_on_change: None,
+                    invalidate_previous_distribution_on_change: None,
+                    max_parallel_transfers: Some(8),
+                    source_block_bytes: Some(64 * 1024),
+                    source_block_merge_gap_bytes: Some(4 * 1024),
+                    source_get_concurrency: Some(2),
+                    source_window_bytes: Some(128 * 1024),
+                    source_window_memory_budget_mb: Some(64),
+                    put_object_max_attempts: Some(3),
+                    put_object_retry_base_delay_ms: Some(50),
+                    put_object_retry_max_delay_ms: Some(500),
+                    put_object_slowdown_retry_base_delay_ms: Some(100),
+                    put_object_slowdown_retry_max_delay_ms: Some(1_000),
+                    put_object_retry_jitter: None,
+                },
+                "128",
+            )?;
 
             deploy(
                 &state,
