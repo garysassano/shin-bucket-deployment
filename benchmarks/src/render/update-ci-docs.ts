@@ -38,6 +38,39 @@ function main(): void {
   console.log(`updated CI benchmark documentation in ${docsFile} and ${benchmarkReadme}`);
 }
 
+function lambdaConfigurations(records: BenchmarkResultRecord[]): string {
+  const configurations = new Set<string>();
+  for (const { memoryMb, parallel } of shinGroups(records)) {
+    configurations.add(`${memoryMb} MiB / ${parallel} Shin transfers`);
+  }
+  return configurations.size === 0 ? "unknown" : [...configurations].join(", ");
+}
+
+function shinGroups(
+  records: BenchmarkResultRecord[],
+): Array<{ readonly profile: string; readonly memoryMb: number; readonly parallel: number }> {
+  const groups = new Map<
+    string,
+    { readonly profile: string; readonly memoryMb: number; readonly parallel: number }
+  >();
+  for (const record of records) {
+    if (implementationLabel(record) !== "shin") continue;
+    if (record.profile == null || record.memoryMb == null || record.parallel == null) continue;
+    const key = `${record.profile}\u0000${record.memoryMb}\u0000${record.parallel}`;
+    groups.set(key, {
+      profile: record.profile,
+      memoryMb: record.memoryMb,
+      parallel: record.parallel,
+    });
+  }
+  return [...groups.values()].sort(
+    (left, right) =>
+      left.profile.localeCompare(right.profile) ||
+      left.memoryMb - right.memoryMb ||
+      left.parallel - right.parallel,
+  );
+}
+
 function renderDocsBlock(records: BenchmarkResultRecord[], runId: string): string {
   const first = records[0];
   const source = records.find((record) => implementationLabel(record) === "shin");
@@ -45,12 +78,12 @@ function renderDocsBlock(records: BenchmarkResultRecord[], runId: string): strin
     START,
     "## Latest CI benchmark",
     "",
-    `The latest complete canonical methodology-v2 run was collected by GitHub Actions on ${first?.snapshotDate ?? "unknown"} from source commit \`${source?.providerImplementationCommit?.slice(0, 7) ?? "unknown"}\`. It contains five sequential repetitions of both canonical profiles across all four phases. The sanitized run UUID is \`${runId}\`; raw AWS output remains outside git.`,
+    `The latest complete canonical methodology-v2 run was collected by GitHub Actions on ${first?.snapshotDate ?? "unknown"} from source commit \`${source?.providerImplementationCommit?.slice(0, 7) ?? "unknown"}\`. It contains five sequential repetitions of all canonical profiles across all four phases. The sanitized run UUID is \`${runId}\`; raw AWS output remains outside git.`,
     "",
     "| Field | Value |",
     "| --- | --- |",
     `| Region | \`${first?.region ?? "unknown"}\` |`,
-    `| Lambda configuration | ${first?.memoryMb ?? "unknown"} MiB / 32 Shin transfers |`,
+    `| Lambda configurations | ${lambdaConfigurations(records)} |`,
     `| Sanitized rows | ${records.length} |`,
     `| Cleanup | ${unique(records.map((record) => record.cleanup)).join(", ")} |`,
     "",
@@ -58,9 +91,10 @@ function renderDocsBlock(records: BenchmarkResultRecord[], runId: string): strin
     "",
     "The [complete generated report](../benchmarks/ci-report.md) includes quartiles, end-to-end timings, and per-phase deltas. [Provider telemetry](../benchmarks/ci-telemetry.md) contains the sanitized Shin diagnostic tables.",
     "",
-    "![Latest tiny-many CI benchmark](../benchmarks/snapshots/ci-tiny-many-1024mib-32.svg)",
-    "",
-    "![Latest large-few CI benchmark](../benchmarks/snapshots/ci-large-few-1024mib-32.svg)",
+    ...shinGroups(records).flatMap(({ profile, memoryMb, parallel }) => [
+      `![Latest ${profile} CI benchmark](../benchmarks/snapshots/ci-${profile}-${memoryMb}mib-${parallel}.svg)`,
+      "",
+    ]),
     END,
   ].join("\n");
 }
@@ -77,13 +111,12 @@ function renderReadmeBlock(records: BenchmarkResultRecord[], runId: string): str
     "- [Shin provider telemetry](ci-telemetry.md)",
     "- [Sanitized structured results](results.jsonl)",
     "",
-    "### tiny-many / 1024 MiB / max concurrency 32",
-    "",
-    "![Latest tiny-many CI benchmark](snapshots/ci-tiny-many-1024mib-32.svg)",
-    "",
-    "### large-few / 1024 MiB / max concurrency 32",
-    "",
-    "![Latest large-few CI benchmark](snapshots/ci-large-few-1024mib-32.svg)",
+    ...shinGroups(records).flatMap(({ profile, memoryMb, parallel }) => [
+      `### ${profile} / ${memoryMb} MiB / max concurrency ${parallel}`,
+      "",
+      `![Latest ${profile} CI benchmark](snapshots/ci-${profile}-${memoryMb}mib-${parallel}.svg)`,
+      "",
+    ]),
     END,
   ].join("\n");
 }

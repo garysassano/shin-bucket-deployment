@@ -197,7 +197,7 @@ jobs:
             approved_through=5
           fi
           pnpm benchmark:run-assets -- \
-            --config benchmarks/configs/methodology-v2-1024-32.json \
+            --config benchmarks/configs/readme-snapshots.json \
             --run-id "$RUN_ID" \
             --start-repetition "$start_repetition" \
             --repetitions "$repetitions" \
@@ -263,7 +263,7 @@ jobs:
       - name: Render Actions summary
         run: |
           node dist/benchmarks/src/render/ci-summary.js \
-            --config benchmarks/configs/methodology-v2-1024-32.json \
+            --config benchmarks/configs/readme-snapshots.json \
             --input-file "$RESULTS_FILE" \
             --output-file "$REPORT_ROOT/summary.md" \
             --run-id "${{ inputs.run_id }}" \
@@ -274,7 +274,7 @@ jobs:
       - name: Render comparison report
         run: |
           node dist/benchmarks/src/render/comparison-report.js \
-            --config benchmarks/configs/methodology-v2-1024-32.json \
+            --config benchmarks/configs/readme-snapshots.json \
             --input-file "$RESULTS_FILE" \
             --output-file "$REPORT_ROOT/report.md" \
             --run-id "${{ inputs.run_id }}" \
@@ -284,7 +284,7 @@ jobs:
       - name: Render provider telemetry
         run: |
           node dist/benchmarks/src/render/telemetry-table.js \
-            --config benchmarks/configs/methodology-v2-1024-32.json \
+            --config benchmarks/configs/readme-snapshots.json \
             --input-file "$RESULTS_FILE" \
             --output-file "$REPORT_ROOT/telemetry.md" \
             --run-id "${{ inputs.run_id }}" \
@@ -295,7 +295,7 @@ jobs:
         if: ${{ inputs.implementations == 'shin,aws' }}
         run: |
           node dist/benchmarks/src/render/readme-snapshot.js \
-            --config benchmarks/configs/methodology-v2-1024-32.json \
+            --config benchmarks/configs/readme-snapshots.json \
             --input-file "$RESULTS_FILE" \
             --output-directory "$REPORT_ROOT/snapshots" \
             --filename-prefix "$SNAPSHOT_PREFIX" \
@@ -311,7 +311,11 @@ jobs:
           if [[ "$IMPLEMENTATIONS" == "shin,aws" ]]; then
             expected+=(
               "snapshots/${SNAPSHOT_PREFIX}large-few-1024mib-32.svg"
+              "snapshots/${SNAPSHOT_PREFIX}large-few-2048mib-64.svg"
+              "snapshots/${SNAPSHOT_PREFIX}mixed-1024mib-32.svg"
+              "snapshots/${SNAPSHOT_PREFIX}mixed-2048mib-64.svg"
               "snapshots/${SNAPSHOT_PREFIX}tiny-many-1024mib-32.svg"
+              "snapshots/${SNAPSHOT_PREFIX}tiny-many-2048mib-64.svg"
             )
           fi
           diff -u \
@@ -393,7 +397,7 @@ jobs:
       - name: Merge validated structured evidence
         run: |
           node dist/benchmarks/src/publish-results.js \
-            --config benchmarks/configs/methodology-v2-1024-32.json \
+            --config benchmarks/configs/readme-snapshots.json \
             --input-file "$RESULTS_FILE" \
             --output-file benchmarks/results.jsonl \
             --run-id "${{ inputs.run_id }}" \
@@ -402,7 +406,7 @@ jobs:
       - name: Render committed comparison report
         run: |
           node dist/benchmarks/src/render/comparison-report.js \
-            --config benchmarks/configs/methodology-v2-1024-32.json \
+            --config benchmarks/configs/readme-snapshots.json \
             --input-file "$RESULTS_FILE" \
             --output-file benchmarks/ci-report.md \
             --run-id "${{ inputs.run_id }}" \
@@ -411,7 +415,7 @@ jobs:
       - name: Render committed provider telemetry
         run: |
           node dist/benchmarks/src/render/telemetry-table.js \
-            --config benchmarks/configs/methodology-v2-1024-32.json \
+            --config benchmarks/configs/readme-snapshots.json \
             --input-file "$RESULTS_FILE" \
             --output-file benchmarks/ci-telemetry.md \
             --run-id "${{ inputs.run_id }}" \
@@ -420,7 +424,7 @@ jobs:
       - name: Render committed profile snapshots
         run: |
           node dist/benchmarks/src/render/readme-snapshot.js \
-            --config benchmarks/configs/methodology-v2-1024-32.json \
+            --config benchmarks/configs/readme-snapshots.json \
             --input-file "$RESULTS_FILE" \
             --output-directory benchmarks/snapshots \
             --filename-prefix ci- \
@@ -430,7 +434,7 @@ jobs:
       - name: Update generated benchmark documentation
         run: |
           node dist/benchmarks/src/render/update-ci-docs.js \
-            --config benchmarks/configs/methodology-v2-1024-32.json \
+            --config benchmarks/configs/readme-snapshots.json \
             --input-file "$RESULTS_FILE" \
             --run-id "${{ inputs.run_id }}" \
             --scratch-root "$SCRATCH_ROOT" \
@@ -441,19 +445,27 @@ jobs:
         run: |
           test -s benchmarks/ci-report.md
           test -s benchmarks/ci-telemetry.md
-          test -s benchmarks/snapshots/ci-tiny-many-1024mib-32.svg
           test -s benchmarks/snapshots/ci-large-few-1024mib-32.svg
+          test -s benchmarks/snapshots/ci-large-few-2048mib-64.svg
+          test -s benchmarks/snapshots/ci-mixed-1024mib-32.svg
+          test -s benchmarks/snapshots/ci-mixed-2048mib-64.svg
+          test -s benchmarks/snapshots/ci-tiny-many-1024mib-32.svg
+          test -s benchmarks/snapshots/ci-tiny-many-2048mib-64.svg
           git add \
             benchmarks/results.jsonl \
             benchmarks/ci-report.md \
             benchmarks/ci-telemetry.md \
-            benchmarks/snapshots/ci-tiny-many-1024mib-32.svg \
             benchmarks/snapshots/ci-large-few-1024mib-32.svg \
+            benchmarks/snapshots/ci-large-few-2048mib-64.svg \
+            benchmarks/snapshots/ci-mixed-1024mib-32.svg \
+            benchmarks/snapshots/ci-mixed-2048mib-64.svg \
+            benchmarks/snapshots/ci-tiny-many-1024mib-32.svg \
+            benchmarks/snapshots/ci-tiny-many-2048mib-64.svg \
             benchmarks/README.md \
             docs/benchmark.md
           git diff --cached --check
           git diff --check
-          unexpected="$(git status --porcelain --untracked-files=all | sed -E 's/^.. //;' | rg -v '^(benchmarks/results\.jsonl|benchmarks/ci-report\.md|benchmarks/ci-telemetry\.md|benchmarks/snapshots/ci-(tiny-many|large-few)-1024mib-32\.svg|benchmarks/README\.md|docs/benchmark\.md)$' || true)"
+          unexpected="$(git status --porcelain --untracked-files=all | sed -E 's/^.. //;' | rg -v '^(benchmarks/results\.jsonl|benchmarks/ci-report\.md|benchmarks/ci-telemetry\.md|benchmarks/snapshots/ci-(large-few|mixed|tiny-many)-(1024mib-32|2048mib-64)\.svg|benchmarks/README\.md|docs/benchmark\.md)$' || true)"
           test -z "$unexpected"
 
       - name: Commit and push benchmark publication
