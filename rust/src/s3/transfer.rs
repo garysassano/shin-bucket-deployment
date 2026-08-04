@@ -26,10 +26,10 @@ use crate::deadline::{InvocationDeadlines, TaskDrainBudget};
 use crate::replace::MarkerReplacements;
 use crate::types::{
     AppState, CopyObjectStats, DeploymentRequest, DeploymentStats, DiagnosticRangeStats,
-    MAX_FAILURE_DIAGNOSTIC_GROUPS, MAX_FAILURE_DIAGNOSTIC_LABELS, MarkerConfig,
-    OTHER_DIAGNOSTIC_LABEL, PutObjectFailureBodyStats, PutObjectFailureSourceStats,
-    PutObjectFailureStateStats, PutObjectRetryJitter, PutObjectRetryOptions, PutObjectStats,
-    SourceArchive, same_failure_signature,
+    MAX_FAILURE_DIAGNOSTIC_GROUPS, MAX_FAILURE_DIAGNOSTIC_LABELS, OTHER_DIAGNOSTIC_LABEL,
+    PutObjectFailureBodyStats, PutObjectFailureSourceStats, PutObjectFailureStateStats,
+    PutObjectRetryJitter, PutObjectRetryOptions, PutObjectStats, SourceArchive,
+    same_failure_signature,
 };
 
 use super::archive::{
@@ -328,12 +328,17 @@ pub(super) async fn upload_zip_entries(
         for (archive_index, plans) in zip_plans {
             let source = archives[archive_index].source.clone();
             archive_diagnostics_sources.push((archive_index, source.clone()));
+            let Some(source_index) = plans.first().map(|plan| plan.source_index) else {
+                continue;
+            };
+            debug_assert!(plans.iter().all(|plan| plan.source_index == source_index));
+            let has_source_markers = !request.source_markers[source_index].is_empty();
             let plans = plans
                 .into_iter()
                 .filter(|plan| {
                     !catalog_skips_zip_entry(
                         plan,
-                        &request.source_markers[plan.source_index],
+                        has_source_markers,
                         destination_objects.get(&plan.relative_key),
                         &stats,
                     )
@@ -342,6 +347,10 @@ pub(super) async fn upload_zip_entries(
             if plans.is_empty() {
                 continue;
             }
+            let marker_replacements = compile_marker_replacements(
+                &request.source_markers[source_index],
+                &request.source_markers_config[source_index],
+            )?;
             let source_window_bytes =
                 source_window_bytes_for_archive(&request.runtime, source.len(), plans.len());
             let store = SourceBlockStore::new(
@@ -372,8 +381,7 @@ pub(super) async fn upload_zip_entries(
                 let task_store = Arc::clone(&store);
                 let state = state.clone();
                 let destination_bucket = request.dest_bucket_name.clone();
-                let source_markers = request.source_markers[plan.source_index].clone();
-                let source_marker_config = request.source_markers_config[plan.source_index].clone();
+                let marker_replacements = marker_replacements.clone();
                 let destination_object = destination_objects.get(&plan.relative_key).cloned();
                 let put_diagnostics = put_diagnostics.clone();
                 let put_retry_coordinator = put_retry_coordinator.clone();
@@ -385,8 +393,7 @@ pub(super) async fn upload_zip_entries(
                         let Some(payload) = prepare_zip_entry_upload(
                             &task_store,
                             &plan,
-                            &source_markers,
-                            &source_marker_config,
+                            marker_replacements,
                             destination_object.as_ref(),
                             &stats,
                         )
@@ -445,11 +452,11 @@ pub(super) async fn upload_zip_entries(
 
 fn catalog_skips_zip_entry(
     plan: &ZipEntryPlan,
-    source_markers: &HashMap<String, String>,
+    has_source_markers: bool,
     destination_object: Option<&DestinationObject>,
     stats: &DeploymentStats,
 ) -> bool {
-    let skip = source_markers.is_empty()
+    let skip = !has_source_markers
         && plan
             .trusted_integrity
             .as_ref()
@@ -466,12 +473,12 @@ fn catalog_skips_zip_entry(
 async fn prepare_zip_entry_upload(
     store: &Arc<SourceBlockStore>,
     plan: &ZipEntryPlan,
-    source_markers: &HashMap<String, String>,
-    source_marker_config: &MarkerConfig,
+    marker_replacements: Option<Arc<MarkerReplacements>>,
     destination_object: Option<&DestinationObject>,
     stats: &Arc<DeploymentStats>,
 ) -> Result<Option<UploadPayload>> {
-    if source_markers.is_empty() && !should_compare_marker_free_entry(plan, destination_object) {
+    if marker_replacements.is_none() && !should_compare_marker_free_entry(plan, destination_object)
+    {
         return Ok(Some(UploadPayload::from_zip_entry(
             store.clone(),
             plan.clone(),
@@ -480,19 +487,13 @@ async fn prepare_zip_entry_upload(
         )));
     }
 
-    if source_markers.is_empty() && plan.trusted_integrity.is_none() {
+    if marker_replacements.is_none() && plan.trusted_integrity.is_none() {
         stats.add_catalog_fallback_hash_attempt();
     } else {
         stats.add_md5_hash_attempt();
     }
-    let prepared = prepare_zip_entry_for_comparison(
-        store.clone(),
-        plan,
-        source_markers,
-        source_marker_config,
-        stats,
-    )
-    .await?;
+    let prepared =
+        prepare_zip_entry_for_comparison(store.clone(), plan, marker_replacements, stats).await?;
 
     if prepared
         .etag
@@ -773,26 +774,10 @@ async fn reconcile_copy(
 async fn prepare_zip_entry_for_comparison(
     store: Arc<SourceBlockStore>,
     plan: &ZipEntryPlan,
-    source_markers: &HashMap<String, String>,
-    source_marker_config: &MarkerConfig,
+    marker_replacements: Option<Arc<MarkerReplacements>>,
     stats: &Arc<DeploymentStats>,
 ) -> Result<PreparedUploadPayload> {
-    if source_markers.is_empty() {
-        let etag = hash_zip_entry_reader(store.clone(), plan.clone()).await?;
-        Ok(PreparedUploadPayload {
-            payload: UploadPayload::from_zip_entry(
-                store,
-                plan.clone(),
-                plan.size,
-                stats.detailed_failure_diagnostics_enabled(),
-            ),
-            etag: Some(etag),
-        })
-    } else {
-        let replacements = Arc::new(MarkerReplacements::new(
-            source_markers,
-            source_marker_config,
-        )?);
+    if let Some(replacements) = marker_replacements {
         // PutObject requires an exact length before its retryable body starts. This
         // pass validates and counts without retaining replacement output; only an
         // object that still needs uploading incurs the second streaming pass.
@@ -811,6 +796,30 @@ async fn prepare_zip_entry_for_comparison(
             ),
             etag,
         })
+    } else {
+        let etag = hash_zip_entry_reader(store.clone(), plan.clone()).await?;
+        Ok(PreparedUploadPayload {
+            payload: UploadPayload::from_zip_entry(
+                store,
+                plan.clone(),
+                plan.size,
+                stats.detailed_failure_diagnostics_enabled(),
+            ),
+            etag: Some(etag),
+        })
+    }
+}
+
+fn compile_marker_replacements(
+    markers: &HashMap<String, String>,
+    config: &crate::types::MarkerConfig,
+) -> Result<Option<Arc<MarkerReplacements>>> {
+    if markers.is_empty() {
+        Ok(None)
+    } else {
+        MarkerReplacements::new(markers, config)
+            .map(Arc::new)
+            .map(Some)
     }
 }
 
@@ -1789,7 +1798,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, HashMap};
     use std::io::{Cursor, Write};
     use std::sync::{Arc, Mutex};
 
@@ -1815,8 +1824,8 @@ mod tests {
     use super::{
         COPY_RECONCILIATION_METADATA_KEY, CopyContext, CopyOutcome, PutContext, UploadPayload,
         WriteDiagnostics, WriteDiagnosticsSnapshot, WriteRetryCoordinator, catalog_skips_zip_entry,
-        copy_reconciliation_identity, copy_source_object, digest_async_reader,
-        dispatch_failure_kind, log_copy_diagnostics, md5_hex, quoted_etag,
+        compile_marker_replacements, copy_reconciliation_identity, copy_source_object,
+        digest_async_reader, dispatch_failure_kind, log_copy_diagnostics, md5_hex, quoted_etag,
         read_async_reader_to_vec, record_bounded_diagnostic_count, record_copy_outcome,
         sanitize_diagnostic_label, serialize_put_attempt_failure, should_compare_marker_free_entry,
         upload_payload, write_error_kind, write_retry_cap_millis,
@@ -1877,7 +1886,7 @@ mod tests {
 
         assert!(!catalog_skips_zip_entry(
             &plan,
-            &Default::default(),
+            false,
             Some(&object),
             &stats,
         ));
@@ -1886,12 +1895,23 @@ mod tests {
             size: 5,
             md5: "5d41402abc4b2a76b9719d911017c592".to_string(),
         });
-        assert!(catalog_skips_zip_entry(
-            &plan,
-            &Default::default(),
-            Some(&object),
-            &stats,
-        ));
+        assert!(catalog_skips_zip_entry(&plan, false, Some(&object), &stats,));
+    }
+
+    #[test]
+    fn compiled_marker_replacements_are_shared_without_cloning_the_matcher() {
+        let markers = HashMap::from([("marker".to_string(), "value".to_string())]);
+        let replacements = compile_marker_replacements(&markers, &Default::default())
+            .expect("marker replacements should compile")
+            .expect("non-empty markers should produce replacements");
+        let shared = Arc::clone(&replacements);
+
+        assert!(Arc::ptr_eq(&replacements, &shared));
+        assert!(
+            compile_marker_replacements(&HashMap::new(), &Default::default())
+                .expect("empty markers should be accepted")
+                .is_none()
+        );
     }
 
     #[test]

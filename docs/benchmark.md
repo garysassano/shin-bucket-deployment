@@ -127,34 +127,41 @@ P-1 is therefore accepted for its simpler single-frame allocation path with no
 measurable performance or pressure regression; it must not be presented as a
 benchmark speedup.
 
-### P-2 marker replacement baseline
+### P-2 per-source marker replacement cache
 
-Collected 2026-08-03 from source commit `d7aec44`, run
-`5bfec7df-3076-4a81-b346-1fd8974ab10b`. This is P-2's before baseline, not
-acceptance evidence for the proposed per-source `MarkerReplacements` cache.
-Five repetitions of the `marker-heavy` profile at 2048 MiB /
-`maxConcurrency` 32 were paired with the same-memory upstream AWS CDK baseline
-across create, unchanged update, and changed update. All 30 sanitized rows have
-complete provider telemetry; every stack was destroyed and confirmed absent.
+The before run `5bfec7df-3076-4a81-b346-1fd8974ab10b` measured source commit
+`d7aec44`; after run `9c0e4cd1-2428-4f39-8ea7-4fc6cea09587` measured the exact
+clean P-2 implementation commit `7373058`. Each run contains five sequential
+repetitions of the `marker-heavy` profile at 2048 MiB / `maxConcurrency` 32,
+paired with a same-memory upstream AWS CDK control across create, unchanged
+update, and changed update. All 60 sanitized rows have complete provider
+telemetry; every stack was destroyed and confirmed absent.
 
 Provider duration, median over `n=5` with `[Q1, Q3]`:
 
-| Phase | Shin | AWS CDK | AWS/Shin |
-| --- | ---: | ---: | ---: |
-| `cold-create` | 0.607 s [0.604, 0.616] | 5.264 s [5.130, 5.330] | 8.7x |
-| `unchanged-update` | 0.377 s [0.366, 0.387] | 5.302 s [5.248, 5.317] | 14.1x |
-| `changed-update` | 0.640 s [0.631, 0.667] | 5.303 s [5.220, 5.306] | 8.3x |
+| Phase | Before Shin | After Shin | Median change | After AWS CDK | AWS/after Shin |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `cold-create` | 0.607 s [0.604, 0.616] | 0.639 s [0.619, 0.651] | +5.3% | 5.199 s [5.118, 5.278] | 8.1x |
+| `unchanged-update` | 0.377 s [0.366, 0.387] | 0.341 s [0.340, 0.358] | -9.5% | 5.260 s [5.232, 5.336] | 15.4x |
+| `changed-update` | 0.640 s [0.631, 0.667] | 0.613 s [0.609, 0.667] | -4.2% | 5.192 s [5.167, 5.231] | 8.5x |
 
-Create and changed update each recorded one marker planning pass and one upload
-pass per invocation. Unchanged update recorded one planning pass and no upload
-pass. Create and changed update also recorded the expected single source-block
-refetch and replay claim after release from the current two-pass marker path;
-consumed request-body replays remained zero. Every Shin row reported zero
-source GET errors/retries, zero destination upload retries/throttles, and zero
-transfer failures. Median peak memory was 37 MiB on create, 33 MiB on unchanged
-update, and 36 MiB on changed update, against 194 MiB for upstream in every
-phase. P-2 requires a separate five-repetition after run with the same matrix
-and upstream control before its performance decision can be made.
+The after run preserved the expected work exactly: create and changed update
+each recorded one marker planning pass, one upload pass, one source-block
+refetch, and one replay claim after release per invocation; unchanged update
+recorded one planning pass and no upload pass or refetch. All 15 after-Shin rows
+reported zero source GET errors/retries, destination upload retries/throttles,
+consumed request-body replays, and transfer failures. Median peak memory remained
+37 MiB on create, 33 MiB on unchanged update, and 36 MiB on changed update,
+compared with 194-195 MiB for upstream.
+
+This matrix does not demonstrate a latency win for matcher sharing: the profile
+has five planned entries, but its marker-bearing source contains only one entry,
+so it does not amplify the eliminated per-entry automaton builds. It does show
+no material timing, memory, or pressure regression and retains an 8.1-15.4x
+provider-duration advantage over upstream. P-2 is therefore accepted for the
+structural guarantee that each surviving marker-bearing source compiles one
+matcher and shares it through `Arc`; it must not be presented as a measured
+benchmark speedup.
 
 
 ## Methodology

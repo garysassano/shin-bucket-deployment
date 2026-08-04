@@ -12,7 +12,6 @@ use crate::util::finalize_md5;
 
 const INPUT_CHUNK_BYTES: usize = 64 * 1024;
 
-#[derive(Clone)]
 pub(crate) struct MarkerReplacements {
     matcher: AhoCorasick,
     replacements: Vec<Vec<u8>>,
