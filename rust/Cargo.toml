@@ -75,3 +75,20 @@ zip = { version = "8", default-features = false, features = [
   "deflate",
   "deflate64",
 ] }
+
+# The provider ships as a Lambda `bootstrap` binary, so build time is paid once in CI
+# while every cold start pays for the artifact.
+#
+# Two settings are deliberately *not* used, both because they trade away a load-bearing
+# failure path for size:
+#
+# - `panic = "abort"`: the scheduler and archive readers rely on `catch_unwind` to turn a
+#   worker panic into a reported failure instead of a hung CloudFormation stack.
+# - `strip = "symbols"`: the provider Lambda runs with `RUST_BACKTRACE=1`, and a stripped
+#   symbol table reduces those backtraces to bare addresses on a runtime nobody can attach
+#   a debugger to. `strip = "debuginfo"` keeps the names and gives up ~4 MiB against
+#   `"symbols"` (x86_64 host build: 30.4 MB unset, 20.9 MB debuginfo, 16.9 MB symbols).
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"
