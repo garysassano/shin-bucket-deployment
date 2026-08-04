@@ -48,7 +48,47 @@ The [generated report](../benchmarks/ci-report.md) has quartiles, end-to-end tim
 
 Memory scaling saturates well before 4096 MiB. Moving 1024 to 2048 cuts Shin cold-create 37% (1.267 s to 0.802 s); 2048 to 4096 buys a further 2.5% (0.802 s to 0.782 s) while peak memory rises from 105 to 126 MiB. Upstream shows the same knee, so part of this is workload-driven rather than a Shin property. On this profile 2048 MiB / 64 is the value configuration.
 
-`pruned-update` is consistently Shin's weakest phase relative to upstream (4.7x-8.5x, against 19x-31x on `unchanged-update`). That is the phase carrying stale-object deletion, whose list-then-delete pagination is fully serialized and whose deletes have no provider-owned retry. Treat it as the highest-value optimization target rather than as measurement noise.
+In this pre-PR-90 baseline, `pruned-update` was consistently Shin's weakest
+phase relative to upstream (4.7x-8.5x, against 19x-31x on
+`unchanged-update`). It carried fully serialized list-then-delete pagination and
+had no provider-owned delete retry. The decision run below measures the merged
+replacement rather than treating that baseline cost as noise.
+
+### P-4/P-6/R-1 destination-cleanup decision
+
+Run `95f84950-c108-4d4d-9e7b-a2f69dc14dfa` measured the exact clean cleanup
+implementation commit `b281f03` with `configs/delete-cleanup-2048-64.json`:
+five repetitions of `mixed` at 2048 MiB / `maxConcurrency` 64, paired with the
+same-memory upstream AWS CDK control across all four ordered phases. All 40
+sanitized rows have complete provider telemetry; every stack was destroyed and
+confirmed absent.
+
+Provider duration, median over `n=5` with `[Q1, Q3]`, compared with the
+five-repetition ancestor baseline at `20313b6`:
+
+| Phase | Before Shin | After Shin | Median change | After AWS CDK | AWS/after Shin |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `cold-create` | 0.802 s [0.792, 0.806] | 0.947 s [0.943, 0.971] | +18.1% | 5.657 s [5.631, 5.658] | 6.0x |
+| `unchanged-update` | 0.262 s [0.261, 0.270] | 0.326 s [0.304, 0.350] | +24.4% | 5.750 s [5.667, 5.794] | 17.6x |
+| `changed-update` | 0.411 s [0.385, 0.474] | 0.543 s [0.528, 0.557] | +32.1% | 5.561 s [5.554, 5.753] | 10.2x |
+| `pruned-update` | 1.138 s [1.069, 1.168] | 1.197 s [1.184, 1.226] | +5.2% | 5.442 s [5.311, 5.492] | 4.5x |
+
+The expected delete-path latency win did not materialize. On `pruned-update`,
+the median destination-list phase changed from 66 ms to 62 ms, transfer from
+121 ms to 120 ms, and delete from 623 ms to 674 ms. The implementation retains
+the 45 stale keys found while planning and sends one successful `DeleteObjects`
+call, so it removes the redundant list request for this bounded namespace; the
+remaining service-bound delete call still dominates the phase. Planning also
+rose from a 171 ms median to 273 ms. That increase coincides with the new
+per-key stale-key retention path but this run does not isolate its cause; it is
+large enough to affect every phase and needs a targeted follow-up.
+
+All 20 after-Shin rows reported zero source GET errors/retries, destination
+upload retries/throttles, transfer failures, cancellations, or panics. Every
+pruned sample deleted exactly 45 objects in one successful SDK call. P-4/P-6/R-1
+are therefore correctness-complete but not performance-accepted: retain the
+retry and bounded-listing improvements, but investigate planning overhead and
+the fixed cost of small `DeleteObjects` calls before claiming a speedup.
 
 ## Exploratory sweep: fixed concurrency 128
 
