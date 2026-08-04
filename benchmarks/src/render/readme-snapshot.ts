@@ -104,7 +104,7 @@ const inputFile = resolve(
 const CANVAS_PAD_LEFT = 24;
 const CANVAS_PAD_RIGHT = 30;
 
-const HEADER_H = headerLayout === "three-line" ? 72 : 60; // header band height
+const HEADER_H = headerLayout === "three-line" ? 111 : 60; // header band height
 const SECTION_HDR_H = 22; // section column-header band
 const SECTION_HDR_PAD_TOP = 15; // text baseline within section header
 
@@ -157,9 +157,13 @@ interface Row {
 type BenchmarkRecord = BenchmarkResultRecord;
 
 interface BenchmarkData {
+  assets: string;
+  awsIdentity: string;
   duration: Row[];
   memory: Row[];
-  metadata: string;
+  profileSummary: string;
+  providerConfiguration: string;
+  shinIdentity: string;
   profile: string;
   memoryMb: number;
   parallel: number;
@@ -359,30 +363,40 @@ function buildBenchmarkData(selection: DataSelection): BenchmarkData {
     };
   });
 
-  const metadataRecord = selection.shinRecords.values().next().value ?? selection.runRecords[0];
+  const metadataRecord =
+    selection.shinRecords.get("cold-create") ??
+    selection.shinRecords.values().next().value ??
+    selection.runRecords[0];
   if (metadataRecord === undefined) {
     throw new Error(
       `No benchmark metadata row found for profile=${selection.profile}, memory=${selection.memoryMb}, maxConcurrency=${selection.parallel}`,
     );
   }
-  const lambdaConfig = `Lambda: ${selection.memoryMb} MiB / Max concurrency: ${selection.parallel}`;
-  const metadataParts = [
-    metadataRecord.profile === null || metadataRecord.profile === undefined
-      ? undefined
-      : `Profile: ${metadataRecord.profile}`,
-    lambdaConfig,
+  const awsMetadataRecord = selection.awsRecords.values().next().value;
+  const shinCommit = metadataRecord.providerImplementationCommit;
+  const awsCdkLibVersion = awsMetadataRecord?.providerPackageVersion;
+  if (shinCommit === null || shinCommit === undefined || awsCdkLibVersion === undefined) {
+    throw new Error(
+      `Missing implementation identity for profile=${selection.profile}, memory=${selection.memoryMb}, maxConcurrency=${selection.parallel}`,
+    );
+  }
+  const assets =
     metadataRecord.fileCount === null ||
     metadataRecord.fileCount === undefined ||
     metadataRecord.totalBytes === null ||
     metadataRecord.totalBytes === undefined
-      ? undefined
-      : `Assets: ${metadataRecord.fileCount.toLocaleString("en-US")} objects / ${formatBytes(metadataRecord.totalBytes)}`,
-  ].filter((part) => part !== undefined);
+      ? "unknown"
+      : `${metadataRecord.fileCount.toLocaleString("en-US")} objects · ${formatBytes(metadataRecord.totalBytes)}`;
+  const profile = metadataRecord.profile ?? "unknown";
 
   return {
+    assets,
+    awsIdentity: `CDK v${awsCdkLibVersion}`,
     duration,
     memory,
-    metadata: metadataParts.join(" · "),
+    profileSummary: profile,
+    providerConfiguration: `${selection.memoryMb} MiB · Shin concurrency ${selection.parallel}`,
+    shinIdentity: `SHA ${shinCommit.slice(0, 7)}`,
     profile: selection.profile,
     memoryMb: selection.memoryMb,
     parallel: selection.parallel,
@@ -397,12 +411,6 @@ function simulateAwsWins(rows: Row[]): Row[] {
   }));
 }
 
-const subtitlePrefix = [
-  requestedPreview ? "PRELIMINARY" : undefined,
-  chartVariant === "aws" ? "AWS win simulation" : "vs AWS BucketDeployment",
-]
-  .filter((part) => part !== undefined)
-  .join(" · ");
 const outFileSuffix = `${chartVariant === "aws" ? "-aws" : ""}${headerLayout === "two-line" ? "-two-line" : ""}`;
 
 function snapshotFileName(benchmarkData: BenchmarkData): string {
@@ -416,7 +424,7 @@ function safeFileToken(value: string): string {
     .replace(/^-|-$/g, "");
 }
 
-const LEGEND_W = 111;
+const LEGEND_W = 220;
 
 // ═══ HELPERS ═══
 function barWidth(val: number, max: number): number {
@@ -526,12 +534,43 @@ function renderSectionHeader(y: number, title: string, deltaLabel: string): stri
 function renderHeader(benchmarkData: BenchmarkData): string {
   if (headerLayout === "three-line") {
     return `<text x="${CANVAS_PAD_LEFT}" y="23" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_TITLE}" font-weight="800" fill="#f0f8ff" letter-spacing="-0.3">ShinBucketDeployment</text>
-<text x="${CANVAS_PAD_LEFT}" y="43" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_SUBTITLE}" font-weight="600" fill="${COLOR_SECTION_HEADER_TEXT}">${subtitlePrefix}</text>
-<text x="${CANVAS_PAD_LEFT}" y="61" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_HEADER_LEGEND}" font-weight="500" fill="${COLOR_SECTION_HEADER_TEXT}">${benchmarkData.metadata}</text>`;
+<text x="${CANVAS_PAD_LEFT}" y="43" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_SUBTITLE + 1}" font-weight="600" fill="${COLOR_SECTION_HEADER_TEXT}">vs BucketDeployment</text>
+${renderMetadataCard(24, 57, 150, "PROFILE", benchmarkData.profileSummary)}
+${renderMetadataCard(182, 57, 210, "ASSETS", benchmarkData.assets)}
+${renderMetadataCard(400, 57, 360, "PROVIDER LAMBDA", benchmarkData.providerConfiguration)}`;
   }
 
-  return `<text x="${CANVAS_PAD_LEFT}" y="26" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_TITLE}" font-weight="800" fill="#f0f8ff" letter-spacing="-0.3">ShinBucketDeployment</text>
-<text x="${CANVAS_PAD_LEFT}" y="46" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_SUBTITLE}" font-weight="500" fill="${COLOR_SECTION_HEADER_TEXT}">${subtitlePrefix} · ${benchmarkData.metadata}</text>`;
+  return `<text x="${CANVAS_PAD_LEFT}" y="26" font-family="Inter, -apple-system, sans-serif"><tspan font-size="${FONT_SIZE_TITLE}" font-weight="800" fill="#f0f8ff" letter-spacing="-0.3">ShinBucketDeployment</tspan><tspan dx="8" font-size="${FONT_SIZE_SUBTITLE}" font-weight="600" fill="${COLOR_SECTION_HEADER_TEXT}">vs BucketDeployment</tspan></text>
+<text x="${CANVAS_PAD_LEFT}" y="46" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_SUBTITLE}" font-weight="500" fill="${COLOR_SECTION_HEADER_TEXT}">Shin ${benchmarkData.shinIdentity} · AWS ${benchmarkData.awsIdentity} · ${benchmarkData.profileSummary} · ${benchmarkData.assets} · ${benchmarkData.providerConfiguration}</text>`;
+}
+
+function renderMetadataCard(
+  x: number,
+  y: number,
+  width: number,
+  label: string,
+  value: string,
+): string {
+  return `<rect x="${x}" y="${y}" width="${width}" height="43" rx="6" fill="#0d1924" stroke="#21394a" stroke-width="0.75"/>
+<text x="${x + 10}" y="${y + 16}" font-family="Inter, -apple-system, sans-serif" font-size="9" font-weight="700" fill="${COLOR_SECTION_HEADER_TEXT}" letter-spacing="0.8">${label}</text>
+<text x="${x + 10}" y="${y + 35}" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="600" fill="#b6cedc">${value}</text>`;
+}
+
+function renderLegend(benchmarkData: BenchmarkData, legendX: number): string {
+  if (headerLayout === "two-line") {
+    return `<rect x="${legendX}" y="12" width="12" height="8" rx="2" fill="url(#shin)"/>
+<text x="${legendX + 18}" y="20" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_HEADER_LEGEND}" font-weight="700" fill="#8ab8d0">SHIN</text>
+<rect x="${legendX + 110}" y="12" width="12" height="8" rx="2" fill="url(#aws)"/>
+<text x="${legendX + 128}" y="20" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_HEADER_LEGEND}" font-weight="700" fill="#8ab8d0">AWS</text>
+<text x="${legendX + LEGEND_W}" y="42" text-anchor="end" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_HEADER_LEGEND}" font-weight="500" fill="${COLOR_SECTION_HEADER_TEXT}">▼ lower is better</text>`;
+  }
+
+  return `<rect x="${legendX}" y="11" width="12" height="8" rx="2" fill="url(#shin)"/>
+<text x="${legendX + 18}" y="19" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_HEADER_LEGEND}" font-weight="700" fill="#8ab8d0">SHIN</text>
+<text x="${legendX}" y="37" font-family="JetBrains Mono, monospace" font-size="11" font-weight="600" fill="${COLOR_SECTION_HEADER_TEXT}">${benchmarkData.shinIdentity}</text>
+<rect x="${legendX + 110}" y="11" width="12" height="8" rx="2" fill="url(#aws)"/>
+<text x="${legendX + 128}" y="19" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_HEADER_LEGEND}" font-weight="700" fill="#8ab8d0">AWS</text>
+<text x="${legendX + 110}" y="37" font-family="JetBrains Mono, monospace" font-size="11" font-weight="600" fill="${COLOR_SECTION_HEADER_TEXT}">${benchmarkData.awsIdentity}</text>`;
 }
 
 // ═══ RENDER ═══
@@ -542,9 +581,6 @@ function render(benchmarkData: BenchmarkData): string {
     chartVariant === "aws" ? simulateAwsWins(benchmarkData.memory) : benchmarkData.memory;
   const maxDuration = Math.max(...chartDuration.flatMap((row) => [row.shin, row.aws]));
   const maxMemory = Math.max(...chartMemory.flatMap((row) => [row.shin, row.aws]));
-  const legendSwatchY = headerLayout === "three-line" ? 22 : 12;
-  const legendLabelY = headerLayout === "three-line" ? 30 : 20;
-  const legendNoteY = headerLayout === "three-line" ? 52 : 42;
   const legendX = CANVAS_W - CANVAS_PAD_LEFT - LEGEND_W;
   const sectionATop = HEADER_H;
   const sectionARowsTop = sectionATop + SECTION_HDR_H + 1;
@@ -586,11 +622,7 @@ function render(benchmarkData: BenchmarkData): string {
 
 <!-- Header -->
 ${renderHeader(benchmarkData)}
-<rect x="${legendX}" y="${legendSwatchY}" width="12" height="8" rx="2" fill="url(#shin)"/>
-<text x="${legendX + 18}" y="${legendLabelY}" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_HEADER_LEGEND}" font-weight="700" fill="#8ab8d0">SHIN</text>
-<rect x="${legendX + 70}" y="${legendSwatchY}" width="12" height="8" rx="2" fill="url(#aws)"/>
-<text x="${legendX + 88}" y="${legendLabelY}" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_HEADER_LEGEND}" font-weight="700" fill="#8ab8d0">AWS</text>
-<text x="${legendX}" y="${legendNoteY}" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_HEADER_LEGEND}" font-weight="500" fill="${COLOR_SECTION_HEADER_TEXT}">▼ lower is better</text>
+${renderLegend(benchmarkData, legendX)}
 <rect x="0" y="${HEADER_H - 1}" width="${CANVAS_W}" height="1" fill="#1a2a38"/>
 
 `;
