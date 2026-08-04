@@ -14,6 +14,10 @@ const ZIP64_LOCATOR_LEN: u64 = 20;
 const ZIP64_EOCD_MIN_LEN: u64 = 56;
 const MIN_CENTRAL_DIRECTORY_ENTRY_BYTES: u64 = 46;
 const MAX_PARSER_DIRECTORY_BUFFER_BYTES: u64 = 20 * 1024 * 1024;
+/// Chunk used while probing for the end-of-central-directory records. Those structures are
+/// at most `EOCD_LEN + MAX_EOCD_COMMENT_LEN` bytes, so aligning the probe to the streaming
+/// `source_block_bytes` (8 MiB by default) fetched megabytes to read tens of kilobytes.
+const METADATA_SCAN_CHUNK_BYTES: usize = 256 * 1024;
 const ENTRY_METADATA_ESTIMATE_BYTES: u64 = 512;
 const DIRECTORY_ALLOCATION_FACTOR: u64 = 4;
 
@@ -43,11 +47,12 @@ pub(crate) async fn prepare_zip_directory_reader(
     );
 
     let chunk_size = chunk_size.max(1);
+    let scan_chunk_size = chunk_size.min(METADATA_SCAN_CHUNK_BYTES);
     let mut preloaded = BTreeMap::new();
     let mut preloaded_bytes = 0_u64;
     let eocd_offset = locate_eocd(
         &source,
-        chunk_size,
+        scan_chunk_size,
         budget.limit_bytes(),
         &mut preloaded,
         &mut preloaded_bytes,
@@ -55,13 +60,23 @@ pub(crate) async fn prepare_zip_directory_reader(
     .await?;
     let info = read_directory_info(
         &source,
-        chunk_size,
+        scan_chunk_size,
         budget.limit_bytes(),
         eocd_offset,
         &mut preloaded,
         &mut preloaded_bytes,
     )
     .await?;
+    // Preloaded blocks are keyed by `scan_chunk_size` alignment, so the parser can only
+    // reuse them while it reads at the same alignment. A central directory that outgrows
+    // one scan chunk is read at the streaming chunk size instead, where a single large
+    // aligned GET beats many small sequential ones; those blocks are then dropped.
+    let directory_fits_scan_chunk = info.central_directory_size <= scan_chunk_size as u64;
+    let (reader_chunk_size, reader_preloaded) = if directory_fits_scan_chunk {
+        (scan_chunk_size, preloaded)
+    } else {
+        (chunk_size, BTreeMap::new())
+    };
     let planning_bytes = directory_memory_estimate(info, preloaded_bytes)?;
     let combined_bytes = planning_bytes
         .checked_add(streaming_headroom_bytes)
@@ -77,7 +92,7 @@ pub(crate) async fn prepare_zip_directory_reader(
         .context("failed to reserve source budget for ZIP central-directory planning")?;
 
     Ok(PreparedZipDirectoryReader {
-        reader: S3RangeReader::with_preloaded(source, chunk_size, preloaded),
+        reader: S3RangeReader::with_preloaded(source, reader_chunk_size, reader_preloaded),
         central_directory_start: info.central_directory_start,
         _planning_permit: planning_permit,
     })

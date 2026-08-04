@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io;
 
@@ -435,7 +436,7 @@ async fn add_archive_entries_to_manifest(
         if is_reserved_catalog_path(&relative_key) {
             continue;
         }
-        if !seen.insert(relative_key.clone()) {
+        if !seen.insert(relative_key.clone().into_owned()) {
             return Err(anyhow!("duplicate ZIP file path `{relative_key}`"));
         }
         validate_stored_file_entry(stored, &relative_key)?;
@@ -473,24 +474,27 @@ async fn add_archive_entries_to_manifest(
             ));
         }
 
-        manifest.insert(
-            relative_key.clone(),
-            PlannedObject {
-                relative_key: relative_key.clone(),
-                expected_etag: None,
-                action: PlannedAction::ZipEntry {
-                    archive_index,
-                    source_index,
-                    size: stored.uncompressed_size(),
-                    compressed_size: stored.compressed_size(),
-                    compression_code: u16::from(stored.compression()),
-                    crc32: stored.crc32(),
-                    trusted_integrity: catalog.get(&relative_key).cloned(),
-                    source_offset,
-                    source_span_end,
-                },
+        let trusted_integrity = catalog.get(relative_key.as_ref()).cloned();
+        // The map key and `PlannedObject::relative_key` hold the same string. Build the
+        // planned object from one clone and move the original into the map, rather than
+        // allocating twice per entry.
+        let relative_key = relative_key.into_owned();
+        let planned = PlannedObject {
+            relative_key: relative_key.clone(),
+            expected_etag: None,
+            action: PlannedAction::ZipEntry {
+                archive_index,
+                source_index,
+                size: stored.uncompressed_size(),
+                compressed_size: stored.compressed_size(),
+                compression_code: u16::from(stored.compression()),
+                crc32: stored.crc32(),
+                trusted_integrity,
+                source_offset,
+                source_span_end,
             },
-        );
+        };
+        manifest.insert(relative_key, planned);
     }
 
     Ok(())
@@ -690,7 +694,7 @@ fn validate_catalog_entries(
         }
         if result
             .insert(
-                path,
+                path.into_owned(),
                 TrustedEntryIntegrity {
                     size: entry.size,
                     md5: entry.md5,
@@ -711,7 +715,10 @@ fn validate_catalog_entries(
             continue;
         }
         validate_stored_file_entry(stored, &path)?;
-        if files.insert(path, stored.uncompressed_size()).is_some() {
+        if files
+            .insert(path.into_owned(), stored.uncompressed_size())
+            .is_some()
+        {
             return Err(anyhow!(
                 "source ZIP contains a duplicate normalized file path"
             ));
@@ -783,7 +790,9 @@ fn zip_entry_plan(
     })
 }
 
-fn stored_zip_file_path(stored: &StoredZipEntry) -> Result<Option<String>> {
+/// Borrows out of `stored` when the entry path is already canonical, so the callers that
+/// only compare or look the path up never allocate.
+fn stored_zip_file_path(stored: &StoredZipEntry) -> Result<Option<Cow<'_, str>>> {
     let raw_path = stored.filename().as_str().map_err(|err| {
         anyhow!(
             "invalid ZIP entry path {:?}: {err}",
