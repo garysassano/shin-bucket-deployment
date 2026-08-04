@@ -1327,7 +1327,8 @@ mod tests {
             32 * 1024 * 1024,
             std::sync::Arc::new(DeploymentStats::default()),
             false,
-        );
+        )
+        .expect("valid test source budget");
         // Exhaust most of the budget the way a held planning reservation would.
         let _held = budget
             .try_reserve_planning(28 * 1024 * 1024)
@@ -1361,7 +1362,8 @@ mod tests {
             64 * 1024 * 1024,
             std::sync::Arc::new(DeploymentStats::default()),
             false,
-        );
+        )
+        .expect("valid test source budget");
         let estimate = catalog_memory_estimate(4 * 1024 * 1024).unwrap();
 
         let permit = budget.try_reserve_planning(estimate).expect("it fits");
@@ -1387,7 +1389,8 @@ mod tests {
             usize::try_from(limit).unwrap(),
             std::sync::Arc::new(DeploymentStats::default()),
             false,
-        );
+        )
+        .expect("valid test source budget");
         let planning = 10 * 1024 * 1024;
         let _planning_permit = budget
             .try_reserve_planning(planning)
@@ -1417,7 +1420,8 @@ mod tests {
             usize::try_from(EMBEDDED_CATALOG_MAX_BYTES).unwrap(),
             std::sync::Arc::new(DeploymentStats::default()),
             false,
-        );
+        )
+        .expect("valid test source budget");
         assert!(
             budget
                 .try_reserve_planning(catalog_memory_estimate(EMBEDDED_CATALOG_MAX_BYTES).unwrap())
@@ -1438,7 +1442,8 @@ mod tests {
             usize::try_from(limit).unwrap(),
             std::sync::Arc::new(DeploymentStats::default()),
             false,
-        );
+        )
+        .expect("valid test source budget");
 
         // Each of these wastes almost a whole unit to rounding.
         let unaligned = 3 * unit + 1;

@@ -50,9 +50,20 @@ pub(crate) fn plan_destination_change_cleanup(
         NamespaceRelation::Disjoint
     };
 
-    if relation == NamespaceRelation::Same {
-        return DestinationChangeCleanupDecision::NotNeeded(NoCleanupReason::SameDestination);
-    }
+    let strategy = match relation {
+        NamespaceRelation::Same => {
+            return DestinationChangeCleanupDecision::NotNeeded(NoCleanupReason::SameDestination);
+        }
+        NamespaceRelation::PreviousContainsCurrent => PreviousCleanupStrategy::DeleteNamespace {
+            excluded_prefix: Some(current.dest_bucket_prefix.clone()),
+        },
+        NamespaceRelation::CurrentContainsPrevious => {
+            PreviousCleanupStrategy::DeleteStaleWithinCurrent
+        }
+        NamespaceRelation::Disjoint => PreviousCleanupStrategy::DeleteNamespace {
+            excluded_prefix: None,
+        },
+    };
 
     if current.delete_previous_objects_on_change.is_none() {
         return DestinationChangeCleanupDecision::Retain(RetainReason::MissingAuthorization);
@@ -69,19 +80,6 @@ pub(crate) fn plan_destination_change_cleanup(
     {
         return DestinationChangeCleanupDecision::Retain(RetainReason::OwnerMismatch);
     }
-
-    let strategy = match relation {
-        NamespaceRelation::PreviousContainsCurrent => PreviousCleanupStrategy::DeleteNamespace {
-            excluded_prefix: Some(current.dest_bucket_prefix.clone()),
-        },
-        NamespaceRelation::CurrentContainsPrevious => {
-            PreviousCleanupStrategy::DeleteStaleWithinCurrent
-        }
-        NamespaceRelation::Disjoint => PreviousCleanupStrategy::DeleteNamespace {
-            excluded_prefix: None,
-        },
-        NamespaceRelation::Same => unreachable!("same destination returned above"),
-    };
 
     DestinationChangeCleanupDecision::Delete(DeletePreviousDestination {
         previous: previous.clone(),

@@ -770,20 +770,25 @@ impl SourceByteBudget {
         limit_bytes: usize,
         stats: Arc<DeploymentStats>,
         detailed_failure_diagnostics: bool,
-    ) -> Arc<Self> {
-        assert!(limit_bytes > 0, "source byte budget must be positive");
-        let limit_bytes = u64::try_from(limit_bytes).expect("usize source budget fits u64");
+    ) -> Result<Arc<Self>> {
+        anyhow::ensure!(limit_bytes > 0, "source byte budget must be positive");
+        let limit_bytes = u64::try_from(limit_bytes)
+            .context("source byte budget cannot be represented safely")?;
         let permit_unit_bytes = SOURCE_BUDGET_PERMIT_UNIT_BYTES.min(limit_bytes);
         let permit_count = usize::try_from(limit_bytes / permit_unit_bytes)
-            .expect("source budget permit count fits usize");
+            .context("source byte budget permit count cannot be represented safely")?;
+        anyhow::ensure!(
+            permit_count <= Semaphore::MAX_PERMITS,
+            "source byte budget requires more semaphore permits than the provider supports"
+        );
         stats.configure_source_global_budget(limit_bytes);
-        Arc::new(Self {
+        Ok(Arc::new(Self {
             limit_bytes,
             permit_unit_bytes,
             semaphore: Arc::new(Semaphore::new(permit_count)),
             stats,
             capacity_waiters: detailed_failure_diagnostics.then(|| AtomicU64::new(0)),
-        })
+        }))
     }
 
     pub(crate) fn limit_bytes(&self) -> u64 {
@@ -985,12 +990,12 @@ impl S3RangeReader {
             return Poll::Ready(Ok(()));
         }
 
-        let fetched = match self
-            .in_flight
-            .as_mut()
-            .expect("in-flight source fetch exists")
-            .poll_unpin(cx)
-        {
+        let Some(in_flight) = self.in_flight.as_mut() else {
+            return Poll::Ready(Err(io::Error::other(
+                "source range reader entered an invalid fetch state",
+            )));
+        };
+        let fetched = match in_flight.poll_unpin(cx) {
             Poll::Pending => return Poll::Pending,
             Poll::Ready(result) => result?,
         };
@@ -2096,7 +2101,8 @@ mod tests {
             let replay = StaticReplayClient::new(vec![get_success_bytes(bytes.clone())]);
             let source = replay_source_client(replay.clone(), bytes.len() as u64);
             let stats = Arc::new(DeploymentStats::default());
-            let budget = super::SourceByteBudget::new(64 * 1024 * 1024, Arc::clone(&stats), false);
+            let budget = super::SourceByteBudget::new(64 * 1024 * 1024, Arc::clone(&stats), false)
+                .expect("valid test source budget");
 
             let prepared = prepare_zip_directory_reader(source, 8 * 1024 * 1024, budget, 0)
                 .await
@@ -2138,6 +2144,13 @@ mod tests {
         fn drop(&mut self) {
             self.0.store(true, Ordering::Release);
         }
+    }
+
+    #[test]
+    fn zero_source_budget_is_rejected_without_panicking() {
+        let result = super::SourceByteBudget::new(0, Arc::new(DeploymentStats::default()), false);
+
+        assert!(result.is_err());
     }
 
     #[test]
@@ -2207,7 +2220,8 @@ mod tests {
     #[tokio::test]
     async fn invocation_budget_bounds_multiple_sources_and_cancel_releases_permits() {
         let stats = Arc::new(crate::types::DeploymentStats::default());
-        let budget = super::SourceByteBudget::new(64, Arc::clone(&stats), true);
+        let budget = super::SourceByteBudget::new(64, Arc::clone(&stats), true)
+            .expect("valid test source budget");
         let first = pending_store_for_span(48, Arc::clone(&budget));
         let second = pending_store_for_span(48, budget);
 
@@ -2248,7 +2262,8 @@ mod tests {
     async fn replay_demand_borrows_global_capacity_when_the_local_window_is_full() {
         const BLOCK_BYTES: usize = 4 * 1024;
         let stats = Arc::new(crate::types::DeploymentStats::default());
-        let budget = super::SourceByteBudget::new(BLOCK_BYTES * 2, Arc::clone(&stats), false);
+        let budget = super::SourceByteBudget::new(BLOCK_BYTES * 2, Arc::clone(&stats), false)
+            .expect("valid test source budget");
         let plans = [
             plan_with_span("early.txt", 0, BLOCK_BYTES as u64),
             plan_with_span("later.txt", BLOCK_BYTES as u64, (BLOCK_BYTES * 2) as u64),
@@ -2667,7 +2682,8 @@ mod tests {
         let plan = zip_plan_from_archive(&zip, "abandoned.txt");
         let block_bytes = usize::try_from(plan.source_span_end - plan.source_offset).unwrap();
         let stats = Arc::new(DeploymentStats::default());
-        let budget = super::SourceByteBudget::new(block_bytes, Arc::clone(&stats), false);
+        let budget = super::SourceByteBudget::new(block_bytes, Arc::clone(&stats), false)
+            .expect("valid test source budget");
         let held_capacity = budget
             .reserve_planning(block_bytes as u64)
             .await
@@ -2776,7 +2792,8 @@ mod tests {
         let plan = zip_plan_from_archive(&zip, "abandoned-detailed.txt");
         let block_bytes = usize::try_from(plan.source_span_end - plan.source_offset).unwrap();
         let stats = Arc::new(DeploymentStats::new(true));
-        let budget = super::SourceByteBudget::new(block_bytes, Arc::clone(&stats), true);
+        let budget = super::SourceByteBudget::new(block_bytes, Arc::clone(&stats), true)
+            .expect("valid test source budget");
         let held_capacity = budget
             .reserve_planning(block_bytes as u64)
             .await
@@ -2957,7 +2974,8 @@ mod tests {
             zip.len() as u64,
         )]);
         let stats = Arc::new(DeploymentStats::default());
-        let budget = super::SourceByteBudget::new(block_bytes, Arc::clone(&stats), false);
+        let budget = super::SourceByteBudget::new(block_bytes, Arc::clone(&stats), false)
+            .expect("valid test source budget");
         let held_capacity = budget
             .reserve_planning(block_bytes as u64)
             .await
@@ -3064,7 +3082,8 @@ mod tests {
         let expected_requests = events.len();
         let replay = StaticReplayClient::new(events);
         let stats = Arc::new(DeploymentStats::default());
-        let budget = super::SourceByteBudget::new(BLOCK_BYTES, Arc::clone(&stats), false);
+        let budget = super::SourceByteBudget::new(BLOCK_BYTES, Arc::clone(&stats), false)
+            .expect("valid test source budget");
         let store = pending_replay_store(&zip, &plan, replay.clone(), budget, BLOCK_BYTES);
         let body = zip_entry_body(
             Arc::clone(&store),
@@ -3342,7 +3361,8 @@ mod tests {
                 usize::try_from(block.len()).unwrap(),
                 Arc::new(crate::types::DeploymentStats::default()),
                 false,
-            ),
+            )
+            .expect("valid test source budget"),
             source_get_concurrency: 1,
             window_bytes: block.len(),
             fetch_semaphore: Semaphore::new(1),
@@ -3529,7 +3549,8 @@ mod tests {
                 usize::try_from(block.len()).unwrap(),
                 Arc::new(crate::types::DeploymentStats::default()),
                 false,
-            ),
+            )
+            .expect("valid test source budget"),
             source_get_concurrency: 1,
             window_bytes: block.len(),
             fetch_semaphore: Semaphore::new(1),
@@ -3584,7 +3605,8 @@ mod tests {
                 usize::try_from(resident).unwrap(),
                 Arc::new(crate::types::DeploymentStats::default()),
                 false,
-            ),
+            )
+            .expect("valid test source budget"),
             source_get_concurrency: 1,
             window_bytes: resident,
             fetch_semaphore: Semaphore::new(1),

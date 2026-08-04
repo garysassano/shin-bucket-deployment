@@ -123,8 +123,10 @@ async fn locate_eocd(
         .await?;
         let block = preloaded
             .get(&block_start)
-            .expect("preloaded source block exists");
-        let block_end = block_start + block.len() as u64;
+            .ok_or_else(|| anyhow!("loaded ZIP metadata block was not retained"))?;
+        let block_end = block_start
+            .checked_add(block.len() as u64)
+            .ok_or_else(|| anyhow!("ZIP metadata block range overflowed"))?;
         let candidate_start = block_start.max(search_start);
         let candidate_end = block_end.min(latest_signature.saturating_add(4));
         let overlap_end = source_len.min(candidate_end.saturating_add(3));
@@ -154,7 +156,7 @@ async fn locate_eocd(
                 preloaded_bytes,
             )
             .await?;
-            let comment_len = u16_at(&header, 20) as u64;
+            let comment_len = u16_at(&header, 20)? as u64;
             if absolute
                 .checked_add(EOCD_LEN)
                 .and_then(|end| end.checked_add(comment_len))
@@ -194,16 +196,16 @@ async fn read_directory_info(
     )
     .await?;
     ensure!(
-        u32_at(&eocd, 0).to_le_bytes() == EOCD_SIGNATURE,
+        u32_at(&eocd, 0)?.to_le_bytes() == EOCD_SIGNATURE,
         "invalid ZIP EOCD signature"
     );
-    let disk = u16_at(&eocd, 4);
-    let directory_disk = u16_at(&eocd, 6);
-    let entries_on_disk = u16_at(&eocd, 8);
-    let entries = u16_at(&eocd, 10);
-    let directory_size = u32_at(&eocd, 12);
-    let directory_start = u32_at(&eocd, 16);
-    let comment_len = u16_at(&eocd, 20) as u64;
+    let disk = u16_at(&eocd, 4)?;
+    let directory_disk = u16_at(&eocd, 6)?;
+    let entries_on_disk = u16_at(&eocd, 8)?;
+    let entries = u16_at(&eocd, 10)?;
+    let directory_size = u32_at(&eocd, 12)?;
+    let directory_start = u32_at(&eocd, 16)?;
+    let comment_len = u16_at(&eocd, 20)? as u64;
 
     ensure!(
         disk == 0 && directory_disk == 0,
@@ -234,14 +236,14 @@ async fn read_directory_info(
 
     let (info, boundary) = if let Some((locator_offset, locator)) = locator {
         ensure!(
-            u32_at(&locator, 4) == 0,
+            u32_at(&locator, 4)? == 0,
             "split ZIP64 archives are not supported"
         );
         ensure!(
-            u32_at(&locator, 16) == 1,
+            u32_at(&locator, 16)? == 1,
             "split ZIP64 archives are not supported"
         );
-        let zip64_offset = u64_at(&locator, 8);
+        let zip64_offset = u64_at(&locator, 8)?;
         let record = cached_span(
             source,
             chunk_size,
@@ -256,7 +258,7 @@ async fn read_directory_info(
             record[..4] == ZIP64_EOCD_SIGNATURE,
             "invalid ZIP64 end-of-central-directory signature"
         );
-        let record_size = u64_at(&record, 4);
+        let record_size = u64_at(&record, 4)?;
         ensure!(
             record_size >= 44,
             "ZIP64 end-of-central-directory record is shorter than its fixed fields"
@@ -270,13 +272,13 @@ async fn read_directory_info(
             "ZIP64 end-of-central-directory record is not bound to its locator"
         );
         ensure!(
-            u32_at(&record, 16) == 0 && u32_at(&record, 20) == 0,
+            u32_at(&record, 16)? == 0 && u32_at(&record, 20)? == 0,
             "split ZIP64 archives are not supported"
         );
-        let zip64_entries_on_disk = u64_at(&record, 24);
-        let zip64_entries = u64_at(&record, 32);
-        let zip64_directory_size = u64_at(&record, 40);
-        let zip64_directory_start = u64_at(&record, 48);
+        let zip64_entries_on_disk = u64_at(&record, 24)?;
+        let zip64_entries = u64_at(&record, 32)?;
+        let zip64_directory_size = u64_at(&record, 40)?;
+        let zip64_directory_start = u64_at(&record, 48)?;
         ensure!(
             zip64_entries_on_disk == zip64_entries,
             "split ZIP64 central-directory entry counts are not supported"
@@ -400,7 +402,7 @@ async fn cached_span(
         .await?;
         let block = preloaded
             .get(&block_start)
-            .expect("preloaded source block exists");
+            .ok_or_else(|| anyhow!("loaded ZIP metadata block was not retained"))?;
         let relative = usize::try_from(position - block_start)
             .context("ZIP metadata block offset does not fit in memory")?;
         let remaining = usize::try_from(end - position)
@@ -459,24 +461,27 @@ fn compatible_u32(legacy: u32, extended: u64) -> bool {
     legacy == u32::MAX || legacy as u64 == extended
 }
 
-fn u16_at(bytes: &[u8], offset: usize) -> u16 {
-    u16::from_le_bytes([bytes[offset], bytes[offset + 1]])
+fn field_at<const N: usize>(bytes: &[u8], offset: usize) -> Result<[u8; N]> {
+    let end = offset
+        .checked_add(N)
+        .ok_or_else(|| anyhow!("ZIP metadata field offset overflowed"))?;
+    bytes
+        .get(offset..end)
+        .ok_or_else(|| anyhow!("ZIP metadata field extends beyond the available bytes"))?
+        .try_into()
+        .map_err(|_| anyhow!("ZIP metadata field has an invalid length"))
 }
 
-fn u32_at(bytes: &[u8], offset: usize) -> u32 {
-    u32::from_le_bytes(
-        bytes[offset..offset + 4]
-            .try_into()
-            .expect("four-byte field"),
-    )
+fn u16_at(bytes: &[u8], offset: usize) -> Result<u16> {
+    Ok(u16::from_le_bytes(field_at(bytes, offset)?))
 }
 
-fn u64_at(bytes: &[u8], offset: usize) -> u64 {
-    u64::from_le_bytes(
-        bytes[offset..offset + 8]
-            .try_into()
-            .expect("eight-byte field"),
-    )
+fn u32_at(bytes: &[u8], offset: usize) -> Result<u32> {
+    Ok(u32::from_le_bytes(field_at(bytes, offset)?))
+}
+
+fn u64_at(bytes: &[u8], offset: usize) -> Result<u64> {
+    Ok(u64::from_le_bytes(field_at(bytes, offset)?))
 }
 
 #[cfg(test)]
@@ -485,7 +490,18 @@ mod tests {
 
     use async_zip::base::read::seek::ZipFileReader;
 
-    use super::{ZipDirectoryInfo, directory_memory_estimate, validate_directory_info};
+    use super::{
+        ZipDirectoryInfo, directory_memory_estimate, u16_at, u32_at, u64_at,
+        validate_directory_info,
+    };
+
+    #[test]
+    fn fixed_width_metadata_reads_reject_truncated_fields() {
+        assert!(u16_at(&[0], 0).is_err());
+        assert!(u32_at(&[0; 4], 1).is_err());
+        assert!(u64_at(&[0; 7], 0).is_err());
+        assert!(u16_at(&[0; 2], usize::MAX).is_err());
+    }
 
     #[test]
     fn central_directory_count_must_fit_the_declared_span() {

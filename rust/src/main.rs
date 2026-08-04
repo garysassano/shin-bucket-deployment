@@ -42,7 +42,7 @@ const CALLBACK_SENSITIVE_LOG_TARGETS: &[&str] = &[
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     tracing_subscriber::fmt()
-        .with_env_filter(callback_safe_log_filter())
+        .with_env_filter(callback_safe_log_filter()?)
         .without_time()
         .init();
 
@@ -75,20 +75,18 @@ async fn main() -> Result<(), Error> {
     Ok(())
 }
 
-fn callback_safe_log_filter() -> EnvFilter {
+fn callback_safe_log_filter() -> Result<EnvFilter, tracing_subscriber::filter::ParseError> {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     harden_callback_log_targets(filter)
 }
 
-fn harden_callback_log_targets(mut filter: EnvFilter) -> EnvFilter {
+fn harden_callback_log_targets(
+    mut filter: EnvFilter,
+) -> Result<EnvFilter, tracing_subscriber::filter::ParseError> {
     for target in CALLBACK_SENSITIVE_LOG_TARGETS {
-        filter = filter.add_directive(
-            format!("{target}=info")
-                .parse()
-                .expect("static tracing directive"),
-        );
+        filter = filter.add_directive(format!("{target}=info").parse()?);
     }
-    filter
+    Ok(filter)
 }
 
 /// Builds the client used only for the CloudFormation response PUT.
@@ -114,7 +112,7 @@ mod tests {
     use tracing_subscriber::fmt::MakeWriter;
     use tracing_subscriber::layer::SubscriberExt;
 
-    use super::harden_callback_log_targets;
+    use super::{CALLBACK_SENSITIVE_LOG_TARGETS, harden_callback_log_targets};
 
     #[derive(Clone, Default)]
     struct TestWriter(Arc<Mutex<Vec<u8>>>);
@@ -148,9 +146,12 @@ mod tests {
         const SECRET: &str = "X-Amz-Signature=callback-secret";
         let writer = TestWriter::default();
         let subscriber = tracing_subscriber::registry()
-            .with(harden_callback_log_targets(EnvFilter::new(
-                "trace,lambda_runtime=trace,reqwest=trace",
-            )))
+            .with(
+                harden_callback_log_targets(EnvFilter::new(
+                    "trace,lambda_runtime=trace,reqwest=trace",
+                ))
+                .expect("callback-sensitive directives must parse"),
+            )
             .with(
                 tracing_subscriber::fmt::layer()
                     .without_time()
@@ -170,5 +171,17 @@ mod tests {
         assert!(!output.contains("raw event"));
         assert!(!output.contains("HTTP request"));
         assert!(output.contains("provider trace retained"));
+    }
+
+    #[test]
+    fn callback_sensitive_log_targets_form_valid_directives() {
+        for target in CALLBACK_SENSITIVE_LOG_TARGETS {
+            assert!(
+                format!("{target}=info")
+                    .parse::<tracing_subscriber::filter::Directive>()
+                    .is_ok(),
+                "invalid callback-sensitive tracing target: {target}"
+            );
+        }
     }
 }

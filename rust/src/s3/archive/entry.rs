@@ -192,7 +192,7 @@ impl UploadProducerStage {
             3 => Self::Complete,
             4 => Self::ReceiverClosed,
             5 => Self::BodyError,
-            _ => unreachable!("invalid upload producer stage"),
+            _ => Self::BodyError,
         };
         (state >> UPLOAD_PRODUCER_STAGE_BITS, stage)
     }
@@ -330,12 +330,12 @@ impl AsyncRead for ZipEntryAsyncReader {
                 }));
             }
 
-            let reader = match self
-                .init
-                .as_mut()
-                .expect("entry reader init exists")
-                .poll_unpin(cx)
-            {
+            let Some(init) = self.init.as_mut() else {
+                return Poll::Ready(Err(io::Error::other(
+                    "ZIP entry reader entered an invalid initialization state",
+                )));
+            };
+            let reader = match init.poll_unpin(cx) {
                 Poll::Pending => return Poll::Pending,
                 Poll::Ready(result) => result?,
             };
@@ -343,7 +343,12 @@ impl AsyncRead for ZipEntryAsyncReader {
             self.init = None;
         }
 
-        Pin::new(self.reader.as_mut().expect("entry data reader initialized")).poll_read(cx, buf)
+        match self.reader.as_mut() {
+            Some(reader) => Pin::new(reader).poll_read(cx, buf),
+            None => Poll::Ready(Err(io::Error::other(
+                "ZIP entry reader did not initialize its data reader",
+            ))),
+        }
     }
 }
 
@@ -557,12 +562,12 @@ impl EntryDataReader {
             self.start_fetch();
         }
 
-        let fetched = match self
-            .in_flight
-            .as_mut()
-            .expect("in-flight entry source fetch exists")
-            .poll_unpin(cx)
-        {
+        let Some(in_flight) = self.in_flight.as_mut() else {
+            return Poll::Ready(Err(io::Error::other(
+                "ZIP entry reader entered an invalid fetch state",
+            )));
+        };
+        let fetched = match in_flight.poll_unpin(cx) {
             Poll::Pending => return Poll::Pending,
             Poll::Ready(result) => result?,
         };
@@ -889,9 +894,7 @@ async fn send_marker_zip_entry_chunks_inner(
     body_state: Arc<UploadBodyState>,
     attempt_number: Option<u64>,
 ) -> std::result::Result<(), BodyError> {
-    let pipe_capacity = ZIP_ENTRY_BODY_CHUNK_BYTES
-        .checked_mul(2)
-        .unwrap_or(ZIP_ENTRY_BODY_CHUNK_BYTES);
+    let pipe_capacity = ZIP_ENTRY_BODY_CHUNK_BYTES.saturating_mul(2);
     let (mut output_reader, mut output_writer) = tokio::io::duplex(pipe_capacity);
     let producer = async move {
         let result = replace_marker_zip_entry(
@@ -1113,11 +1116,15 @@ impl Body for ReceiverBody {
             self.receiver = Some(receiver);
         }
 
-        let frame = self
-            .receiver
-            .as_mut()
-            .expect("source body receiver starts on first poll")
-            .poll_recv(cx);
+        let Some(receiver) = self.receiver.as_mut() else {
+            self.complete = true;
+            self.record_body_error();
+            self.publish_attempt(false, false, None);
+            return Poll::Ready(Some(Err(boxed_body_error(io::Error::other(
+                "source body receiver was not initialized",
+            )))));
+        };
+        let frame = receiver.poll_recv(cx);
         match frame {
             Poll::Ready(Some(Ok(BodyFrame::Data(bytes)))) => {
                 let frame_bytes = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
@@ -1203,18 +1210,13 @@ impl Drop for ReceiverBody {
             .as_ref()
             .is_some_and(|producer| !producer.is_finished());
         if !self.complete
-            && self
+            && let Some(diagnostics) = self
                 .diagnostics
                 .as_ref()
-                .is_some_and(|diagnostics| diagnostics.attempt_number.is_some())
+                .filter(|diagnostics| diagnostics.attempt_number.is_some())
         {
             // Capture source state while the receiver and producer are still live.
-            let source = self
-                .diagnostics
-                .as_ref()
-                .expect("observed attempt has receiver diagnostics")
-                .store
-                .attempt_snapshot();
+            let source = diagnostics.store.attempt_snapshot();
             self.publish_attempt(true, aborted_producer, Some(source));
         }
         self.receiver.take();
