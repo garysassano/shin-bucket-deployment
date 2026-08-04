@@ -3257,9 +3257,54 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn open_entry_data_reader_rejects_short_local_header() {
-        // Simulate a block boundary splitting the 30-byte local header; the
-        // parser should return a clean error instead of indexing past the slice.
+    async fn open_entry_data_reader_stitches_a_local_header_across_a_block_boundary() {
+        let zip = zip_from_entry("straddle.txt", b"local header straddles a source block");
+        let plan = zip_plan_from_archive(&zip, "straddle.txt");
+        let single_block = ready_store_for_plan(&zip, &plan);
+        let mut expected = Vec::new();
+        super::open_entry_data_reader(single_block, plan.clone())
+            .await
+            .expect("single-block reader")
+            .read_to_end(&mut expected)
+            .await
+            .unwrap();
+        assert!(!expected.is_empty());
+
+        // Every block size that puts a boundary strictly inside the 30-byte header, so the
+        // split lands on a different header byte each iteration. These sizes are below
+        // `MIN_SOURCE_BLOCK_BYTES` and the current planner never emits such a split at all
+        // (see `read_local_file_header`); they are the only way to drive the stitching
+        // path, which exists so a future coalescing change cannot resurrect the failure.
+        for block_bytes in 4..LOCAL_FILE_HEADER_LEN {
+            let store = ready_store_for_plan_with_block_bytes(&zip, &plan, block_bytes);
+            assert!(
+                store.blocks.len() > 1,
+                "block size {block_bytes} must split the entry"
+            );
+            assert!(
+                store.blocks[0].len() < LOCAL_FILE_HEADER_LEN as u64,
+                "block size {block_bytes} must split the header itself"
+            );
+
+            let mut actual = Vec::new();
+            super::open_entry_data_reader(store, plan.clone())
+                .await
+                .unwrap_or_else(|error| {
+                    panic!("straddling header at block size {block_bytes} must parse: {error}")
+                })
+                .read_to_end(&mut actual)
+                .await
+                .unwrap();
+
+            assert_eq!(actual, expected, "block size {block_bytes}");
+        }
+    }
+
+    #[tokio::test]
+    async fn open_entry_data_reader_rejects_header_bytes_outside_every_planned_block() {
+        // Header bytes that no planned block covers are unreachable through real
+        // planning, which always covers an entry's whole span contiguously. Stitching
+        // must still degrade to a clean error rather than looping or panicking.
         let short_len: u64 = (LOCAL_FILE_HEADER_LEN as u64) - 1;
         let block = SourceBlockRange {
             start: 0,
@@ -3317,11 +3362,16 @@ mod tests {
         };
 
         let error = match super::open_entry_data_reader(store, plan).await {
-            Ok(_) => panic!("expected short local header to be rejected"),
+            Ok(_) => panic!("expected unplanned local header bytes to be rejected"),
             Err(error) => error,
         };
 
-        assert!(error.to_string().contains("local file header"));
+        assert!(
+            error
+                .to_string()
+                .contains("no planned source block covers offset"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
@@ -3482,6 +3532,61 @@ mod tests {
             ),
             source_get_concurrency: 1,
             window_bytes: block.len(),
+            fetch_semaphore: Semaphore::new(1),
+            body_tasks: std::sync::Mutex::new(tokio::task::JoinSet::new()),
+        })
+    }
+
+    /// Builds a store whose blocks come from the real planner at `block_bytes`, so an
+    /// entry's local header and data can be split across genuine block boundaries.
+    fn ready_store_for_plan_with_block_bytes(
+        zip: &[u8],
+        plan: &ZipEntryPlan,
+        block_bytes: usize,
+    ) -> Arc<super::SourceBlockStore> {
+        let plans = std::slice::from_ref(plan);
+        let blocks = super::plan_source_blocks(zip.len() as u64, plans, block_bytes, 0);
+        let claims = super::initial_claim_counts(&blocks, plans);
+        let resident: u64 = blocks.iter().map(|block| block.len()).sum();
+        let slots = blocks
+            .iter()
+            .zip(claims)
+            .map(|(block, remaining_claims)| SourceBlockSlot {
+                remaining_claims,
+                live_claims: 0,
+                replay_priority: false,
+                budget_permit: None,
+                status: SourceBlockStatus::Ready(bytes::Bytes::copy_from_slice(
+                    &zip[block.start as usize..block.end as usize + 1],
+                )),
+            })
+            .collect();
+        Arc::new(super::SourceBlockStore {
+            source: Arc::new(super::SourceClient {
+                client: dummy_s3_client(),
+                bucket: "bucket".to_string(),
+                key: "archive.zip".to_string(),
+                len: zip.len() as u64,
+                etag: "\"test-source-etag\"".to_string(),
+                diagnostics: Arc::new(SourceDiagnostics::new(zip.len() as u64)),
+            }),
+            blocks,
+            state: std::sync::Mutex::new(SourceBlockState {
+                slots,
+                window_committed_bytes: resident,
+                resident_bytes: resident,
+                failure: None,
+            }),
+            notify: Arc::new(tokio::sync::Notify::new()),
+            capacity_notify: Arc::new(tokio::sync::Notify::new()),
+            cancel_notify: Arc::new(tokio::sync::Notify::new()),
+            budget: super::SourceByteBudget::new(
+                usize::try_from(resident).unwrap(),
+                Arc::new(crate::types::DeploymentStats::default()),
+                false,
+            ),
+            source_get_concurrency: 1,
+            window_bytes: resident,
             fetch_semaphore: Semaphore::new(1),
             body_tasks: std::sync::Mutex::new(tokio::task::JoinSet::new()),
         })
