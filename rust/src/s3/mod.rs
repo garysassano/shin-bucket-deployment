@@ -134,7 +134,7 @@ pub(crate) async fn deploy(
 ) -> Result<()> {
     let started = std::time::Instant::now();
     planner::validate_request_lengths(request)?;
-    let source_budget = archive::SourceByteBudget::new(
+    let source_budget = archive::budget::SourceByteBudget::new(
         request.runtime.source_memory_budget_bytes,
         Arc::clone(&stats),
         state.detailed_failure_diagnostics,

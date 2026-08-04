@@ -32,10 +32,12 @@ use crate::types::{
 };
 use crate::util::{MAX_DIAGNOSTIC_VALUE_BYTES, sanitize_diagnostic};
 
-use super::archive::{
-    MarkerBodyContext, SourceBlockOptions, SourceBlockStore, SourceByteBudget, UploadBodyState,
-    marker_zip_entry_body, plan_marker_zip_entry, validate_zip_entry_output,
-    validate_zip_entry_size_not_exceeded, zip_entry_body, zip_entry_reader,
+use super::archive::block_store::{SourceAttemptSnapshot, SourceBlockOptions, SourceBlockStore};
+use super::archive::budget::SourceByteBudget;
+use super::archive::entry::{
+    MarkerBodyContext, UploadBodyState, marker_zip_entry_body, plan_marker_zip_entry,
+    validate_zip_entry_output, validate_zip_entry_size_not_exceeded, zip_entry_body,
+    zip_entry_reader,
 };
 use super::content_type::{apply_copy_content_type, apply_put_content_type};
 use super::destination::{
@@ -144,7 +146,7 @@ impl UploadPayload {
         }
     }
 
-    fn source_attempt_snapshot(&self) -> Option<super::archive::SourceAttemptSnapshot> {
+    fn source_attempt_snapshot(&self) -> Option<SourceAttemptSnapshot> {
         match self {
             UploadPayload::Bytes { .. } => None,
             UploadPayload::ZipEntry { store, .. } => Some(store.attempt_snapshot()),

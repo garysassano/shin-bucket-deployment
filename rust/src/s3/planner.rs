@@ -16,11 +16,13 @@ use crate::types::{
 };
 use crate::util::{MAX_DIAGNOSTIC_VALUE_BYTES, sanitize_diagnostic};
 
-use super::archive::{
-    SourceBlockOptions, SourceBlockStore, SourceByteBudget, prepare_source_zip,
-    prepare_zip_directory_reader, validate_zip_entry_output, validate_zip_entry_size_not_exceeded,
-    zip_entry_reader,
+use super::archive::block_store::{SourceBlockOptions, SourceBlockStore};
+use super::archive::budget::SourceByteBudget;
+use super::archive::directory::prepare_zip_directory_reader;
+use super::archive::entry::{
+    validate_zip_entry_output, validate_zip_entry_size_not_exceeded, zip_entry_reader,
 };
+use super::archive::prepare_source_zip;
 use super::destination::{
     DestinationObject, DestinationWritePrecondition, destination_etag_matches,
     destination_write_precondition, normalize_etag,
@@ -1066,7 +1068,7 @@ mod tests {
         validate_catalog_entries, validate_deployment_preflight, validate_stored_file_entry,
     };
     use crate::request::compile_filters;
-    use crate::s3::archive::SourceByteBudget;
+    use crate::s3::archive::budget::SourceByteBudget;
     use crate::s3::destination::{DestinationObject, DestinationWritePrecondition};
     use crate::types::DeploymentStats;
     use crate::types::{

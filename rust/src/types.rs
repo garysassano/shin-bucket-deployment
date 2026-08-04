@@ -742,7 +742,10 @@ impl DeploymentStats {
         self.marker_upload_passes.fetch_add(1, Ordering::Relaxed);
     }
 
-    pub(crate) fn add_source_stats(&self, stats: &crate::s3::archive::SourceDiagnosticsSnapshot) {
+    pub(crate) fn add_source_stats(
+        &self,
+        stats: &crate::s3::archive::diagnostics::SourceDiagnosticsSnapshot,
+    ) {
         self.source_planned_blocks
             .fetch_add(stats.planned_blocks, Ordering::Relaxed);
         self.source_planned_bytes
