@@ -15,6 +15,18 @@ pub(super) const MAX_CLOUDFORMATION_RESPONSE_BYTES: usize = 4096;
 const CALLBACK_MAX_ATTEMPTS: usize = 5;
 const CALLBACK_RETRY_BASE_DELAY: Duration = Duration::from_millis(250);
 const CALLBACK_RETRY_MAX_DELAY: Duration = Duration::from_secs(2);
+const CLOUDFORMATION_RESPONSE_BUCKET_PREFIX: &str = "cloudformation-custom-resource-response-";
+const CLOUDFORMATION_RESPONSE_PARTITIONS: &[(&str, &[&str])] = &[
+    (
+        "amazonaws.com",
+        &[
+            "us-", "eu-", "ap-", "sa-", "ca-", "me-", "af-", "il-", "mx-", "us-gov-",
+        ],
+    ),
+    ("amazonaws.com.cn", &["cn-"]),
+    ("c2s.ic.gov", &["us-iso-"]),
+    ("sc2s.sgov.gov", &["us-isob-"]),
+];
 
 pub(super) fn truncate_failure_reason(reason: &str) -> String {
     truncate_failure_reason_to(reason, MAX_FAILURE_REASON_BYTES)
@@ -317,18 +329,15 @@ fn callback_retry_delay(attempt: usize, retry: CallbackRetryPolicy) -> Duration 
 /// Validates the CloudFormation `ResponseURL` before PUTing the response.
 ///
 /// The URL comes from the CloudFormation event envelope, not
-/// `ResourceProperties`, so this is defense-in-depth. Validate only scheme and
-/// host shape: response URL hosts vary by AWS partition, and a false rejection
-/// would prevent the provider from reporting failure. HTTPS keeps the response
-/// body, including any `Data`, off plaintext transport.
+/// `ResourceProperties`, so this is defense-in-depth. CloudFormation callback
+/// URLs target a service-owned bucket through the regional S3 endpoint. Accept
+/// only that bucket/region relationship in a current AWS partition so the
+/// response body and its presigned authorization cannot be sent elsewhere.
 pub(super) fn validate_response_url(response_url: &str) -> Result<reqwest::Url> {
     let parsed = reqwest::Url::parse(response_url)
         .map_err(|_| anyhow!("CloudFormation response URL is invalid"))?;
     if parsed.scheme() != "https" {
         return Err(anyhow!("CloudFormation response URL must use https"));
-    }
-    if parsed.host_str().is_none() {
-        return Err(anyhow!("CloudFormation response URL must include a host"));
     }
     if !parsed.username().is_empty() || parsed.password().is_some() {
         return Err(anyhow!(
@@ -340,8 +349,63 @@ pub(super) fn validate_response_url(response_url: &str) -> Result<reqwest::Url> 
             "CloudFormation response URL must not include a non-default port"
         ));
     }
+    if !parsed
+        .host_str()
+        .is_some_and(is_cloudformation_response_host)
+    {
+        return Err(anyhow!(
+            "CloudFormation response URL host is not an allowed callback endpoint"
+        ));
+    }
 
     Ok(parsed)
+}
+
+fn is_cloudformation_response_host(host: &str) -> bool {
+    for (dns_suffix, region_prefixes) in CLOUDFORMATION_RESPONSE_PARTITIONS {
+        let Some(endpoint) = host
+            .strip_suffix(dns_suffix)
+            .and_then(|prefix| prefix.strip_suffix('.'))
+        else {
+            continue;
+        };
+        let mut labels = endpoint.split('.');
+        let (Some(bucket), Some("s3"), Some(region), None) =
+            (labels.next(), labels.next(), labels.next(), labels.next())
+        else {
+            return false;
+        };
+        let Some(bucket_region) = bucket.strip_prefix(CLOUDFORMATION_RESPONSE_BUCKET_PREFIX) else {
+            return false;
+        };
+        if region
+            .bytes()
+            .filter(|byte| *byte != b'-')
+            .ne(bucket_region.bytes())
+        {
+            return false;
+        }
+
+        return region_prefixes
+            .iter()
+            .any(|prefix| region_has_partition_shape(region, prefix));
+    }
+
+    false
+}
+
+fn region_has_partition_shape(region: &str, prefix: &str) -> bool {
+    let Some(remainder) = region.strip_prefix(prefix) else {
+        return false;
+    };
+    let Some((area, number)) = remainder.split_once('-') else {
+        return false;
+    };
+
+    !area.is_empty()
+        && area.bytes().all(|byte| byte.is_ascii_lowercase())
+        && !number.is_empty()
+        && number.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 #[cfg(test)]
@@ -822,14 +886,24 @@ mod tests {
 
     #[test]
     fn response_url_shape_is_validated_without_echoing_input() {
-        assert!(
-            validate_response_url(
-                "https://cloudformation-custom-resource-response-useast1.s3.us-east-1.amazonaws.com/abc?signature=x"
-            )
-            .is_ok()
-        );
-        assert!(validate_response_url("https://example.com/response").is_ok());
+        for valid in [
+            "https://cloudformation-custom-resource-response-useast1.s3.us-east-1.amazonaws.com/response?signature=x",
+            "https://cloudformation-custom-resource-response-usgovwest1.s3.us-gov-west-1.amazonaws.com/response?signature=x",
+            "https://cloudformation-custom-resource-response-cnnorth1.s3.cn-north-1.amazonaws.com.cn/response?signature=x",
+            "https://cloudformation-custom-resource-response-usisoeast1.s3.us-iso-east-1.c2s.ic.gov/response?signature=x",
+            "https://cloudformation-custom-resource-response-usisobeast1.s3.us-isob-east-1.sc2s.sgov.gov/response?signature=x",
+        ] {
+            validate_response_url(valid).expect("partition callback URL must be accepted");
+        }
         for invalid in [
+            "https://example.com/response?signature=sentinel-secret",
+            "https://127.0.0.1/response?signature=sentinel-secret",
+            "https://10.0.0.1/response?signature=sentinel-secret",
+            "https://cloudformation-custom-resource-response-useast1.s3.us-west-2.amazonaws.com/response?signature=sentinel-secret",
+            "https://attacker-bucket.s3.us-east-1.amazonaws.com/response?signature=sentinel-secret",
+            "https://cloudformation-custom-resource-response-useast1.s3.us-east-1.amazonaws.com.example.net/response?signature=sentinel-secret",
+            "https://cloudformation-custom-resource-response-useast1.s3.amazonaws.com/response?signature=sentinel-secret",
+            "https://cloudformation-custom-resource-response-useast1.s3-us-east-1.amazonaws.com/response?signature=sentinel-secret",
             "https://user:sentinel-secret@example.com/response",
             "https://example.com:8443/response?signature=sentinel-secret",
             "http://example.com/response?signature=sentinel-secret",
