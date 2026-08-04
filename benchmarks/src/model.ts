@@ -9,8 +9,27 @@ export const BENCHMARK_ASSET_PROFILES = [
   "large-few",
   "marker-heavy",
   "multi-source-prune",
+  "uncataloged",
+  "copy-archives",
 ] as const;
 export type BenchmarkAssetProfile = (typeof BENCHMARK_ASSET_PROFILES)[number];
+
+/**
+ * Whether a profile extracts its sources. `copy-archives` deploys each source archive as
+ * a single copied object (`extract:false`), which is the only committed coverage of the
+ * copy path and its destination `HeadObject` identity probe.
+ */
+export function profileExtractsSources(profile: string | null | undefined): boolean {
+  return profile !== "copy-archives";
+}
+
+/**
+ * Whether a profile's directory sources carry Shin's embedded catalog. `uncataloged`
+ * mirrors `mixed` without one, so the untrusted comparison path stays measurable.
+ */
+export function profileUsesEmbeddedCatalog(profile: string | null | undefined): boolean {
+  return profile !== "uncataloged";
+}
 
 export const BENCHMARK_ASSET_STATES = ["baseline", "changed", "pruned"] as const;
 export type BenchmarkAssetState = (typeof BENCHMARK_ASSET_STATES)[number];
@@ -748,6 +767,10 @@ export function benchmarkRecordErrors(
       errors.push(
         ...providerSummaryErrors(record.providerSummary).map((error) => `${label}: ${error}`),
       );
+      const expectedExtract = profileExtractsSources(record.profile);
+      if (record.providerSummary.extract !== expectedExtract) {
+        errors.push(`${label}: summary extract must be ${expectedExtract} for this profile`);
+      }
     }
   } else {
     errors.push(`${label}: unsupported implementation`);
@@ -955,7 +978,9 @@ function summaryShapeErrors(summary: ProviderSummary): string[] {
     }
   }
 
-  if (summary.extract !== true) errors.push("summary extract must be true");
+  // Both values are legitimate: `copy-archives` deploys with `extract:false`. The record
+  // level cross-checks the value against the profile, which the summary alone cannot.
+  if (typeof summary.extract !== "boolean") errors.push("summary extract must be boolean");
   if (summary.deleteStaleObjectsOnDeployment !== true)
     errors.push("summary deleteStaleObjectsOnDeployment must be true");
   if (summary.transfer?.failedObjects !== 0)
