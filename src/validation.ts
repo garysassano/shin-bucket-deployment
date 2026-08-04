@@ -1,4 +1,4 @@
-import { AssetHashType, BundlingFileAccess, BundlingOutput, Token } from "aws-cdk-lib";
+import { AssetHashType, BundlingFileAccess, BundlingOutput, Token, Validations } from "aws-cdk-lib";
 import type { Construct } from "constructs";
 import { DEFAULT_PROVIDER_LAMBDA_MEMORY_SIZE_MIB } from "./defaults";
 import { DestinationWriteRetryJitter, FailureDiagnostics, ProviderSharing } from "./enums";
@@ -12,6 +12,7 @@ import type {
 const MIN_SOURCE_BLOCK_BYTES = 30;
 const DEFAULT_SOURCE_BLOCK_BYTES = 8 * 1024 * 1024;
 const MAX_CONCURRENCY = 256;
+const MEASURED_CONCURRENCY_GUIDANCE_MAX = 64;
 const MAX_SOURCE_GET_CONCURRENCY = 64;
 const MAX_DESTINATION_WRITE_ATTEMPTS = 10;
 const MAX_RETRY_DELAY_MS = 60_000;
@@ -288,6 +289,13 @@ export function validateDeploymentProps(scope: Construct, props: ShinBucketDeplo
   const destinationWriteRetryTuning = advancedTransferTuning.destinationWriteRetry ?? {};
   validateIntegerProps(scope, providerLambda ?? {}, ["memorySize"], 128, "providerLambda.", 10_240);
   validateIntegerProps(scope, transferOptions, ["maxConcurrency"], 1, "transfer.", MAX_CONCURRENCY);
+  const maxConcurrency = resolvedNumber(transferOptions.maxConcurrency);
+  if (maxConcurrency !== undefined && maxConcurrency > MEASURED_CONCURRENCY_GUIDANCE_MAX) {
+    Validations.of(scope).addWarning(
+      "ShinBucketDeploymentHighTransferConcurrency",
+      `transfer.maxConcurrency=${maxConcurrency} is above the current measured guidance ceiling of 64. A value of 128 slowed cold-create by 18% at both 1024 MiB and 2048 MiB on the measured workload. Keep a higher value only after benchmarking your workload and comparing inFlightHighWater, source.activeGetsHighWater, and destination retry/throttle telemetry.`,
+    );
+  }
   validateIntegerProps(
     scope,
     advancedTransferTuning,

@@ -27,10 +27,12 @@ Runtime tuning defaults:
 
 | Setting | Default | Purpose |
 | --- | ---: | --- |
-| `transfer.maxConcurrency` | 32 | Bounds the continuously drained set of copy, hash, upload, and related logical object tasks; valid range 1–256. |
+| `transfer.maxConcurrency` | 32 | Bounds the continuously drained set of copy, hash, upload, and related logical object tasks; valid range 1–256. Resolved values above 64 emit an acknowledgeable synthesis warning. |
 | `providerLambda.memorySize` | 1024 MiB | Sizes the Lambda. The provider reads the actual value from the Lambda runtime environment. |
 
 Most deployments should tune only `providerLambda.memorySize` and, when needed, `transfer.maxConcurrency`. The experimental `transfer.advancedTuning` object keeps source block/window and destination-write retry settings available as support and benchmark escape hatches:
+
+Concurrency is a workload limit, not a throughput target. On the measured mixed workload, raising `transfer.maxConcurrency` to 128 slowed cold-create by 18% at both 1024 MiB and 2048 MiB compared with the measured 32- and 64-task configurations. The replication across two memory sizes is useful directional evidence, but the 128-task points had one repetition each and do not prove that 64 is optimal for every source shape. Resolved values above 64 therefore remain valid but emit `ShinBucketDeploymentHighTransferConcurrency`; acknowledge that warning only after a representative benchmark shows a benefit and provider diagnostics confirm that `inFlightHighWater` is useful work rather than source starvation or destination retries/throttling. Unresolved values are left to provider validation and cannot receive synthesis-time guidance.
 
 | Advanced setting | Default | Purpose |
 | --- | ---: | --- |
@@ -621,7 +623,7 @@ CloudFormation callback diagnostics field reference:
 - Each extracted ZIP entry, including marker-expanded output, must be no larger than 5 GiB because uploads currently use single-request `PutObject`, not multipart upload.
 - Final destination keys must fit S3's 1024-byte UTF-8 limit.
 - `destination.keyPrefix` must be a concrete string no longer than 102 characters. `"/"` and an omitted prefix both select the bucket root and share the same canonical ownership namespace.
-- `transfer.maxConcurrency` is 1–256, explicit source GET concurrency is 1–64, and provider-owned destination write attempts are 1–10.
+- `transfer.maxConcurrency` is 1–256; resolved values above the measured guidance ceiling of 64 emit an acknowledgeable synthesis warning. Explicit source GET concurrency is 1–64, and provider-owned destination write attempts are 1–10.
 - `transfer.advancedTuning.sourceBlockBytes` must be at least 30 bytes so ZIP local file headers can fit in one source block. Block size, block size times source GET concurrency, and any explicit local window must fit the invocation-global source budget.
 - Retry delays are 0–60000 ms and each base delay must not exceed its corresponding maximum.
 - `transfer.advancedTuning.sourceWindowMemoryBudgetMiB` can only lower the default half-memory source cap. Very small Lambda memory settings can therefore make otherwise valid tuning combinations fail explicitly.

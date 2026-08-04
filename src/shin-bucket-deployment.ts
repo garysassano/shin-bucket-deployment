@@ -487,6 +487,12 @@ export interface ShinBucketDeploymentTransferOptions {
    * Maximum concurrent logical object transfers run by the provider.
    * Must be in the inclusive range 1..256.
    *
+   * Values above 64 produce a synthesis warning. Measurements found that 128
+   * slowed cold-create at both 1024 MiB and 2048 MiB because the source
+   * pipeline did not feed the additional transfer tasks. Benchmark the actual
+   * workload before acknowledging the warning; 64 is guidance, not a
+   * universal optimum.
+   *
    * @default DEFAULT_TRANSFER_MAX_CONCURRENCY (32)
    */
   readonly maxConcurrency?: number;

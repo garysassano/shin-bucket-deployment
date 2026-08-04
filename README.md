@@ -118,7 +118,7 @@ interface ShinBucketDeploymentProps {
 
   // Request-scoped controls; these do not split an identically configured shared handler.
   readonly transfer?: {
-    readonly maxConcurrency?: number; // Default: 32
+    readonly maxConcurrency?: number; // Default: 32; values above 64 warn at synthesis
     readonly advancedTuning?: {
       readonly sourceBlockBytes?: number; // Default: 8 MiB
       readonly sourceBlockMergeGapBytes?: number; // Default: 256 KiB
