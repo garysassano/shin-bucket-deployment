@@ -40,20 +40,21 @@ export class DemoStack extends Stack {
 
 The official `BucketDeployment` is a good default for many stacks, but its provider is built around AWS CLI copy/sync orchestration. Shin uses a purpose-built Rust Lambda function and a configuration model that exposes provider identity separately from request-scoped transfer controls.
 
-| Advantage                   | What changes                                                                                                                                                                                                                                                                                                                                                |
-| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Leaner runtime              | Shin's provider runs on the [Lambda Rust runtime](https://github.com/aws/aws-lambda-rust-runtime) (`provided.al2023`) instead of the Python runtime used upstream. In practice, the lower runtime overhead can mean faster cold starts and a lower memory footprint. See [lambda-perf](https://maxday.github.io/lambda-perf/).                                                                                     |
-| Direct AWS SDK operations   | S3 copy, upload, and delete work is executed through Rust SDK calls instead of the upstream provider's `aws s3 cp`, `aws s3 sync`, and `aws s3 rm` subprocesses.                                                                                                                                                                                               |
-| Archive-aware planning      | For extracted assets, the provider plans directly from the zip archive instead of extracting the whole archive to a working directory before syncing.                                                                                                                                                                                                       |
-| Invocation-wide memory cap  | Central-directory planning and every source archive share a source-memory budget capped at half the provider's actual Lambda memory by default; destination cleanup retains at most manifest metadata plus one S3 page.                                                                                                                                                  |
-| Bounded fail-fast transfers | Transfer concurrency is capped by `transfer.maxConcurrency`. The first observed failure or panic stops admission and drains outstanding work before cleanup or invalidation can continue.                                                                                                                                                                                                  |
-| Skips unchanged objects     | Unchanged objects are identified from one destination listing and never re-uploaded. This is why only SSE-S3 destinations are supported: the comparison needs the destination `ETag` to be a plaintext MD5.                                                                                                                                                                                  |
-| Bounded marker replacement  | Marker-free entries stream directly. Marker entries use deterministic simultaneous replacement with one exact-length planning pass and a second retryable streaming pass only when upload is required; neither pass retains the complete entry or output.                                                                                                  |
-| Safer destination moves     | Opt-in cleanup deploys new content first, infers the previous prefix, and preserves overlapping current namespaces. See [Destination Lifecycle](#destination-lifecycle).                                                                                                                                                                                    |
+| Advantage                   | What changes                                                                                                                                                                                                                                                                                                                   |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Leaner runtime              | Shin's provider runs on the [Lambda Rust runtime](https://github.com/aws/aws-lambda-rust-runtime) (`provided.al2023`) instead of the Python runtime used upstream. In practice, the lower runtime overhead can mean faster cold starts and a lower memory footprint. See [lambda-perf](https://maxday.github.io/lambda-perf/). |
+| Direct AWS SDK operations   | S3 copy, upload, and delete work is executed through Rust SDK calls instead of the upstream provider's `aws s3 cp`, `aws s3 sync`, and `aws s3 rm` subprocesses.                                                                                                                                                               |
+| Archive-aware planning      | For extracted assets, the provider plans directly from the zip archive instead of extracting the whole archive to a working directory before syncing.                                                                                                                                                                          |
+| Invocation-wide memory cap  | Central-directory planning and every source archive share a source-memory budget capped at half the provider's actual Lambda memory by default; destination cleanup retains at most manifest metadata plus one S3 page.                                                                                                        |
+| Bounded fail-fast transfers | Transfer concurrency is capped by `transfer.maxConcurrency`. The first observed failure or panic stops admission and drains outstanding work before cleanup or invalidation can continue.                                                                                                                                      |
+| Skips unchanged objects     | Unchanged objects are identified from one destination listing and never re-uploaded. This is why only SSE-S3 destinations are supported: the comparison needs the destination `ETag` to be a plaintext MD5.                                                                                                                    |
+| Bounded marker replacement  | Marker-free entries stream directly. Marker entries use deterministic simultaneous replacement with one exact-length planning pass and a second retryable streaming pass only when upload is required; neither pass retains the complete entry or output.                                                                      |
+| Safer destination moves     | Opt-in cleanup deploys new content first, infers the previous prefix, and preserves overlapping current namespaces. See [Destination Lifecycle](#destination-lifecycle).                                                                                                                                                       |
 
-## Benchmark Snapshot
+## Benchmark Snapshots
 
-`mixed` (442 files, ~50 MB), `tiny-many` (2584 files, ~7.8 MB), and `large-few` (32 files, ~137 MB) at 2048 MiB / max concurrency 64, one repetition per phase against upstream AWS CDK `BucketDeployment`. Results depend on workload, region, and account conditions; they are evidence, not a guarantee. See [Benchmark](docs/benchmark.md) for the full matrix, telemetry, and methodology.
+> [!CAUTION]
+> These charts are illustrative, not performance guarantees or guidance for production defaults. They come from one repetition per phase, not a five-repetition median. See [Benchmark](docs/benchmark.md) for the supporting evidence.
 
 <img src="https://raw.githubusercontent.com/garysassano/shin-bucket-deployment/main/benchmarks/snapshots/mixed-2048mib-64.svg" alt="ShinBucketDeployment mixed 2048 MiB max concurrency 64 benchmark" width="100%">
 
@@ -150,13 +151,13 @@ Most consumers should omit `providerLambda.localBuild` and use the packaged prov
 
 The constructed deployment exposes these values and methods; these are construct members, not CloudFormation outputs or input props.
 
-| Member | Description |
-| --- | --- |
-| `deployment.deployedBucket` | Destination bucket reconstructed lazily from the custom-resource response. |
-| `deployment.objectKeys` | Deployed object keys requested lazily from the custom-resource response. |
-| `deployment.handlerRole` | Execution role used by the backing provider Lambda. |
-| `deployment.handlerFunction` | Backing provider Lambda function. |
-| `deployment.addSource(source)` | Adds another ordered source after construction. |
+| Member                         | Description                                                                |
+| ------------------------------ | -------------------------------------------------------------------------- |
+| `deployment.deployedBucket`    | Destination bucket reconstructed lazily from the custom-resource response. |
+| `deployment.objectKeys`        | Deployed object keys requested lazily from the custom-resource response.   |
+| `deployment.handlerRole`       | Execution role used by the backing provider Lambda.                        |
+| `deployment.handlerFunction`   | Backing provider Lambda function.                                          |
+| `deployment.addSource(source)` | Adds another ordered source after construction.                            |
 
 ## Destination Lifecycle
 
@@ -175,22 +176,22 @@ Most deployments should omit `destinationLifecycle`. By default, Shin removes st
 
 Previous objects are retained by default. To delete them:
 
-| `destination.bucket` | `destination.keyPrefix` | Object-cleanup configuration |
-| --- | --- | --- |
-| Unchanged | Unchanged | None; there is no previous object location. |
-| Unchanged | Changed | Set `deletePreviousObjects: true`. Omit `previousBucket`; Shin uses the current bucket. |
-| Changed | Unchanged | Set `deletePreviousObjects: true` and provide `previousBucket`. |
-| Changed | Changed | Set `deletePreviousObjects: true` and provide `previousBucket`. |
+| `destination.bucket` | `destination.keyPrefix` | Object-cleanup configuration                                                            |
+| -------------------- | ----------------------- | --------------------------------------------------------------------------------------- |
+| Unchanged            | Unchanged               | None; there is no previous object location.                                             |
+| Unchanged            | Changed                 | Set `deletePreviousObjects: true`. Omit `previousBucket`; Shin uses the current bucket. |
+| Changed              | Unchanged               | Set `deletePreviousObjects: true` and provide `previousBucket`.                         |
+| Changed              | Changed                 | Set `deletePreviousObjects: true` and provide `previousBucket`.                         |
 
 > [!WARNING]
 > `deletePreviousObjects` grants the provider role `s3:ListBucket`, `s3:GetBucketTagging`, and `s3:DeleteObject` across the **whole** previous bucket, not a single prefix. CloudFormation only reveals the previous prefix at deploy time through `OldResourceProperties`, so the grant cannot be narrowed at synthesis. The provider derives the actual prefix from the Update event and confines deletion to that namespace, and it validates the selected bucket before using the grant — but the IAM authority is bucket-wide and is inherited by every deployment sharing the handler role.
 
 #### CloudFront Invalidation
 
-| `cloudfrontInvalidation.distribution` | Invalidation configuration |
-| --- | --- |
-| Unchanged | Omit `invalidatePreviousDistribution`; any configured current distribution is invalidated normally. |
-| Changed | Provide `invalidatePreviousDistribution: previousDistribution` only if the previous distribution should also be invalidated. |
+| `cloudfrontInvalidation.distribution` | Invalidation configuration                                                                                                   |
+| ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| Unchanged                             | Omit `invalidatePreviousDistribution`; any configured current distribution is invalidated normally.                          |
+| Changed                               | Provide `invalidatePreviousDistribution: previousDistribution` only if the previous distribution should also be invalidated. |
 
 > [!IMPORTANT]
 > After destination-change cleanup succeeds, remove previous-resource references and any `onChange` actions that are no longer needed to drop access to the previous bucket or distribution.
