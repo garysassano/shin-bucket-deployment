@@ -30,6 +30,7 @@ use crate::types::{
     PutObjectRetryJitter, PutObjectRetryOptions, PutObjectStats, SourceArchive,
     same_failure_signature,
 };
+use crate::util::{MAX_DIAGNOSTIC_VALUE_BYTES, sanitize_diagnostic};
 
 use super::archive::{
     MarkerBodyContext, SourceBlockOptions, SourceBlockStore, SourceByteBudget, UploadBodyState,
@@ -592,7 +593,7 @@ async fn copy_source_object(context: CopyContext<'_>, plan: &CopyPlan) -> Result
         {
             return Err(anyhow!(
                 "destination CopyObject throttle cooldown for {} reaches or exceeds the deployment work deadline",
-                plan.destination_key
+                sanitize_diagnostic(&plan.destination_key, MAX_DIAGNOSTIC_VALUE_BYTES)
             ));
         }
         let request = context
@@ -650,7 +651,10 @@ async fn copy_source_object(context: CopyContext<'_>, plan: &CopyPlan) -> Result
                         return Err(error).with_context(|| {
                             format!(
                                 "not retrying destination CopyObject for {} because its retry wait reaches or exceeds the deployment work deadline",
-                                plan.destination_key
+                                sanitize_diagnostic(
+                                    &plan.destination_key,
+                                    MAX_DIAGNOSTIC_VALUE_BYTES
+                                )
                             )
                         });
                     }
@@ -658,12 +662,16 @@ async fn copy_source_object(context: CopyContext<'_>, plan: &CopyPlan) -> Result
                         .diagnostics
                         .retry_attempts
                         .fetch_add(1, Ordering::Relaxed);
+                    let diagnostic = sanitize_diagnostic(
+                        &write_error_message(&error),
+                        MAX_DIAGNOSTIC_VALUE_BYTES,
+                    );
                     tracing::warn!(
                         destination_key = plan.destination_key,
                         attempt,
                         max_attempts,
                         error_code = ?code.as_deref(),
-                        error = %write_error_message(&error),
+                        error = %diagnostic,
                         "destination CopyObject attempt failed; retrying"
                     );
                     continue;
@@ -671,14 +679,19 @@ async fn copy_source_object(context: CopyContext<'_>, plan: &CopyPlan) -> Result
                 return Err(error).with_context(|| {
                     format!(
                         "failed to copy {}/{} to {}",
-                        plan.source_bucket, plan.source_key, plan.destination_key
+                        sanitize_diagnostic(&plan.source_bucket, MAX_DIAGNOSTIC_VALUE_BYTES),
+                        sanitize_diagnostic(&plan.source_key, MAX_DIAGNOSTIC_VALUE_BYTES),
+                        sanitize_diagnostic(&plan.destination_key, MAX_DIAGNOSTIC_VALUE_BYTES)
                     )
                 });
             }
         }
     }
 
-    Err(anyhow!("failed to copy {}", plan.destination_key))
+    Err(anyhow!(
+        "failed to copy {}",
+        sanitize_diagnostic(&plan.destination_key, MAX_DIAGNOSTIC_VALUE_BYTES)
+    ))
 }
 
 fn quoted_etag(etag: &str) -> String {
@@ -749,9 +762,10 @@ async fn destination_matches_copy_identity(
     let head = match request.send().await {
         Ok(head) => head,
         Err(error) => {
+            let diagnostic = sanitize_diagnostic(&error.to_string(), MAX_DIAGNOSTIC_VALUE_BYTES);
             tracing::debug!(
                 destination_key = plan.destination_key,
-                error = %error,
+                error = %diagnostic,
                 "destination HeadObject failed; copy identity is unproven"
             );
             return None;
@@ -882,7 +896,8 @@ async fn upload_payload(
             .await
         {
             return Err(anyhow!(
-                "destination PutObject throttle cooldown for {destination_key} reaches or exceeds the deployment work deadline"
+                "destination PutObject throttle cooldown for {} reaches or exceeds the deployment work deadline",
+                sanitize_diagnostic(destination_key, MAX_DIAGNOSTIC_VALUE_BYTES)
             ));
         }
         payload.reset_attempt_diagnostics();
@@ -949,7 +964,8 @@ async fn upload_payload(
                 {
                     return Err(error).with_context(|| {
                         format!(
-                            "not retrying destination PutObject for {destination_key} because its retry wait reaches or exceeds the deployment work deadline"
+                            "not retrying destination PutObject for {} because its retry wait reaches or exceeds the deployment work deadline",
+                            sanitize_diagnostic(destination_key, MAX_DIAGNOSTIC_VALUE_BYTES)
                         )
                     });
                 }
@@ -957,12 +973,14 @@ async fn upload_payload(
                     .diagnostics
                     .retry_attempts
                     .fetch_add(1, Ordering::Relaxed);
+                let diagnostic =
+                    sanitize_diagnostic(&write_error_message(&error), MAX_DIAGNOSTIC_VALUE_BYTES);
                 tracing::warn!(
                     destination_key,
                     attempt,
                     max_attempts,
                     error_code = ?code.as_deref(),
-                    error = %write_error_message(&error),
+                    error = %diagnostic,
                     "destination PutObject attempt failed; retrying"
                 );
                 last_error = Some(error);
@@ -986,17 +1004,28 @@ async fn upload_payload(
                 }
                 if let Some(validation_error) = payload.body_state().validation_error() {
                     return Err(anyhow!(validation_error.to_string())).with_context(|| {
-                        format!("source validation failed while uploading {destination_key}")
+                        format!(
+                            "source validation failed while uploading {}",
+                            sanitize_diagnostic(destination_key, MAX_DIAGNOSTIC_VALUE_BYTES)
+                        )
                     });
                 }
-                return Err(error).with_context(|| format!("failed to upload {destination_key}"));
+                return Err(error).with_context(|| {
+                    format!(
+                        "failed to upload {}",
+                        sanitize_diagnostic(destination_key, MAX_DIAGNOSTIC_VALUE_BYTES)
+                    )
+                });
             }
         }
     }
 
-    Err(last_error
-        .map(|error| anyhow!(error))
-        .unwrap_or_else(|| anyhow!("failed to upload {destination_key}")))
+    Err(last_error.map(|error| anyhow!(error)).unwrap_or_else(|| {
+        anyhow!(
+            "failed to upload {}",
+            sanitize_diagnostic(destination_key, MAX_DIAGNOSTIC_VALUE_BYTES)
+        )
+    }))
 }
 
 fn apply_put_precondition(
@@ -1085,9 +1114,10 @@ async fn reconcile_conditional_put(
     {
         Ok(head) => head,
         Err(error) => {
+            let diagnostic = sanitize_diagnostic(&error.to_string(), MAX_DIAGNOSTIC_VALUE_BYTES);
             tracing::warn!(
                 destination_key,
-                error = %error,
+                error = %diagnostic,
                 "could not reconcile an ambiguous conditional PutObject result"
             );
             return false;
@@ -1121,7 +1151,7 @@ fn validate_put_object_size(plan: &ZipEntryPlan, output_len: u64) -> Result<()> 
     if output_len > S3_SINGLE_PUT_LIMIT {
         return Err(anyhow!(
             "marker-expanded entry `{}` is {output_len} bytes, larger than the S3 single PutObject limit",
-            plan.relative_key
+            sanitize_diagnostic(&plan.relative_key, MAX_DIAGNOSTIC_VALUE_BYTES)
         ));
     }
     Ok(())
@@ -1582,6 +1612,7 @@ fn log_put_attempt_failure(failure: &PutObjectFailureStateStats) {
             tracing::warn!(attempt_failure, "shin PutObject attempt failure");
         }
         Err(error) => {
+            let error = sanitize_diagnostic(&error.to_string(), MAX_DIAGNOSTIC_VALUE_BYTES);
             tracing::warn!(error = %error, "failed to serialize PutObject attempt failure");
         }
     }

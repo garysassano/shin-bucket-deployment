@@ -22,6 +22,7 @@ use tokio::task::{AbortHandle, JoinSet};
 use tokio::time::{Instant, timeout_at};
 
 use crate::types::{AppState, DeploymentStats};
+use crate::util::{MAX_DIAGNOSTIC_VALUE_BYTES, sanitize_diagnostic};
 
 use super::planner::ZipEntryPlan;
 
@@ -1193,6 +1194,7 @@ impl SourceBlockStore {
             if let Err(error) = result
                 && !error.is_cancelled()
             {
+                let error = sanitize_diagnostic(&error.to_string(), MAX_DIAGNOSTIC_VALUE_BYTES);
                 tracing::error!(error = %error, "source body task panicked");
             }
         }

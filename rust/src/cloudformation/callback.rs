@@ -6,7 +6,7 @@ use serde_json::json;
 use tokio::time::{Instant as TokioInstant, sleep_until, timeout_at};
 
 use crate::types::{DeploymentStats, ResponsePayload};
-use crate::util::duration_ms;
+use crate::util::{duration_ms, sanitize_diagnostic};
 
 use super::RequestEnvelope;
 
@@ -28,31 +28,8 @@ const CLOUDFORMATION_RESPONSE_PARTITIONS: &[(&str, &[&str])] = &[
     ("sc2s.sgov.gov", &["us-isob-"]),
 ];
 
-pub(super) fn truncate_failure_reason(reason: &str) -> String {
-    truncate_failure_reason_to(reason, MAX_FAILURE_REASON_BYTES)
-}
-
-fn truncate_failure_reason_to(reason: &str, max_bytes: usize) -> String {
-    if reason.len() <= max_bytes {
-        return reason.to_string();
-    }
-    if max_bytes == 0 {
-        return String::new();
-    }
-
-    const SUFFIX: &str = " ... [truncated]";
-    if max_bytes <= SUFFIX.len() {
-        return SUFFIX[..max_bytes].to_string();
-    }
-    let mut end = max_bytes - SUFFIX.len();
-    while end > 0 && !reason.is_char_boundary(end) {
-        end -= 1;
-    }
-
-    let mut truncated = String::with_capacity(end + SUFFIX.len());
-    truncated.push_str(&reason[..end]);
-    truncated.push_str(SUFFIX);
-    truncated
+pub(super) fn sanitize_failure_reason(reason: &str) -> String {
+    sanitize_diagnostic(reason, MAX_FAILURE_REASON_BYTES)
 }
 
 pub(super) fn response_target(request: &RequestEnvelope) -> Option<(&str, &str, &str, &str)> {
@@ -142,7 +119,7 @@ pub(super) fn serialize_failure_response(
     loop {
         let bounded = ResponsePayload {
             physical_resource_id: payload.physical_resource_id.clone(),
-            reason: Some(truncate_failure_reason_to(full_reason, reason_limit)),
+            reason: Some(sanitize_diagnostic(full_reason, reason_limit)),
             data: payload.data.clone(),
         };
         let body = serialize_response(
@@ -426,8 +403,8 @@ mod tests {
 
     use super::{
         CallbackRetryPolicy, MAX_CLOUDFORMATION_RESPONSE_BYTES, MAX_FAILURE_REASON_BYTES,
-        callback_retry_delay, callback_status_is_retryable, send_response_with_policy,
-        serialize_failure_response, serialize_response, truncate_failure_reason,
+        callback_retry_delay, callback_status_is_retryable, sanitize_failure_reason,
+        send_response_with_policy, serialize_failure_response, serialize_response,
         validate_response_body_size, validate_response_url,
     };
 
@@ -848,7 +825,7 @@ mod tests {
     fn escaped_failure_reason_is_reduced_to_a_valid_response_body() {
         let failure = ResponsePayload {
             physical_resource_id: "physical".to_string(),
-            reason: Some("\0".repeat(MAX_FAILURE_REASON_BYTES)),
+            reason: Some("line\r\n\0\u{001b}\u{2028}".repeat(MAX_FAILURE_REASON_BYTES)),
             data: Map::new(),
         };
 
@@ -859,26 +836,37 @@ mod tests {
         let response: Value = serde_json::from_slice(&body).expect("failure response JSON");
         assert_eq!(response["Status"], "FAILED");
         assert!(response.get("NoEcho").is_none());
+        let reason = response["Reason"].as_str().expect("failure reason string");
+        assert!(reason.len() <= MAX_FAILURE_REASON_BYTES);
+        assert!(!reason.chars().any(char::is_control));
+        assert!(reason.contains("\\r\\n\\0\\u{001b}\\u{2028}"));
     }
 
     #[test]
-    fn truncate_failure_reason_leaves_short_reasons_unchanged() {
-        assert_eq!(truncate_failure_reason("short failure"), "short failure");
+    fn failure_reason_leaves_safe_short_reasons_unchanged() {
+        assert_eq!(sanitize_failure_reason("short failure"), "short failure");
     }
 
     #[test]
-    fn truncate_failure_reason_caps_long_reasons() {
+    fn failure_reason_escapes_controls_and_caps_the_escaped_result() {
+        let hostile = "first\r\nsecond\0\u{001b}\u{2028}\u{2029}";
+        assert_eq!(
+            sanitize_failure_reason(hostile),
+            "first\\r\\nsecond\\0\\u{001b}\\u{2028}\\u{2029}"
+        );
+
         let reason = "x".repeat(MAX_FAILURE_REASON_BYTES + 100);
-        let truncated = truncate_failure_reason(&reason);
+        let truncated = sanitize_failure_reason(&reason);
 
         assert_eq!(truncated.len(), MAX_FAILURE_REASON_BYTES);
         assert!(truncated.ends_with(" ... [truncated]"));
+        assert!(!truncated.chars().any(char::is_control));
     }
 
     #[test]
-    fn truncate_failure_reason_preserves_utf8_boundaries() {
+    fn failure_reason_preserves_utf8_boundaries() {
         let reason = "é".repeat(MAX_FAILURE_REASON_BYTES);
-        let truncated = truncate_failure_reason(&reason);
+        let truncated = sanitize_failure_reason(&reason);
 
         assert!(truncated.len() <= MAX_FAILURE_REASON_BYTES);
         assert!(truncated.ends_with(" ... [truncated]"));

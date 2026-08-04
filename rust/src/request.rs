@@ -17,6 +17,7 @@ use crate::types::{
     DeletePreviousObjectsOnChange, DeploymentRequest, Filters, MarkerConfig, PreviousDestination,
     PutObjectRetryJitter, PutObjectRetryOptions, RuntimeOptions, TrustedSourceCatalog,
 };
+use crate::util::{MAX_DIAGNOSTIC_VALUE_BYTES, sanitize_diagnostic};
 
 const MIN_SOURCE_BLOCK_BYTES: usize = 30;
 const MAX_PARALLEL_TRANSFERS: usize = 256;
@@ -481,13 +482,19 @@ pub(crate) fn normalize_archive_key(raw: &str) -> Result<Cow<'_, str>> {
             continue;
         }
         if part == ".." {
-            return Err(anyhow!("archive entry attempts path traversal: {raw}"));
+            return Err(anyhow!(
+                "archive entry attempts path traversal: {}",
+                sanitize_diagnostic(raw, MAX_DIAGNOSTIC_VALUE_BYTES)
+            ));
         }
         parts.push(part);
     }
 
     if parts.is_empty() {
-        return Err(anyhow!("archive entry resolved to an empty key: {raw}"));
+        return Err(anyhow!(
+            "archive entry resolved to an empty key: {}",
+            sanitize_diagnostic(raw, MAX_DIAGNOSTIC_VALUE_BYTES)
+        ));
     }
 
     Ok(Cow::Owned(parts.join("/")))
@@ -508,7 +515,12 @@ pub(crate) fn source_basename(key: &str) -> Result<String> {
     let basename = Path::new(key)
         .file_name()
         .and_then(|name| name.to_str())
-        .ok_or_else(|| anyhow!("unable to determine basename for source object key {key}"))?;
+        .ok_or_else(|| {
+            anyhow!(
+                "unable to determine basename for source object key {}",
+                sanitize_diagnostic(key, MAX_DIAGNOSTIC_VALUE_BYTES)
+            )
+        })?;
     Ok(basename.to_string())
 }
 
@@ -691,7 +703,12 @@ fn compile_globs(patterns: &[String]) -> Result<Vec<GlobMatcher>> {
         .iter()
         .map(|pattern| {
             Glob::new(pattern)
-                .with_context(|| format!("invalid include/exclude pattern: {pattern}"))
+                .map_err(|_| {
+                    anyhow!(
+                        "invalid include/exclude pattern: {}",
+                        sanitize_diagnostic(pattern, MAX_DIAGNOSTIC_VALUE_BYTES)
+                    )
+                })
                 .map(|glob| glob.compile_matcher())
         })
         .collect()
@@ -724,6 +741,21 @@ mod tests {
     }
 
     #[test]
+    fn invalid_glob_diagnostics_escape_and_cap_the_pattern_without_raw_parser_fallback() {
+        let pattern = format!("[\r\nforged\u{2028}{}", "x".repeat(400));
+        let error = compile_filters(&[pattern], &[])
+            .err()
+            .expect("invalid glob must fail")
+            .to_string();
+
+        assert!(error.contains("[\\r\\nforged\\u{2028}"));
+        assert!(error.contains(" ... [truncated]"));
+        assert!(!error.chars().any(char::is_control));
+        assert!(error.len() < 400);
+        assert!(!error.contains("unclosed"));
+    }
+
+    #[test]
     fn canonical_archive_keys_are_borrowed_and_non_canonical_ones_normalized() {
         assert!(matches!(
             normalize_archive_key("assets/app.js").expect("canonical"),
@@ -749,6 +781,15 @@ mod tests {
         assert!(normalize_archive_key("a/../../escape.txt").is_err());
         assert!(normalize_archive_key("").is_err());
         assert!(normalize_archive_key("/").is_err());
+
+        let hostile = format!("\r\nforged\u{2028}{}/../escape.txt", "x".repeat(400));
+        let error = normalize_archive_key(&hostile)
+            .expect_err("hostile traversal must fail")
+            .to_string();
+        assert!(error.contains("\\r\\nforged\\u{2028}"));
+        assert!(error.contains(" ... [truncated]"));
+        assert!(!error.chars().any(char::is_control));
+        assert!(error.len() < 400);
     }
 
     fn minimal_request() -> serde_json::Value {

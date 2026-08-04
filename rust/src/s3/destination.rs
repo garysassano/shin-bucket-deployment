@@ -17,6 +17,7 @@ use crate::types::{
     AppState, DeploymentManifest, DeploymentRequest, DeploymentStats, Filters,
     PutObjectRetryJitter, PutObjectRetryOptions,
 };
+use crate::util::{MAX_DIAGNOSTIC_VALUE_BYTES, sanitize_diagnostic};
 
 const OWNER_TAG_BASE: &str = "aws-cdk:cr-owned";
 const MAX_RETAINED_DELETION_KEY_BYTES: usize = 4 * 1024 * 1024;
@@ -225,7 +226,8 @@ pub(super) async fn read_bucket_owner_tags(
             Ok(BucketOwnerTags { keys: Vec::new() })
         }
         Err(err) => {
-            warn!(error = %err, bucket, "failed to read bucket tags");
+            let diagnostic = sanitize_diagnostic(&err.to_string(), MAX_DIAGNOSTIC_VALUE_BYTES);
+            warn!(error = %diagnostic, bucket, "failed to read bucket tags");
             Err(err).with_context(|| {
                 format!(
                     "unable to determine whether bucket {bucket} has a competing custom resource owner"
