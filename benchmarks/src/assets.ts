@@ -201,6 +201,19 @@ function buildSpecs(profile: BenchmarkAssetProfile, state: BenchmarkAssetState):
     return state === "pruned" ? specs.filter((_, index) => index % 10 === 0) : specs;
   }
 
+  if (profile === "copy-archives") {
+    // Deployed with `extract:false`, so each source root becomes one copied destination
+    // object. Four roots keep the copy path and its HeadObject identity probes visible
+    // without paying for a large payload.
+    const specs: FileSpec[] = [];
+    for (let sourceIndex = 0; sourceIndex < 4; sourceIndex++) {
+      const source = `source-${String(sourceIndex).padStart(2, "0")}`;
+      specs.push({ path: `${source}/index.html`, size: 8 * 1024, kind: "text" });
+      addSeries(specs, `${source}/assets/route`, ".js", 60, 8 * 1024, 96 * 1024, "text");
+    }
+    return state === "pruned" ? specs.filter((_, index) => index % 10 !== 0) : specs;
+  }
+
   const specs: FileSpec[] = [
     { path: "index.html", size: 24 * 1024, kind: "text" },
     { path: "asset-manifest.json", size: 18 * 1024, kind: "json" },
@@ -214,7 +227,9 @@ function buildSpecs(profile: BenchmarkAssetProfile, state: BenchmarkAssetState):
     addSeries(specs, "assets/css/scope", ".css", 80, 1024, 8 * 1024, "text");
   }
 
-  if (profile === "mixed") {
+  // `uncataloged` mirrors `mixed` byte-for-byte in shape; only the source wiring differs,
+  // which keeps the untrusted-comparison cost directly comparable to the canonical rows.
+  if (profile === "mixed" || profile === "uncataloged") {
     addSeries(specs, "assets/chunks/route", ".js", 140, 12 * 1024, 96 * 1024, "text");
     addSeries(specs, "assets/chunks/vendor", ".js", 12, 512 * 1024, 1536 * 1024, "text");
     addSeries(specs, "assets/maps/route", ".js.map", 80, 32 * 1024, 220 * 1024, "json");
@@ -470,7 +485,7 @@ function changedSalt(path: string): string {
 }
 
 function sourceRoots(profile: BenchmarkAssetProfile, root: string): readonly string[] {
-  if (profile !== "multi-source-prune") {
+  if (profile !== "multi-source-prune" && profile !== "copy-archives") {
     return [root];
   }
   return Array.from({ length: 4 }, (_, index) =>

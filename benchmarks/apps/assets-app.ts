@@ -23,7 +23,12 @@ import {
   MARKER_BENCHMARK_VALUE_B,
   markerBenchmarkPayload,
 } from "../src/marker-payload";
-import { type BenchmarkImplementation, isBenchmarkImplementation } from "../src/model";
+import {
+  type BenchmarkImplementation,
+  isBenchmarkImplementation,
+  profileExtractsSources,
+  profileUsesEmbeddedCatalog,
+} from "../src/model";
 
 class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
   constructor(scope: App, id: string, props?: StackProps) {
@@ -53,6 +58,8 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
       "SHIN_BENCH_DELETE_CURRENT_OBJECTS_ON_DELETE",
     );
     const deleteStaleObjects = process.env.SHIN_BENCH_DELETE_STALE_OBJECTS !== "false";
+    const extract = profileExtractsSources(bundle.profile);
+    const embeddedCatalog = profileUsesEmbeddedCatalog(bundle.profile);
     let markerPayload: string | undefined;
     if (bundle.profile === "marker-heavy") {
       const markerA = new CfnParameter(this, "MarkerA", {
@@ -120,8 +127,13 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
                   : { advancedTuning: { sourceWindowBytes } }),
               },
             }),
+        ...(extract ? {} : { sourceProcessing: { extract: false } }),
         sources: [
-          ...bundle.sourceRoots.map((root) => ShinSource.asset(root)),
+          ...bundle.sourceRoots.map((root) =>
+            embeddedCatalog
+              ? ShinSource.asset(root)
+              : ShinSource.asset(root, { embeddedCatalog: false }),
+          ),
           ...(markerPayload === undefined
             ? []
             : [ShinSource.data("runtime/marker-heavy.txt", markerPayload)]),
@@ -132,6 +144,7 @@ class BenchmarkAssetsShinBucketDeploymentStack extends Stack {
         ...upstreamDeploymentProps,
         waitForDistributionInvalidation: process.env.SHIN_BENCH_WAIT_FOR_CLOUDFRONT === "true",
         prune: deleteStaleObjects,
+        ...(extract ? {} : { extract: false }),
         ...(deleteCurrentObjectsOnDelete === undefined
           ? {}
           : { retainOnDelete: !deleteCurrentObjectsOnDelete }),

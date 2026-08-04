@@ -127,6 +127,48 @@ describe("benchmark assets", () => {
     expect(changed.assetManifestSha256).not.toBe(baseline.assetManifestSha256);
   });
 
+  it("generates the uncataloged profile with the mixed file shape", () => {
+    const mixed = ensureBenchmarkAssets({ assetProfile: "mixed", state: "baseline", outputRoot });
+    const uncataloged = ensureBenchmarkAssets({
+      assetProfile: "uncataloged",
+      state: "baseline",
+      outputRoot,
+    });
+
+    expect(listFiles(uncataloged.root).sort()).toEqual(listFiles(mixed.root).sort());
+    expect(uncataloged.fileCount).toBe(mixed.fileCount);
+    expect(uncataloged.totalBytes).toBe(mixed.totalBytes);
+    expect(uncataloged.sourceRoots).toEqual([uncataloged.root]);
+  });
+
+  it("splits the copy-archives profile into four independently changing sources", () => {
+    const baseline = ensureBenchmarkAssets({
+      assetProfile: "copy-archives",
+      state: "baseline",
+      outputRoot,
+    });
+    const changed = ensureBenchmarkAssets({
+      assetProfile: "copy-archives",
+      state: "changed",
+      outputRoot,
+    });
+
+    expect(baseline.sourceRoots).toHaveLength(4);
+    expect(baseline.sourceCount).toBe(4);
+    // Every archive must change, so no phase silently degenerates into a no-op copy.
+    for (const root of baseline.sourceRoots) {
+      expect(listFiles(root).length).toBeGreaterThan(0);
+      const relativeRoot = relative(baseline.root, root);
+      const changedRoot = join(changed.root, relativeRoot);
+      expect(
+        listFiles(root).some(
+          (path) => fileDigest(join(root, path)) !== fileDigest(join(changedRoot, path)),
+        ),
+        relativeRoot,
+      ).toBe(true);
+    }
+  });
+
   it("keeps the committed snapshot inventory equal to tracked Markdown references", () => {
     const repositoryRoot = join(__dirname, "..", "..");
     const snapshots = readdirSync(join(repositoryRoot, "benchmarks", "snapshots"))
