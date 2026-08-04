@@ -246,7 +246,10 @@ function forceBenchmarkInvocation(deployment: Construct, token: string | undefin
       `Expected exactly one deployment custom resource, found ${customResources.length}.`,
     );
   }
-  customResource.addPropertyOverride("BenchmarkInvocationToken", token);
+  // CloudFormation only re-invokes a custom resource when a property changes, and the
+  // unchanged-update phase deploys byte-identical assets on purpose. Varying the provider's
+  // declared redeploy trigger is what makes that phase measure the provider's no-op path.
+  customResource.addPropertyOverride("DeploymentNonce", token);
 }
 
 function parseImplementation(value: string | undefined): BenchmarkImplementation {
