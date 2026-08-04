@@ -163,6 +163,7 @@ interface BenchmarkData {
   memory: Row[];
   profileSummary: string;
   providerConfiguration: string;
+  region: string;
   shinIdentity: string;
   profile: string;
   memoryMb: number;
@@ -388,6 +389,7 @@ function buildBenchmarkData(selection: DataSelection): BenchmarkData {
       ? "unknown"
       : `${metadataRecord.fileCount.toLocaleString("en-US")} objects · ${formatBytes(metadataRecord.totalBytes)}`;
   const profile = metadataRecord.profile ?? "unknown";
+  const region = metadataRecord.region ?? "unknown";
 
   return {
     assets,
@@ -396,6 +398,7 @@ function buildBenchmarkData(selection: DataSelection): BenchmarkData {
     memory,
     profileSummary: profile,
     providerConfiguration: `${selection.memoryMb} MiB · Shin concurrency ${selection.parallel}`,
+    region,
     shinIdentity: `SHA ${shinCommit.slice(0, 7)}`,
     profile: selection.profile,
     memoryMb: selection.memoryMb,
@@ -535,13 +538,14 @@ function renderHeader(benchmarkData: BenchmarkData): string {
   if (headerLayout === "three-line") {
     return `<text x="${CANVAS_PAD_LEFT}" y="23" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_TITLE}" font-weight="800" fill="#f0f8ff" letter-spacing="-0.3">ShinBucketDeployment</text>
 <text x="${CANVAS_PAD_LEFT}" y="43" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_SUBTITLE + 1}" font-weight="600" fill="${COLOR_SECTION_HEADER_TEXT}">vs BucketDeployment</text>
-${renderMetadataCard(24, 57, 150, "PROFILE", benchmarkData.profileSummary)}
-${renderMetadataCard(182, 57, 210, "ASSETS", benchmarkData.assets)}
-${renderMetadataCard(400, 57, 360, "PROVIDER LAMBDA", benchmarkData.providerConfiguration)}`;
+${renderMetadataCard(24, 57, 136, "PROFILE", benchmarkData.profileSummary)}
+${renderMetadataCard(168, 57, 152, "REGION", benchmarkData.region)}
+${renderMetadataCard(328, 57, 200, "ASSETS", benchmarkData.assets)}
+${renderMetadataCard(536, 57, 224, "PROVIDER LAMBDA", benchmarkData.providerConfiguration)}`;
   }
 
   return `<text x="${CANVAS_PAD_LEFT}" y="26" font-family="Inter, -apple-system, sans-serif"><tspan font-size="${FONT_SIZE_TITLE}" font-weight="800" fill="#f0f8ff" letter-spacing="-0.3">ShinBucketDeployment</tspan><tspan dx="8" font-size="${FONT_SIZE_SUBTITLE}" font-weight="600" fill="${COLOR_SECTION_HEADER_TEXT}">vs BucketDeployment</tspan></text>
-<text x="${CANVAS_PAD_LEFT}" y="46" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_SUBTITLE}" font-weight="500" fill="${COLOR_SECTION_HEADER_TEXT}">Shin ${benchmarkData.shinIdentity} · AWS ${benchmarkData.awsIdentity} · ${benchmarkData.profileSummary} · ${benchmarkData.assets} · ${benchmarkData.providerConfiguration}</text>`;
+<text x="${CANVAS_PAD_LEFT}" y="46" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_SUBTITLE}" font-weight="500" fill="${COLOR_SECTION_HEADER_TEXT}">Shin ${benchmarkData.shinIdentity} · AWS ${benchmarkData.awsIdentity} · ${benchmarkData.profileSummary} · ${benchmarkData.region} · ${benchmarkData.assets} · ${benchmarkData.providerConfiguration}</text>`;
 }
 
 function renderMetadataCard(
