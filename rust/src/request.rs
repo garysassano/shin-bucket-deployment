@@ -135,6 +135,17 @@ pub(crate) struct RawDeploymentRequest {
     pub(crate) put_object_slowdown_retry_max_delay_ms: Option<u64>,
     #[serde(default)]
     pub(crate) put_object_retry_jitter: Option<PutObjectRetryJitter>,
+    /// CloudFormation puts the custom-resource envelope in `ResourceProperties` alongside the
+    /// deployment inputs, so a strict request has to declare it. `ServiceToken` is the handler
+    /// ARN CloudFormation dispatched through; `ServiceTimeout` is the CDK `serviceTimeout`
+    /// rendered by `CustomResource`. Both are transport, not deployment input: they are parsed
+    /// and dropped. Stripping them before decoding would mean cloning the whole property tree,
+    /// which `decode_resource_properties` deliberately avoids. Typed as `Value` so a protocol
+    /// representation change cannot fail a deployment over a field the provider ignores.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) service_token: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) service_timeout: Option<serde_json::Value>,
     /// Opaque redeploy trigger. CloudFormation only re-invokes a custom resource when
     /// some property changes, so a caller that needs a fresh invocation without changing
     /// any real input varies this instead. It is parsed and then ignored: it reaches no
@@ -1186,6 +1197,27 @@ mod tests {
             .expect_err("a misspelled destructive-default property must fail closed");
 
         assert!(error.to_string().contains("DeleteStaleObjectOnDeployment"));
+    }
+
+    #[test]
+    fn custom_resource_envelope_properties_do_not_fail_a_deployment() {
+        // CloudFormation delivers the envelope inside ResourceProperties, and CDK's
+        // `CustomResource` always renders both keys, so every real Create/Update/Delete
+        // carries them. Rejecting either one fails the deployment outright, which is not
+        // something a synth-only or hand-built-payload test can observe.
+        let mut props = minimal_request();
+        props["ServiceToken"] = json!("arn:aws:lambda:eu-central-1:123456789012:function:handler");
+        props["ServiceTimeout"] = json!("900");
+
+        let raw: RawDeploymentRequest = serde_json::from_value(props)
+            .expect("the custom-resource envelope must not fail the strict request decode");
+
+        let baseline: RawDeploymentRequest = serde_json::from_value(minimal_request()).unwrap();
+        let parsed = parse_request_with_memory(raw, "1024").expect("envelope request parses");
+        let parsed_baseline =
+            parse_request_with_memory(baseline, "1024").expect("baseline request parses");
+
+        assert_eq!(format!("{parsed:?}"), format!("{parsed_baseline:?}"));
     }
 
     #[test]

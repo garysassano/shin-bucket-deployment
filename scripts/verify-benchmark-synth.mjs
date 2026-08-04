@@ -59,7 +59,51 @@ for (const path of templates) {
   ) {
     throw new Error(`Shin benchmark provider architecture is invalid in ${path}.`);
   }
+  if (implementation === "shin") {
+    assertProviderAcceptsEveryProperty(customResources[0].Properties ?? {}, path);
+  }
   implementations.add(implementation);
+}
+
+/**
+ * The provider decodes `ResourceProperties` with `deny_unknown_fields`, so a property the
+ * template emits but the request does not declare fails the deployment at runtime — on Create
+ * and on Delete, which wedges the stack. Synthesis and unit tests both miss it: CDK injects
+ * envelope keys the templates carry but hand-built test payloads never do. Reading the accepted
+ * names back out of the request struct keeps this honest without duplicating the field list.
+ */
+function assertProviderAcceptsEveryProperty(properties, path) {
+  const accepted = acceptedRequestProperties();
+  const rejected = Object.keys(properties).filter((key) => !accepted.has(key));
+  if (rejected.length > 0) {
+    throw new Error(
+      `Shin provider would reject ${rejected.join(", ")} at deploy time in ${path}. ` +
+        "Declare it in RawDeploymentRequest or stop emitting it.",
+    );
+  }
+}
+
+function acceptedRequestProperties() {
+  const source = readFileSync(join(process.cwd(), "rust", "src", "request.rs"), "utf8");
+  const struct = source.match(/pub\(crate\) struct RawDeploymentRequest \{([\s\S]*?)\n\}/);
+  if (struct === null) {
+    throw new Error("Could not locate RawDeploymentRequest to read its accepted properties.");
+  }
+  const fields = [...struct[1].matchAll(/^\s*pub\(crate\) ([a-z0-9_]+):/gm)].map(
+    (match) => match[1],
+  );
+  if (fields.length === 0) {
+    throw new Error("Parsed no fields from RawDeploymentRequest; the guard would be vacuous.");
+  }
+  // `#[serde(rename_all = "PascalCase")]` on the struct.
+  return new Set(
+    fields.map((field) =>
+      field
+        .split("_")
+        .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1))
+        .join(""),
+    ),
+  );
 }
 
 if (!implementations.has("shin") || !implementations.has("aws")) {
