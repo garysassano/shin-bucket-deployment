@@ -11,9 +11,13 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
-import { gzipSync } from "node:zlib";
+import { deflateRawSync, gzipSync } from "node:zlib";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { ensureBenchmarkAssets, renderBenchmarkBinary } from "../../benchmarks/src/assets";
+import {
+  ASSET_GENERATOR_VERSION,
+  ensureBenchmarkAssets,
+  renderBenchmarkBinary,
+} from "../../benchmarks/src/assets";
 
 describe("benchmark assets", () => {
   let outputRoot: string;
@@ -60,10 +64,31 @@ describe("benchmark assets", () => {
 
     expect(readFileSync(filePath)).toEqual(expectedContents);
     expect(JSON.parse(readFileSync(markerPath, "utf8"))).toMatchObject({
-      generatorVersion: 3,
+      generatorVersion: ASSET_GENERATOR_VERSION,
       profile: "tiny-many",
       state: "baseline",
     });
+  });
+
+  it("generates fixtures the provider's archive-expansion guard accepts", () => {
+    // The provider rejects any entry over DEFAULT_MAX_COMPRESSION_RATIO (100:1). Filling a
+    // file by repeating one block reached 140:1-220:1, which failed every deploy and also
+    // measured an archive hundreds of times smaller than the bytes written. Assert real
+    // per-entry ratios so neither regression can return silently.
+    const bundle = ensureBenchmarkAssets({
+      assetProfile: "tiny-many",
+      state: "baseline",
+      outputRoot,
+    });
+
+    const ratios = readdirSync(bundle.root, { recursive: true, withFileTypes: true })
+      .filter((entry) => entry.isFile())
+      .map((entry) => readFileSync(join(entry.parentPath, entry.name)))
+      .filter((contents) => contents.length >= 4096)
+      .map((contents) => contents.length / deflateRawSync(contents).length);
+
+    expect(ratios.length).toBeGreaterThan(0);
+    expect(Math.max(...ratios)).toBeLessThan(100);
   });
 
   it("regenerates assets whose contents no longer match the marker digest", () => {

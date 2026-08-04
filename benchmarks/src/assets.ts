@@ -37,7 +37,7 @@ export type GeneratedBundle = {
 
 const DEFAULT_PROFILE: BenchmarkAssetProfile = "mixed";
 const DEFAULT_STATE: BenchmarkAssetState = "baseline";
-const ASSET_GENERATOR_VERSION = 3;
+export const ASSET_GENERATOR_VERSION = 4;
 const SHA256_BYTES = 32;
 
 type GeneratedFileDigest = {
@@ -283,17 +283,34 @@ function renderFile(
     return renderBenchmarkBinary(spec.size, seed);
   }
 
-  const text = spec.kind === "json" ? renderJsonText(spec.path, seed) : renderText(spec.path, seed);
+  const text =
+    spec.kind === "json"
+      ? renderJsonText(spec.path, seed, spec.size)
+      : renderText(spec.path, seed, spec.size);
   const bytes = Buffer.from(text);
   if (bytes.length >= spec.size) {
     return bytes.subarray(0, spec.size);
   }
 
+  // Short of the target only when the generator's own framing exceeds it; pad with the
+  // incompressible stream rather than repeating text, so the ratio cannot drift upward.
   const output = Buffer.alloc(spec.size);
-  for (let offset = 0; offset < spec.size; offset += bytes.length) {
-    bytes.copy(output, offset);
-  }
+  bytes.copy(output, 0);
+  renderBenchmarkBinary(spec.size - bytes.length, seed).copy(output, bytes.length);
   return output;
+}
+
+/**
+ * Deterministic xorshift32. Fixtures must be byte-identical across machines and runs, so
+ * every varying token comes from this rather than from `Math.random`.
+ */
+function nextRandom(state: number): number {
+  let x = state >>> 0;
+  x ^= x << 13;
+  x >>>= 0;
+  x ^= x >> 17;
+  x ^= x << 5;
+  return x >>> 0;
 }
 
 export function renderBenchmarkBinary(size: number, seed: number): Buffer {
@@ -309,33 +326,47 @@ export function renderBenchmarkBinary(size: number, seed: number): Buffer {
   return output;
 }
 
-function renderText(path: string, seed: number): string {
-  const token = seed.toString(36);
-  return [
-    `/* ${path} ${token} */`,
-    "import{createElement as h}from'react';",
-    `const route="${path}";`,
-    `const token="${token}";`,
-    "export function render(){return h('main',{className:'route'},route,token);}",
-    "export const styles='display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:16px';",
-    "",
-  ].join("\n");
+/**
+ * Fills to `size` with distinct statements instead of one repeated block. A repeated block
+ * deflates at 140:1 to 220:1, which both trips the provider's `MaxCompressionRatio` guard and
+ * measures a workload no real deployment has: the archive would be a couple of hundred times
+ * smaller than the bytes written, so source reads and archive planning would barely register.
+ * Repeated boilerplate carrying high-entropy identifiers is the shape of a real minified
+ * bundle and holds a steady ~3.8:1.
+ */
+function renderText(path: string, seed: number, size: number): string {
+  const parts = [`/* ${path} ${seed.toString(36)} */`, "import{createElement as h}from'react';"];
+  let used = parts.reduce((total, part) => total + part.length + 1, 0);
+  let state = seed >>> 0 || 1;
+
+  while (used < size) {
+    state = nextRandom(state);
+    const name = state.toString(36);
+    state = nextRandom(state);
+    const className = state.toString(36);
+    state = nextRandom(state);
+    const key = state.toString(36);
+    const line = `export const r${name}=()=>h('div',{className:'${className}',key:'${key}'},'${name}${className}');`;
+    parts.push(line);
+    used += line.length + 1;
+  }
+  return parts.join("\n");
 }
 
-function renderJsonText(path: string, seed: number): string {
-  return `${JSON.stringify(
-    {
-      path,
-      seed,
-      title: `Benchmark page ${path}`,
-      blocks: Array.from({ length: 16 }, (_, index) => ({
-        id: `${path}-${index}`,
-        value: (seed + index).toString(36),
-      })),
-    },
-    null,
-    2,
-  )}\n`;
+function renderJsonText(path: string, seed: number, size: number): string {
+  const blocks: { id: string; value: string }[] = [];
+  let used = 0;
+  let state = seed >>> 0 || 1;
+
+  while (used < size) {
+    state = nextRandom(state);
+    const id = state.toString(36);
+    state = nextRandom(state);
+    const value = state.toString(36);
+    blocks.push({ id: `${path}-${id}`, value });
+    used += id.length + value.length + path.length + 32;
+  }
+  return `${JSON.stringify({ path, seed, title: `Benchmark page ${path}`, blocks }, null, 2)}\n`;
 }
 
 function sized(index: number, minSize: number, maxSize: number): number {
