@@ -277,7 +277,9 @@ async fn send_response_with_policy(
         sleep_until(wake).await;
     }
 
-    unreachable!("positive callback attempt count checked above")
+    Err(anyhow!(
+        "CloudFormation callback retry loop ended without a response"
+    ))
 }
 
 fn callback_status_is_retryable(status: reqwest::StatusCode) -> bool {
@@ -581,6 +583,25 @@ mod tests {
 
         assert!(result.is_ok());
         assert_eq!(requests, 1);
+    }
+
+    #[tokio::test]
+    async fn callback_rejects_zero_attempts_without_sending_a_request() {
+        let server = MockCallbackServer::start(Vec::new());
+        let error = send_response_with_policy(
+            &callback_client(Duration::from_secs(1)),
+            &server.url,
+            b"{}",
+            TokioInstant::now() + Duration::from_secs(1),
+            test_retry_policy(0),
+            None,
+        )
+        .await
+        .expect_err("zero callback attempts must be rejected");
+        let requests = server.finish();
+
+        assert!(error.to_string().contains("attempts must be positive"));
+        assert_eq!(requests, 0);
     }
 
     #[tokio::test]
