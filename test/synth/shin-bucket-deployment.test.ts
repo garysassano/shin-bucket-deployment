@@ -305,6 +305,36 @@ test("keeps every provider Lambda identity member in canonical handler selection
   }
 });
 
+test("canonicalizes provider security group identity independently of caller order", () => {
+  const stack = new Stack();
+  const vpc = new Vpc(stack, "Vpc", { maxAzs: 2, natGateways: 0 });
+  const firstGroup = new SecurityGroup(stack, "FirstGroup", { vpc });
+  const secondGroup = new SecurityGroup(stack, "SecondGroup", { vpc });
+  const handlerSource = {
+    kind: "compile",
+    packageVersion: "0.9.0",
+    manifestPath: "/repo/rust/Cargo.toml",
+  };
+
+  const first = renderHandlerConfigHashInput(
+    stack,
+    { securityGroups: [firstGroup, secondGroup] },
+    Architecture.ARM_64,
+    handlerSource,
+  );
+  const reversed = renderHandlerConfigHashInput(
+    stack,
+    { securityGroups: [secondGroup, firstGroup] },
+    Architecture.ARM_64,
+    handlerSource,
+  );
+
+  expect(first).toBe(reversed);
+  expect(JSON.parse(first)).toMatchObject({
+    securityGroups: [firstGroup.node.addr, secondGroup.node.addr].sort(),
+  });
+});
+
 test("detailed failure diagnostics are opt-in and select a distinct shared handler", () => {
   const stack = new Stack();
   const defaultDeployment = new ShinBucketDeployment(stack, "DefaultDeploy", {
@@ -419,6 +449,37 @@ test("reuses a shared handler for identical provider configuration in the same s
 
   const lambdaFunctions = Template.fromStack(stack).findResources("AWS::Lambda::Function");
   expect(Object.keys(lambdaFunctions)).toHaveLength(1);
+});
+
+test("reuses a shared handler when provider security groups have reversed caller order", () => {
+  const stack = new Stack();
+  const vpc = new Vpc(stack, "Vpc", { maxAzs: 2, natGateways: 0 });
+  const firstGroup = new SecurityGroup(stack, "FirstGroup", { vpc });
+  const secondGroup = new SecurityGroup(stack, "SecondGroup", { vpc });
+
+  const first = new ShinBucketDeployment(stack, "FirstDeploy", {
+    sources: [Source.data("first.txt", "first")],
+    destination: { bucket: new Bucket(stack, "FirstDest") },
+    providerLambda: {
+      vpc,
+      securityGroups: [firstGroup, secondGroup],
+      localBuild: testLocalProviderBuild(),
+    },
+  });
+  const second = new ShinBucketDeployment(stack, "SecondDeploy", {
+    sources: [Source.data("second.txt", "second")],
+    destination: { bucket: new Bucket(stack, "SecondDest") },
+    providerLambda: {
+      vpc,
+      securityGroups: [secondGroup, firstGroup],
+      localBuild: testLocalProviderBuild(),
+    },
+  });
+
+  expect(first.handlerFunction).toBe(second.handlerFunction);
+  expect(
+    Object.keys(Template.fromStack(stack).findResources("AWS::Lambda::Function")),
+  ).toHaveLength(1);
 });
 
 test("keeps every transfer setting request-scoped while sharing one handler", () => {
