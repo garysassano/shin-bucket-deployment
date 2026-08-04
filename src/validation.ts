@@ -10,6 +10,8 @@ import type {
 } from "./shin-bucket-deployment";
 
 const MIN_SOURCE_BLOCK_BYTES = 30;
+const MAX_UNCOMPRESSED_ENTRY_BYTES = 5 * 1024 * 1024 * 1024;
+const MAX_COMPRESSION_RATIO = 10_000;
 const DEFAULT_SOURCE_BLOCK_BYTES = 8 * 1024 * 1024;
 const MAX_CONCURRENCY = 256;
 const MEASURED_CONCURRENCY_GUIDANCE_MAX = 64;
@@ -82,7 +84,7 @@ export function validateDeploymentProps(scope: Construct, props: ShinBucketDeplo
     scope,
     rawProps.sourceProcessing,
     "sourceProcessing",
-    ["extract", "include", "exclude"],
+    ["extract", "maxUncompressedEntryBytes", "maxCompressionRatio", "include", "exclude"],
   );
   const providerLambda = optionalObjectGroup(
     scope,
@@ -200,6 +202,22 @@ export function validateDeploymentProps(scope: Construct, props: ShinBucketDeplo
   );
 
   validateOptionalBoolean(scope, sourceProcessing?.extract, "sourceProcessing.extract");
+  validateIntegerProps(
+    scope,
+    sourceProcessing ?? {},
+    ["maxUncompressedEntryBytes"],
+    1,
+    "sourceProcessing.",
+    MAX_UNCOMPRESSED_ENTRY_BYTES,
+  );
+  validateIntegerProps(
+    scope,
+    sourceProcessing ?? {},
+    ["maxCompressionRatio"],
+    1,
+    "sourceProcessing.",
+    MAX_COMPRESSION_RATIO,
+  );
   validateOptionalStringArray(scope, sourceProcessing?.include, "sourceProcessing.include");
   validateOptionalStringArray(scope, sourceProcessing?.exclude, "sourceProcessing.exclude");
   validateOptionalString(scope, localBuild?.projectPath, "providerLambda.localBuild.projectPath");

@@ -314,6 +314,8 @@ mod tests {
             "SourceBucketNames": [],
             "SourceObjectKeys": [],
             "DestinationBucketName": "destination",
+            "MaxUncompressedEntryBytes": 1073741824,
+            "MaxCompressionRatio": 100,
             "DeleteStaleObjectsOnDeployment": true
         }))
         .expect("empty source request should deserialize");
@@ -448,6 +450,8 @@ mod aws_integration_tests {
                     destination_owner_id: Some("integration-owner".to_string()),
                     delete_previous_objects_on_change: None,
                     invalidate_previous_distribution_on_change: None,
+                    max_uncompressed_entry_bytes: 1024 * 1024 * 1024,
+                    max_compression_ratio: 100,
                     max_parallel_transfers: Some(8),
                     source_block_bytes: Some(64 * 1024),
                     source_block_merge_gap_bytes: Some(4 * 1024),

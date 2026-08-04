@@ -857,6 +857,8 @@ mod tests {
             "SourceBucketNames": ["source"],
             "SourceObjectKeys": ["asset.zip"],
             "DestinationBucketName": "destination",
+            "MaxUncompressedEntryBytes": 1073741824,
+            "MaxCompressionRatio": 100,
             "DistributionId": "distribution",
             "DistributionPaths": paths
         }))
@@ -880,7 +882,9 @@ mod tests {
             "SourceBucketNames": ["source"],
             "SourceObjectKeys": ["asset.zip"],
             "DestinationBucketName": bucket,
-            "DestinationBucketKeyPrefix": prefix
+            "DestinationBucketKeyPrefix": prefix,
+            "MaxUncompressedEntryBytes": 1073741824,
+            "MaxCompressionRatio": 100
         });
         if let Some(owner_id) = owner_id {
             value["DestinationOwnerId"] = json!(owner_id);
@@ -1150,7 +1154,9 @@ mod tests {
             "ResourceProperties": {
                 "SourceBucketNames": ["source"],
                 "SourceObjectKeys": ["asset.zip"],
-                "DestinationBucketName": "destination"
+                "DestinationBucketName": "destination",
+                "MaxUncompressedEntryBytes": 1073741824,
+                "MaxCompressionRatio": 100
             }
         }))
         .expect("valid envelope");
@@ -1168,7 +1174,9 @@ mod tests {
             "ResourceProperties": {
                 "SourceBucketNames": ["source"],
                 "SourceObjectKeys": ["asset.zip"],
-                "DestinationBucketName": "destination"
+                "DestinationBucketName": "destination",
+                "MaxUncompressedEntryBytes": 1073741824,
+                "MaxCompressionRatio": 100
             }
         }))
         .expect("invalid Delete resource type still forms an envelope");
@@ -1191,7 +1199,9 @@ mod tests {
             "ResourceProperties": {
                 "SourceBucketNames": ["source"],
                 "SourceObjectKeys": ["asset.zip"],
-                "DestinationBucketName": "destination"
+                "DestinationBucketName": "destination",
+                "MaxUncompressedEntryBytes": 1073741824,
+                "MaxCompressionRatio": 100
             }
         }))
         .expect("invalid resource type still forms an envelope");
@@ -1215,7 +1225,9 @@ mod tests {
             "ResourceProperties": {
                 "SourceBucketNames": ["source"],
                 "SourceObjectKeys": ["asset.zip"],
-                "DestinationBucketName": "destination"
+                "DestinationBucketName": "destination",
+                "MaxUncompressedEntryBytes": 1073741824,
+                "MaxCompressionRatio": 100
             }
         }))
         .expect("hostile resource type still forms an envelope");
@@ -1242,6 +1254,8 @@ mod tests {
                 "SourceBucketNames": ["source"],
                 "SourceObjectKeys": ["asset.zip"],
                 "DestinationBucketName": "destination",
+                "MaxUncompressedEntryBytes": 1073741824,
+                "MaxCompressionRatio": 100,
                 // One catalog descriptor for two declared sources: a Delete envelope has
                 // to fail this the same way every other request type does.
                 "SourceCatalogs": [{ "Version": 1, "Sha256": "00" }, { "Version": 1, "Sha256": "11" }]

@@ -111,7 +111,14 @@ pub(crate) struct DeploymentRequest {
     pub(crate) destination_owner_id: Option<String>,
     pub(crate) delete_previous_objects_on_change: Option<DeletePreviousObjectsOnChange>,
     pub(crate) invalidate_previous_distribution_on_change: Option<String>,
+    pub(crate) archive_expansion: ArchiveExpansionLimits,
     pub(crate) runtime: RuntimeOptions,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ArchiveExpansionLimits {
+    pub(crate) max_uncompressed_entry_bytes: u64,
+    pub(crate) max_compression_ratio: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

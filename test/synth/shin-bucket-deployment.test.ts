@@ -13,7 +13,14 @@ import { LogGroup } from "aws-cdk-lib/aws-logs";
 import { Bucket, BucketEncryption, BucketNamespace, CfnBucket } from "aws-cdk-lib/aws-s3";
 import type { IConstruct } from "constructs";
 import { expect, test } from "vitest";
-import { FailureDiagnostics, ProviderSharing, ShinBucketDeployment, Source } from "../../src";
+import {
+  DEFAULT_MAX_COMPRESSION_RATIO,
+  DEFAULT_MAX_UNCOMPRESSED_ENTRY_BYTES,
+  FailureDiagnostics,
+  ProviderSharing,
+  ShinBucketDeployment,
+  Source,
+} from "../../src";
 import { validateDestinationEncryption } from "../../src/destination";
 import { renderHandlerConfigHashInput } from "../../src/provider";
 import { stableStringify } from "../../src/stable-json";
@@ -71,6 +78,8 @@ test("renders a Rust-backed custom resource", () => {
       Ref: Match.anyValue(),
     },
     Extract: true,
+    MaxUncompressedEntryBytes: DEFAULT_MAX_UNCOMPRESSED_ENTRY_BYTES,
+    MaxCompressionRatio: DEFAULT_MAX_COMPRESSION_RATIO,
     DeleteStaleObjectsOnDeployment: true,
   });
 }, 120_000);

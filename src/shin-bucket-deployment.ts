@@ -20,6 +20,7 @@ import type { ILogGroupRef } from "aws-cdk-lib/aws-logs";
 import { Bucket, type IBucket } from "aws-cdk-lib/aws-s3";
 import type { ISource, SourceConfig } from "aws-cdk-lib/aws-s3-deployment";
 import { Construct } from "constructs";
+import { DEFAULT_MAX_COMPRESSION_RATIO, DEFAULT_MAX_UNCOMPRESSED_ENTRY_BYTES } from "./defaults";
 import { inspectableDestinationBucketResource, validateDestinationEncryption } from "./destination";
 import type { DestinationWriteRetryJitter, FailureDiagnostics, ProviderSharing } from "./enums";
 import { ValidationError } from "./errors";
@@ -346,6 +347,28 @@ export interface ShinBucketDeploymentSourceProcessingOptions {
    * @default true
    */
   readonly extract?: boolean;
+
+  /**
+   * Maximum uncompressed size in bytes of one extracted ZIP entry.
+   *
+   * The provider rejects an archive during source planning when any regular
+   * entry exceeds this limit. Copy mode (`extract: false`) is unaffected.
+   *
+   * @default DEFAULT_MAX_UNCOMPRESSED_ENTRY_BYTES (1073741824)
+   */
+  readonly maxUncompressedEntryBytes?: number;
+
+  /**
+   * Maximum ratio of uncompressed to compressed bytes for one extracted ZIP
+   * entry. For example, `100` permits an entry that expands to exactly 100
+   * times its compressed size.
+   *
+   * The provider rejects non-empty entries with zero compressed bytes. Empty
+   * entries are valid. Copy mode (`extract: false`) is unaffected.
+   *
+   * @default DEFAULT_MAX_COMPRESSION_RATIO (100)
+   */
+  readonly maxCompressionRatio?: number;
 
   /**
    * Include matching source-relative object paths.
@@ -874,6 +897,9 @@ export class ShinBucketDeployment extends Construct {
         WaitForDistributionInvalidation: props.cloudfrontInvalidation?.waitForCompletion ?? true,
         DeleteCurrentObjectsOnDelete: deleteCurrentObjectsOnDelete,
         Extract: sourceProcessing.extract ?? true,
+        MaxUncompressedEntryBytes:
+          sourceProcessing.maxUncompressedEntryBytes ?? DEFAULT_MAX_UNCOMPRESSED_ENTRY_BYTES,
+        MaxCompressionRatio: sourceProcessing.maxCompressionRatio ?? DEFAULT_MAX_COMPRESSION_RATIO,
         DeleteStaleObjectsOnDeployment: deleteStaleObjectsOnDeploy,
         Exclude: sourceProcessing.exclude,
         Include: sourceProcessing.include,

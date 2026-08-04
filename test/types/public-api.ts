@@ -2,6 +2,8 @@ import type { IDistributionRef } from "aws-cdk-lib/aws-cloudfront";
 import { Architecture } from "aws-cdk-lib/aws-lambda";
 import type { Bucket } from "aws-cdk-lib/aws-s3";
 import {
+  DEFAULT_MAX_COMPRESSION_RATIO,
+  DEFAULT_MAX_UNCOMPRESSED_ENTRY_BYTES,
   FailureDiagnostics,
   type ISource,
   ProviderSharing,
@@ -21,6 +23,8 @@ declare const source: ISource;
 const destination: ShinBucketDeploymentDestination = { bucket };
 const sourceProcessing: ShinBucketDeploymentSourceProcessingOptions = {
   extract: true,
+  maxUncompressedEntryBytes: DEFAULT_MAX_UNCOMPRESSED_ENTRY_BYTES,
+  maxCompressionRatio: DEFAULT_MAX_COMPRESSION_RATIO,
   include: ["*.html"],
   exclude: ["*.map"],
 };

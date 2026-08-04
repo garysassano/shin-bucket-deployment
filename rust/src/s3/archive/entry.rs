@@ -1357,4 +1357,31 @@ mod diagnostic_tests {
         assert!(!error.chars().any(char::is_control));
         assert!(error.len() < 400);
     }
+
+    #[test]
+    fn decoded_output_cannot_cross_the_planned_entry_ceiling() {
+        let plan = ZipEntryPlan {
+            source_index: 0,
+            relative_key: "bounded.bin".to_string(),
+            destination_key: "bounded.bin".to_string(),
+            size: 1_024,
+            compressed_size: 10,
+            compression_code: 8,
+            crc32: 0,
+            trusted_integrity: None,
+            source_offset: 0,
+            source_span_end: 1,
+        };
+
+        validate_zip_entry_size_not_exceeded(&plan, 1_024)
+            .expect("decoded output at the planned limit is valid");
+        let error = validate_zip_entry_size_not_exceeded(&plan, 1_025)
+            .expect_err("decoded output above the planned limit must fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("central directory declared 1024 bytes")
+        );
+    }
 }
