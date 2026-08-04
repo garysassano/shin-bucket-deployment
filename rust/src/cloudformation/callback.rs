@@ -519,7 +519,7 @@ mod tests {
             "DistributionPaths": paths
         }))
         .expect("raw deployment request");
-        crate::request::parse_request(&raw).expect("valid request")
+        crate::request::parse_request(raw).expect("valid request")
     }
 
     #[tokio::test]

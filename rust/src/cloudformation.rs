@@ -7,6 +7,7 @@ use anyhow::{Context, Result, anyhow, ensure};
 use aws_lambda_events::event::cloudformation::CloudFormationCustomResourceRequest;
 use lambda_runtime::Error;
 use md5::{Digest, Md5};
+use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use sha2::Sha256;
 use tokio::time::timeout_at;
@@ -255,8 +256,12 @@ fn decode_request_envelope(payload: Value) -> Result<RequestEnvelope> {
     serde_json::from_value(payload).context("failed to deserialize CloudFormation request envelope")
 }
 
+/// Deserializes straight out of the borrowed `Value`. `serde_json::from_value` would first
+/// clone the whole property tree, which for a large source/marker payload is a full copy
+/// discarded immediately afterwards.
 fn decode_resource_properties(value: &Value, label: &str) -> Result<RawDeploymentRequest> {
-    serde_json::from_value(value.clone()).with_context(|| format!("failed to deserialize {label}"))
+    RawDeploymentRequest::deserialize(value)
+        .with_context(|| format!("failed to deserialize {label}"))
 }
 
 async fn process_request_envelope(
@@ -270,13 +275,20 @@ async fn process_request_envelope(
         logical_resource_id = decoded.identity.logical_resource_id,
         "processing request"
     );
+    let DecodedRequest {
+        request_type,
+        identity,
+        physical_resource_id,
+        resource_properties,
+        old_resource_properties,
+    } = decoded;
     process_request(
         state,
-        decoded.request_type,
-        decoded.identity,
-        decoded.physical_resource_id,
-        &decoded.resource_properties,
-        decoded.old_resource_properties.as_ref(),
+        request_type,
+        identity,
+        physical_resource_id,
+        resource_properties,
+        old_resource_properties.as_ref(),
         deadlines,
     )
     .await
@@ -341,7 +353,7 @@ async fn process_request(
     request_type: &'static str,
     identity: RequestIdentity<'_>,
     physical_resource_id: Option<&str>,
-    resource_properties: &RawDeploymentRequest,
+    resource_properties: RawDeploymentRequest,
     old_resource_properties: Option<&RawDeploymentRequest>,
     deadlines: InvocationDeadlines,
 ) -> Result<ProcessedRequest> {
@@ -850,7 +862,7 @@ mod tests {
             "DistributionPaths": paths
         }))
         .expect("raw deployment request");
-        parse_request(&raw).expect("valid request")
+        parse_request(raw).expect("valid request")
     }
 
     fn deployment_request_for_destination(
@@ -861,7 +873,7 @@ mod tests {
         let raw: RawDeploymentRequest =
             serde_json::from_value(deployment_request_properties(bucket, prefix, owner_id))
                 .expect("raw deployment request");
-        parse_request(&raw).expect("valid request")
+        parse_request(raw).expect("valid request")
     }
 
     fn deployment_request_properties(bucket: &str, prefix: &str, owner_id: Option<&str>) -> Value {
@@ -1216,7 +1228,7 @@ mod tests {
         }))
         .expect("Delete envelope");
         let decoded = decode_deployment_request(&request).expect("current resource type");
-        let error = parse_request(&decoded.resource_properties)
+        let error = parse_request(decoded.resource_properties)
             .expect_err("Delete must not relax the current request schema");
 
         assert!(
@@ -1354,12 +1366,11 @@ mod tests {
             }))
             .expect("Update envelope");
             let decoded = decode_deployment_request(&envelope).expect("decoded Update request");
-            let decoded_current = parse_request(&decoded.resource_properties)
+            let decoded_current = parse_request(decoded.resource_properties)
                 .expect("decoded current deployment request");
             let decoded_previous = parse_request(
                 decoded
                     .old_resource_properties
-                    .as_ref()
                     .expect("Update OldResourceProperties"),
             )
             .expect("decoded previous deployment request");
