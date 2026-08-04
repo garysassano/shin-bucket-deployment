@@ -545,7 +545,8 @@ export interface ShinBucketDeploymentCloudFrontInvalidation {
    * Distribution paths to invalidate.
    *
    * A concrete list must contain at least one path. Every concrete path must
-   * start with `/` and contain at most 4,000 Unicode characters.
+   * start with `/`, contain at most 4,000 Unicode characters, and contain no
+   * control characters.
    *
    * Paths must not contain `~`, in either its literal or percent-encoded form.
    * CloudFront does not support that character for invalidations, so such a path
@@ -659,6 +660,9 @@ export interface ShinBucketDeploymentDestinationLifecycle {
   readonly onDelete?: {
     /**
      * Delete objects from the current destination namespace.
+     *
+     * With an omitted `destination.keyPrefix` or `/`, the namespace is the
+     * whole bucket and synthesis emits an acknowledgeable warning.
      *
      * @default false
      */

@@ -439,6 +439,14 @@ impl SourceClient {
                 range_get_request_error(error)
             })?;
 
+        validate_content_range(output.content_range(), start, end, self.len).map_err(|source| {
+            RangeGetError {
+                source,
+                retryable: true,
+                throttled: false,
+            }
+        })?;
+
         output
             .body
             .collect()
@@ -484,6 +492,34 @@ impl SourceClient {
                     })
                 }
             })
+    }
+}
+
+fn validate_content_range(value: Option<&str>, start: u64, end: u64, total: u64) -> io::Result<()> {
+    let Some(value) = value else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("S3 range bytes={start}-{end} response is missing Content-Range"),
+        ));
+    };
+    let parsed = value
+        .strip_prefix("bytes ")
+        .and_then(|value| value.split_once('/'))
+        .and_then(|(range, total)| {
+            let (start, end) = range.split_once('-')?;
+            Some((
+                start.parse::<u64>().ok()?,
+                end.parse::<u64>().ok()?,
+                total.parse::<u64>().ok()?,
+            ))
+        });
+    if parsed == Some((start, end, total)) {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("S3 range bytes={start}-{end} response has a mismatched Content-Range"),
+        ))
     }
 }
 
@@ -3193,8 +3229,10 @@ mod tests {
 
     #[tokio::test]
     async fn ranged_get_retries_incomplete_bodies() {
-        let replay =
-            StaticReplayClient::new(vec![get_success_event(b"hey"), get_success_event(b"hello")]);
+        let replay = StaticReplayClient::new(vec![
+            get_range_response(b"hey", Some("bytes 0-4/5")),
+            get_success_event(b"hello"),
+        ]);
         let source = replay_source_client(replay.clone(), 5);
 
         let bytes = source
@@ -3207,6 +3245,42 @@ mod tests {
         assert_eq!(diagnostics.source_get_short_body_errors, 1);
         assert_eq!(diagnostics.source_get_retryable_errors, 1);
         assert_eq!(diagnostics.source_get_retries, 1);
+    }
+
+    #[tokio::test]
+    async fn ranged_get_retries_a_mismatched_content_range() {
+        let replay = StaticReplayClient::new(vec![
+            get_range_response(b"hello", Some("bytes 1-5/5")),
+            get_success_event(b"hello"),
+        ]);
+        let source = replay_source_client(replay.clone(), 5);
+
+        let bytes = source
+            .get_range(0, 4)
+            .await
+            .expect("a valid replay after a mismatched Content-Range should succeed");
+
+        assert_eq!(bytes.as_ref(), b"hello");
+        assert_eq!(replay.actual_requests().count(), 2);
+        assert_eq!(source.diagnostics().source_get_retryable_errors, 1);
+    }
+
+    #[tokio::test]
+    async fn ranged_get_rejects_a_missing_content_range() {
+        let replay = StaticReplayClient::new(vec![
+            get_range_response(b"hello", None),
+            get_range_response(b"hello", None),
+            get_range_response(b"hello", None),
+        ]);
+        let source = replay_source_client(replay.clone(), 5);
+
+        let error = source
+            .get_range(0, 4)
+            .await
+            .expect_err("a missing Content-Range must fail closed");
+
+        assert!(error.to_string().contains("missing Content-Range"));
+        assert_eq!(replay.actual_requests().count(), 3);
     }
 
     #[test]
@@ -3897,17 +3971,22 @@ mod tests {
     }
 
     fn get_success_event(bytes: &'static [u8]) -> ReplayEvent {
+        get_range_response(bytes, Some(&format!("bytes 0-{}/5", bytes.len() - 1)))
+    }
+
+    fn get_range_response(bytes: &'static [u8], content_range: Option<&str>) -> ReplayEvent {
+        let mut response = Response::builder()
+            .status(206)
+            .header("content-length", bytes.len());
+        if let Some(content_range) = content_range {
+            response = response.header("content-range", content_range);
+        }
         ReplayEvent::new(
             Request::builder()
                 .uri("https://s3.test/expected")
                 .body(SdkBody::empty())
                 .unwrap(),
-            Response::builder()
-                .status(206)
-                .header("content-length", bytes.len())
-                .header("content-range", format!("bytes 0-{}/5", bytes.len() - 1))
-                .body(SdkBody::from(bytes))
-                .unwrap(),
+            response.body(SdkBody::from(bytes)).unwrap(),
         )
     }
 

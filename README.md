@@ -193,6 +193,9 @@ Previous objects are retained by default. To delete them:
 
 Set `destinationLifecycle.onDelete.deleteCurrentObjects` to `true` only when current destination objects should be removed with the stack or custom resource. Otherwise, omit it.
 
+> [!WARNING]
+> With an omitted `destination.keyPrefix` or `/`, Delete cleanup selects the entire bucket namespace. Shin emits an acknowledgeable synthesis warning for this combination; acknowledge it only when removing every object in the bucket is intended.
+
 ## How It Works
 
 Shin plans extracted assets directly from ranged S3 reads without staging complete archives or entries in Lambda `/tmp`. It compares the deployment plan with the destination, streams changed objects with bounded concurrency and memory, optionally removes stale objects, and then creates any configured CloudFront invalidation. Direct-copy sources use S3 `CopyObject` instead of extraction.

@@ -161,6 +161,11 @@ pub(crate) fn parse_request_with_memory(
     lambda_memory: &str,
 ) -> Result<DeploymentRequest> {
     validate_destination_owner_id(&raw.destination_owner_id)?;
+    validate_distribution_id("DistributionId", raw.distribution_id.as_deref())?;
+    validate_distribution_id(
+        "InvalidatePreviousDistributionOnChange",
+        raw.invalidate_previous_distribution_on_change.as_deref(),
+    )?;
     let source_catalogs = parse_source_catalogs(&raw)?;
     let archive_expansion = archive_expansion_limits(&raw)?;
     let runtime = runtime_options_with_memory(&raw, lambda_memory)?;
@@ -465,6 +470,7 @@ fn validate_u64_range(name: &str, value: u64, minimum: u64, maximum: u64) -> Res
 
 pub(crate) fn parse_old_destination(raw: &RawDeploymentRequest) -> Result<PreviousDestination> {
     validate_destination_owner_id(&raw.destination_owner_id)?;
+    validate_distribution_id("DistributionId", raw.distribution_id.as_deref())?;
     let old_prefix = normalize_destination_prefix(
         raw.destination_bucket_key_prefix
             .clone()
@@ -487,6 +493,16 @@ fn validate_destination_owner_id(owner_id: &str) -> Result<()> {
         !owner_id.is_empty() && !owner_id.contains(':'),
         "DestinationOwnerId must be non-empty and must not contain ':'"
     );
+    Ok(())
+}
+
+fn validate_distribution_id(name: &str, distribution_id: Option<&str>) -> Result<()> {
+    if let Some(distribution_id) = distribution_id {
+        ensure!(
+            !distribution_id.is_empty() && !distribution_id.chars().any(char::is_control),
+            "{name} must be non-empty and must not contain control characters"
+        );
+    }
     Ok(())
 }
 
@@ -944,6 +960,23 @@ mod tests {
             let error = parse_test_request(raw).expect_err("invalid owner identity must fail");
 
             assert!(error.to_string().contains("DestinationOwnerId"));
+        }
+    }
+
+    #[test]
+    fn distribution_ids_must_be_nonempty_and_free_of_control_characters() {
+        for (property, value) in [
+            ("DistributionId", ""),
+            ("DistributionId", "distribution\nforged"),
+            ("InvalidatePreviousDistributionOnChange", "previous\u{7f}"),
+        ] {
+            let mut props = minimal_request();
+            props[property] = json!(value);
+            let raw: RawDeploymentRequest = serde_json::from_value(props).unwrap();
+
+            let error = parse_test_request(raw).expect_err("invalid distribution id must fail");
+
+            assert!(error.to_string().contains(property));
         }
     }
 

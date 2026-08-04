@@ -243,7 +243,7 @@ export function validateDeploymentProps(scope: Construct, props: ShinBucketDeplo
     onChange?.previousBucket,
     "destinationLifecycle.onChange.previousBucket",
   );
-  validateOptionalObjectReference(
+  validateOptionalDistributionReference(
     scope,
     onChange?.invalidatePreviousDistribution,
     "destinationLifecycle.onChange.invalidatePreviousDistribution",
@@ -275,6 +275,15 @@ export function validateDeploymentProps(scope: Construct, props: ShinBucketDeplo
     );
   }
   validateDestinationKeyPrefix(scope, destination.keyPrefix);
+  if (
+    onDelete?.deleteCurrentObjects === true &&
+    destinationOwnerPrefix(destination.keyPrefix as string | undefined) === ""
+  ) {
+    Validations.of(scope).addWarning(
+      "ShinBucketDeploymentRootDelete",
+      "destinationLifecycle.onDelete.deleteCurrentObjects=true with a root destination selects the entire bucket namespace for deletion. Keep this enabled only when deleting every object in the bucket with the custom resource is intended.",
+    );
+  }
 
   if (
     props.destinationLifecycle?.onChange?.previousBucket &&
@@ -294,7 +303,7 @@ export function validateDeploymentProps(scope: Construct, props: ShinBucketDeplo
         scope,
       );
     }
-    validateObjectReference(
+    validateDistributionReference(
       scope,
       cloudfrontInvalidation.distribution,
       "cloudfrontInvalidation.distribution",
@@ -474,6 +483,37 @@ function validateProviderReferences(
   }
 }
 
+function validateOptionalDistributionReference(
+  scope: Construct,
+  value: unknown,
+  path: string,
+): void {
+  if (value === undefined) return;
+  validateDistributionReference(scope, value, path);
+}
+
+function validateDistributionReference(scope: Construct, value: unknown, path: string): void {
+  const distribution = requireObject(scope, value, path);
+  const distributionRef = requireObject(
+    scope,
+    distribution.distributionRef,
+    `${path}.distributionRef`,
+  );
+  const distributionId = distributionRef.distributionId;
+  if (Token.isUnresolved(distributionId)) return;
+  if (
+    typeof distributionId !== "string" ||
+    distributionId.length === 0 ||
+    containsControlCharacter(distributionId)
+  ) {
+    throw invalidValue(
+      scope,
+      `${path}.distributionRef.distributionId`,
+      "a non-empty string without control characters",
+    );
+  }
+}
+
 function validateBundlingProps(
   scope: Construct,
   bundling: Record<string, unknown> | undefined,
@@ -606,6 +646,13 @@ function validateCloudFrontPaths(scope: Construct, paths: unknown): void {
         scope,
       );
     }
+    if (containsControlCharacter(path)) {
+      throw new ValidationError(
+        "ShinBucketDeploymentCloudFrontPathControlCharacter",
+        `cloudfrontInvalidation.paths[${index}] must not contain control characters.`,
+        scope,
+      );
+    }
     if (containsUnsupportedTilde(path)) {
       throw new ValidationError(
         "ShinBucketDeploymentCloudFrontPathTilde",
@@ -614,6 +661,10 @@ function validateCloudFrontPaths(scope: Construct, paths: unknown): void {
       );
     }
   }
+}
+
+function containsControlCharacter(value: string): boolean {
+  return /\p{Cc}/u.test(value);
 }
 
 /**
