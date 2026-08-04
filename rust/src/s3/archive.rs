@@ -909,22 +909,18 @@ impl SourceByteBudget {
 
 impl SourceBudgetWaitGuard {
     fn new(budget: Arc<SourceByteBudget>) -> Self {
-        budget
-            .capacity_waiters
-            .as_ref()
-            .expect("waiter tracking is enabled")
-            .fetch_add(1, Ordering::AcqRel);
+        if let Some(waiters) = &budget.capacity_waiters {
+            waiters.fetch_add(1, Ordering::AcqRel);
+        }
         Self { budget }
     }
 }
 
 impl Drop for SourceBudgetWaitGuard {
     fn drop(&mut self) {
-        self.budget
-            .capacity_waiters
-            .as_ref()
-            .expect("waiter tracking is enabled")
-            .fetch_sub(1, Ordering::AcqRel);
+        if let Some(waiters) = &self.budget.capacity_waiters {
+            waiters.fetch_sub(1, Ordering::AcqRel);
+        }
     }
 }
 
@@ -2153,6 +2149,16 @@ mod tests {
         let result = super::SourceByteBudget::new(0, Arc::new(DeploymentStats::default()), false);
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn disabled_budget_waiter_diagnostics_are_a_noop() {
+        let budget = super::SourceByteBudget::new(64, Arc::new(DeploymentStats::default()), false)
+            .expect("valid source budget");
+
+        drop(super::SourceBudgetWaitGuard::new(Arc::clone(&budget)));
+
+        assert!(budget.capacity_waiters.is_none());
     }
 
     #[test]
