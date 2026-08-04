@@ -54,7 +54,7 @@ The official `BucketDeployment` is a good default for many stacks, but its provi
 ## Benchmark Snapshots
 
 > [!CAUTION]
-> These charts are illustrative, not performance guarantees or guidance for production defaults. They come from one repetition per phase, not a five-repetition median. See [Benchmark](docs/benchmark.md) for the supporting evidence.
+> These charts are illustrative, not performance guarantees or guidance for production defaults. See [Benchmark](docs/benchmark.md) for the supporting evidence.
 
 <img src="https://raw.githubusercontent.com/garysassano/shin-bucket-deployment/main/benchmarks/snapshots/mixed-2048mib-64.svg" alt="ShinBucketDeployment mixed 2048 MiB max concurrency 64 benchmark" width="100%">
 
