@@ -18,6 +18,7 @@ Treat performance as a primary product constraint. Shin must materially outperfo
 - Do not add an unmeasured per-byte or per-object pass, hash, network request, payload copy, allocation, or whole-entry materialization to a normal path.
 - Reuse bytes, digests, listings, and validation work already produced by the transfer path whenever possible.
 - Before merging or releasing a performance-relevant provider change, collect comparable before/after Shin evidence and an upstream AWS CDK baseline with the relevant provider telemetry. If evidence is still pending, say so explicitly instead of presenting the change as performance-accepted.
+- Persist every completed AWS benchmark run used to evaluate a change as validated sanitized rows in `benchmarks/results.jsonl`. Each Shin row must identify the exact clean measured commit in `providerImplementationCommit`. Prefer committing the rows in the same PR before merge; if the benchmark runs after the implementation PR merges, immediately open and merge a follow-up evidence PR. Do not call the workstream complete or performance-accepted until the rows are committed on `main`, the measured commit is an ancestor of the implementation merge commit, and the committed rows retain the run UUID, provenance, telemetry, and cleanup outcome.
 - Keep those measurements in benchmark evidence; correctness scenarios and `docs/verification.md` do not establish a performance win.
 
 Never commit raw AWS evidence or identifiers:

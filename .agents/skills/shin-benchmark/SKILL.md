@@ -167,6 +167,8 @@ Do not parse `summary=...` tracing lines by hand. If parsing fails, fix `benchma
 
 Write one JSON object per measured phase to `benchmarks/results.jsonl`. This file is current-result data for reports and profile snapshots, not append-only history. Rows are upserted by their run, sample, repetition, implementation, configuration, phase, and state identity. There is one methodology and one result schema; rows that do not conform are not readable and belong in `archive/`.
 
+Persist every completed AWS benchmark run used to evaluate a change; accepted evidence must not remain only in external scratch. Each Shin row must carry the full exact clean measured commit in `providerImplementationCommit`. Prefer committing validated sanitized rows in the implementation PR before merge. If benchmarking occurs after that PR merges, immediately create and merge a follow-up evidence PR containing the updated `benchmarks/results.jsonl` and human benchmark page. Do not call the workstream complete or performance-accepted until the rows are present on `main`, the measured commit is verified as an ancestor of the implementation merge commit, and the committed records retain the run UUID, provenance fields, provider telemetry, and definitive cleanup outcome.
+
 Required fields:
 
 - `resultSchemaVersion`
