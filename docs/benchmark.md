@@ -9,7 +9,9 @@ Provider-summary schema-5 result rows, their generated reports, and their chart 
 <!-- benchmark-ci:start -->
 ## Latest Canonical Benchmark
 
-No current provider-summary schema-6 canonical run is published. The active ledger is empty, and reports, telemetry tables, and charts will be regenerated only from a completed approved run. Archived schema-5 evidence is not used for current claims.
+**Repetition 1 only — not a completed canonical run.** The active ledger holds 48 schema-6 rows measuring `main` commit `808f2b6` in `eu-central-1`: `mixed`, `tiny-many`, and `large-few` against upstream AWS CDK `BucketDeployment`, at 1024 MiB / max concurrency 32 and 2048 MiB / max concurrency 64, across `cold-create`, `unchanged-update`, `changed-update`, and `pruned-update`. Every row records provider invocation, CloudWatch `REPORT` metrics, a sanitized provider summary, a clean source tree, and verified stack destruction.
+
+Repetitions 2–5 have not been collected, so this run supports no median, quartile, or ranking claim, and the README charts are rendered in preview mode rather than from a validated complete matrix. `pnpm benchmark:comparison-report` and the snapshot renderers reject an incomplete matrix outside preview mode by design. Archived schema-5 evidence is not used for current claims.
 <!-- benchmark-ci:end -->
 
 ## Methodology

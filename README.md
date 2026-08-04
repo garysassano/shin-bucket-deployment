@@ -51,9 +51,15 @@ The official `BucketDeployment` is a good default for many stacks, but its provi
 | Bounded marker replacement  | Marker-free entries stream directly. Marker entries use deterministic simultaneous replacement with one exact-length planning pass and a second retryable streaming pass only when upload is required; neither pass retains the complete entry or output.                                                                                                  |
 | Safer destination moves     | Opt-in cleanup deploys new content first, infers the previous prefix, and preserves overlapping current namespaces. See [Destination Lifecycle](#destination-lifecycle).                                                                                                                                                                                    |
 
-## Benchmark Evidence
+## Benchmark Snapshot
 
-No current provider-summary schema-6 canonical run is published yet. The next approved canonical run will populate the active benchmark ledger and regenerate the reports and chart. See [Benchmark](docs/benchmark.md) for the methodology and evidence requirements.
+`mixed` (442 files, ~50 MB), `tiny-many` (2584 files, ~7.8 MB), and `large-few` (32 files, ~137 MB) at 2048 MiB / max concurrency 64, one repetition per phase against upstream AWS CDK `BucketDeployment`. Results depend on workload, region, and account conditions; they are evidence, not a guarantee. See [Benchmark](docs/benchmark.md) for the full matrix, telemetry, and methodology.
+
+<img src="https://raw.githubusercontent.com/garysassano/shin-bucket-deployment/main/benchmarks/snapshots/mixed-2048mib-64.svg" alt="ShinBucketDeployment mixed 2048 MiB max concurrency 64 benchmark" width="100%">
+
+<img src="https://raw.githubusercontent.com/garysassano/shin-bucket-deployment/main/benchmarks/snapshots/tiny-many-2048mib-64.svg" alt="ShinBucketDeployment tiny-many 2048 MiB max concurrency 64 benchmark" width="100%">
+
+<img src="https://raw.githubusercontent.com/garysassano/shin-bucket-deployment/main/benchmarks/snapshots/large-few-2048mib-64.svg" alt="ShinBucketDeployment large-few 2048 MiB max concurrency 64 benchmark" width="100%">
 
 ## Construct API
 
