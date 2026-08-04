@@ -492,6 +492,29 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     }).toThrow(/cloudfrontInvalidation\.distribution is required/);
   });
 
+  test("rejects malformed concrete CloudFront distribution references", () => {
+    const invalidDistributions: unknown[] = [
+      {},
+      { distributionRef: {} },
+      { distributionRef: { distributionId: "" } },
+      { distributionRef: { distributionId: "distribution\nforged" } },
+    ];
+
+    for (const [index, distribution] of invalidDistributions.entries()) {
+      const stack = new Stack();
+      const destinationBucket = new Bucket(stack, `Dest${index}`);
+
+      expect(
+        () =>
+          new ShinBucketDeployment(stack, `Deploy${index}`, {
+            sources: [Source.data("index.html", "ok")],
+            destination: { bucket: destinationBucket },
+            cloudfrontInvalidation: { distribution, paths: ["/*"] } as never,
+          }),
+      ).toThrow(/cloudfrontInvalidation\.distribution\.distributionRef/);
+    }
+  });
+
   test("throws when a distribution path does not start with a slash", () => {
     const stack = new Stack();
     const destinationBucket = new Bucket(stack, "Dest");
@@ -528,6 +551,8 @@ describe("ShinBucketDeployment validation and option coverage", () => {
       [["/~user/*"], /must not contain "~"/],
       [["/a/%7Euser/*"], /must not contain "~"/],
       [["/a/%7euser/*"], /must not contain "~"/],
+      [["/line\nbreak"], /must not contain control characters/],
+      [["/delete\u007f"], /must not contain control characters/],
     ];
 
     for (const [index, [paths, expected]] of invalidPaths.entries()) {
@@ -1061,6 +1086,47 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     Annotations.fromStack(stack).hasNoWarning(
       "/GuidanceBoundary/Deploy",
       Match.stringLikeRegexp("transfer\\.maxConcurrency"),
+    );
+  });
+
+  test.each([
+    undefined,
+    "/",
+  ])("warns when Delete cleanup selects the whole bucket for root prefix %s", (keyPrefix) => {
+    const app = new App();
+    const stack = new Stack(app, "RootDelete");
+    const destinationBucket = new Bucket(stack, "Dest");
+
+    new ShinBucketDeployment(stack, "Deploy", {
+      sources: [Source.data("index.html", "ok")],
+      destination: { bucket: destinationBucket, keyPrefix },
+      destinationLifecycle: { onDelete: { deleteCurrentObjects: true } },
+      providerLambda: { localBuild: testLocalProviderBuild() },
+    });
+
+    Annotations.fromStack(stack).hasWarning(
+      "/RootDelete/Deploy",
+      Match.stringLikeRegexp(
+        "deleteCurrentObjects=true with a root destination selects the entire bucket namespace",
+      ),
+    );
+  });
+
+  test("does not warn about Delete cleanup for a bounded prefix", () => {
+    const app = new App();
+    const stack = new Stack(app, "BoundedDelete");
+    const destinationBucket = new Bucket(stack, "Dest");
+
+    new ShinBucketDeployment(stack, "Deploy", {
+      sources: [Source.data("index.html", "ok")],
+      destination: { bucket: destinationBucket, keyPrefix: "site" },
+      destinationLifecycle: { onDelete: { deleteCurrentObjects: true } },
+      providerLambda: { localBuild: testLocalProviderBuild() },
+    });
+
+    Annotations.fromStack(stack).hasNoWarning(
+      "/BoundedDelete/Deploy",
+      Match.stringLikeRegexp("selects the entire bucket namespace"),
     );
   });
 

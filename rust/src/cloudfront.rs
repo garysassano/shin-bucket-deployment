@@ -148,6 +148,11 @@ pub(crate) fn validate_invalidation_paths(paths: &[String]) -> Result<i32> {
             index + 1
         );
         ensure!(
+            !path.chars().any(char::is_control),
+            "CloudFront invalidation path {} contains a control character",
+            index + 1
+        );
+        ensure!(
             !contains_unsupported_tilde(path),
             "CloudFront invalidation path {} contains `~`, which CloudFront does not support for invalidations, URL-encoded or not",
             index + 1
@@ -222,6 +227,16 @@ mod tests {
             validate_invalidation_paths(&["/a/%7.txt".to_string()]).expect("valid path"),
             1
         );
+    }
+
+    #[test]
+    fn invalidation_paths_reject_control_characters() {
+        for path in ["/line\nbreak", "/delete\u{7f}", "/c1\u{85}"] {
+            assert!(
+                validate_invalidation_paths(&[path.to_string()]).is_err(),
+                "`{path:?}` must be rejected"
+            );
+        }
     }
 
     #[test]

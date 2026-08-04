@@ -16,6 +16,9 @@ async-compression = { version = "0.4", default-features = false, features = [
   "tokio",
   "deflate",
 ] }
+# Keep the 0.0.20 floor: bounded external ZIP planning and the Info-ZIP/Python ZIP64
+# fixtures were introduced against this Astral fork release. Track both the fork and
+# upstream async_zip before upgrades because this pre-1.0 parser consumes untrusted metadata.
 async_zip = { package = "astral_async_zip", version = "0.0.20", features = [
   "tokio",
   "deflate",
@@ -84,10 +87,11 @@ zip = { version = "8", default-features = false, features = [
 #
 # - `panic = "abort"`: the scheduler and archive readers rely on `catch_unwind` to turn a
 #   worker panic into a reported failure instead of a hung CloudFormation stack.
-# - `strip = "symbols"`: the provider Lambda runs with `RUST_BACKTRACE=1`, and a stripped
-#   symbol table reduces those backtraces to bare addresses on a runtime nobody can attach
-#   a debugger to. `strip = "debuginfo"` keeps the names and gives up ~4 MiB against
-#   `"symbols"` (x86_64 host build: 30.4 MB unset, 20.9 MB debuginfo, 16.9 MB symbols).
+# - `strip = "symbols"`: detailed failure diagnostics run the provider Lambda with
+#   `RUST_BACKTRACE=1`, and a stripped symbol table reduces those opt-in backtraces to bare
+#   addresses on a runtime nobody can attach a debugger to. `strip = "debuginfo"` keeps the
+#   names and gives up ~4 MiB against `"symbols"` (x86_64 host build: 30.4 MB unset,
+#   20.9 MB debuginfo, 16.9 MB symbols).
 [profile.release]
 lto = "thin"
 codegen-units = 1

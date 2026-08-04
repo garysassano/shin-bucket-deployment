@@ -368,11 +368,7 @@ test("detailed failure diagnostics are opt-in and select a distinct shared handl
 
   expect(defaultDeployment.handlerFunction).not.toBe(diagnosticDeployment.handlerFunction);
   Template.fromStack(stack).hasResourceProperties("AWS::Lambda::Function", {
-    Environment: {
-      Variables: {
-        RUST_BACKTRACE: "1",
-      },
-    },
+    Environment: Match.absent(),
   });
   Template.fromStack(stack).hasResourceProperties("AWS::Lambda::Function", {
     Environment: {

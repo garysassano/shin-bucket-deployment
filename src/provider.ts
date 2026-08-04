@@ -106,12 +106,13 @@ export function getOrCreateHandler(scope: Construct, config: ProviderLambdaConfi
     vpcSubnets: config.vpcSubnets,
     securityGroups:
       config.securityGroups && config.securityGroups.length > 0 ? config.securityGroups : undefined,
-    environment: {
-      RUST_BACKTRACE: "1",
-      ...(config.failureDiagnostics === FailureDiagnostics.DETAILED
-        ? { SHIN_DETAILED_FAILURE_DIAGNOSTICS: "true" }
-        : {}),
-    },
+    environment:
+      config.failureDiagnostics === FailureDiagnostics.DETAILED
+        ? {
+            RUST_BACKTRACE: "1",
+            SHIN_DETAILED_FAILURE_DIAGNOSTICS: "true",
+          }
+        : {},
     logGroup: config.logGroup,
   };
 
