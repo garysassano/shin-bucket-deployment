@@ -331,9 +331,7 @@ export function renderHandlerConfigHashInput(
     role: normalizeSingletonValue(config.role),
     securityGroups:
       config.securityGroups && config.securityGroups.length > 0
-        ? [...config.securityGroups]
-            .map((securityGroup) => normalizeSingletonValue(securityGroup))
-            .sort()
+        ? config.securityGroups.map((securityGroup) => securityGroup.node.addr).sort()
         : undefined,
     stack: stack.node.addr,
     vpc: normalizeSingletonValue(config.vpc),
