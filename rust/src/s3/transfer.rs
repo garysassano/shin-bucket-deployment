@@ -43,7 +43,7 @@ use super::destination::{
 };
 use super::planner::{CopyPlan, ZipEntryPlan};
 use super::{S3_SINGLE_PUT_LIMIT, ZIP_ENTRY_READ_CHUNK_BYTES, source_window_bytes_for_archive};
-use crate::util::{duration_ms, finalize_md5, lower_hex};
+use crate::util::{duration_ms, finalize_md5, lock_telemetry, lower_hex};
 
 mod scheduler;
 
@@ -1348,10 +1348,7 @@ impl WriteDiagnostics {
             self.throttled_attempts.fetch_add(1, Ordering::Relaxed);
         }
         let code = write_error_code(error).unwrap_or_else(|| write_error_kind(error).to_string());
-        let mut failures = self
-            .failures_by_error_code
-            .lock()
-            .expect("write diagnostics mutex should not be poisoned");
+        let mut failures = lock_telemetry(&self.failures_by_error_code);
         *failures.entry(code).or_default() += 1;
     }
 
@@ -1436,10 +1433,7 @@ impl WriteDiagnostics {
         };
         log_put_attempt_failure(&failure);
 
-        let mut failures = detailed
-            .failure_states
-            .lock()
-            .expect("PutObject failure-state mutex should not be poisoned");
+        let mut failures = lock_telemetry(&detailed.failure_states);
         if let Some(existing) = failures
             .iter_mut()
             .find(|existing| same_failure_signature(existing, &failure))
@@ -1465,37 +1459,21 @@ impl WriteDiagnostics {
             throttle_cooldown_wait_millis: self
                 .throttle_cooldown_wait_millis
                 .load(Ordering::Relaxed),
-            failures_by_error_code: self
-                .failures_by_error_code
-                .lock()
-                .expect("write diagnostics mutex should not be poisoned")
-                .clone(),
-            failures_by_sdk_error_kind: self.detailed.as_ref().map_or_else(
-                BTreeMap::new,
-                |detailed| {
-                    detailed
-                        .failures_by_sdk_error_kind
-                        .lock()
-                        .expect("write diagnostics SDK-kind mutex should not be poisoned")
-                        .clone()
-                },
-            ),
-            failures_by_service_code: self.detailed.as_ref().map_or_else(
-                BTreeMap::new,
-                |detailed| {
-                    detailed
-                        .failures_by_service_code
-                        .lock()
-                        .expect("write diagnostics service-code mutex should not be poisoned")
-                        .clone()
-                },
-            ),
+            failures_by_error_code: lock_telemetry(&self.failures_by_error_code).clone(),
+            failures_by_sdk_error_kind: self
+                .detailed
+                .as_ref()
+                .map_or_else(BTreeMap::new, |detailed| {
+                    lock_telemetry(&detailed.failures_by_sdk_error_kind).clone()
+                }),
+            failures_by_service_code: self
+                .detailed
+                .as_ref()
+                .map_or_else(BTreeMap::new, |detailed| {
+                    lock_telemetry(&detailed.failures_by_service_code).clone()
+                }),
             failure_states: self.detailed.as_ref().map_or_else(Vec::new, |detailed| {
-                detailed
-                    .failure_states
-                    .lock()
-                    .expect("write diagnostics failure-state mutex should not be poisoned")
-                    .clone()
+                lock_telemetry(&detailed.failure_states).clone()
             }),
             failure_state_overflow_attempts: self.detailed.as_ref().map_or(0, |detailed| {
                 detailed
@@ -1553,9 +1531,7 @@ impl PutObjectFailureSourceStats {
 }
 
 fn record_bounded_diagnostic_count(target: &Mutex<BTreeMap<String, u64>>, label: String) {
-    let mut counts = target
-        .lock()
-        .expect("write diagnostic count mutex should not be poisoned");
+    let mut counts = lock_telemetry(target);
     if let Some(count) = counts.get_mut(&label) {
         *count = count.saturating_add(1);
     } else if label != OTHER_DIAGNOSTIC_LABEL
@@ -1865,6 +1841,7 @@ where
 mod tests {
     use std::collections::{BTreeMap, HashMap};
     use std::io::{Cursor, Write};
+    use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::sync::{Arc, Mutex};
 
     use anyhow::Result;
@@ -1891,10 +1868,10 @@ mod tests {
         CopyOutcome, PutContext, UploadPayload, WriteDiagnostics, WriteDiagnosticsSnapshot,
         WriteRetryCoordinator, catalog_skips_zip_entry, comparison_spool_limit_bytes,
         compile_marker_replacements, copy_reconciliation_identity, copy_source_object,
-        digest_async_reader, dispatch_failure_kind, log_copy_diagnostics, md5_hex, quoted_etag,
-        read_async_reader_to_vec, record_bounded_diagnostic_count, record_copy_outcome,
-        sanitize_diagnostic_label, serialize_put_attempt_failure, should_compare_marker_free_entry,
-        upload_payload, write_error_kind, write_retry_cap_millis,
+        digest_async_reader, dispatch_failure_kind, log_copy_diagnostics, log_put_diagnostics,
+        md5_hex, quoted_etag, read_async_reader_to_vec, record_bounded_diagnostic_count,
+        record_copy_outcome, sanitize_diagnostic_label, serialize_put_attempt_failure,
+        should_compare_marker_free_entry, upload_payload, write_error_kind, write_retry_cap_millis,
     };
 
     #[derive(Clone, Default)]
@@ -1931,6 +1908,36 @@ mod tests {
                 .with_ansi(false)
                 .with_writer(writer),
         )
+    }
+
+    fn poison_telemetry<T>(telemetry: &Mutex<T>) {
+        let panic = catch_unwind(AssertUnwindSafe(|| {
+            let _guard = telemetry.lock().expect("initial telemetry lock");
+            panic!("injected telemetry writer panic");
+        }));
+        assert!(panic.is_err());
+        assert!(telemetry.is_poisoned());
+    }
+
+    #[test]
+    fn pre_callback_put_diagnostics_aggregate_after_telemetry_poisoning() {
+        let diagnostics = WriteDiagnostics::new(true);
+        poison_telemetry(&diagnostics.failures_by_error_code);
+        let detailed = diagnostics
+            .detailed
+            .as_ref()
+            .expect("detailed diagnostics enabled");
+        poison_telemetry(&detailed.failures_by_sdk_error_kind);
+        poison_telemetry(&detailed.failures_by_service_code);
+        poison_telemetry(&detailed.failure_states);
+
+        let stats = DeploymentStats::new(true);
+        log_put_diagnostics(&test_retry_options(), &diagnostics, &stats);
+
+        assert!(diagnostics.failures_by_error_code.is_poisoned());
+        assert!(detailed.failures_by_sdk_error_kind.is_poisoned());
+        assert!(detailed.failures_by_service_code.is_poisoned());
+        assert!(detailed.failure_states.is_poisoned());
     }
 
     #[test]

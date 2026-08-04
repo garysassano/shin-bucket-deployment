@@ -3270,12 +3270,12 @@ mod tests {
             .unwrap();
         assert!(!expected.is_empty());
 
-        // Every block size that puts a boundary strictly inside the 30-byte header, so the
-        // split lands on a different header byte each iteration. These sizes are below
+        // Every block size that puts the first boundary strictly inside the 30-byte header,
+        // so the split lands after a different header byte each iteration. These sizes are below
         // `MIN_SOURCE_BLOCK_BYTES` and the current planner never emits such a split at all
         // (see `read_local_file_header`); they are the only way to drive the stitching
         // path, which exists so a future coalescing change cannot resurrect the failure.
-        for block_bytes in 4..LOCAL_FILE_HEADER_LEN {
+        for block_bytes in 1..LOCAL_FILE_HEADER_LEN {
             let store = ready_store_for_plan_with_block_bytes(&zip, &plan, block_bytes);
             assert!(
                 store.blocks.len() > 1,
