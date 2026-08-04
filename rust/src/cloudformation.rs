@@ -680,18 +680,14 @@ async fn process_request_inner(
     if should_invalidate_current
         && let Some(distribution_id) = non_empty(request.distribution_id.as_deref())
     {
-        let distribution_paths = if previous_content_changed
-            && previous_destination
-                .is_some_and(|previous| previous.distribution_id == request.distribution_id)
-        {
-            merge_distribution_paths(
-                &request.distribution_paths,
-                &previous_destination
-                    .expect("checked above")
-                    .distribution_paths,
-            )
-        } else {
-            request.distribution_paths.clone()
+        let distribution_paths = match previous_destination {
+            Some(previous)
+                if previous_content_changed
+                    && previous.distribution_id == request.distribution_id =>
+            {
+                merge_distribution_paths(&request.distribution_paths, &previous.distribution_paths)
+            }
+            _ => request.distribution_paths.clone(),
         };
 
         invalidate_distribution(

@@ -136,7 +136,7 @@ pub(crate) async fn deploy(
         request.runtime.source_memory_budget_bytes,
         Arc::clone(&stats),
         state.detailed_failure_diagnostics,
-    );
+    )?;
 
     let filters = compile_filters(&request.exclude, &request.include)?;
     let (archives, deployment_manifest) = timeout_at(
