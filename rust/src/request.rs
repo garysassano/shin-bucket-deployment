@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -132,22 +133,14 @@ pub(crate) struct RawDeploymentRequest {
 }
 
 impl Filters {
+    /// Excluded keys can be re-included, so the include patterns only matter once a key
+    /// has actually been excluded. Running both lists to completion for every planned
+    /// entry, as this used to, is wasted work on the phase that dominates both fast paths.
     pub(crate) fn should_include(&self, key: &str) -> bool {
-        let mut included = true;
-
-        for matcher in &self.exclude {
-            if matcher.is_match(key) {
-                included = false;
-            }
+        if !self.exclude.iter().any(|matcher| matcher.is_match(key)) {
+            return true;
         }
-
-        for matcher in &self.include {
-            if matcher.is_match(key) {
-                included = true;
-            }
-        }
-
-        included
+        self.include.iter().any(|matcher| matcher.is_match(key))
     }
 }
 
@@ -476,7 +469,15 @@ pub(crate) fn normalize_destination_prefix(prefix: String) -> String {
     if prefix == "/" { String::new() } else { prefix }
 }
 
-pub(crate) fn normalize_archive_key(raw: &str) -> Result<String> {
+/// Borrows when the entry path is already canonical, which is the overwhelmingly common
+/// case. A trusted-catalog plan normalizes every entry three times (catalog entry scan,
+/// catalog/ZIP set comparison, and the planning loop), and the owning form allocated a
+/// replacement string, a parts vector, and a joined string on each of them.
+pub(crate) fn normalize_archive_key(raw: &str) -> Result<Cow<'_, str>> {
+    if is_canonical_archive_key(raw) {
+        return Ok(Cow::Borrowed(raw));
+    }
+
     let normalized = raw.replace('\\', "/");
     let mut parts = Vec::new();
 
@@ -494,7 +495,18 @@ pub(crate) fn normalize_archive_key(raw: &str) -> Result<String> {
         return Err(anyhow!("archive entry resolved to an empty key: {raw}"));
     }
 
-    Ok(parts.join("/"))
+    Ok(Cow::Owned(parts.join("/")))
+}
+
+/// True when normalization would return `raw` unchanged. `..` is deliberately excluded so
+/// a traversal attempt falls through to the owning path and is rejected there.
+fn is_canonical_archive_key(raw: &str) -> bool {
+    !raw.is_empty()
+        && !raw.contains('\\')
+        && !raw.starts_with('/')
+        && !raw.ends_with('/')
+        && !raw.contains("//")
+        && raw.split('/').all(|part| part != "." && part != "..")
 }
 
 pub(crate) fn source_basename(key: &str) -> Result<String> {
@@ -695,6 +707,54 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn filters_keep_exclude_then_reinclude_semantics_while_short_circuiting() {
+        let filters = compile_filters(
+            &["assets/**".to_string(), "*.map".to_string()],
+            &["assets/keep/**".to_string()],
+        )
+        .expect("valid globs");
+
+        assert!(filters.should_include("index.html"));
+        assert!(!filters.should_include("assets/app.js"));
+        assert!(filters.should_include("assets/keep/app.js"));
+        assert!(!filters.should_include("app.js.map"));
+
+        // Include patterns must not promote a key that was never excluded, and must not be
+        // consulted at all for such a key.
+        let include_only =
+            compile_filters(&[], &["assets/keep/**".to_string()]).expect("valid globs");
+        assert!(include_only.should_include("anything.txt"));
+    }
+
+    #[test]
+    fn canonical_archive_keys_are_borrowed_and_non_canonical_ones_normalized() {
+        assert!(matches!(
+            normalize_archive_key("assets/app.js").expect("canonical"),
+            Cow::Borrowed("assets/app.js")
+        ));
+        assert!(matches!(
+            normalize_archive_key("a.b-c_d/e.txt").expect("canonical"),
+            Cow::Borrowed(_)
+        ));
+
+        for (raw, expected) in [
+            ("assets\\app.js", "assets/app.js"),
+            ("/leading/app.js", "leading/app.js"),
+            ("a//b/./c.txt", "a/b/c.txt"),
+            ("dir/", "dir"),
+        ] {
+            let normalized = normalize_archive_key(raw).expect("normalizable");
+            assert_eq!(normalized, expected, "{raw}");
+            assert!(matches!(normalized, Cow::Owned(_)), "{raw}");
+        }
+
+        assert!(normalize_archive_key("../escape.txt").is_err());
+        assert!(normalize_archive_key("a/../../escape.txt").is_err());
+        assert!(normalize_archive_key("").is_err());
+        assert!(normalize_archive_key("/").is_err());
+    }
 
     fn minimal_request() -> serde_json::Value {
         json!({

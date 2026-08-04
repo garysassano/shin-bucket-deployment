@@ -179,13 +179,29 @@ async fn delete_namespace(
     .await
 }
 
-pub(crate) async fn bucket_has_competing_owner(
+/// The bucket's ownership tag keys, read once so several namespace checks against the same
+/// bucket share one `GetBucketTagging` call.
+pub(super) struct BucketOwnerTags {
+    keys: Vec<String>,
+}
+
+impl BucketOwnerTags {
+    pub(super) fn has_competing_owner(
+        &self,
+        prefix: &str,
+        excluded_prefix: Option<&str>,
+        current_owner_id: Option<&str>,
+    ) -> bool {
+        self.keys
+            .iter()
+            .any(|key| owner_tag_overlaps_cleanup(key, prefix, excluded_prefix, current_owner_id))
+    }
+}
+
+pub(super) async fn read_bucket_owner_tags(
     state: &AppState,
     bucket: &str,
-    prefix: &str,
-    excluded_prefix: Option<&str>,
-    current_owner_id: Option<&str>,
-) -> Result<bool> {
+) -> Result<BucketOwnerTags> {
     match state
         .destination_s3
         .get_bucket_tagging()
@@ -193,16 +209,20 @@ pub(crate) async fn bucket_has_competing_owner(
         .send()
         .await
     {
-        Ok(response) => Ok(response.tag_set().iter().any(|tag| {
-            owner_tag_overlaps_cleanup(tag.key(), prefix, excluded_prefix, current_owner_id)
-        })),
+        Ok(response) => Ok(BucketOwnerTags {
+            keys: response
+                .tag_set()
+                .iter()
+                .map(|tag| tag.key().to_owned())
+                .collect(),
+        }),
         Err(err)
             if err
                 .as_service_error()
                 .and_then(|service_err| service_err.code())
                 .is_some_and(|code| matches!(code, "NoSuchTagSet" | "NoSuchBucket")) =>
         {
-            Ok(false)
+            Ok(BucketOwnerTags { keys: Vec::new() })
         }
         Err(err) => {
             warn!(error = %err, bucket, "failed to read bucket tags");
@@ -213,6 +233,18 @@ pub(crate) async fn bucket_has_competing_owner(
             })
         }
     }
+}
+
+pub(crate) async fn bucket_has_competing_owner(
+    state: &AppState,
+    bucket: &str,
+    prefix: &str,
+    excluded_prefix: Option<&str>,
+    current_owner_id: Option<&str>,
+) -> Result<bool> {
+    Ok(read_bucket_owner_tags(state, bucket)
+        .await?
+        .has_competing_owner(prefix, excluded_prefix, current_owner_id))
 }
 
 pub(super) async fn plan_destination(
@@ -315,47 +347,44 @@ pub(super) async fn delete_stale_objects(
     let delete_previous_stale =
         previous_cleanup_prefix.is_some() && destination_plan.previous_stale.has_candidates();
 
-    let current_cleanup_authorized = if delete_current_stale {
-        if bucket_has_competing_owner(
-            state,
-            &request.dest_bucket_name,
-            &request.dest_bucket_prefix,
-            protected_prefix,
-            request.destination_owner_id.as_deref(),
-        )
-        .await?
+    // Both checks below are against the same destination bucket, so read its ownership tags
+    // once instead of issuing a second GetBucketTagging round trip for the previous prefix.
+    let owner_tags = if delete_current_stale || delete_previous_stale {
+        Some(read_bucket_owner_tags(state, &request.dest_bucket_name).await?)
+    } else {
+        None
+    };
+
+    let current_cleanup_authorized = match owner_tags.as_ref().filter(|_| delete_current_stale) {
+        Some(tags)
+            if tags.has_competing_owner(
+                &request.dest_bucket_prefix,
+                protected_prefix,
+                request.destination_owner_id.as_deref(),
+            ) =>
         {
             warn!(
                 "stale destination objects retained because another custom resource owns an overlapping namespace"
             );
             false
-        } else {
-            true
         }
-    } else {
-        false
+        Some(_) => true,
+        None => false,
     };
-    let previous_cleanup_authorized = if let Some(prefix) = previous_cleanup_prefix
-        && delete_previous_stale
+    let previous_cleanup_authorized = match previous_cleanup_prefix
+        .filter(|_| delete_previous_stale)
+        .zip(owner_tags.as_ref())
     {
-        if bucket_has_competing_owner(
-            state,
-            &request.dest_bucket_name,
-            prefix,
-            None,
-            request.destination_owner_id.as_deref(),
-        )
-        .await?
+        Some((prefix, tags))
+            if tags.has_competing_owner(prefix, None, request.destination_owner_id.as_deref()) =>
         {
             warn!(
                 "previous destination retained because another custom resource owns an overlapping namespace"
             );
             false
-        } else {
-            true
         }
-    } else {
-        false
+        Some(_) => true,
+        None => false,
     };
     if !current_cleanup_authorized && !previous_cleanup_authorized {
         return Ok(());

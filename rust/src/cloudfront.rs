@@ -8,6 +8,9 @@ use tokio::time::{Instant, sleep_until, timeout_at};
 use crate::types::AppState;
 
 const INVALIDATION_POLL_INTERVAL: Duration = Duration::from_secs(20);
+/// Jitter added to each poll so that stacks deploying many distributions at once do not
+/// settle into one synchronized 20-second GetInvalidation cadence.
+const INVALIDATION_POLL_JITTER: Duration = Duration::from_secs(5);
 const MAX_INVALIDATION_PATH_CHARACTERS: usize = 4_000;
 
 pub(crate) async fn invalidate(
@@ -65,6 +68,10 @@ pub(crate) async fn invalidate(
         .ok_or_else(|| anyhow!("CreateInvalidation response did not include an invalidation id"))?;
 
     loop {
+        // Poll after waiting, not before. CreateInvalidation always returns `InProgress`,
+        // so the pre-existing immediate first poll was a guaranteed-useless round trip.
+        sleep_until(next_poll_at(Instant::now(), deadline)?).await;
+
         let status = match timeout_at(
             deadline,
             state
@@ -98,9 +105,6 @@ pub(crate) async fn invalidate(
         if completed {
             return Ok(());
         }
-
-        let next_poll = next_poll_at(Instant::now(), deadline)?;
-        sleep_until(next_poll).await;
     }
 }
 
@@ -109,14 +113,19 @@ fn next_poll_at(now: Instant, deadline: Instant) -> Result<Instant> {
         now < deadline,
         "CloudFront invalidation polling exceeded the deployment work deadline"
     );
-    let next_poll = now
-        .checked_add(INVALIDATION_POLL_INTERVAL)
-        .unwrap_or(deadline);
+    let next_poll = now.checked_add(poll_interval()).unwrap_or(deadline);
     ensure!(
         next_poll < deadline,
         "CloudFront invalidation did not complete before the deployment work deadline"
     );
     Ok(next_poll)
+}
+
+fn poll_interval() -> Duration {
+    INVALIDATION_POLL_INTERVAL
+        + Duration::from_millis(fastrand::u64(
+            0..=INVALIDATION_POLL_JITTER.as_millis() as u64,
+        ))
 }
 
 pub(crate) fn validate_invalidation_paths(paths: &[String]) -> Result<i32> {
@@ -173,8 +182,8 @@ mod tests {
     use tokio::time::Instant;
 
     use super::{
-        INVALIDATION_POLL_INTERVAL, MAX_INVALIDATION_PATH_CHARACTERS, invalidation_quantity,
-        next_poll_at, validate_invalidation_paths,
+        INVALIDATION_POLL_INTERVAL, INVALIDATION_POLL_JITTER, MAX_INVALIDATION_PATH_CHARACTERS,
+        invalidation_quantity, next_poll_at, poll_interval, validate_invalidation_paths,
     };
 
     #[test]
@@ -227,15 +236,24 @@ mod tests {
     #[test]
     fn invalidation_polling_never_sleeps_to_or_past_the_work_deadline() {
         let now = Instant::now();
-        assert_eq!(
-            next_poll_at(
-                now,
-                now + INVALIDATION_POLL_INTERVAL + Duration::from_secs(1)
-            )
-            .expect("room for another poll"),
-            now + INVALIDATION_POLL_INTERVAL
-        );
+        let generous_deadline =
+            now + INVALIDATION_POLL_INTERVAL + INVALIDATION_POLL_JITTER + Duration::from_secs(1);
+        let next = next_poll_at(now, generous_deadline).expect("room for another poll");
+
+        assert!(next >= now + INVALIDATION_POLL_INTERVAL);
+        assert!(next <= now + INVALIDATION_POLL_INTERVAL + INVALIDATION_POLL_JITTER);
+        // The jitter only ever delays a poll, so the un-jittered interval is still the
+        // earliest possible wake-up and remains a valid deadline boundary.
         assert!(next_poll_at(now, now + INVALIDATION_POLL_INTERVAL).is_err());
         assert!(next_poll_at(now, now).is_err());
+    }
+
+    #[test]
+    fn invalidation_poll_interval_stays_within_its_jitter_band() {
+        for _ in 0..64 {
+            let interval = poll_interval();
+            assert!(interval >= INVALIDATION_POLL_INTERVAL);
+            assert!(interval <= INVALIDATION_POLL_INTERVAL + INVALIDATION_POLL_JITTER);
+        }
     }
 }
