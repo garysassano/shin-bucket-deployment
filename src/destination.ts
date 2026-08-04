@@ -116,8 +116,8 @@ function unsupportedDestinationKmsEncryption(scope: Construct): ValidationError 
 /**
  * Raised when the installed `aws-cdk-lib` no longer renders a `CfnBucket` in the
  * shape this construct inspects. Kept separate from
- * {@link unsupportedDestinationEncryption} so a CDK compatibility break is never
- * mistaken for an unsupported bucket configuration.
+ * {@link unsupportedDestinationEncryption} so an unavailable rendering contract
+ * is not mistaken for an unsupported bucket configuration.
  */
 function unsupportedCdkRendering(scope: Construct, cause?: unknown): ValidationError {
   const error = new ValidationError(

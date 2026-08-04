@@ -51,7 +51,7 @@ const RUNTIME_COLUMNS: Array<Column<TelemetryRow>> = [
   { header: "Request", value: (row) => row.summary.requestType },
   {
     header: "Deployment work",
-    value: (row) => row.summary.deploymentStatus ?? row.summary.status,
+    value: (row) => row.summary.deploymentStatus,
   },
   { header: "Files", value: (row) => row.record.fileCount },
   { header: "Bytes", value: (row) => row.record.totalBytes },
@@ -64,7 +64,6 @@ const RUNTIME_COLUMNS: Array<Column<TelemetryRow>> = [
   { header: "Max memory MiB", value: (row) => row.record.maxMemoryMb },
   { header: "Available MiB", value: (row) => row.summary.availableMemoryMb },
   { header: "Max concurrency", value: (row) => row.summary.maxParallelTransfers },
-  { header: "Checksum strategy", value: (row) => row.summary.destinationChecksumStrategy },
   { header: "Row", value: (row) => row.line },
 ];
 
@@ -215,8 +214,7 @@ const PUT_COLUMNS: Array<Column<TelemetryRow>> = [
 ];
 
 // Direct-copy (`extract:false`) deployments report their retry and throttle pressure
-// here rather than under `putObject`. Rows older than diagnostics schema v5 have no
-// `copyObject` section and render as unavailable.
+// here rather than under `putObject`.
 const COPY_COLUMNS: Array<Column<TelemetryRow>> = [
   { header: "Phase", value: phase },
   { header: "Wire attempts", value: (row) => nested(row, "copyObject", "wireAttempts") },

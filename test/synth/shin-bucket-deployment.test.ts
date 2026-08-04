@@ -166,7 +166,7 @@ test("stages the packaged provider archive byte-for-byte as a file asset", () =>
   }
 });
 
-test("reuses a shared prebuilt handler for compatible deployments", () => {
+test("reuses a shared prebuilt handler for identical provider configuration", () => {
   const cleanup = ensurePrebuiltBootstrapAssets();
   try {
     const stack = new Stack();
@@ -390,7 +390,7 @@ test("Source.asset emits an embedded catalog for directory assets", () => {
   }
 });
 
-test("reuses a shared handler for compatible deployments in the same stack", () => {
+test("reuses a shared handler for identical provider configuration in the same stack", () => {
   const stack = new Stack();
   const firstBucket = new Bucket(stack, "FirstDest");
   const secondBucket = new Bucket(stack, "SecondDest");

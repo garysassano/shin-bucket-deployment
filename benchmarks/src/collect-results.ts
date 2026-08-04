@@ -13,8 +13,6 @@ import {
 import { upsertBenchmarkRecord } from "./persistence";
 
 export type CollectBenchmarkOptions = {
-  readonly resultSchemaVersion?: number;
-  readonly methodologyVersion?: 2;
   readonly runId?: string;
   readonly sampleId?: string;
   readonly assetProfile?: string;
@@ -110,8 +108,6 @@ const CLI_OPTIONS = [
   "cleanup",
   "comparison-variant",
   "commit",
-  "result-schema-version",
-  "methodology-version",
   "run-id",
   "sample-id",
   "provider-package-name",
@@ -166,49 +162,36 @@ function main(): void {
 
 export function collectBenchmarkResult(options: CollectBenchmarkOptions): BenchmarkResultRecord {
   const logText = readFileSync(options.logFile, "utf8");
-  const strictEvidence = options.methodologyVersion === 2;
   const implementation = normalizeImplementation(
     options.implementation ?? outputString(logText, "BenchmarkImplementation"),
   );
-  const report = options.reportFile
-    ? readReportFile(options.reportFile, strictEvidence)
-    : undefined;
-  const summaryEvidence = options.summaryFile
-    ? readSummaryFile(options.summaryFile, strictEvidence)
-    : undefined;
-  if (strictEvidence && report === undefined) {
+  const report = options.reportFile ? readReportFile(options.reportFile) : undefined;
+  const summaryEvidence = options.summaryFile ? readSummaryFile(options.summaryFile) : undefined;
+  if (report === undefined) {
     throw new Error("Methodology-v2 collection requires one complete CloudWatch REPORT event.");
   }
-  if (strictEvidence && implementation === "shin" && summaryEvidence === undefined) {
+  if (implementation === "shin" && summaryEvidence === undefined) {
     throw new Error("Methodology-v2 Shin collection requires one provider summary event.");
   }
-  if (strictEvidence && summaryEvidence !== undefined && report !== undefined) {
+  if (summaryEvidence !== undefined) {
     assertCorrelatedTelemetry(report, summaryEvidence);
-  }
-  if (strictEvidence && summaryEvidence !== undefined) {
     const summaryErrors = providerSummaryErrors(summaryEvidence.summary);
     if (summaryErrors.length > 0) {
       throw new Error(`Invalid methodology-v2 provider summary: ${summaryErrors.join("; ")}`);
     }
   }
-  if (strictEvidence) {
-    assertObservedOutputs(logText, options, implementation);
-    if (report?.memorySizeMb !== options.memoryMb) {
-      throw new Error(
-        `Methodology-v2 REPORT memory size ${report?.memorySizeMb ?? "missing"} does not match planned memory ${options.memoryMb ?? "missing"}.`,
-      );
-    }
+  assertObservedOutputs(logText, options, implementation);
+  if (report.memorySizeMb !== options.memoryMb) {
+    throw new Error(
+      `Methodology-v2 REPORT memory size ${report.memorySizeMb} does not match planned memory ${options.memoryMb ?? "missing"}.`,
+    );
   }
-  if (
-    strictEvidence &&
-    options.cleanup === "all benchmark stacks destroyed" &&
-    options.cleanupVerified !== true
-  ) {
+  if (options.cleanup === "all benchmark stacks destroyed" && options.cleanupVerified !== true) {
     throw new Error("Methodology-v2 cleanup can only be qualified by the automated runner.");
   }
   const record: BenchmarkResultRecord = {
-    resultSchemaVersion: options.resultSchemaVersion ?? null,
-    methodologyVersion: options.methodologyVersion ?? null,
+    resultSchemaVersion: 2,
+    methodologyVersion: 2,
     runId: options.runId ?? null,
     sampleId: options.sampleId ?? null,
     snapshotDate: options.snapshotDate ?? today(),
@@ -258,7 +241,7 @@ export function collectBenchmarkResult(options: CollectBenchmarkOptions): Benchm
     profile: options.assetProfile ?? outputString(logText, "BenchmarkAssetProfile"),
     memoryMb: options.memoryMb ?? outputNumber(logText, "BenchmarkMemoryLimitMb"),
     parallel:
-      strictEvidence && implementation === "aws"
+      implementation === "aws"
         ? null
         : options.parallel === undefined
           ? outputNumber(logText, "BenchmarkTransferMaxConcurrency")
@@ -294,11 +277,9 @@ export function collectBenchmarkResult(options: CollectBenchmarkOptions): Benchm
   if (sanitizationErrors.length > 0) {
     throw new Error(`Benchmark record failed sanitization: ${sanitizationErrors.join("; ")}`);
   }
-  if (strictEvidence) {
-    const recordErrors = benchmarkRecordErrors(record, { allowPendingCleanup: true });
-    if (recordErrors.length > 0) {
-      throw new Error(`Invalid methodology-v2 benchmark record: ${recordErrors.join("; ")}`);
-    }
+  const recordErrors = benchmarkRecordErrors(record, { allowPendingCleanup: true });
+  if (recordErrors.length > 0) {
+    throw new Error(`Invalid methodology-v2 benchmark record: ${recordErrors.join("; ")}`);
   }
 
   if (options.persist !== false) {
@@ -315,8 +296,6 @@ function parseArgs(args: string[]): CollectBenchmarkOptions {
   const phase = required(values, "phase");
 
   return {
-    resultSchemaVersion: optionalPositiveInteger(values, "result-schema-version"),
-    methodologyVersion: optionalMethodologyVersion(values),
     runId: values.get("run-id"),
     sampleId: values.get("sample-id"),
     assetProfile: values.get("asset-profile"),
@@ -401,13 +380,6 @@ function optionalNumber(values: Map<string, string>, name: string): number | und
   return parsed;
 }
 
-function optionalMethodologyVersion(values: Map<string, string>): 2 | undefined {
-  const value = optionalNumber(values, "methodology-version");
-  if (value === undefined) return undefined;
-  if (value !== 2) usage();
-  return 2;
-}
-
 function optionalPositiveInteger(values: Map<string, string>, name: string): number | undefined {
   const value = optionalNumber(values, name);
   if (value !== undefined && (!Number.isInteger(value) || value < 1)) {
@@ -423,7 +395,7 @@ function usage(): never {
   process.exit(1);
 }
 
-function readReportFile(path: string, strict: boolean): ReportEvidence | undefined {
+function readReportFile(path: string): ReportEvidence | undefined {
   if (!existsSync(path)) {
     return undefined;
   }
@@ -453,7 +425,7 @@ function readReportFile(path: string, strict: boolean): ReportEvidence | undefin
         },
       ];
     });
-  if (strict && reports.length !== 1) {
+  if (reports.length !== 1) {
     throw new Error(
       `Expected exactly one complete REPORT event in ${path}, found ${reports.length}.`,
     );
@@ -462,7 +434,7 @@ function readReportFile(path: string, strict: boolean): ReportEvidence | undefin
   if (report === undefined) {
     return undefined;
   }
-  if (strict && (report.initDurationSeconds === null || report.requestId === null)) {
+  if (report.initDurationSeconds === null || report.requestId === null) {
     throw new Error(
       `Methodology-v2 REPORT event in ${path} is missing init duration or request ID.`,
     );
@@ -470,7 +442,7 @@ function readReportFile(path: string, strict: boolean): ReportEvidence | undefin
   return report;
 }
 
-function readSummaryFile(path: string, strict: boolean): SummaryEvidence | undefined {
+function readSummaryFile(path: string): SummaryEvidence | undefined {
   if (!existsSync(path)) {
     return undefined;
   }
@@ -482,7 +454,7 @@ function readSummaryFile(path: string, strict: boolean): SummaryEvidence | undef
   if (summaries.length === 0) {
     throw new Error(`No shin_deployment_summary record found in ${path}.`);
   }
-  if (strict && summaries.length !== 1) {
+  if (summaries.length !== 1) {
     throw new Error(
       `Expected exactly one shin_deployment_summary event in ${path}, found ${summaries.length}.`,
     );
@@ -549,15 +521,8 @@ function summaryFromMessage(message: string): ProviderSummary | undefined {
 function isDeploymentSummary(value: unknown): value is ProviderSummary {
   if (!isRecord(value) || value.event !== "shin_deployment_summary") return false;
   sanitizeProviderSummary(value);
-  // Every strictly-versioned summary is validated against its own exact shape.
-  // Older, looser rows are left to parse as-is.
-  if (value.schemaVersion === 4 || value.schemaVersion === 5) {
-    const errors = providerSummaryErrors(value);
-    if (errors.length > 0)
-      throw new Error(
-        `Invalid schema-v${value.schemaVersion} provider summary: ${errors.join("; ")}`,
-      );
-  }
+  const errors = providerSummaryErrors(value);
+  if (errors.length > 0) throw new Error(`Invalid provider summary: ${errors.join("; ")}`);
   return true;
 }
 

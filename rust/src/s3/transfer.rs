@@ -2448,10 +2448,7 @@ mod tests {
                     (metadata_header.as_str(), "written-by-something-else"),
                 ]),
             ),
-            (
-                "an absent token, as written by an older provider",
-                head_event(vec![("content-length", "5")]),
-            ),
+            ("an absent token", head_event(vec![("content-length", "5")])),
             (
                 "a token recorded against a different length",
                 head_event(vec![
@@ -2502,7 +2499,7 @@ mod tests {
         assert_eq!(snapshot.counts.copied_objects, 1);
         assert_eq!(
             snapshot.bytes.copied, 4096,
-            "a retired copy must not inflate transferred bytes"
+            "a skipped copy must not inflate transferred bytes"
         );
     }
 
@@ -3233,11 +3230,10 @@ mod tests {
             "SourceBucketNames": ["source"],
             "SourceObjectKeys": ["archive.zip"],
             "DestinationBucketName": "destination",
-            "DestinationChecksumStrategy": "sse-s3-etag",
             "Extract": false
         }))
         .expect("raw deployment request");
-        crate::request::parse_request(raw).expect("valid request")
+        crate::request::parse_request_with_memory(raw, "1024").expect("valid request")
     }
 
     /// Drives a real replayed copy (one failure, one success) so the counters come

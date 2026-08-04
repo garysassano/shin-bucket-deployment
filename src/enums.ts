@@ -3,7 +3,7 @@
  */
 export enum ProviderSharing {
   /**
-   * Reuse a compatible provider Lambda within the stack.
+   * Reuse an identically configured provider Lambda within the stack.
    */
   STACK = "stack",
 

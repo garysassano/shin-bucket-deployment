@@ -172,11 +172,10 @@ function zeroFields(names: readonly string[]): Record<string, number> {
 export function providerSummary(memoryMb: number, parallel: number, create: boolean) {
   return {
     event: "shin_deployment_summary",
-    schemaVersion: 5,
+    schemaVersion: 6,
     requestType: create ? "Create" : "Update",
     deploymentStatus: "success",
     extract: true,
-    destinationChecksumStrategy: "sse-s3-etag",
     deleteStaleObjectsOnDeployment: true,
     availableMemoryMb: memoryMb,
     maxParallelTransfers: parallel,
@@ -267,6 +266,7 @@ export function providerSummary(memoryMb: number, parallel: number, create: bool
       "globalBudgetBytes",
       "globalResidentBytesCurrent",
       "globalResidentBytesHighWater",
+      "globalReleaseAnomalies",
     ]),
     putObject: {
       ...zeroFields([

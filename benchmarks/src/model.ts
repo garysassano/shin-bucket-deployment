@@ -52,13 +52,8 @@ export type ProviderSummary = {
   readonly schemaVersion?: number | null;
   readonly requestType?: string | null;
   readonly deploymentStatus?: string | null;
-  /** Diagnostics schema v2 compatibility. */
-  readonly status?: string | null;
   readonly extract?: boolean | null;
-  readonly destinationChecksumStrategy?: string | null;
   readonly deleteStaleObjectsOnDeployment?: boolean | null;
-  /** Historical provider snapshots before the destination lifecycle rename. */
-  readonly prune?: boolean | null;
   readonly availableMemoryMb?: number | null;
   readonly maxParallelTransfers?: number | null;
   readonly detailedFailureDiagnosticsEnabled?: boolean | null;
@@ -71,7 +66,6 @@ export type ProviderSummary = {
   readonly catalog?: Record<string, number | null> | null;
   readonly source?: Record<string, number | null> | null;
   readonly putObject?: ProviderPutObjectSummary | null;
-  /** Diagnostics schema v5 and later. */
   readonly copyObject?: Record<string, number | null> | null;
   readonly deleteObject?: Record<string, number | null> | null;
   readonly callback?: Record<string, number | null> | null;
@@ -141,7 +135,6 @@ const PROVIDER_SUMMARY_SCALARS = {
   requestType: "string",
   deploymentStatus: "string",
   extract: "boolean",
-  destinationChecksumStrategy: "string",
   deleteStaleObjectsOnDeployment: "boolean",
   availableMemoryMb: "number",
   maxParallelTransfers: "number",
@@ -235,6 +228,7 @@ const PROVIDER_SUMMARY_SECTIONS = {
     globalBudgetBytes: "number",
     globalResidentBytesCurrent: "number",
     globalResidentBytesHighWater: "number",
+    globalReleaseAnomalies: "number",
   },
   putObject: {
     wireAttempts: "number",
@@ -849,13 +843,13 @@ export function sanitizeProviderSummary(value: unknown): ProviderSummary {
 }
 
 /**
- * Validates a provider summary against the current schema (v5). Validation runs in three
+ * Validates a provider summary against the current schema (v6). Validation runs in three
  * stages -- copy section, detailed PutObject invariants, then the base shape -- which is a
- * factoring of one schema, not support for older ones. Only v5 is accepted.
+ * factoring of one schema, not support for older ones. Only v6 is accepted.
  */
 export function providerSummaryErrors(summary: ProviderSummary): string[] {
-  if (summary.schemaVersion !== 5) {
-    return [`summary schemaVersion must be 5, got ${String(summary.schemaVersion)}`];
+  if (summary.schemaVersion !== 6) {
+    return [`summary schemaVersion must be 6, got ${String(summary.schemaVersion)}`];
   }
   return summaryCopyErrors(summary);
 }
@@ -878,7 +872,7 @@ function summaryCopyErrors(summary: ProviderSummary): string[] {
       } else if (copyObject[name] === null) {
         errors.push(`summary field copyObject.${name} must not be null`);
       } else if (typeof copyObject[name] !== "number" || !Number.isSafeInteger(copyObject[name])) {
-        // Safe integers, matching the v3/v4 scalar and section checks. Plain
+        // Safe integers, matching the scalar and section checks. Plain
         // `Number.isInteger` would accept values above 2^53 that have already lost
         // precision in JSON, letting lossy counters into committed evidence.
         errors.push(`summary field copyObject.${name} must be a safe integer`);
@@ -890,7 +884,7 @@ function summaryCopyErrors(summary: ProviderSummary): string[] {
       }
     }
 
-    // The same internal consistency the v3/v4 validators require of `putObject`.
+    // The same internal consistency required of `putObject`.
     // Without these the collector accepts impossible copy telemetry.
     const counter = (name: string): number => {
       const value = copyObject[name];
@@ -940,8 +934,6 @@ function summaryShapeErrors(summary: ProviderSummary): string[] {
     errors.push("summary requestType is invalid");
   if (summary.deploymentStatus !== "success")
     errors.push("summary deploymentStatus must be success");
-  if (summary.destinationChecksumStrategy !== "sse-s3-etag")
-    errors.push("summary destinationChecksumStrategy is invalid");
   if (typeof summary.detailedFailureDiagnosticsEnabled !== "boolean")
     errors.push("summary detailedFailureDiagnosticsEnabled must be boolean");
   if (summary.availableMemoryMb === null || (summary.availableMemoryMb ?? 0) <= 0)
@@ -995,6 +987,8 @@ function summaryShapeErrors(summary: ProviderSummary): string[] {
     errors.push("summary transfer inFlightHighWater exceeds maxParallelTransfers");
   if (summary.source?.globalResidentBytesCurrent !== 0)
     errors.push("summary source globalResidentBytesCurrent must be zero");
+  if (summary.source?.globalReleaseAnomalies !== 0)
+    errors.push("summary source globalReleaseAnomalies must be zero");
 
   const put = isObject(summary.putObject) ? summary.putObject : {};
   const states = Array.isArray(put.failureStates) ? put.failureStates : [];

@@ -356,8 +356,6 @@ async function runBenchmarkStack(args: {
         reportFile,
         ...(run.implementation === "shin" ? { summaryFile } : {}),
         outputFile: options.outputFile,
-        resultSchemaVersion: 2,
-        methodologyVersion: 2,
         runId: options.runId,
         sampleId: run.sampleId,
         snapshotDate: options.snapshotDate,

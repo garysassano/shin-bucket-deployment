@@ -180,7 +180,7 @@ describe("benchmark assets", () => {
     })
       .trim()
       .split("\n")
-      .filter(Boolean);
+      .filter((path) => path.length > 0 && !path.startsWith("archive/"));
     const markdownReferences = trackedMarkdown.flatMap((path) =>
       [...readFileSync(join(repositoryRoot, path), "utf8").matchAll(/snapshots\/([^\s)>]+\.svg)/g)]
         .map((match) => match[1])

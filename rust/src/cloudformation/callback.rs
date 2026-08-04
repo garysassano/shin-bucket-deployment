@@ -514,12 +514,11 @@ mod tests {
             "SourceBucketNames": ["source"],
             "SourceObjectKeys": ["asset.zip"],
             "DestinationBucketName": "destination",
-            "DestinationChecksumStrategy": "sse-s3-etag",
             "DistributionId": "distribution",
             "DistributionPaths": paths
         }))
         .expect("raw deployment request");
-        crate::request::parse_request(raw).expect("valid request")
+        crate::request::parse_request_with_memory(raw, "1024").expect("valid request")
     }
 
     #[tokio::test]

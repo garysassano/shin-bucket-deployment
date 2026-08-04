@@ -9,105 +9,49 @@ import { createBenchmarkPlan } from "../../benchmarks/src/plan";
 import { renderBenchmarkReport } from "../../benchmarks/src/render/comparison-report";
 import { renderBenchmarkResultsTable } from "../../benchmarks/src/render/telemetry-table";
 import { CANONICAL_BENCHMARK_CONFIG } from "../../benchmarks/src/validation";
-import { canonicalRecord } from "../support/benchmark-records";
+import { canonicalBenchmarkRecord, canonicalRecord } from "../support/benchmark-records";
 
 describe("benchmark result collector", () => {
-  test("upserts sanitized benchmark result records", () => {
+  test("collects and persists one complete current-schema record", () => {
     const dir = mkdtempSync(join(tmpdir(), "shin-bench-collector-"));
-    const logFile = join(dir, "deploy.log");
-    const reportFile = join(dir, "report.json");
     const outputFile = join(dir, "results.jsonl");
 
-    writeFileSync(
-      logFile,
-      [
-        "✨  Deployment time: 14.16s",
-        "Outputs:",
-        "Stack.BenchmarkFileCount = 442",
-        "Stack.BenchmarkAssetProfile = mixed",
-        "Stack.BenchmarkImplementation = shin",
-        "Stack.BenchmarkMemoryLimitMb = 512",
-        "Stack.BenchmarkTransferMaxConcurrency = 32",
-        "Stack.BenchmarkState = baseline",
-        "Stack.BenchmarkTotalBytes = 52904649",
-        "real 57.72",
-        "",
-      ].join("\n"),
-    );
-    writeFileSync(
-      reportFile,
-      JSON.stringify({
-        events: [
-          {
-            timestamp: 1,
-            message:
-              "REPORT RequestId: id\tDuration: 211.83 ms\tBilled Duration: 212 ms\tMemory Size: 512 MB\tMax Memory Used: 68 MB\t",
-          },
-        ],
-      }),
-    );
+    const collected = collectCurrentRecord(dir, outputFile);
 
-    const collected = collectBenchmarkResult({
-      logFile,
-      reportFile,
-      outputFile,
-      snapshotDate: "2026-05-02",
-      phase: "unchanged-update",
-      commit: "abc1234",
-      region: "ap-southeast-2",
-      parallel: null,
-    });
-
-    const record = JSON.parse(readFileSync(outputFile, "utf8"));
-    expect(collected).toEqual(record);
-    expect(record).toMatchObject({
-      snapshotDate: "2026-05-02",
-      providerImplementationCommit: "abc1234",
-      region: "ap-southeast-2",
+    expect(JSON.parse(readFileSync(outputFile, "utf8"))).toEqual(collected);
+    expect(collected).toMatchObject({
+      resultSchemaVersion: 2,
+      methodologyVersion: 2,
       implementation: "shin",
-      profile: "mixed",
-      memoryMb: 512,
-      parallel: null,
-      phase: "unchanged-update",
-      state: "baseline",
-      fileCount: 442,
-      totalBytes: 52904649,
-      cdkDeploySeconds: 14.16,
-      localWallSeconds: 57.72,
-      providerDurationSeconds: 0.212,
-      billedDurationSeconds: 0.212,
-      initDurationSeconds: null,
-      maxMemoryMb: 68,
+      profile: "tiny-many",
+      memoryMb: 1024,
+      parallel: 32,
+      phase: "cold-create",
+      providerDurationSeconds: 1,
+      billedDurationSeconds: 1,
+      initDurationSeconds: 0.1,
+      maxMemoryMb: 1,
       providerInvoked: true,
     });
+    expect(collected.providerSummary).toEqual(summaryFixture());
   });
 
-  test("preserves decision-run variants and repetitions in the JSONL key", () => {
+  test("preserves complete decision-run repetitions in the JSONL key", () => {
     const dir = mkdtempSync(join(tmpdir(), "shin-bench-collector-"));
-    const logFile = join(dir, "deploy.log");
     const outputFile = join(dir, "results.jsonl");
-    writeFileSync(
-      logFile,
-      [
-        "Stack.BenchmarkAssetProfile = tiny-many",
-        "Stack.BenchmarkImplementation = shin",
-        "Stack.BenchmarkMemoryLimitMb = 2048",
-        "Stack.BenchmarkTransferMaxConcurrency = 32",
-        "Stack.BenchmarkState = baseline",
-        "",
-      ].join("\n"),
-    );
 
-    for (const repetition of [1, 2]) {
-      collectBenchmarkResult({
-        logFile,
-        outputFile,
-        phase: "cold-create",
-        decisionRunId: "transfer-scheduler-2026-07-13",
-        comparisonVariant: "current",
-        repetition,
-      });
-    }
+    collectCurrentRecord(dir, outputFile, {
+      decisionRunId: "scheduler-current",
+      comparisonVariant: "current",
+      repetition: 1,
+      sampleId: "00000000-0000-5000-a000-000000000001",
+    });
+    collectCurrentRecord(dir, outputFile, {
+      decisionRunId: "scheduler-current",
+      comparisonVariant: "current",
+      repetition: 2,
+      sampleId: "00000000-0000-5000-a000-000000000002",
+    });
 
     const rows = readFileSync(outputFile, "utf8")
       .trim()
@@ -117,192 +61,9 @@ describe("benchmark result collector", () => {
     expect(rows.map((row) => row.repetition)).toEqual([1, 2]);
   });
 
-  test("uses explicit metadata when command logs omit outputs", () => {
-    const dir = mkdtempSync(join(tmpdir(), "shin-bench-collector-"));
-    const logFile = join(dir, "destroy.log");
-    const outputFile = join(dir, "results.jsonl");
-
-    writeFileSync(logFile, ["destroying...", "real 37.91", ""].join("\n"));
-
-    const collected = collectBenchmarkResult({
-      logFile,
-      outputFile,
-      snapshotDate: "2026-05-02",
-      phase: "destroy",
-      assetProfile: "large-few",
-      memoryMb: 2048,
-      parallel: 8,
-      fileCount: 32,
-      totalBytes: 144167470,
-    });
-
-    expect(collected).toMatchObject({
-      profile: "large-few",
-      memoryMb: 2048,
-      parallel: 8,
-      phase: "destroy",
-      state: null,
-      fileCount: 32,
-      totalBytes: 144167470,
-      localWallSeconds: 37.91,
-    });
-  });
-
-  test("persists source and provider build provenance metadata", () => {
-    const dir = mkdtempSync(join(tmpdir(), "shin-bench-collector-"));
-    const logFile = join(dir, "deploy.log");
-    const outputFile = join(dir, "results.jsonl");
-    writeFileSync(logFile, "Stack.BenchmarkImplementation = shin\n");
-
-    const collected = collectBenchmarkResult({
-      logFile,
-      outputFile,
-      phase: "cold-create",
-      sourceTreeSha256: "1".repeat(64),
-      installedDependenciesSha256: "5".repeat(64),
-      nodeVersion: "v24.0.0",
-      pnpmVersion: "11.0.0",
-      executionEnvironmentSha256: "6".repeat(64),
-      providerBootstrapProvenanceSha256: "2".repeat(64),
-      providerBootstrapBuildDirty: false,
-      providerBootstrapCargoVersion: "cargo 1.0.0",
-      providerBootstrapRustcVersion: "rustc 1.0.0",
-      providerBootstrapCargoLambdaVersion: "cargo-lambda 1.0.0",
-      providerBootstrapZigVersion: "1.0.0",
-      providerBootstrapBuildToolchainSha256: "4".repeat(64),
-      providerBootstrapBuildEnvironmentSha256: "3".repeat(64),
-    });
-
-    expect(JSON.parse(readFileSync(outputFile, "utf8"))).toEqual(collected);
-    expect(collected).toMatchObject({
-      sourceTreeSha256: "1".repeat(64),
-      installedDependenciesSha256: "5".repeat(64),
-      nodeVersion: "v24.0.0",
-      pnpmVersion: "11.0.0",
-      executionEnvironmentSha256: "6".repeat(64),
-      providerBootstrapProvenanceSha256: "2".repeat(64),
-      providerBootstrapBuildDirty: false,
-      providerBootstrapCargoVersion: "cargo 1.0.0",
-      providerBootstrapRustcVersion: "rustc 1.0.0",
-      providerBootstrapCargoLambdaVersion: "cargo-lambda 1.0.0",
-      providerBootstrapZigVersion: "1.0.0",
-      providerBootstrapBuildToolchainSha256: "4".repeat(64),
-      providerBootstrapBuildEnvironmentSha256: "3".repeat(64),
-    });
-  });
-
-  test("extracts sanitized provider summary from raw CloudWatch log events", () => {
-    const dir = mkdtempSync(join(tmpdir(), "shin-bench-collector-"));
-    const logFile = join(dir, "deploy.log");
-    const reportFile = join(dir, "report.json");
-    const summaryFile = join(dir, "summary.json");
-    const outputFile = join(dir, "results.jsonl");
-    const summary = {
-      event: "shin_deployment_summary",
-      schemaVersion: 3,
-      requestType: "Create",
-      deploymentStatus: "success",
-      destinationChecksumStrategy: "sse-s3-etag",
-      maxParallelTransfers: 32,
-      durationMs: 3632,
-      counts: { uploadedObjects: 2585 },
-    };
-
-    writeFileSync(
-      logFile,
-      [
-        "✨  Deployment time: 66.68s",
-        "Outputs:",
-        "Stack.BenchmarkFileCount = 2584",
-        "Stack.BenchmarkAssetProfile = tiny-many",
-        "Stack.BenchmarkImplementation = shin",
-        "Stack.BenchmarkMemoryLimitMb = 1024",
-        "Stack.BenchmarkState = baseline",
-        "Stack.BenchmarkTotalBytes = 8178618",
-        "real 128.05",
-        "",
-      ].join("\n"),
-    );
-    writeFileSync(
-      reportFile,
-      JSON.stringify({
-        events: [
-          {
-            timestamp: 1,
-            message:
-              "REPORT RequestId: id\tDuration: 3694.94 ms\tBilled Duration: 3830 ms\tMemory Size: 1024 MB\tMax Memory Used: 96 MB\tInit Duration: 134.50 ms",
-          },
-        ],
-      }),
-    );
-    writeFileSync(
-      summaryFile,
-      JSON.stringify({
-        events: [
-          {
-            timestamp: 1,
-            message: `\u001b[0m{requestId="redacted"}: summary=${JSON.stringify(JSON.stringify(summary))}`,
-          },
-        ],
-      }),
-    );
-
-    const collected = collectBenchmarkResult({
-      logFile,
-      reportFile,
-      summaryFile,
-      outputFile,
-      snapshotDate: "2026-05-10",
-      phase: "cold-create-parallel-32",
-      parallel: 32,
-      region: "ap-southeast-2",
-    });
-
-    expect(collected.providerSummary).toEqual(summary);
-    expect(collected).toMatchObject({
-      providerDurationSeconds: 3.695,
-      billedDurationSeconds: 3.83,
-      initDurationSeconds: 0.135,
-      maxMemoryMb: 96,
-      providerInvoked: true,
-    });
-  });
-
   test("round-trips strict current-schema PutObject failure diagnostics", () => {
-    const dir = mkdtempSync(join(tmpdir(), "shin-bench-collector-v4-"));
-    const logFile = join(dir, "deploy.log");
-    const summaryFile = join(dir, "summary.json");
-    const outputFile = join(dir, "results.jsonl");
     const summary = summaryFixture();
-    writeFileSync(
-      logFile,
-      [
-        "Stack.BenchmarkImplementation = shin",
-        "Stack.BenchmarkSourceWindowBytes = 134217728",
-        "",
-      ].join("\n"),
-    );
-    writeFileSync(
-      summaryFile,
-      JSON.stringify({
-        events: [
-          {
-            timestamp: 1,
-            message: `summary=${JSON.stringify(JSON.stringify(summary))}`,
-          },
-        ],
-      }),
-    );
 
-    const collected = collectBenchmarkResult({
-      logFile,
-      summaryFile,
-      outputFile,
-      phase: "cold-create",
-    });
-
-    expect(collected.providerSummary).toEqual(summary);
-    expect(collected.sourceWindowBytes).toBe(134217728);
     expect(sanitizeProviderSummary(summary)).toEqual(summary);
     expect(providerSummaryErrors(summary)).toEqual([]);
   });
@@ -468,24 +229,11 @@ describe("benchmark result collector", () => {
   });
 
   test("rejects unsanitized provider summary fields", () => {
-    const dir = mkdtempSync(join(tmpdir(), "shin-bench-collector-"));
-    const logFile = join(dir, "deploy.log");
-    const summaryFile = join(dir, "summary.json");
-    writeFileSync(logFile, "Stack.BenchmarkImplementation = shin\n");
-    writeFileSync(
-      summaryFile,
-      `${JSON.stringify({
-        event: "shin_deployment_summary",
-        schemaVersion: 3,
-        requestId: "must-not-be-persisted",
-      })}\n`,
-    );
     expect(() =>
-      collectBenchmarkResult({
-        logFile,
-        summaryFile,
-        outputFile: join(dir, "results.jsonl"),
-        phase: "cold-create",
+      sanitizeProviderSummary({
+        event: "shin_deployment_summary",
+        schemaVersion: 6,
+        requestId: "must-not-be-persisted",
       }),
     ).toThrow("unexpected field requestId");
   });
@@ -516,16 +264,13 @@ describe("benchmark result collector", () => {
           {
             timestamp: 1,
             logStreamName: "stream",
-            message: `requestId="summary-id": summary=${JSON.stringify(
-              JSON.stringify({ event: "shin_deployment_summary" }),
-            )}`,
+            message: `requestId="summary-id": summary=${JSON.stringify(JSON.stringify(summaryFixture()))}`,
           },
         ],
       }),
     );
     expect(() =>
       collectBenchmarkResult({
-        methodologyVersion: 2,
         implementation: "shin",
         logFile,
         reportFile,
@@ -598,7 +343,7 @@ function summaryFixture() {
   const base = summaryBaseFixture();
   return {
     ...base,
-    schemaVersion: 5,
+    schemaVersion: 6,
     copyObject: {
       wireAttempts: 12,
       failedAttempts: 3,
@@ -616,11 +361,10 @@ function summaryBaseFixture() {
   const range = (value: number, count = 2) => ({ min: value, max: value, total: value * count });
   return {
     event: "shin_deployment_summary",
-    schemaVersion: 5,
+    schemaVersion: 6,
     requestType: "Create",
     deploymentStatus: "success",
     extract: true,
-    destinationChecksumStrategy: "sse-s3-etag",
     deleteStaleObjectsOnDeployment: true,
     availableMemoryMb: 1024,
     maxParallelTransfers: 32,
@@ -712,6 +456,7 @@ function summaryBaseFixture() {
         "globalBudgetBytes",
         "globalResidentBytesCurrent",
         "globalResidentBytesHighWater",
+        "globalReleaseAnomalies",
       ]),
       globalBudgetBytes: 536870912,
     },
@@ -777,6 +522,131 @@ function summaryBaseFixture() {
       confirmedResponses: 1,
     },
   };
+}
+
+function collectCurrentRecord(
+  dir: string,
+  outputFile: string,
+  overrides: Record<string, unknown> = {},
+) {
+  const record = canonicalBenchmarkRecord({
+    cleanup: "benchmark cleanup pending",
+    providerSummary: summaryFixture(),
+    ...overrides,
+  });
+  const sampleId = record.sampleId as string;
+  const requestId = `request-${sampleId}`;
+  const logStreamName = `stream-${sampleId}`;
+  const logFile = join(dir, `deploy-${sampleId}.log`);
+  const reportFile = join(dir, `report-${sampleId}.json`);
+  const summaryFile = join(dir, `summary-${sampleId}.json`);
+
+  writeFileSync(
+    logFile,
+    [
+      "✨  Deployment time: 1s",
+      `Stack.BenchmarkImplementation = ${String(record.implementation)}`,
+      `Stack.BenchmarkAssetProfile = ${String(record.profile)}`,
+      `Stack.BenchmarkMemoryLimitMb = ${String(record.memoryMb)}`,
+      `Stack.BenchmarkState = ${String(record.state)}`,
+      `Stack.BenchmarkFileCount = ${String(record.fileCount)}`,
+      `Stack.BenchmarkTotalBytes = ${String(record.totalBytes)}`,
+      `Stack.BenchmarkAssetManifestSha256 = ${String(record.assetManifestSha256)}`,
+      "Stack.BenchmarkSourceCount = 1",
+      `Stack.BenchmarkTransferMaxConcurrency = ${String(record.parallel)}`,
+      "Stack.BenchmarkSourceWindowBytes = adaptive",
+      "Stack.BenchmarkDetailedFailureDiagnostics = true",
+      "real 1",
+      "",
+    ].join("\n"),
+  );
+  writeFileSync(
+    reportFile,
+    JSON.stringify({
+      events: [
+        {
+          timestamp: 2,
+          logStreamName,
+          message: `REPORT RequestId: ${requestId} Duration: 1000 ms Billed Duration: 1000 ms Memory Size: ${String(record.memoryMb)} MB Max Memory Used: 1 MB Init Duration: 100 ms`,
+        },
+      ],
+    }),
+  );
+  writeFileSync(
+    summaryFile,
+    JSON.stringify({
+      events: [
+        {
+          timestamp: 1,
+          logStreamName,
+          message: `requestId="${requestId}": summary=${JSON.stringify(JSON.stringify(record.providerSummary))}`,
+        },
+      ],
+    }),
+  );
+
+  return collectBenchmarkResult({
+    runId: record.runId as string,
+    sampleId,
+    snapshotDate: record.snapshotDate as string,
+    decisionRunId: (record.decisionRunId as string | null) ?? undefined,
+    comparisonVariant: (record.comparisonVariant as string | null) ?? undefined,
+    repetition: record.repetition as number,
+    benchmarkConfigSha256: record.benchmarkConfigSha256 as string,
+    assetManifestSha256: record.assetManifestSha256 as string,
+    dependencyLockSha256: record.dependencyLockSha256 as string,
+    applicationBuildSha256: record.applicationBuildSha256 as string,
+    installedDependenciesSha256: record.installedDependenciesSha256 as string,
+    nodeVersion: record.nodeVersion as string,
+    pnpmVersion: record.pnpmVersion as string,
+    executionEnvironmentSha256: record.executionEnvironmentSha256 as string,
+    sourceTreeSha256: record.sourceTreeSha256 as string,
+    commit: record.providerImplementationCommit as string,
+    subject: record.providerImplementationSubject as string,
+    providerPackageName: record.providerPackageName as string,
+    providerPackageVersion: record.providerPackageVersion as string,
+    providerArchitecture: record.providerArchitecture as string,
+    providerRuntime: record.providerRuntime as string,
+    providerHandler: record.providerHandler as string,
+    providerCodeSha256: record.providerCodeSha256 as string,
+    providerBootstrapSha256: record.providerBootstrapSha256 as string,
+    providerBootstrapArchiveSha256: record.providerBootstrapArchiveSha256 as string,
+    providerBootstrapProvenanceSha256: record.providerBootstrapProvenanceSha256 as string,
+    providerBootstrapBuildDirty: record.providerBootstrapBuildDirty as boolean,
+    providerBootstrapCargoVersion: record.providerBootstrapCargoVersion as string,
+    providerBootstrapRustcVersion: record.providerBootstrapRustcVersion as string,
+    providerBootstrapCargoLambdaVersion: record.providerBootstrapCargoLambdaVersion as string,
+    providerBootstrapZigVersion: record.providerBootstrapZigVersion as string,
+    providerBootstrapBuildToolchainSha256: record.providerBootstrapBuildToolchainSha256 as string,
+    providerBootstrapBuildEnvironmentSha256:
+      record.providerBootstrapBuildEnvironmentSha256 as string,
+    gitDirty: record.gitDirty as boolean,
+    cdkCliVersion: record.cdkCliVersion as string,
+    cdkCliInstalledSha256: record.cdkCliInstalledSha256 as string,
+    awsCdkLibVersion: record.awsCdkLibVersion as string,
+    awsCdkLibIntegrity: record.awsCdkLibIntegrity as string,
+    awsCdkLibInstalledSha256: record.awsCdkLibInstalledSha256 as string,
+    constructsInstalledSha256: record.constructsInstalledSha256 as string,
+    executionEnvironmentFresh: record.executionEnvironmentFresh as boolean,
+    memoryMeasurementScope: record.memoryMeasurementScope as "phase-local",
+    region: record.region as string,
+    implementation: record.implementation as string,
+    assetProfile: record.profile as string,
+    memoryMb: record.memoryMb as number,
+    parallel: record.parallel as number,
+    sourceWindowBytes: null,
+    detailedFailureDiagnostics: true,
+    phase: record.phase as string,
+    state: record.state as string,
+    fileCount: record.fileCount as number,
+    totalBytes: record.totalBytes as number,
+    sourceCount: 1,
+    cleanup: record.cleanup as string,
+    logFile,
+    reportFile,
+    summaryFile,
+    outputFile,
+  });
 }
 
 function firstFailureState(summary: ReturnType<typeof summaryBaseFixture>) {

@@ -63,13 +63,5 @@ const complete: ShinBucketDeploymentProps = {
   },
 };
 
-const formerFlatProperty = {
-  sources: [source],
-  destination,
-  // @ts-expect-error The clean-break API rejects former flat properties.
-  destinationBucket: bucket,
-} satisfies ShinBucketDeploymentProps;
-
 void minimal;
 void complete;
-void formerFlatProperty;

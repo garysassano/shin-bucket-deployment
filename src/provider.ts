@@ -310,7 +310,7 @@ function renderHandlerConfigHash(
     .slice(0, 16);
 }
 
-/** Exact canonical serialization hashed for a compatible stack-scoped handler. */
+/** Exact canonical serialization hashed for an identically configured stack-scoped handler. */
 export function renderHandlerConfigHashInput(
   stack: Stack,
   config: ProviderLambdaConfig,

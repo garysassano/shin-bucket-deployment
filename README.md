@@ -36,17 +36,6 @@ export class DemoStack extends Stack {
 }
 ```
 
-### Migrating from `BucketDeployment`
-
-Migration usually starts with this import change:
-
-```diff
--import { BucketDeployment, Source } from "aws-cdk-lib/aws-s3-deployment";
-+import { ShinBucketDeployment, Source } from "shin-bucket-deployment";
-```
-
-See the [full property mapping](#bucketdeployment-property-mapping) for replaced and unsupported properties.
-
 ## Why Build This
 
 The official `BucketDeployment` is a good default for many stacks, but its provider is built around AWS CLI copy/sync orchestration. Shin uses a purpose-built Rust Lambda function and a configuration model that exposes provider identity separately from request-scoped transfer controls.
@@ -62,11 +51,9 @@ The official `BucketDeployment` is a good default for many stacks, but its provi
 | Bounded marker replacement  | Marker-free entries stream directly. Marker entries use deterministic simultaneous replacement with one exact-length planning pass and a second retryable streaming pass only when upload is required; neither pass retains the complete entry or output.                                                                                                  |
 | Safer destination moves     | Opt-in cleanup deploys new content first, infers the previous prefix, and preserves overlapping current namespaces. See [Destination Lifecycle](#destination-lifecycle).                                                                                                                                                                                    |
 
-## Benchmark Snapshot
+## Benchmark Evidence
 
-`mixed` profile (442 files, ~50 MB) at 2048 MiB / max concurrency 64, five sequential repetitions per phase against upstream AWS CDK `BucketDeployment`. Results depend on workload, region, and account conditions; they are evidence, not a guarantee. See [Benchmark](docs/benchmark.md) for the full matrix, telemetry, and methodology.
-
-<img src="https://raw.githubusercontent.com/garysassano/shin-bucket-deployment/main/benchmarks/snapshots/mixed-2048mib-64.svg" alt="ShinBucketDeployment mixed 2048 MiB max concurrency 64 benchmark" width="100%">
+No current provider-summary schema-6 canonical run is published yet. The next approved canonical run will populate the active benchmark ledger and regenerate the reports and chart. See [Benchmark](docs/benchmark.md) for the methodology and evidence requirements.
 
 ## Construct API
 
@@ -129,7 +116,7 @@ interface ShinBucketDeploymentProps {
     }; // Default: use the packaged prebuilt provider
   };
 
-  // Request-scoped controls; these do not split a compatible shared handler.
+  // Request-scoped controls; these do not split an identically configured shared handler.
   readonly transfer?: {
     readonly maxConcurrency?: number; // Default: 32
     readonly advancedTuning?: {
@@ -164,33 +151,6 @@ The constructed deployment exposes these values and methods; these are construct
 | `deployment.handlerRole` | Execution role used by the backing provider Lambda. |
 | `deployment.handlerFunction` | Backing provider Lambda function. |
 | `deployment.addSource(source)` | Adds another ordered source after construction. |
-
-## `BucketDeployment` Property Mapping
-
-`ShinBucketDeployment` accepts the same upstream CDK `ISource` implementations, but uses its own grouped configuration API. Keep `sources`, move the destination into `destination`, and then map only the behavior your deployment needs.
-
-### Replaced Properties
-
-| Upstream prop | Use instead |
-| --- | --- |
-| `prune` | `destinationLifecycle.onDeploy.deleteStaleObjects` |
-| `retainOnDelete` | `destinationLifecycle.onChange.deletePreviousObjects` and `destinationLifecycle.onDelete.deleteCurrentObjects` |
-| `distribution` | `cloudfrontInvalidation.distribution` |
-| `distributionPaths` | `cloudfrontInvalidation.paths` |
-| `waitForDistributionInvalidation` | `cloudfrontInvalidation.waitForCompletion` |
-| `outputObjectKeys` | `objectKeys`; Shin returns the key list only when this property is accessed. |
-| `logRetention` | `providerLambda.logGroup` |
-
-### Unsupported Properties
-
-| Upstream prop | Shin behavior |
-| --- | --- |
-| `accessControl`, `cacheControl`, `contentDisposition`, `contentEncoding`, `contentLanguage`, `expires`, `metadata`, `storageClass`, `websiteRedirectLocation` | Object metadata is intentionally outside the deployment contract. Configure cache behavior in CloudFront and storage/lifecycle behavior on the bucket. |
-| `contentType` | Shin automatically infers `Content-Type` from each deployed object's file extension, with `application/octet-stream` as the fallback. |
-| `serverSideEncryption`, `serverSideEncryptionAwsKmsKeyId`, `serverSideEncryptionCustomerAlgorithm` | Only SSE-S3 destinations are supported, which S3 applies by default. SSE-C, SSE-KMS, and SSE-DSSE are rejected. |
-| `ephemeralStorageSize` | The provider does not stage archives or extracted files in Lambda `/tmp`. |
-| `signContent` | The provider uses AWS SDK calls directly, not the upstream AWS CLI upload path. |
-| `useEfs` | EFS is not needed because the provider streams data with bounded memory instead of staging archives or extracted files on disk. |
 
 ## Destination Lifecycle
 
@@ -227,7 +187,7 @@ Previous objects are retained by default. To delete them:
 | Changed | Provide `invalidatePreviousDistribution: previousDistribution` only if the previous distribution should also be invalidated. |
 
 > [!IMPORTANT]
-> After a one-time destination move succeeds, remove previous-resource references and any `onChange` actions that are no longer needed to drop access to the previous bucket or distribution.
+> After destination-change cleanup succeeds, remove previous-resource references and any `onChange` actions that are no longer needed to drop access to the previous bucket or distribution.
 
 ### Resource Deletion
 
@@ -237,6 +197,6 @@ Set `destinationLifecycle.onDelete.deleteCurrentObjects` to `true` only when cur
 
 Shin plans extracted assets directly from ranged S3 reads without staging complete archives or entries in Lambda `/tmp`. It compares the deployment plan with the destination, streams changed objects with bounded concurrency and memory, optionally removes stale objects, and then creates any configured CloudFront invalidation. Direct-copy sources use S3 `CopyObject` instead of extraction.
 
-Content checks and write reconciliation adapt to the destination bucket's encryption. Transfer failures stop later cleanup and invalidation, and structured diagnostics are emitted without resource identifiers or presigned URLs.
+Content checks and write reconciliation use SSE-S3 object identities; other destination encryption modes are rejected during synthesis. Transfer failures stop later cleanup and invalidation, and structured diagnostics are emitted without resource identifiers or presigned URLs.
 
-See [Architecture](docs/architecture.md) for the handler flow, archive planning, memory model, retry and write-safety rules, marker replacement, lifecycle behavior, compatibility tradeoffs, limits, and diagnostics field reference. The latest correctness snapshot is recorded in [Verification](docs/verification.md).
+See [Architecture](docs/architecture.md) for the handler flow, archive planning, memory model, retry and write-safety rules, marker replacement, lifecycle behavior, engine boundaries, limits, and diagnostics field reference. The latest correctness snapshot is recorded in [Verification](docs/verification.md).

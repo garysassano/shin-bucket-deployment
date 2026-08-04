@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::path::Path;
 
 use anyhow::{Context, Result, anyhow, ensure};
@@ -17,7 +18,6 @@ use crate::types::{
     PutObjectRetryJitter, PutObjectRetryOptions, RuntimeOptions, TrustedSourceCatalog,
 };
 
-const DEFAULT_AVAILABLE_MEMORY_MB: u64 = 1024;
 const MIN_SOURCE_BLOCK_BYTES: usize = 30;
 const MAX_PARALLEL_TRANSFERS: usize = 256;
 const MAX_SOURCE_GET_CONCURRENCY: usize = 64;
@@ -53,6 +53,7 @@ pub(crate) struct RawSourceCatalog {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 #[serde(rename_all = "PascalCase")]
 pub(crate) struct RawDeploymentRequest {
     pub(crate) source_bucket_names: Vec<String>,
@@ -104,8 +105,6 @@ pub(crate) struct RawDeploymentRequest {
     pub(crate) delete_previous_objects_on_change: Option<RawDeletePreviousObjectsOnChange>,
     #[serde(default)]
     pub(crate) invalidate_previous_distribution_on_change: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_optional_u64ish")]
-    pub(crate) available_memory_mb: Option<u64>,
     #[serde(default, deserialize_with = "deserialize_optional_usizeish")]
     pub(crate) max_parallel_transfers: Option<usize>,
     #[serde(default, deserialize_with = "deserialize_optional_usizeish")]
@@ -147,8 +146,16 @@ impl Filters {
 /// Takes the raw request by value so every owned field moves into the parsed request.
 /// The two `&raw` helpers below run first, while the whole value is still intact.
 pub(crate) fn parse_request(raw: RawDeploymentRequest) -> Result<DeploymentRequest> {
+    let lambda_memory = std::env::var_os(LAMBDA_MEMORY_ENV);
+    parse_request_with_memory(raw, parse_lambda_memory_env(lambda_memory.as_deref())?)
+}
+
+pub(crate) fn parse_request_with_memory(
+    raw: RawDeploymentRequest,
+    lambda_memory: &str,
+) -> Result<DeploymentRequest> {
     let source_catalogs = parse_source_catalogs(&raw)?;
-    let runtime = runtime_options(&raw)?;
+    let runtime = runtime_options_with_memory(&raw, lambda_memory)?;
 
     let source_count = raw.source_bucket_names.len();
     let mut source_markers = raw.source_markers;
@@ -245,33 +252,21 @@ fn parse_sha256(value: &str) -> Option<[u8; 32]> {
     Some(digest)
 }
 
-fn runtime_options(raw: &RawDeploymentRequest) -> Result<RuntimeOptions> {
-    let lambda_memory = std::env::var(LAMBDA_MEMORY_ENV).ok();
-    runtime_options_with_memory(raw, lambda_memory.as_deref())
+fn parse_lambda_memory_env(value: Option<&OsStr>) -> Result<&str> {
+    value
+        .ok_or_else(|| anyhow!("{LAMBDA_MEMORY_ENV} must be set"))?
+        .to_str()
+        .ok_or_else(|| anyhow!("{LAMBDA_MEMORY_ENV} must contain valid Unicode"))
 }
 
 fn runtime_options_with_memory(
     raw: &RawDeploymentRequest,
-    lambda_memory: Option<&str>,
+    lambda_memory: &str,
 ) -> Result<RuntimeOptions> {
-    let available_memory_mb = match lambda_memory {
-        Some(value) => value.parse::<u64>().with_context(|| {
-            format!("{LAMBDA_MEMORY_ENV} must contain a positive integer MiB value")
-        })?,
-        None => raw
-            .available_memory_mb
-            .unwrap_or(DEFAULT_AVAILABLE_MEMORY_MB),
-    };
-    validate_u64_range(
-        if lambda_memory.is_some() {
-            LAMBDA_MEMORY_ENV
-        } else {
-            "AvailableMemoryMb"
-        },
-        available_memory_mb,
-        1,
-        MAX_SAFE_INTEGER,
-    )?;
+    let available_memory_mb = lambda_memory.parse::<u64>().with_context(|| {
+        format!("{LAMBDA_MEMORY_ENV} must contain a positive integer MiB value")
+    })?;
+    validate_u64_range(LAMBDA_MEMORY_ENV, available_memory_mb, 1, MAX_SAFE_INTEGER)?;
 
     let lambda_memory_bytes = available_memory_mb
         .checked_mul(MIB)
@@ -764,11 +759,15 @@ mod tests {
         })
     }
 
+    fn parse_test_request(raw: RawDeploymentRequest) -> Result<DeploymentRequest> {
+        parse_request_with_memory(raw, "1024")
+    }
+
     #[test]
     fn deserializes_minimal_request_with_defaults() {
         let raw: RawDeploymentRequest =
             serde_json::from_value(minimal_request()).expect("minimal request should deserialize");
-        let request = parse_request(raw).expect("valid request");
+        let request = parse_test_request(raw).expect("valid request");
 
         assert!(request.extract);
         assert!(!request.delete_current_objects_on_delete);
@@ -810,12 +809,10 @@ mod tests {
     }
 
     #[test]
-    fn lambda_memory_environment_is_authoritative_for_the_global_budget() {
-        let mut props = minimal_request();
-        props["AvailableMemoryMb"] = json!(2048);
-        let raw: RawDeploymentRequest = serde_json::from_value(props).unwrap();
+    fn lambda_memory_environment_controls_the_global_budget() {
+        let raw: RawDeploymentRequest = serde_json::from_value(minimal_request()).unwrap();
 
-        let runtime = runtime_options_with_memory(&raw, Some("512")).expect("runtime options");
+        let runtime = runtime_options_with_memory(&raw, "512").expect("runtime options");
 
         assert_eq!(runtime.available_memory_mb, 512);
         assert_eq!(runtime.source_memory_budget_bytes, 256 * 1024 * 1024);
@@ -855,7 +852,7 @@ mod tests {
             let mut props = minimal_request();
             props[property] = value;
             let raw: RawDeploymentRequest = serde_json::from_value(props).unwrap();
-            let error = runtime_options_with_memory(&raw, Some("1024"))
+            let error = runtime_options_with_memory(&raw, "1024")
                 .expect_err("invalid runtime tuning must fail");
             assert!(
                 error.to_string().contains(expected),
@@ -868,7 +865,7 @@ mod tests {
         props["SourceGetConcurrency"] = json!(5);
         let raw: RawDeploymentRequest = serde_json::from_value(props).unwrap();
         assert!(
-            runtime_options_with_memory(&raw, Some("1024"))
+            runtime_options_with_memory(&raw, "1024")
                 .unwrap_err()
                 .to_string()
                 .contains("SourceBlockBytes * SourceGetConcurrency")
@@ -878,15 +875,15 @@ mod tests {
     #[test]
     fn runtime_tuning_rejects_malformed_memory_and_inverted_delays() {
         let raw: RawDeploymentRequest = serde_json::from_value(minimal_request()).unwrap();
-        assert!(runtime_options_with_memory(&raw, Some("not-a-number")).is_err());
-        assert!(runtime_options_with_memory(&raw, Some("0")).is_err());
+        assert!(runtime_options_with_memory(&raw, "not-a-number").is_err());
+        assert!(runtime_options_with_memory(&raw, "0").is_err());
 
         let mut props = minimal_request();
         props["PutObjectRetryBaseDelayMs"] = json!(20);
         props["PutObjectRetryMaxDelayMs"] = json!(10);
         let raw: RawDeploymentRequest = serde_json::from_value(props).unwrap();
         assert!(
-            runtime_options_with_memory(&raw, Some("1024"))
+            runtime_options_with_memory(&raw, "1024")
                 .unwrap_err()
                 .to_string()
                 .contains("PutObjectRetryBaseDelayMs")
@@ -894,17 +891,36 @@ mod tests {
     }
 
     #[test]
-    fn a_withdrawn_destination_checksum_strategy_is_ignored_rather_than_honoured() {
-        // KMS destinations are refused at synthesis, so the provider no longer reads a
-        // strategy at all. A stale template still carrying one must parse and be ignored
-        // rather than resurrect a code path that no longer exists.
-        for stale in ["kms-sha256", "sse-s3-etag", "sha256"] {
-            let mut props = minimal_request();
-            props["DestinationChecksumStrategy"] = json!(stale);
-            let raw: RawDeploymentRequest =
-                serde_json::from_value(props).expect("an unknown field must not fail the request");
-            assert!(parse_request(raw).is_ok());
-        }
+    fn deployment_request_rejects_unknown_top_level_properties() {
+        let mut props = minimal_request();
+        props["DeleteStaleObjectOnDeployment"] = json!(false);
+
+        let error = serde_json::from_value::<RawDeploymentRequest>(props)
+            .expect_err("a misspelled destructive-default property must fail closed");
+
+        assert!(error.to_string().contains("DeleteStaleObjectOnDeployment"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn lambda_memory_environment_rejects_non_unicode_values() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let value = std::ffi::OsString::from_vec(vec![0xff]);
+        let error = parse_lambda_memory_env(Some(value.as_os_str()))
+            .expect_err("non-Unicode Lambda memory must not fall back to request defaults");
+
+        assert!(error.to_string().contains(LAMBDA_MEMORY_ENV));
+        assert!(error.to_string().contains("valid Unicode"));
+    }
+
+    #[test]
+    fn lambda_memory_environment_is_required() {
+        let error = parse_lambda_memory_env(None)
+            .expect_err("missing Lambda memory must not use a request or hard-coded fallback");
+
+        assert!(error.to_string().contains(LAMBDA_MEMORY_ENV));
+        assert!(error.to_string().contains("must be set"));
     }
 
     #[test]
@@ -919,7 +935,7 @@ mod tests {
         ]);
 
         let raw: RawDeploymentRequest = serde_json::from_value(props).unwrap();
-        let request = parse_request(raw).expect("valid catalog descriptors");
+        let request = parse_test_request(raw).expect("valid catalog descriptors");
 
         assert!(request.source_catalogs[0].is_none());
         assert_eq!(
@@ -946,7 +962,7 @@ mod tests {
             let mut props = minimal_request();
             props["SourceCatalogs"] = catalogs;
             let raw: RawDeploymentRequest = serde_json::from_value(props).unwrap();
-            assert!(parse_request(raw).is_err());
+            assert!(parse_test_request(raw).is_err());
         }
     }
 
@@ -987,7 +1003,7 @@ mod tests {
         }]);
         let raw: RawDeploymentRequest = serde_json::from_value(props).unwrap();
 
-        let error = parse_request(raw).expect_err("uppercase digest must fail");
+        let error = parse_test_request(raw).expect_err("uppercase digest must fail");
 
         assert!(!error.to_string().contains(&secret_digest));
     }
@@ -1024,7 +1040,7 @@ mod tests {
 
         let raw: RawDeploymentRequest = serde_json::from_value(props)
             .expect("marker config string booleans should deserialize");
-        let request = parse_request(raw).expect("valid request");
+        let request = parse_test_request(raw).expect("valid request");
 
         assert!(request.source_markers_config[0].json_escape);
     }
@@ -1048,7 +1064,7 @@ mod tests {
 
         let raw: RawDeploymentRequest =
             serde_json::from_value(props).expect("string booleans should deserialize");
-        let request = parse_request(raw).expect("valid request");
+        let request = parse_test_request(raw).expect("valid request");
 
         assert!(request.extract);
         assert!(request.delete_current_objects_on_delete);
@@ -1060,7 +1076,6 @@ mod tests {
     #[test]
     fn deserializes_runtime_tuning_overrides() {
         let mut props = minimal_request();
-        props["AvailableMemoryMb"] = json!("1024");
         props["MaxParallelTransfers"] = json!("12");
         props["SourceBlockBytes"] = json!("4096");
         props["SourceBlockMergeGapBytes"] = json!("128");
@@ -1075,7 +1090,7 @@ mod tests {
         props["PutObjectRetryJitter"] = json!("none");
 
         let raw: RawDeploymentRequest = serde_json::from_value(props).unwrap();
-        let request = parse_request(raw).expect("valid request");
+        let request = parse_test_request(raw).expect("valid request");
 
         assert_eq!(request.runtime.available_memory_mb, 1024);
         assert_eq!(request.runtime.max_parallel_transfers, 12);
@@ -1117,7 +1132,7 @@ mod tests {
         props["InvalidatePreviousDistributionOnChange"] = json!("old-distribution");
 
         let raw: RawDeploymentRequest = serde_json::from_value(props).unwrap();
-        let request = parse_request(raw).expect("valid request");
+        let request = parse_test_request(raw).expect("valid request");
 
         assert_eq!(request.destination_owner_id.as_deref(), Some("owner-123"));
         assert_eq!(
@@ -1135,7 +1150,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_obsolete_previous_prefix_authorization() {
+    fn rejects_unknown_previous_prefix_authorization() {
         let mut props = minimal_request();
         props["DeletePreviousObjectsOnChange"] = json!({
             "DestinationBucketName": "old-bucket",
@@ -1151,7 +1166,7 @@ mod tests {
         props["SourceBlockBytes"] = json!("1");
 
         let raw: RawDeploymentRequest = serde_json::from_value(props).unwrap();
-        let error = parse_request(raw).expect_err("undersized source block must fail");
+        let error = parse_test_request(raw).expect_err("undersized source block must fail");
 
         assert!(error.to_string().contains("SourceBlockBytes"));
     }

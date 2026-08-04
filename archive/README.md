@@ -14,13 +14,16 @@ than being kept readable by version-branching code. Git history and GitHub relea
 the record of how things used to work; this directory is only for artifacts that are
 awkward to reconstruct from either.
 
-Current evidence lives in `docs/benchmark.md`, `benchmarks/`, and `docs/verification.md`.
+Current evidence lives in `docs/benchmark.md`, `benchmarks/`, and `docs/verification.md`. The active benchmark ledger is empty until a provider-summary schema-6 run is collected.
 
 ## Contents
 
 | Path | What it is | Why it is here |
 | --- | --- | --- |
-| `benchmarks/results-archived.jsonl` | All 474 sanitized result rows ever committed | No row carries a current-schema (v5) provider summary — 80 are schema v3, 40 are v4, and the rest predate result-schema v2 or carry no summary. `benchmarks/results.jsonl` starts empty; the next canonical run is the first current evidence. |
+| `benchmarks/results-archived.jsonl` | 474 older sanitized result rows | These rows predate the immediately previous provider-summary schema and are retained only as historical artifacts. |
+| `benchmarks/results-schema-v5.jsonl` | 354 sanitized result rows using provider-summary schema 5 | Schema 6 requires `source.globalReleaseAnomalies`; the old rows cannot be upgraded without inventing evidence. |
+| `benchmarks/ci-report-schema-v5.md`, `benchmarks/ci-telemetry-schema-v5.md` | Generated report and telemetry from schema-5 rows | Their source rows are no longer accepted by active renderers. |
+| `benchmarks/snapshots/mixed-2048mib-64-schema-v5.svg` | Canonical chart rendered from schema-5 rows | It is archived with its source evidence and is not a current product claim. |
 | `benchmarks/ci-report.md`, `benchmarks/ci-telemetry.md` | Generated report and telemetry for the last CI run | Rendered from the archived rows above. |
 | `benchmarks/telemetry.md` | Methodology-v1 provider telemetry tables | Rendered from the oldest archived rows. |
 | `benchmarks/snapshots/` | Seven chart renders (two CI charts plus 1024/16, 1024/32, 2048/64, 4096/128, 10240/320) | All derive from archived rows. The 10240/320 configuration can no longer be synthesized at all — `transfer.maxConcurrency` is capped at 256. |

@@ -110,11 +110,10 @@ function providerSummary(memoryMb, parallel, create) {
   const zeroFields = (names) => Object.fromEntries(names.map((name) => [name, 0]));
   return {
     event: "shin_deployment_summary",
-    schemaVersion: 5,
+    schemaVersion: 6,
     requestType: create ? "Create" : "Update",
     deploymentStatus: "success",
     extract: true,
-    destinationChecksumStrategy: "sse-s3-etag",
     deleteStaleObjectsOnDeployment: true,
     availableMemoryMb: memoryMb,
     maxParallelTransfers: parallel,
@@ -205,6 +204,7 @@ function providerSummary(memoryMb, parallel, create) {
       "globalBudgetBytes",
       "globalResidentBytesCurrent",
       "globalResidentBytesHighWater",
+      "globalReleaseAnomalies",
     ]),
     putObject: {
       ...zeroFields([

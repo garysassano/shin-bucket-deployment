@@ -594,7 +594,7 @@ export interface ShinBucketDeploymentDestinationLifecycle {
      * bucket rather than a single prefix. The provider itself derives the actual
      * prefix from the Update event and confines deletion to that namespace, but
      * the IAM grant is bucket-wide and is inherited by every deployment sharing
-     * the handler role. Turn the option back off after a one-time migration if
+     * the handler role. Turn the option back off after the destination change if
      * that authority is no longer needed.
      *
      * @default false

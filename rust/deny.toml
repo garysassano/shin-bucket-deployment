@@ -22,7 +22,7 @@ ignore = []
 # aws-smithy-checksums requires crc-fast 1.9+, whose x86_64/aarch64 targets
 # require that newly yanked exact version. `pnpm rust:audit` still scans the
 # complete lockfile. Remove the exact CLI exclusion when crc-fast publishes a
-# compatible non-yanked dependency. Tracked in issue #75.
+# non-yanked replacement. Tracked in issue #75.
 
 [bans]
 # AWS SDK transitive dependencies carry a few duplicate majors. Warn for
