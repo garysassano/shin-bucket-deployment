@@ -11,11 +11,12 @@ use crate::s3::{
     DEFAULT_SOURCE_BLOCK_BYTES, DEFAULT_SOURCE_BLOCK_MERGE_GAP_BYTES,
     DEFAULT_TRANSFER_MAX_CONCURRENCY, PUT_OBJECT_MAX_ATTEMPTS, PUT_OBJECT_RETRY_BASE_DELAY_MS,
     PUT_OBJECT_RETRY_MAX_DELAY_MS, PUT_OBJECT_SLOWDOWN_RETRY_BASE_DELAY_MS,
-    PUT_OBJECT_SLOWDOWN_RETRY_MAX_DELAY_MS, adaptive_source_get_concurrency,
+    PUT_OBJECT_SLOWDOWN_RETRY_MAX_DELAY_MS, S3_SINGLE_PUT_LIMIT, adaptive_source_get_concurrency,
 };
 use crate::types::{
-    DeletePreviousObjectsOnChange, DeploymentRequest, Filters, MarkerConfig, PreviousDestination,
-    PutObjectRetryJitter, PutObjectRetryOptions, RuntimeOptions, TrustedSourceCatalog,
+    ArchiveExpansionLimits, DeletePreviousObjectsOnChange, DeploymentRequest, Filters,
+    MarkerConfig, PreviousDestination, PutObjectRetryJitter, PutObjectRetryOptions, RuntimeOptions,
+    TrustedSourceCatalog,
 };
 use crate::util::{MAX_DIAGNOSTIC_VALUE_BYTES, sanitize_diagnostic};
 
@@ -23,6 +24,7 @@ const MIN_SOURCE_BLOCK_BYTES: usize = 30;
 const MAX_PARALLEL_TRANSFERS: usize = 256;
 const MAX_SOURCE_GET_CONCURRENCY: usize = 64;
 const MAX_PUT_OBJECT_ATTEMPTS: usize = 10;
+const MAX_COMPRESSION_RATIO: u64 = 10_000;
 const MAX_RETRY_DELAY_MS: u64 = 60_000;
 const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 const MIB: u64 = 1024 * 1024;
@@ -106,6 +108,10 @@ pub(crate) struct RawDeploymentRequest {
     pub(crate) delete_previous_objects_on_change: Option<RawDeletePreviousObjectsOnChange>,
     #[serde(default)]
     pub(crate) invalidate_previous_distribution_on_change: Option<String>,
+    #[serde(deserialize_with = "deserialize_u64ish")]
+    pub(crate) max_uncompressed_entry_bytes: u64,
+    #[serde(deserialize_with = "deserialize_u64ish")]
+    pub(crate) max_compression_ratio: u64,
     #[serde(default, deserialize_with = "deserialize_optional_usizeish")]
     pub(crate) max_parallel_transfers: Option<usize>,
     #[serde(default, deserialize_with = "deserialize_optional_usizeish")]
@@ -156,6 +162,7 @@ pub(crate) fn parse_request_with_memory(
     lambda_memory: &str,
 ) -> Result<DeploymentRequest> {
     let source_catalogs = parse_source_catalogs(&raw)?;
+    let archive_expansion = archive_expansion_limits(&raw)?;
     let runtime = runtime_options_with_memory(&raw, lambda_memory)?;
 
     let source_count = raw.source_bucket_names.len();
@@ -201,7 +208,27 @@ pub(crate) fn parse_request_with_memory(
             }
         }),
         invalidate_previous_distribution_on_change: raw.invalidate_previous_distribution_on_change,
+        archive_expansion,
         runtime,
+    })
+}
+
+fn archive_expansion_limits(raw: &RawDeploymentRequest) -> Result<ArchiveExpansionLimits> {
+    validate_u64_range(
+        "MaxUncompressedEntryBytes",
+        raw.max_uncompressed_entry_bytes,
+        1,
+        S3_SINGLE_PUT_LIMIT,
+    )?;
+    validate_u64_range(
+        "MaxCompressionRatio",
+        raw.max_compression_ratio,
+        1,
+        MAX_COMPRESSION_RATIO,
+    )?;
+    Ok(ArchiveExpansionLimits {
+        max_uncompressed_entry_bytes: raw.max_uncompressed_entry_bytes,
+        max_compression_ratio: raw.max_compression_ratio,
     })
 }
 
@@ -618,6 +645,47 @@ where
     deserialize_optional_unsigned(deserializer, "u64")
 }
 
+fn deserialize_u64ish<'de, D>(deserializer: D) -> std::result::Result<u64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct U64ishVisitor;
+
+    impl serde::de::Visitor<'_> for U64ishVisitor {
+        type Value = u64;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("an unsigned integer or a decimal string containing one")
+        }
+
+        fn visit_u64<E>(self, value: u64) -> std::result::Result<Self::Value, E> {
+            Ok(value)
+        }
+
+        fn visit_i64<E>(self, value: i64) -> std::result::Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            u64::try_from(value)
+                .map_err(|_| E::invalid_value(serde::de::Unexpected::Signed(value), &self))
+        }
+
+        fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+                return Err(E::invalid_value(serde::de::Unexpected::Str(value), &self));
+            }
+            value
+                .parse::<u64>()
+                .map_err(|_| E::invalid_value(serde::de::Unexpected::Str(value), &self))
+        }
+    }
+
+    deserializer.deserialize_any(U64ishVisitor)
+}
+
 fn deserialize_optional_usizeish<'de, D>(
     deserializer: D,
 ) -> std::result::Result<Option<usize>, D::Error>
@@ -797,6 +865,8 @@ mod tests {
             "SourceBucketNames": ["source-bucket"],
             "SourceObjectKeys": ["source.zip"],
             "DestinationBucketName": "dest-bucket",
+            "MaxUncompressedEntryBytes": 1073741824,
+            "MaxCompressionRatio": 100,
         })
     }
 
@@ -805,7 +875,7 @@ mod tests {
     }
 
     #[test]
-    fn deserializes_minimal_request_with_defaults() {
+    fn deserializes_minimal_request_with_required_archive_limits() {
         let raw: RawDeploymentRequest =
             serde_json::from_value(minimal_request()).expect("minimal request should deserialize");
         let request = parse_test_request(raw).expect("valid request");
@@ -827,9 +897,107 @@ mod tests {
         assert_eq!(request.runtime.source_get_concurrency, 4);
         assert_eq!(request.runtime.max_parallel_transfers, 32);
         assert_eq!(
+            request.archive_expansion,
+            ArchiveExpansionLimits {
+                max_uncompressed_entry_bytes: 1_073_741_824,
+                max_compression_ratio: 100,
+            }
+        );
+        assert_eq!(
             request.runtime.put_object_retry.jitter,
             PutObjectRetryJitter::Full
         );
+    }
+
+    #[test]
+    fn archive_expansion_limits_are_required() {
+        for missing in ["MaxUncompressedEntryBytes", "MaxCompressionRatio"] {
+            let mut props = minimal_request();
+            props
+                .as_object_mut()
+                .expect("request is an object")
+                .remove(missing);
+
+            let error = serde_json::from_value::<RawDeploymentRequest>(props)
+                .expect_err("a missing archive expansion limit must fail");
+
+            assert!(
+                error.to_string().contains(missing),
+                "unexpected error for {missing}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn archive_expansion_limits_accept_numeric_and_decimal_string_boundaries() {
+        for (entry_bytes, ratio, expected_entry_bytes, expected_ratio) in [
+            (json!(1), json!(1), 1, 1),
+            (
+                json!(S3_SINGLE_PUT_LIMIT.to_string()),
+                json!(MAX_COMPRESSION_RATIO.to_string()),
+                S3_SINGLE_PUT_LIMIT,
+                MAX_COMPRESSION_RATIO,
+            ),
+        ] {
+            let mut props = minimal_request();
+            props["MaxUncompressedEntryBytes"] = entry_bytes;
+            props["MaxCompressionRatio"] = ratio;
+
+            let raw: RawDeploymentRequest = serde_json::from_value(props)
+                .expect("number and decimal string forms should deserialize");
+            let limits = archive_expansion_limits(&raw).expect("boundary must be accepted");
+
+            assert_eq!(limits.max_uncompressed_entry_bytes, expected_entry_bytes);
+            assert_eq!(limits.max_compression_ratio, expected_ratio);
+        }
+    }
+
+    #[test]
+    fn archive_expansion_limits_reject_zero_and_values_above_the_current_bounds() {
+        for (property, value) in [
+            ("MaxUncompressedEntryBytes", json!(0)),
+            ("MaxUncompressedEntryBytes", json!(S3_SINGLE_PUT_LIMIT + 1)),
+            ("MaxCompressionRatio", json!(0)),
+            ("MaxCompressionRatio", json!(MAX_COMPRESSION_RATIO + 1)),
+        ] {
+            let mut props = minimal_request();
+            props[property] = value;
+            let raw: RawDeploymentRequest = serde_json::from_value(props)
+                .expect("range-invalid unsigned integer should deserialize");
+
+            let error = archive_expansion_limits(&raw)
+                .expect_err("out-of-range archive expansion limit must fail");
+
+            assert!(
+                error.to_string().contains(property),
+                "unexpected error for {property}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn archive_expansion_limits_reject_null_blank_signed_fractional_and_malformed_values() {
+        for (property, value) in [
+            ("MaxUncompressedEntryBytes", json!(null)),
+            ("MaxUncompressedEntryBytes", json!("")),
+            ("MaxUncompressedEntryBytes", json!(" 1")),
+            ("MaxUncompressedEntryBytes", json!(-1)),
+            ("MaxUncompressedEntryBytes", json!(1.5)),
+            ("MaxCompressionRatio", json!(null)),
+            ("MaxCompressionRatio", json!("")),
+            ("MaxCompressionRatio", json!("1 ")),
+            ("MaxCompressionRatio", json!(-1)),
+            ("MaxCompressionRatio", json!(1.5)),
+            ("MaxCompressionRatio", json!("not-a-number")),
+        ] {
+            let mut props = minimal_request();
+            props[property] = value;
+
+            assert!(
+                serde_json::from_value::<RawDeploymentRequest>(props).is_err(),
+                "{property} should reject the malformed wire value"
+            );
+        }
     }
 
     #[test]

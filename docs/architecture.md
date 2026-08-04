@@ -607,6 +607,7 @@ CloudFormation callback diagnostics field reference:
 | Deploy-time marker replacement | Marker entries use simultaneous leftmost-longest replacement, one bounded exact-length planning pass, and a second retryable streaming pass only when upload is required. |
 | Multiple sources with override order | The provider builds one manifest across sources before pruning and upload decisions. |
 | Include/exclude filters | Filters are applied while walking ZIP entries. |
+| Archive expansion limits | Extracted regular entries are checked during source planning against `sourceProcessing.maxUncompressedEntryBytes` and `sourceProcessing.maxCompressionRatio`, before destination listing or mutation. The check uses central-directory metadata already read by planning and adds no archive pass or payload copy. |
 | Object metadata and content type | Deployment-wide object metadata overrides are intentionally omitted. Upload and copy infer `Content-Type` from the deployed object's file extension with a binary fallback. Bucket and CloudFront policy own cache, encryption, storage, and lifecycle behavior. |
 | `extract=false` | Copy mode stays separate from ZIP extraction. |
 | `destinationLifecycle` | Destination listing, stale-object deletion, destination-change cleanup, and Delete cleanup remain provider-owned. |
@@ -620,7 +621,8 @@ CloudFormation callback diagnostics field reference:
 - Destination buckets must use SSE-S3; SSE-C, SSE-KMS, and SSE-DSSE are unsupported.
 - Imported buckets and tokenized, unknown, or multi-rule synthesized encryption configurations are rejected.
 - Source ZIP archives and marker-expanded entries do not need to fit in Lambda memory or ephemeral storage; both stream in bounded chunks.
-- Each extracted ZIP entry, including marker-expanded output, must be no larger than 5 GiB because uploads currently use single-request `PutObject`, not multipart upload.
+- Each extracted ZIP entry is limited by `sourceProcessing.maxUncompressedEntryBytes`, which defaults to 1 GiB and accepts 1 byte through the 5 GiB S3 single-`PutObject` ceiling. `sourceProcessing.maxCompressionRatio` defaults to 100 and accepts 1–10,000; an entry exactly at the configured ratio passes, while any fractional excess fails. Empty `0/0` entries pass, and non-empty entries declaring zero compressed bytes fail. These planning limits apply to Stored and Deflate entries, including the authenticated embedded catalog, but not to archives copied with `extract=false`.
+- Streaming validation independently refuses decoded bytes beyond the central-directory size. Because planning first requires that declared size to fit `maxUncompressedEntryBytes`, a ZIP that lies about its output cannot stream past the configured byte ceiling.
 - Final destination keys must fit S3's 1024-byte UTF-8 limit.
 - `destination.keyPrefix` must be a concrete string no longer than 102 characters. `"/"` and an omitted prefix both select the bucket root and share the same canonical ownership namespace.
 - `transfer.maxConcurrency` is 1–256; resolved values above the measured guidance ceiling of 64 emit an acknowledgeable synthesis warning. Explicit source GET concurrency is 1–64, and provider-owned destination write attempts are 1–10.

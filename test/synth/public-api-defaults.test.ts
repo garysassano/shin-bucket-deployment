@@ -3,6 +3,8 @@ import { join } from "node:path";
 import { expect, test } from "vitest";
 import {
   DEFAULT_FAILURE_DIAGNOSTICS,
+  DEFAULT_MAX_COMPRESSION_RATIO,
+  DEFAULT_MAX_UNCOMPRESSED_ENTRY_BYTES,
   DEFAULT_PROVIDER_LAMBDA_MEMORY_SIZE_MIB,
   DEFAULT_TRANSFER_MAX_CONCURRENCY,
   FailureDiagnostics,
@@ -24,6 +26,12 @@ test("keeps public JSDoc defaults bound to the exported source constants", () =>
   );
   expect(publicSource).toContain(
     `@default DEFAULT_TRANSFER_MAX_CONCURRENCY (${DEFAULT_TRANSFER_MAX_CONCURRENCY})`,
+  );
+  expect(publicSource).toContain(
+    `@default DEFAULT_MAX_UNCOMPRESSED_ENTRY_BYTES (${DEFAULT_MAX_UNCOMPRESSED_ENTRY_BYTES})`,
+  );
+  expect(publicSource).toContain(
+    `@default DEFAULT_MAX_COMPRESSION_RATIO (${DEFAULT_MAX_COMPRESSION_RATIO})`,
   );
   expect(publicSource).toContain(
     "@default DEFAULT_FAILURE_DIAGNOSTICS (FailureDiagnostics.STANDARD)",

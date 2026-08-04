@@ -11,8 +11,8 @@ use tokio::io::AsyncReadExt;
 
 use crate::request::{join_s3_key, normalize_archive_key, source_basename};
 use crate::types::{
-    AppState, DeploymentManifest, DeploymentRequest, DeploymentStats, Filters, PlannedAction,
-    PlannedObject, SourceArchive, TrustedEntryIntegrity,
+    AppState, ArchiveExpansionLimits, DeploymentManifest, DeploymentRequest, DeploymentStats,
+    Filters, PlannedAction, PlannedObject, SourceArchive, TrustedEntryIntegrity,
 };
 use crate::util::{MAX_DIAGNOSTIC_VALUE_BYTES, sanitize_diagnostic};
 
@@ -443,7 +443,7 @@ async fn add_archive_entries_to_manifest(
                 sanitize_diagnostic(&relative_key, MAX_DIAGNOSTIC_VALUE_BYTES)
             ));
         }
-        validate_stored_file_entry(stored, &relative_key)?;
+        validate_stored_file_entry(stored, &relative_key, request.archive_expansion)?;
         if !filters.should_include(&relative_key) {
             stats.add_filtered_entry();
             continue;
@@ -544,6 +544,12 @@ async fn load_authenticated_catalog(
     {
         return Err(anyhow!("embedded source catalog exceeds its size limit"));
     }
+    validate_archive_expansion(
+        EMBEDDED_CATALOG_PATH,
+        stored.uncompressed_size(),
+        stored.compressed_size(),
+        request.archive_expansion,
+    )?;
 
     let plan = zip_entry_plan(
         source.len(),
@@ -617,7 +623,7 @@ async fn load_authenticated_catalog(
     // parse above; releasing the raw half here keeps the peak at that parse rather than
     // letting it grow again while the manifest map is built.
     drop(bytes);
-    let manifest = validate_catalog_entries(catalog, entries);
+    let manifest = validate_catalog_entries(catalog, entries, request.archive_expansion);
     // The surviving map is charged to the central directory's per-entry metadata
     // estimate, so the catalog reservation ends with the transient buffers.
     drop(catalog_permit);
@@ -695,6 +701,7 @@ fn authenticate_catalog_bytes(bytes: &[u8], expected_sha256: &[u8; 32]) -> Resul
 fn validate_catalog_entries(
     catalog: EmbeddedCatalog,
     zip_entries: &[StoredZipEntry],
+    limits: ArchiveExpansionLimits,
 ) -> Result<HashMap<String, TrustedEntryIntegrity>> {
     if catalog.version != EMBEDDED_CATALOG_VERSION {
         return Err(anyhow!(
@@ -742,7 +749,7 @@ fn validate_catalog_entries(
         if is_reserved_catalog_path(&path) {
             continue;
         }
-        validate_stored_file_entry(stored, &path)?;
+        validate_stored_file_entry(stored, &path, limits)?;
         if files
             .insert(path.into_owned(), stored.uncompressed_size())
             .is_some()
@@ -835,7 +842,11 @@ fn stored_zip_file_path(stored: &StoredZipEntry) -> Result<Option<Cow<'_, str>>>
     }
 }
 
-fn validate_stored_file_entry(stored: &StoredZipEntry, path: &str) -> Result<()> {
+fn validate_stored_file_entry(
+    stored: &StoredZipEntry,
+    path: &str,
+    limits: ArchiveExpansionLimits,
+) -> Result<()> {
     match stored.compression() {
         Compression::Stored | Compression::Deflate => {}
         other => {
@@ -846,11 +857,52 @@ fn validate_stored_file_entry(stored: &StoredZipEntry, path: &str) -> Result<()>
         }
     }
 
-    let size = stored.uncompressed_size();
-    if size > S3_SINGLE_PUT_LIMIT {
+    validate_archive_expansion(
+        path,
+        stored.uncompressed_size(),
+        stored.compressed_size(),
+        limits,
+    )
+}
+
+fn validate_archive_expansion(
+    path: &str,
+    uncompressed_size: u64,
+    compressed_size: u64,
+    limits: ArchiveExpansionLimits,
+) -> Result<()> {
+    if uncompressed_size > S3_SINGLE_PUT_LIMIT {
         return Err(anyhow!(
-            "entry `{}` is {size} bytes, larger than the S3 single PutObject limit",
+            "entry `{}` is {uncompressed_size} bytes, larger than the S3 single PutObject limit",
             sanitize_diagnostic(path, MAX_DIAGNOSTIC_VALUE_BYTES)
+        ));
+    }
+    if uncompressed_size > limits.max_uncompressed_entry_bytes {
+        return Err(anyhow!(
+            "entry `{}` has an uncompressed size of {uncompressed_size} bytes, larger than the configured MaxUncompressedEntryBytes limit of {}",
+            sanitize_diagnostic(path, MAX_DIAGNOSTIC_VALUE_BYTES),
+            limits.max_uncompressed_entry_bytes
+        ));
+    }
+    if uncompressed_size == 0 {
+        return Ok(());
+    }
+    if compressed_size == 0 {
+        return Err(anyhow!(
+            "entry `{}` declares non-empty output with zero compressed bytes",
+            sanitize_diagnostic(path, MAX_DIAGNOSTIC_VALUE_BYTES)
+        ));
+    }
+
+    let quotient = uncompressed_size / compressed_size;
+    let remainder = uncompressed_size % compressed_size;
+    if quotient > limits.max_compression_ratio
+        || (quotient == limits.max_compression_ratio && remainder > 0)
+    {
+        return Err(anyhow!(
+            "entry `{}` exceeds the configured MaxCompressionRatio limit of {}",
+            sanitize_diagnostic(path, MAX_DIAGNOSTIC_VALUE_BYTES),
+            limits.max_compression_ratio
         ));
     }
 
@@ -887,13 +939,17 @@ pub(super) fn validate_deployment_preflight(
                     })?;
                 validate_copy_object_size(&planned.relative_key, size)?;
             }
-            PlannedAction::ZipEntry { size, .. } => {
-                if size > S3_SINGLE_PUT_LIMIT {
-                    return Err(anyhow!(
-                        "entry `{}` is {size} bytes, larger than the S3 single PutObject limit",
-                        sanitize_diagnostic(&planned.relative_key, MAX_DIAGNOSTIC_VALUE_BYTES)
-                    ));
-                }
+            PlannedAction::ZipEntry {
+                size,
+                compressed_size,
+                ..
+            } => {
+                validate_archive_expansion(
+                    &planned.relative_key,
+                    size,
+                    compressed_size,
+                    request.archive_expansion,
+                )?;
             }
         }
     }
@@ -997,6 +1053,7 @@ mod tests {
     use sha2::{Digest, Sha256};
     use tracing_subscriber::fmt::MakeWriter;
     use tracing_subscriber::layer::SubscriberExt;
+    use zip::CompressionMethod;
     use zip::write::{SimpleFileOptions, ZipWriter};
 
     use super::{
@@ -1005,22 +1062,29 @@ mod tests {
         authenticate_catalog_bytes, authenticated_catalog_entry, catalog_budget_error,
         catalog_memory_estimate, catalog_source_block_bytes, checked_archive_totals,
         collect_copy_plans, collect_zip_entry_plans, ensure_unique_source_offsets,
-        insert_manifest_object, validate_archive_directory, validate_catalog_entries,
-        validate_deployment_preflight,
+        insert_manifest_object, validate_archive_directory, validate_archive_expansion,
+        validate_catalog_entries, validate_deployment_preflight, validate_stored_file_entry,
     };
     use crate::request::compile_filters;
     use crate::s3::archive::SourceByteBudget;
     use crate::s3::destination::{DestinationObject, DestinationWritePrecondition};
     use crate::types::DeploymentStats;
     use crate::types::{
-        DeploymentManifest, DeploymentRequest, MarkerConfig, PlannedAction, PlannedObject,
-        PutObjectRetryJitter, PutObjectRetryOptions, RuntimeOptions,
+        ArchiveExpansionLimits, DeploymentManifest, DeploymentRequest, MarkerConfig, PlannedAction,
+        PlannedObject, PutObjectRetryJitter, PutObjectRetryOptions, RuntimeOptions,
     };
 
     #[derive(Clone, Default)]
     struct TestWriter(Arc<Mutex<Vec<u8>>>);
 
     struct TestWriterGuard(Arc<Mutex<Vec<u8>>>);
+
+    fn archive_expansion_limits() -> ArchiveExpansionLimits {
+        ArchiveExpansionLimits {
+            max_uncompressed_entry_bytes: 1024 * 1024 * 1024,
+            max_compression_ratio: 100,
+        }
+    }
 
     impl Write for TestWriterGuard {
         fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
@@ -1330,6 +1394,105 @@ mod tests {
         assert_eq!(checked_archive_totals((1, 2), 3, 4).unwrap(), (4, 6));
         assert!(checked_archive_totals((u64::MAX, 0), 1, 0).is_err());
         assert!(checked_archive_totals((0, u64::MAX), 0, 1).is_err());
+    }
+
+    #[test]
+    fn archive_expansion_guard_enforces_exact_byte_and_ratio_boundaries() {
+        let limits = ArchiveExpansionLimits {
+            max_uncompressed_entry_bytes: 1_000,
+            max_compression_ratio: 100,
+        };
+
+        validate_archive_expansion("exact.bin", 1_000, 10, limits)
+            .expect("exact size and ratio boundaries are valid");
+
+        let size_error = validate_archive_expansion("large.bin", 1_001, 11, limits)
+            .expect_err("one byte above the absolute limit must fail");
+        assert!(size_error.to_string().contains("MaxUncompressedEntryBytes"));
+
+        let ratio_error = validate_archive_expansion("dense.bin", 1_000, 9, limits)
+            .expect_err("a fractional ratio above the boundary must fail");
+        assert!(ratio_error.to_string().contains("MaxCompressionRatio"));
+    }
+
+    #[test]
+    fn archive_expansion_guard_handles_empty_zero_compressed_and_overflow_edge_metadata() {
+        let limits = ArchiveExpansionLimits {
+            max_uncompressed_entry_bytes: S3_SINGLE_PUT_LIMIT,
+            max_compression_ratio: 10_000,
+        };
+
+        validate_archive_expansion("empty.bin", 0, 0, limits).expect("empty 0/0 entry is valid");
+        assert!(validate_archive_expansion("invalid.bin", 1, 0, limits).is_err());
+        validate_archive_expansion("wide-metadata.bin", S3_SINGLE_PUT_LIMIT, u64::MAX, limits)
+            .expect("ratio arithmetic must not multiply attacker-sized metadata");
+        assert!(validate_archive_expansion("overflow.bin", u64::MAX, 1, limits).is_err());
+    }
+
+    #[tokio::test]
+    async fn stored_and_deflate_entries_use_the_archive_expansion_guard() {
+        let contents = vec![b'a'; 4_096];
+
+        for compression in [CompressionMethod::Stored, CompressionMethod::Deflated] {
+            let bytes = zip_bytes_from_entries_with_compression(
+                &[("entry.bin", contents.as_slice())],
+                false,
+                compression,
+            );
+            let reader = ZipFileReader::with_tokio(Cursor::new(bytes)).await.unwrap();
+            let zip = reader.file().clone();
+            let stored = &zip.entries()[0];
+            let exact_limits = ArchiveExpansionLimits {
+                max_uncompressed_entry_bytes: contents.len() as u64,
+                max_compression_ratio: 10_000,
+            };
+
+            validate_stored_file_entry(stored, "entry.bin", exact_limits)
+                .expect("entry at the configured byte boundary must pass");
+
+            let error = validate_stored_file_entry(
+                stored,
+                "entry.bin",
+                ArchiveExpansionLimits {
+                    max_uncompressed_entry_bytes: contents.len() as u64 - 1,
+                    max_compression_ratio: 10_000,
+                },
+            )
+            .expect_err("entry above the configured byte boundary must fail");
+            assert!(error.to_string().contains("MaxUncompressedEntryBytes"));
+        }
+    }
+
+    #[test]
+    fn deployment_preflight_rechecks_archive_expansion_limits() {
+        let mut request = copy_request();
+        request.archive_expansion = ArchiveExpansionLimits {
+            max_uncompressed_entry_bytes: 1_000,
+            max_compression_ratio: 10,
+        };
+        let manifest = DeploymentManifest::from([(
+            "dense.bin".to_string(),
+            PlannedObject {
+                relative_key: "dense.bin".to_string(),
+                expected_etag: None,
+                action: PlannedAction::ZipEntry {
+                    archive_index: 0,
+                    source_index: 0,
+                    size: 101,
+                    compressed_size: 10,
+                    compression_code: 8,
+                    crc32: 0,
+                    trusted_integrity: None,
+                    source_offset: 0,
+                    source_span_end: 1,
+                },
+            },
+        )]);
+
+        let error = validate_deployment_preflight(&request, &manifest)
+            .expect_err("an internally malformed manifest must fail before destination work");
+
+        assert!(error.to_string().contains("MaxCompressionRatio"));
     }
 
     #[test]
@@ -1715,24 +1878,37 @@ mod tests {
             }],
         };
 
-        let mapped = validate_catalog_entries(valid(), zip.entries()).expect("valid mapping");
+        let mapped = validate_catalog_entries(valid(), zip.entries(), archive_expansion_limits())
+            .expect("valid mapping");
         assert_eq!(mapped["index.html"].size, 5);
 
         let mut wrong_version = valid();
         wrong_version.version = 2;
-        assert!(validate_catalog_entries(wrong_version, zip.entries()).is_err());
+        assert!(
+            validate_catalog_entries(wrong_version, zip.entries(), archive_expansion_limits())
+                .is_err()
+        );
 
         let mut wrong_size = valid();
         wrong_size.entries[0].size = 6;
-        assert!(validate_catalog_entries(wrong_size, zip.entries()).is_err());
+        assert!(
+            validate_catalog_entries(wrong_size, zip.entries(), archive_expansion_limits())
+                .is_err()
+        );
 
         let mut malformed_md5 = valid();
         malformed_md5.entries[0].md5 = "ABCDEF".repeat(5) + "AB";
-        assert!(validate_catalog_entries(malformed_md5, zip.entries()).is_err());
+        assert!(
+            validate_catalog_entries(malformed_md5, zip.entries(), archive_expansion_limits())
+                .is_err()
+        );
 
         let mut non_canonical = valid();
         non_canonical.entries[0].path = "nested/../index.html".to_string();
-        assert!(validate_catalog_entries(non_canonical, zip.entries()).is_err());
+        assert!(
+            validate_catalog_entries(non_canonical, zip.entries(), archive_expansion_limits())
+                .is_err()
+        );
 
         let mut duplicate = valid();
         duplicate.entries.push(EmbeddedCatalogEntry {
@@ -1740,7 +1916,9 @@ mod tests {
             size: 5,
             md5: "6a992d5529f459a44fee58c733255e86".to_string(),
         });
-        assert!(validate_catalog_entries(duplicate, zip.entries()).is_err());
+        assert!(
+            validate_catalog_entries(duplicate, zip.entries(), archive_expansion_limits()).is_err()
+        );
 
         let mut extra = valid();
         extra.entries.push(EmbeddedCatalogEntry {
@@ -1748,13 +1926,50 @@ mod tests {
             size: 5,
             md5: "6a992d5529f459a44fee58c733255e86".to_string(),
         });
-        assert!(validate_catalog_entries(extra, zip.entries()).is_err());
+        assert!(
+            validate_catalog_entries(extra, zip.entries(), archive_expansion_limits()).is_err()
+        );
 
         let missing = EmbeddedCatalog {
             version: 1,
             entries: Vec::new(),
         };
-        assert!(validate_catalog_entries(missing, zip.entries()).is_err());
+        assert!(
+            validate_catalog_entries(missing, zip.entries(), archive_expansion_limits()).is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn authenticated_catalog_mapping_enforces_archive_expansion_limits() {
+        let bytes = zip_bytes_from_entries(
+            &[
+                ("index.html", b"index" as &[u8]),
+                (".shin/catalog.v1.json", b"catalog" as &[u8]),
+            ],
+            false,
+        );
+        let reader = ZipFileReader::with_tokio(Cursor::new(bytes)).await.unwrap();
+        let zip = reader.file().clone();
+        let catalog = EmbeddedCatalog {
+            version: 1,
+            entries: vec![EmbeddedCatalogEntry {
+                path: "index.html".to_string(),
+                size: 5,
+                md5: "6a992d5529f459a44fee58c733255e86".to_string(),
+            }],
+        };
+
+        let error = validate_catalog_entries(
+            catalog,
+            zip.entries(),
+            ArchiveExpansionLimits {
+                max_uncompressed_entry_bytes: 4,
+                max_compression_ratio: 100,
+            },
+        )
+        .expect_err("trusted catalog mapping must enforce the configured entry ceiling");
+
+        assert!(error.to_string().contains("MaxUncompressedEntryBytes"));
     }
 
     #[tokio::test]
@@ -1777,7 +1992,8 @@ mod tests {
             }],
         };
 
-        validate_catalog_entries(catalog, zip.entries()).expect("ZIP64 mapping should validate");
+        validate_catalog_entries(catalog, zip.entries(), archive_expansion_limits())
+            .expect("ZIP64 mapping should validate");
     }
 
     #[tokio::test]
@@ -1801,7 +2017,9 @@ mod tests {
             }],
         };
 
-        assert!(validate_catalog_entries(catalog, zip.entries()).is_err());
+        assert!(
+            validate_catalog_entries(catalog, zip.entries(), archive_expansion_limits()).is_err()
+        );
     }
 
     fn copy_request() -> DeploymentRequest {
@@ -1826,6 +2044,7 @@ mod tests {
             destination_owner_id: Some("test-owner".to_string()),
             delete_previous_objects_on_change: None,
             invalidate_previous_distribution_on_change: None,
+            archive_expansion: archive_expansion_limits(),
             runtime: RuntimeOptions {
                 available_memory_mb: 1024,
                 max_parallel_transfers: 1,
@@ -1866,9 +2085,19 @@ mod tests {
     }
 
     fn zip_bytes_from_entries(entries: &[(&str, &[u8])], zip64: bool) -> Vec<u8> {
+        zip_bytes_from_entries_with_compression(entries, zip64, CompressionMethod::Stored)
+    }
+
+    fn zip_bytes_from_entries_with_compression(
+        entries: &[(&str, &[u8])],
+        zip64: bool,
+        compression: CompressionMethod,
+    ) -> Vec<u8> {
         let cursor = Cursor::new(Vec::new());
         let mut writer = ZipWriter::new(cursor);
-        let options = SimpleFileOptions::default().large_file(zip64);
+        let options = SimpleFileOptions::default()
+            .compression_method(compression)
+            .large_file(zip64);
 
         for (name, bytes) in entries {
             writer.start_file(name, options).unwrap();

@@ -160,8 +160,8 @@ mod tests {
     use std::collections::HashMap;
 
     use crate::types::{
-        DeletePreviousObjectsOnChange, DeploymentRequest, PutObjectRetryJitter,
-        PutObjectRetryOptions, RuntimeOptions,
+        ArchiveExpansionLimits, DeletePreviousObjectsOnChange, DeploymentRequest,
+        PutObjectRetryJitter, PutObjectRetryOptions, RuntimeOptions,
     };
 
     use super::*;
@@ -188,6 +188,10 @@ mod tests {
             destination_owner_id: Some("owner".to_string()),
             delete_previous_objects_on_change: None,
             invalidate_previous_distribution_on_change: None,
+            archive_expansion: ArchiveExpansionLimits {
+                max_uncompressed_entry_bytes: 1024 * 1024 * 1024,
+                max_compression_ratio: 100,
+            },
             runtime: RuntimeOptions {
                 available_memory_mb: 1024,
                 max_parallel_transfers: 1,

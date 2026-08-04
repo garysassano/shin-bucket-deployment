@@ -6,6 +6,8 @@ import { S3BucketOrigin } from "aws-cdk-lib/aws-cloudfront-origins";
 import { Bucket, type CfnBucket } from "aws-cdk-lib/aws-s3";
 import { describe, expect, test } from "vitest";
 import {
+  DEFAULT_MAX_COMPRESSION_RATIO,
+  DEFAULT_MAX_UNCOMPRESSED_ENTRY_BYTES,
   DestinationWriteRetryJitter,
   ShinBucketDeployment,
   type ShinBucketDeploymentProps,
@@ -31,6 +33,82 @@ function customResourceProperties(stack: Stack) {
 }
 
 describe("ShinBucketDeployment validation and option coverage", () => {
+  test("renders strict archive expansion defaults", () => {
+    const stack = new Stack();
+    const destinationBucket = new Bucket(stack, "Dest");
+
+    new ShinBucketDeployment(stack, "Deploy", {
+      sources: [Source.data("index.html", "ok")],
+      destination: { bucket: destinationBucket },
+      providerLambda: { localBuild: testLocalProviderBuild() },
+    });
+
+    expect(customResourceProperties(stack)).toMatchObject({
+      MaxUncompressedEntryBytes: DEFAULT_MAX_UNCOMPRESSED_ENTRY_BYTES,
+      MaxCompressionRatio: DEFAULT_MAX_COMPRESSION_RATIO,
+    });
+  });
+
+  test("renders explicit archive expansion boundaries", () => {
+    const stack = new Stack();
+    const destinationBucket = new Bucket(stack, "Dest");
+
+    new ShinBucketDeployment(stack, "Deploy", {
+      sources: [Source.data("index.html", "ok")],
+      destination: { bucket: destinationBucket },
+      sourceProcessing: {
+        maxUncompressedEntryBytes: 5 * 1024 * 1024 * 1024,
+        maxCompressionRatio: 10_000,
+      },
+      providerLambda: { localBuild: testLocalProviderBuild() },
+    });
+
+    expect(customResourceProperties(stack)).toMatchObject({
+      MaxUncompressedEntryBytes: 5 * 1024 * 1024 * 1024,
+      MaxCompressionRatio: 10_000,
+    });
+  });
+
+  test.each([
+    ["maxUncompressedEntryBytes", 0],
+    ["maxUncompressedEntryBytes", 5 * 1024 * 1024 * 1024 + 1],
+    ["maxUncompressedEntryBytes", 1.5],
+    ["maxUncompressedEntryBytes", Number.MAX_SAFE_INTEGER + 1],
+    ["maxUncompressedEntryBytes", "1024"],
+    ["maxCompressionRatio", 0],
+    ["maxCompressionRatio", 10_001],
+    ["maxCompressionRatio", 1.5],
+    ["maxCompressionRatio", "100"],
+  ] as const)("rejects invalid sourceProcessing.%s value %s", (property, value) => {
+    const stack = new Stack();
+    const destinationBucket = new Bucket(stack, "Dest");
+
+    expect(
+      () =>
+        new ShinBucketDeployment(stack, `Deploy${property}${String(value)}`, {
+          sources: [Source.data("index.html", "ok")],
+          destination: { bucket: destinationBucket },
+          sourceProcessing: { [property]: value } as never,
+          providerLambda: { localBuild: testLocalProviderBuild() },
+        }),
+    ).toThrow(new RegExp(`${property}.*inclusive range`));
+  });
+
+  test("rejects unknown archive expansion option names", () => {
+    const stack = new Stack();
+    const destinationBucket = new Bucket(stack, "Dest");
+
+    expect(
+      () =>
+        new ShinBucketDeployment(stack, "Deploy", {
+          sources: [Source.data("index.html", "ok")],
+          destination: { bucket: destinationBucket },
+          sourceProcessing: { maxEntryBytes: 1024 } as never,
+          providerLambda: { localBuild: testLocalProviderBuild() },
+        }),
+    ).toThrow(/Unknown ShinBucketDeployment property sourceProcessing\.maxEntryBytes/);
+  });
+
   test("rejects an invalid provider sharing value", () => {
     const stack = new Stack();
     const destinationBucket = new Bucket(stack, "Dest");
@@ -992,6 +1070,10 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     const memory = new CfnParameter(stack, "Memory", { type: "Number" });
     const block = new CfnParameter(stack, "Block", { type: "Number" });
     const maxConcurrency = new CfnParameter(stack, "MaxConcurrency", { type: "Number" });
+    const maxEntryBytes = new CfnParameter(stack, "MaxEntryBytes", { type: "Number" });
+    const maxCompressionRatio = new CfnParameter(stack, "MaxCompressionRatio", {
+      type: "Number",
+    });
 
     new ShinBucketDeployment(stack, "Deploy", {
       sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
@@ -1001,6 +1083,10 @@ describe("ShinBucketDeployment validation and option coverage", () => {
       providerLambda: {
         memorySize: memory.valueAsNumber,
         localBuild: testLocalProviderBuild(),
+      },
+      sourceProcessing: {
+        maxUncompressedEntryBytes: maxEntryBytes.valueAsNumber,
+        maxCompressionRatio: maxCompressionRatio.valueAsNumber,
       },
       transfer: {
         maxConcurrency: maxConcurrency.valueAsNumber,
@@ -1014,6 +1100,12 @@ describe("ShinBucketDeployment validation and option coverage", () => {
       Ref: "MaxConcurrency",
     });
     expect(customResourceProperties(stack).SourceBlockBytes).toEqual({ Ref: "Block" });
+    expect(customResourceProperties(stack).MaxUncompressedEntryBytes).toEqual({
+      Ref: "MaxEntryBytes",
+    });
+    expect(customResourceProperties(stack).MaxCompressionRatio).toEqual({
+      Ref: "MaxCompressionRatio",
+    });
     Annotations.fromStack(stack).hasNoWarning(
       "/Default/Deploy",
       Match.stringLikeRegexp("transfer\\.maxConcurrency"),

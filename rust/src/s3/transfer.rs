@@ -3261,6 +3261,8 @@ mod tests {
             "SourceBucketNames": ["source"],
             "SourceObjectKeys": ["archive.zip"],
             "DestinationBucketName": "destination",
+            "MaxUncompressedEntryBytes": 1073741824,
+            "MaxCompressionRatio": 100,
             "Extract": false
         }))
         .expect("raw deployment request");
