@@ -61,3 +61,44 @@ Shin rows require sanitized `shin_deployment_summary` telemetry at schema v6. It
 Do not infer S3 throttling from source block waits alone. Source S3 pressure requires source `getRetries` or `getErrors`; destination S3 throttling requires `putObject.throttledAttempts` or retry evidence for extracted uploads, and `copyObject.throttledAttempts` or retry evidence for direct copies.
 
 Do not commit `.benchmark-runs/` or other raw AWS output. Commit only sanitized result rows, Markdown/SVG render outputs, configs, source, and tests.
+
+## Destination-cleanup follow-up: planning-overhead attribution
+
+The P-4/P-6/R-1 destination-cleanup decision run (`95f84950`, five repetitions at
+`b281f03`, `mixed` 2048/64) reported planning rising from a 171 ms median to
+273 ms against the `20313b6` baseline (`9af64d64`), and concluded the rise
+"coincides with the new per-key stale-key retention path but this run does not
+isolate its cause." A follow-up attribution review (2026-08-05) now isolates it,
+using only the committed sanitized rows plus a host micro-measurement:
+
+- **The retention path is not the cause.** The implementation PR touched only
+  `destination.rs`, `s3/mod.rs`, and `cloudformation.rs` — the source planner is
+  byte-identical between the two runs, yet the `plan` phase rose across _all_
+  phases, including `cold-create` with an empty destination: 174→284
+  (`cold-create`), 159→199 (`unchanged-update`), 170→282 (`changed-update`),
+  171→273 (`pruned-update`). The phase the change actually modified
+  (`destinationList`) stayed flat at 66→62 ms. Same-day control runs with an
+  untouched plan path (P-2 marker evidence, `5bfec7df` vs `7a77a569`) swing the
+  `plan` median by 66–107 ms between runs, so the reported +102 ms is
+  inter-run platform noise, not a code regression.
+- **The per-key retention cost is measurable and tiny.** Host-build
+  micro-measurement of the exact listing-loop work (442 keys, 45 stale, empty
+  filters) shows the P-6 retention path adds ~16 ns per listed key (53→67 ns
+  per key); the second previous-namespace predicate on destination moves adds
+  ~58 ns per key. On the 442-object benchmark namespace that is roughly 7–30 µs
+  total — five orders of magnitude below the reported delta. A bounded
+  regression test now guards the per-key cost.
+- **The small-delete latency is service-bound.** Both runs delete exactly 45
+  objects in one `DeleteObjects` call with zero retries; the median delete phase
+  moved 623→674 ms, which is inside the baseline run's own 620–757 ms spread.
+  45 < 1000, so batching is already a single call, and the provider-owned retry
+  (R-1) only adds time when the service fails. There is no provider-side lever
+  for the fixed per-call latency; treat it as documented service cost.
+- **What changed:** the planning loop now shares one prefix strip and one
+  manifest lookup between the current-namespace stale predicate and the
+  previous-namespace predicate (previously two strips and two lookups per key
+  on destination moves). Behavior is identical — an equivalence test proves the
+  fused per-key decisions match the standalone predicates for every listing key
+  shape. No performance acceptance is claimed for this change: at benchmark
+  scale the saving is below run noise, and the real planning cost driver
+  remains per-entry source planning (P-9's remaining bullets).
