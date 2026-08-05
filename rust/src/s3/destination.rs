@@ -28,7 +28,7 @@ pub(super) struct DestinationPlan {
     previous_stale: DeletionCandidates,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct DestinationObject {
     pub(super) etag: Option<String>,
     pub(super) size: Option<u64>,
@@ -41,7 +41,6 @@ pub(super) enum DestinationWritePrecondition {
 }
 
 struct DestinationRecordContext<'a> {
-    strip_prefix: &'a str,
     protected_namespace: Option<&'a str>,
     filters: &'a Filters,
     manifest: &'a DeploymentManifest,
@@ -284,12 +283,19 @@ pub(super) async fn plan_destination(
 
         for object in response.contents() {
             let Some(key) = object.key() else { continue };
+            // One strip and one manifest lookup serve both the current-namespace stale
+            // predicate and the previous-namespace predicate. The previous predicate is
+            // exactly `unplanned_destination_key(key, strip_prefix, None, None, manifest)`
+            // (its protected-namespace and filter arguments are `None`, so it reduces to
+            // `!relative.is_empty() && !manifest.contains_key(relative)`); sharing the
+            // relative key keeps the two checks equivalent to the standalone function.
+            let relative_key = strip_destination_prefix(strip_prefix, key);
             let current_key_is_stale = record_destination_object(
                 key,
+                &relative_key,
                 object.e_tag(),
                 object.size().and_then(|size| u64::try_from(size).ok()),
                 DestinationRecordContext {
-                    strip_prefix,
                     protected_namespace: protected_namespace.as_deref(),
                     filters,
                     manifest,
@@ -300,10 +306,11 @@ pub(super) async fn plan_destination(
             if current_key_is_stale {
                 current_stale.retain(key);
             }
-            if previous_cleanup_namespace
-                .as_deref()
-                .is_some_and(|prefix| key.starts_with(prefix))
-                && unplanned_destination_key(key, strip_prefix, None, None, manifest)
+            if !relative_key.is_empty()
+                && previous_cleanup_namespace
+                    .as_deref()
+                    .is_some_and(|prefix| key.starts_with(prefix))
+                && !manifest.contains_key(&relative_key)
             {
                 previous_stale.retain(key);
             }
@@ -1127,25 +1134,30 @@ fn key_is_excluded(key: &str, excluded_namespace: Option<&str>) -> bool {
     excluded_namespace.is_some_and(|excluded| key.starts_with(excluded))
 }
 
+/// Records one listed destination object and reports whether it is a stale candidate
+/// for the current namespace. `relative_key` must be the caller-computed
+/// `strip_destination_prefix(strip_prefix, key)`: sharing one strip and one manifest
+/// lookup between this function and the caller's previous-namespace predicate avoids
+/// a second per-key allocation and BTreeMap lookup on destination moves.
 fn record_destination_object(
     key: &str,
+    relative_key: &str,
     etag: Option<&str>,
     size: Option<u64>,
     context: DestinationRecordContext<'_>,
     objects: &mut HashMap<String, DestinationObject>,
 ) -> bool {
-    let relative_key = strip_destination_prefix(context.strip_prefix, key);
     if relative_key.is_empty() {
         return false;
     }
-    if !context.manifest.contains_key(&relative_key) {
+    if !context.manifest.contains_key(relative_key) {
         return context.detect_stale_candidates
             && !key_is_excluded(key, context.protected_namespace)
-            && context.filters.should_include(&relative_key);
+            && context.filters.should_include(relative_key);
     }
 
     objects.insert(
-        relative_key.clone(),
+        relative_key.to_owned(),
         DestinationObject {
             etag: etag.and_then(normalize_etag),
             size,
@@ -1162,6 +1174,38 @@ fn stale_destination_key(
     manifest: &DeploymentManifest,
 ) -> bool {
     unplanned_destination_key(key, strip_prefix, None, Some(filters), manifest)
+}
+
+/// The pre-fusion form of `record_destination_object`: strips `strip_prefix` from
+/// `key` internally. Kept under `#[cfg(test)]` as the reference behavior the fused
+/// planning loop must match.
+#[cfg(test)]
+fn record_destination_object_original(
+    key: &str,
+    strip_prefix: &str,
+    etag: Option<&str>,
+    size: Option<u64>,
+    context: DestinationRecordContext<'_>,
+    objects: &mut HashMap<String, DestinationObject>,
+) -> bool {
+    let relative_key = strip_destination_prefix(strip_prefix, key);
+    if relative_key.is_empty() {
+        return false;
+    }
+    if !context.manifest.contains_key(&relative_key) {
+        return context.detect_stale_candidates
+            && !key_is_excluded(key, context.protected_namespace)
+            && context.filters.should_include(&relative_key);
+    }
+
+    objects.insert(
+        relative_key,
+        DestinationObject {
+            etag: etag.and_then(normalize_etag),
+            size,
+        },
+    );
+    false
 }
 
 fn unplanned_destination_key(
@@ -1192,10 +1236,10 @@ mod tests {
         GuardedDeleteContext, GuardedDeleteOutcome, UnplannedDeletionContext, delete_key_chunk,
         delete_listed_objects, guarded_delete_namespace, inferred_delete_counts, key_is_excluded,
         namespace_list_prefix, normalize_etag, owner_tag_overlaps_cleanup, parse_owner_tag,
-        record_destination_object, stale_destination_key, unplanned_cleanup_key,
-        unplanned_destination_key,
+        record_destination_object, record_destination_object_original, stale_destination_key,
+        unplanned_cleanup_key, unplanned_destination_key,
     };
-    use crate::request::compile_filters;
+    use crate::request::{compile_filters, strip_destination_prefix};
     use crate::types::{
         AppState, DeploymentManifest, PlannedAction, PlannedObject, PutObjectRetryJitter,
         PutObjectRetryOptions,
@@ -1204,6 +1248,187 @@ mod tests {
     #[test]
     fn namespace_list_prefix_adds_trailing_slash() {
         assert_eq!(namespace_list_prefix("site"), Some("site/".to_string()));
+    }
+
+    #[test]
+    fn fused_per_key_checks_match_the_original_two_predicate_path() {
+        // The planning loop shares one strip and one manifest lookup between the
+        // current-namespace stale predicate and the previous-namespace predicate.
+        // Prove the fused form decides identically to calling the standalone
+        // functions for every key shape the listing can produce.
+        let filters = compile_filters(&["*.map".to_string()], &[]).unwrap();
+        let mut manifest = DeploymentManifest::new();
+        for relative_key in ["keep.txt", "dir/current.txt", "old/keep.txt"] {
+            manifest.insert(
+                relative_key.to_string(),
+                PlannedObject {
+                    relative_key: relative_key.to_string(),
+                    expected_etag: None,
+                    action: PlannedAction::CopyObject {
+                        source_index: 0,
+                        size: None,
+                    },
+                },
+            );
+        }
+        let keys = [
+            "site/keep.txt",        // in manifest: recorded, not stale
+            "site/dir/current.txt", // in manifest: recorded, not stale
+            "site/old.txt",         // stale in the current namespace
+            "site/old/debug.map",   // stale, but excluded by the filter
+            "site/",                // empty relative key: ignored
+            "site/old/index.html",  // previous namespace, not in manifest
+            "site/old/keep.txt",    // previous namespace, but in the manifest
+            "other/foreign.txt",    // outside the namespace entirely
+        ];
+        let previous_namespace = Some("site/old/");
+        let context = |detect| DestinationRecordContext {
+            protected_namespace: None,
+            filters: &filters,
+            manifest: &manifest,
+            detect_stale_candidates: detect,
+        };
+
+        for detect in [false, true] {
+            for key in keys {
+                let mut fused_objects = HashMap::<String, DestinationObject>::new();
+                let mut original_objects = HashMap::<String, DestinationObject>::new();
+                let mut fused_current = DeletionCandidates::default();
+                let mut fused_previous = DeletionCandidates::default();
+                let mut original_current = DeletionCandidates::default();
+                let mut original_previous = DeletionCandidates::default();
+
+                // Fused form: what the planning loop does today.
+                let relative_key = strip_destination_prefix("site/", key);
+                if record_destination_object(
+                    key,
+                    &relative_key,
+                    Some("\"etag\""),
+                    Some(1),
+                    context(detect),
+                    &mut fused_objects,
+                ) {
+                    fused_current.retain(key);
+                }
+                if !relative_key.is_empty()
+                    && previous_namespace.is_some_and(|prefix| key.starts_with(prefix))
+                    && !manifest.contains_key(&relative_key)
+                {
+                    fused_previous.retain(key);
+                }
+
+                // Original form: the two standalone predicates the fusion replaced.
+                if record_destination_object_original(
+                    key,
+                    "site/",
+                    Some("\"etag\""),
+                    Some(1),
+                    context(detect),
+                    &mut original_objects,
+                ) {
+                    original_current.retain(key);
+                }
+                if previous_namespace.is_some_and(|prefix| key.starts_with(prefix))
+                    && unplanned_destination_key(key, "site/", None, None, &manifest)
+                {
+                    original_previous.retain(key);
+                }
+
+                assert_eq!(
+                    fused_objects, original_objects,
+                    "objects map diverges for {key:?} with detect={detect}"
+                );
+                assert_eq!(
+                    fused_current.keys(),
+                    original_current.keys(),
+                    "current-stale candidates diverge for {key:?} with detect={detect}"
+                );
+                assert_eq!(
+                    fused_current.has_candidates(),
+                    original_current.has_candidates(),
+                    "current-stale presence diverges for {key:?} with detect={detect}"
+                );
+                assert_eq!(
+                    fused_previous.keys(),
+                    original_previous.keys(),
+                    "previous-stale candidates diverge for {key:?} with detect={detect}"
+                );
+                assert_eq!(
+                    fused_previous.has_candidates(),
+                    original_previous.has_candidates(),
+                    "previous-stale presence diverges for {key:?} with detect={detect}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn per_key_stale_detection_stays_cheap() {
+        // Isolation guard for the per-key retention path added by P-6 (PR #90): the
+        // planning loop must stay O(1)-ish per listed key. Comparing the detect-on
+        // path against the detect-off baseline on the same thread keeps the guard
+        // independent of machine speed and CI load; on a host build the P-6 retention
+        // path measures ~1.0-1.3x the baseline, and a per-key pass that became
+        // per-manifest (e.g. a full scan inside the loop) exceeds 25x.
+        use std::time::Instant;
+
+        let filters = compile_filters(&[], &[]).unwrap();
+        let manifest: DeploymentManifest = (0..397)
+            .map(|i| {
+                let relative_key = format!("dir{:02}/asset{:04}.html", i / 20, i);
+                (
+                    relative_key,
+                    PlannedObject {
+                        relative_key: String::new(),
+                        expected_etag: None,
+                        action: PlannedAction::CopyObject {
+                            source_index: 0,
+                            size: None,
+                        },
+                    },
+                )
+            })
+            .collect();
+        let keys: Vec<String> = (0..442)
+            .map(|i| format!("site/dir{:02}/asset{:04}.html", i / 20, i))
+            .collect();
+        let iterations = 500_u32;
+
+        let measure = |detect: bool| -> std::time::Duration {
+            let mut objects = HashMap::new();
+            let mut candidates = DeletionCandidates::default();
+            let started = Instant::now();
+            for _ in 0..iterations {
+                for key in &keys {
+                    let relative_key = strip_destination_prefix("site/", key);
+                    if record_destination_object(
+                        key,
+                        &relative_key,
+                        Some("\"abc\""),
+                        Some(1),
+                        DestinationRecordContext {
+                            protected_namespace: None,
+                            filters: &filters,
+                            manifest: &manifest,
+                            detect_stale_candidates: detect,
+                        },
+                        &mut objects,
+                    ) {
+                        candidates.retain(key);
+                    }
+                }
+            }
+            started.elapsed() / iterations
+        };
+
+        let baseline = measure(false);
+        let detected = measure(true);
+        assert!(
+            detected < baseline * 25,
+            "detect-on per-iteration cost {detected:?} is {:.1}x the baseline {baseline:?}; \
+             stale detection must stay O(1)-ish per listed key",
+            detected.as_secs_f64() / baseline.as_secs_f64(),
+        );
     }
 
     #[test]
@@ -1503,10 +1728,10 @@ mod tests {
 
         let has_stale_candidate = record_destination_object(
             "site/old.txt",
+            &strip_destination_prefix("site/", "site/old.txt"),
             Some("\"ABC123\""),
             Some(10),
             DestinationRecordContext {
-                strip_prefix: "site/",
                 protected_namespace: None,
                 filters: &filters,
                 manifest: &manifest,
@@ -1544,10 +1769,10 @@ mod tests {
 
         let has_stale_candidate = record_destination_object(
             "site//index.html",
+            &strip_destination_prefix("site/", "site//index.html"),
             Some("\"alias-etag\""),
             Some(10),
             DestinationRecordContext {
-                strip_prefix: "site/",
                 protected_namespace: None,
                 filters: &filters,
                 manifest: &manifest,
@@ -1624,10 +1849,10 @@ mod tests {
 
         let manifest_key_is_stale = record_destination_object(
             "site/keep.txt",
+            &strip_destination_prefix("site/", "site/keep.txt"),
             None,
             Some(1),
             DestinationRecordContext {
-                strip_prefix: "site/",
                 protected_namespace: None,
                 filters: &filters,
                 manifest: &manifest,
@@ -1637,10 +1862,10 @@ mod tests {
         );
         let excluded_key_is_stale = record_destination_object(
             "site/debug.map",
+            &strip_destination_prefix("site/", "site/debug.map"),
             None,
             Some(1),
             DestinationRecordContext {
-                strip_prefix: "site/",
                 protected_namespace: None,
                 filters: &filters,
                 manifest: &manifest,
@@ -1675,10 +1900,10 @@ mod tests {
 
         let has_stale_candidate = record_destination_object(
             "site/",
+            &strip_destination_prefix("site/", "site/"),
             None,
             None,
             DestinationRecordContext {
-                strip_prefix: "site/",
                 protected_namespace: None,
                 filters: &filters,
                 manifest: &manifest,
@@ -1699,10 +1924,10 @@ mod tests {
 
         let has_stale_candidate = record_destination_object(
             "site/old.txt",
+            &strip_destination_prefix("site/", "site/old.txt"),
             None,
             Some(1),
             DestinationRecordContext {
-                strip_prefix: "site/",
                 protected_namespace: None,
                 filters: &filters,
                 manifest: &manifest,
