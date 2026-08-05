@@ -313,7 +313,7 @@ S3 requires exact `Content-Length` before `PutObject` starts. Marker entries the
 
 ## Authenticated Catalog Trust
 
-Cataloged local directories contain compact UTF-8 JSON at `.shin/catalog.v1.json`:
+Cataloged local directories contain compact UTF-8 JSON at `.shin/catalog.v1.json` (pretty-printed here for readability):
 
 ```json
 {
