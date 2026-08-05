@@ -40,6 +40,9 @@ jobs:
       - name: Lint
         run: pnpm lint
 
+      - name: Markdown format check
+        run: pnpm check:md
+
       - name: Test
         run: pnpm test:ci
 
