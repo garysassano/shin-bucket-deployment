@@ -13,7 +13,20 @@ const INVALIDATION_POLL_INTERVAL: Duration = Duration::from_secs(20);
 const INVALIDATION_POLL_JITTER: Duration = Duration::from_secs(5);
 const MAX_INVALIDATION_PATH_CHARACTERS: usize = 4_000;
 
-pub(crate) async fn invalidate(
+/// An invalidation created by [`create_invalidation`], ready to be awaited by
+/// [`wait_for_invalidation`]. Splitting creation from the completion wait lets a
+/// deployment create invalidations for several distributions up front and then
+/// `join!`/`try_join!` the waits so they overlap instead of serializing.
+pub(crate) struct CreatedInvalidation {
+    distribution_id: String,
+    invalidation_id: String,
+    missing_distribution_is_success: bool,
+}
+
+/// Creates one CloudFront invalidation. Returns `None` when the caller does not want
+/// to wait for completion (the id is then not needed), or when `NoSuchDistribution`
+/// is treated as success for `missing_distribution_is_success`.
+pub(crate) async fn create_invalidation(
     state: &AppState,
     distribution_id: &str,
     distribution_paths: &[String],
@@ -21,7 +34,7 @@ pub(crate) async fn invalidate(
     caller_reference: &str,
     missing_distribution_is_success: bool,
     deadline: Instant,
-) -> Result<()> {
+) -> Result<Option<CreatedInvalidation>> {
     let quantity = validate_invalidation_paths(distribution_paths)?;
     let batch = InvalidationBatch::builder()
         .caller_reference(caller_reference)
@@ -53,13 +66,13 @@ pub(crate) async fn invalidate(
                     .and_then(ProvideErrorMetadata::code)
                     == Some("NoSuchDistribution") =>
         {
-            return Ok(());
+            return Ok(None);
         }
         Err(error) => return Err(error.into()),
     };
 
     if !wait_for_completion {
-        return Ok(());
+        return Ok(None);
     }
 
     let invalidation_id = response
@@ -67,6 +80,20 @@ pub(crate) async fn invalidate(
         .map(|invalidation| invalidation.id().to_string())
         .ok_or_else(|| anyhow!("CreateInvalidation response did not include an invalidation id"))?;
 
+    Ok(Some(CreatedInvalidation {
+        distribution_id: distribution_id.to_string(),
+        invalidation_id,
+        missing_distribution_is_success,
+    }))
+}
+
+/// Polls a previously created invalidation until CloudFront reports it `Completed`.
+/// Several of these waits may run concurrently against the same work deadline.
+pub(crate) async fn wait_for_invalidation(
+    state: &AppState,
+    created: CreatedInvalidation,
+    deadline: Instant,
+) -> Result<()> {
     loop {
         // Poll after waiting, not before. CreateInvalidation always returns `InProgress`,
         // so the pre-existing immediate first poll was a guaranteed-useless round trip.
@@ -77,8 +104,8 @@ pub(crate) async fn invalidate(
             state
                 .cloudfront
                 .get_invalidation()
-                .distribution_id(distribution_id)
-                .id(&invalidation_id)
+                .distribution_id(&created.distribution_id)
+                .id(&created.invalidation_id)
                 .send(),
         )
         .await
@@ -86,7 +113,7 @@ pub(crate) async fn invalidate(
         {
             Ok(status) => status,
             Err(error)
-                if missing_distribution_is_success
+                if created.missing_distribution_is_success
                     && error
                         .as_service_error()
                         .and_then(ProvideErrorMetadata::code)

@@ -13,7 +13,7 @@ use sha2::Sha256;
 use tokio::time::timeout_at;
 use tracing::error;
 
-use crate::cloudfront::{invalidate as invalidate_cloudfront, validate_invalidation_paths};
+use crate::cloudfront::{create_invalidation, validate_invalidation_paths, wait_for_invalidation};
 use crate::deadline::InvocationDeadlines;
 use crate::lifecycle::{
     DestinationChangeCleanupDecision, PreviousCleanupStrategy, destination_namespaces_overlap,
@@ -613,6 +613,31 @@ async fn process_request_inner(
         }
     }
 
+    invalidate_distributions(
+        state,
+        execution,
+        request_type,
+        previous_destination,
+        request,
+        cleaned_previous_destination.is_some(),
+        deleted_current_destination,
+        &stats,
+    )
+    .await?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn invalidate_distributions(
+    state: &AppState,
+    execution: RequestExecution<'_>,
+    request_type: &str,
+    previous_destination: Option<&crate::types::PreviousDestination>,
+    request: &crate::types::DeploymentRequest,
+    previous_destination_cleaned: bool,
+    deleted_current_destination: bool,
+    stats: &DeploymentStats,
+) -> Result<()> {
     let should_invalidate_current = match request_type {
         "Create" | "Update" => true,
         "Delete" => deleted_current_destination,
@@ -620,33 +645,36 @@ async fn process_request_inner(
     };
 
     let previous_content_changed = previous_destination.is_some_and(|previous| {
-        cleaned_previous_destination.is_some() || destination_namespaces_overlap(request, previous)
+        previous_destination_cleaned || destination_namespaces_overlap(request, previous)
     });
 
-    if previous_content_changed
+    let started = Instant::now();
+    let previous_invalidation = if previous_content_changed
         && let Some(previous) = previous_destination
         && previous.distribution_id != request.distribution_id
         && let Some(distribution_id) = non_empty(previous.distribution_id.as_deref())
     {
         if previous_distribution_authorized(request, previous) {
-            invalidate_distribution(
+            create_distribution_invalidation(
                 state,
                 execution,
                 distribution_id,
                 &previous.distribution_paths,
                 request.wait_for_distribution_invalidation,
                 true,
-                &stats,
             )
-            .await?;
+            .await?
         } else {
             tracing::warn!(
                 "previous distribution was not invalidated because it was not explicitly authorized"
             );
+            None
         }
-    }
+    } else {
+        None
+    };
 
-    if should_invalidate_current
+    let current_invalidation = if should_invalidate_current
         && let Some(distribution_id) = non_empty(request.distribution_id.as_deref())
     {
         let distribution_paths = match previous_destination {
@@ -659,31 +687,45 @@ async fn process_request_inner(
             _ => request.distribution_paths.clone(),
         };
 
-        invalidate_distribution(
+        create_distribution_invalidation(
             state,
             execution,
             distribution_id,
             &distribution_paths,
             request.wait_for_distribution_invalidation,
             request_type == "Delete",
-            &stats,
         )
-        .await?;
+        .await?
+    } else {
+        None
+    };
+
+    // Both invalidations are created before either completion wait starts, so the
+    // two waits run concurrently against the shared work deadline instead of
+    // serializing their 20-second poll cadences (P-3).
+    if request.wait_for_distribution_invalidation {
+        let previous_wait = wait_distribution_invalidation(
+            state,
+            previous_invalidation,
+            execution.deadlines.work(),
+        );
+        let current_wait =
+            wait_distribution_invalidation(state, current_invalidation, execution.deadlines.work());
+        tokio::try_join!(previous_wait, current_wait)?;
     }
+    stats.add_cloudfront_millis(duration_ms(started.elapsed()));
     Ok(())
 }
 
-async fn invalidate_distribution(
+async fn create_distribution_invalidation(
     state: &AppState,
     execution: RequestExecution<'_>,
     distribution_id: &str,
     distribution_paths: &[String],
     wait_for_completion: bool,
     missing_distribution_is_success: bool,
-    stats: &DeploymentStats,
-) -> Result<()> {
-    let started = Instant::now();
-    invalidate_cloudfront(
+) -> Result<Option<crate::cloudfront::CreatedInvalidation>> {
+    create_invalidation(
         state,
         distribution_id,
         distribution_paths,
@@ -698,9 +740,18 @@ async fn invalidate_distribution(
         missing_distribution_is_success,
         execution.deadlines.work(),
     )
-    .await?;
-    stats.add_cloudfront_millis(duration_ms(started.elapsed()));
-    Ok(())
+    .await
+}
+
+async fn wait_distribution_invalidation(
+    state: &AppState,
+    created: Option<crate::cloudfront::CreatedInvalidation>,
+    deadline: tokio::time::Instant,
+) -> Result<()> {
+    let Some(created) = created else {
+        return Ok(());
+    };
+    wait_for_invalidation(state, created, deadline).await
 }
 
 fn non_empty(value: Option<&str>) -> Option<&str> {
@@ -799,11 +850,11 @@ mod tests {
     use crate::types::AppState;
 
     use super::{
-        EnvelopeResponseTarget, RESOURCE_TYPE, cloudfront_caller_reference,
-        decode_deployment_request, decode_request_envelope, decode_resource_properties,
-        destination_physical_resource_id, merge_distribution_paths,
-        preflight_invalidation_requests, response_physical_resource_id, response_target,
-        serialize_response, success_payload, validate_resource_type,
+        EnvelopeResponseTarget, RESOURCE_TYPE, RequestExecution, RequestIdentity,
+        cloudfront_caller_reference, decode_deployment_request, decode_request_envelope,
+        decode_resource_properties, destination_physical_resource_id, invalidate_distributions,
+        merge_distribution_paths, preflight_invalidation_requests, response_physical_resource_id,
+        response_target, serialize_response, success_payload, validate_resource_type,
     };
 
     fn deployment_request_with_paths(paths: Vec<String>) -> crate::types::DeploymentRequest {
@@ -1556,6 +1607,152 @@ mod tests {
         assert!(
             !chain.contains("must-not-leak"),
             "the response URL must not leak into the error chain: {chain}"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn distribution_invalidation_waits_overlap_after_both_creates() {
+        // P-3: the previous- and current-distribution invalidations are both created
+        // before either completion wait starts, so the two 20-second poll cadences
+        // overlap. Serialized waits would take two poll intervals each (80s total);
+        // concurrent waits finish both in two intervals (40s total). The paused
+        // clock makes the elapsed time deterministic.
+        use aws_sdk_s3::primitives::SdkBody;
+        use aws_smithy_http_client::test_util::{ReplayEvent, StaticReplayClient};
+        use http::{Request, Response};
+
+        let invalidation_xml = |status: &str| {
+            format!(
+                "<Invalidation xmlns=\"http://cloudfront.amazonaws.com/doc/2020-05-31/\">\
+                 <Id>I1</Id><Status>{status}</Status>\
+                 <CreateTime>2026-08-05T00:00:00Z</CreateTime></Invalidation>"
+            )
+        };
+        let event = |body: String| {
+            ReplayEvent::new(
+                Request::builder()
+                    .uri("https://cloudfront.test/")
+                    .body(SdkBody::empty())
+                    .unwrap(),
+                Response::builder()
+                    .status(200)
+                    .header("content-type", "application/xml")
+                    .body(SdkBody::from(body))
+                    .unwrap(),
+            )
+        };
+        let replay = StaticReplayClient::new(vec![
+            event(invalidation_xml("InProgress")), // CreateInvalidation, previous distribution
+            event(invalidation_xml("InProgress")), // CreateInvalidation, current distribution
+            event(invalidation_xml("InProgress")), // poll 1, previous
+            event(invalidation_xml("InProgress")), // poll 1, current
+            event(invalidation_xml("Completed")),  // poll 2, previous
+            event(invalidation_xml("Completed")),  // poll 2, current
+        ]);
+        let cloudfront = aws_sdk_cloudfront::Client::from_conf(
+            aws_sdk_cloudfront::Config::builder()
+                .behavior_version_latest()
+                .region(aws_sdk_cloudfront::config::Region::new("us-east-1"))
+                .credentials_provider(aws_sdk_cloudfront::config::Credentials::new(
+                    "test-access-key",
+                    "test-secret-key",
+                    None,
+                    None,
+                    "shin-bucket-deployment-test",
+                ))
+                .http_client(replay.clone())
+                .build(),
+        );
+        let s3 = aws_sdk_s3::Client::from_conf(
+            aws_sdk_s3::Config::builder()
+                .behavior_version_latest()
+                .region(aws_sdk_s3::config::Region::new("us-east-1"))
+                .credentials_provider(aws_sdk_s3::config::Credentials::new(
+                    "test-access-key",
+                    "test-secret-key",
+                    None,
+                    None,
+                    "shin-bucket-deployment-test",
+                ))
+                .build(),
+        );
+        let state = AppState {
+            source_s3: s3.clone(),
+            destination_s3: s3,
+            cloudfront,
+            http: reqwest::Client::new(),
+            detailed_failure_diagnostics: false,
+        };
+
+        let request = deployment_request_with_paths(vec!["/*".to_string()]);
+        let request = crate::types::DeploymentRequest {
+            invalidate_previous_distribution_on_change: Some("previous-dist".to_string()),
+            ..request
+        };
+        let previous = crate::types::PreviousDestination {
+            bucket_name: "previous-bucket".to_string(),
+            bucket_prefix: "previous-site/".to_string(),
+            distribution_id: Some("previous-dist".to_string()),
+            distribution_paths: vec!["/old/*".to_string()],
+            owner_id: "summary-owner".to_string(),
+        };
+        let execution = RequestExecution {
+            identity: RequestIdentity {
+                stack_id: "stack-123",
+                request_id: "request-123",
+                logical_resource_id: "Deploy",
+            },
+            deadlines: InvocationDeadlines::from_remaining_at(
+                tokio::time::Instant::now(),
+                std::time::Duration::from_secs(120),
+            ),
+        };
+        let stats = crate::types::DeploymentStats::new(true);
+
+        let handle = tokio::spawn(async move {
+            invalidate_distributions(
+                &state,
+                execution,
+                "Update",
+                Some(&previous),
+                &request,
+                true,
+                false,
+                &stats,
+            )
+            .await
+        });
+        // Advance one second at a time until both waits finish. Each wait needs two
+        // jittered 20-25s poll intervals, so concurrent waits finish within ~50s;
+        // serialized waits would need four intervals (~80-100s). The paused clock
+        // keeps this deterministic.
+        let mut elapsed = std::time::Duration::ZERO;
+        loop {
+            if handle.is_finished() {
+                break;
+            }
+            tokio::time::advance(std::time::Duration::from_secs(1)).await;
+            elapsed += std::time::Duration::from_secs(1);
+            assert!(
+                elapsed <= std::time::Duration::from_secs(60),
+                "both invalidation waits should finish within two poll intervals, \
+                 took {elapsed:?}"
+            );
+        }
+        handle
+            .await
+            .expect("joined invalidation task")
+            .expect("both invalidation waits must succeed");
+        eprintln!("elapsed: {elapsed:?}");
+        let requests: Vec<_> = replay.actual_requests().collect();
+        // Both CreateInvalidation calls precede every GetInvalidation poll.
+        assert_eq!(requests.len(), 6);
+        assert_eq!(requests[0].method(), "POST");
+        assert_eq!(requests[1].method(), "POST");
+        assert!(
+            requests[2..]
+                .iter()
+                .all(|request| request.method() == "GET")
         );
     }
 }
