@@ -441,6 +441,9 @@ jobs:
             --docs-file docs/benchmark.md \
             --benchmark-readme benchmarks/README.md
 
+      - name: Format generated markdown
+        run: pnpm exec prettier --write benchmarks/ci-report.md benchmarks/ci-telemetry.md benchmarks/README.md docs/benchmark.md
+
       - name: Validate publication diff
         run: |
           test -s benchmarks/ci-report.md
