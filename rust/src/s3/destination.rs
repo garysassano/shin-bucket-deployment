@@ -736,8 +736,15 @@ async fn delete_key_chunk(
             ));
         }
 
-        let objects = pending
-            .iter()
+        // Consume the pending keys by value: the ObjectIdentifier builder takes the
+        // key string without cloning it, and the retry path rebuilds `pending` from
+        // the response errors anyway.
+        let requested = pending.len();
+        if let Some(stats) = stats {
+            stats.record_delete_sdk_call(requested as u64);
+        }
+        let objects = std::mem::take(&mut pending)
+            .into_iter()
             .map(|key| ObjectIdentifier::builder().key(key).build())
             .collect::<std::result::Result<Vec<_>, _>>()?;
         let delete = Delete::builder()
@@ -763,7 +770,7 @@ async fn delete_key_chunk(
         match response {
             Ok(response) => {
                 let (inferred_deleted, unconfirmed) =
-                    inferred_delete_counts(pending.len() as u64, response.errors().len() as u64);
+                    inferred_delete_counts(requested as u64, response.errors().len() as u64);
                 if let Some(stats) = stats {
                     stats.record_delete_response(inferred_deleted, unconfirmed);
                 }
@@ -812,13 +819,13 @@ async fn delete_key_chunk(
             }
             Err(error) if service_error_code(&error) == Some("NoSuchBucket") => {
                 if let Some(stats) = stats {
-                    stats.record_delete_no_such_bucket(pending.len() as u64);
+                    stats.record_delete_no_such_bucket(requested as u64);
                 }
                 return Ok((deleted, true));
             }
             Err(error) => {
                 if let Some(stats) = stats {
-                    stats.record_delete_failure(pending.len() as u64);
+                    stats.record_delete_failure(requested as u64);
                 }
                 let throttled =
                     service_error_code(&error).is_some_and(crate::util::is_throttle_error_code);
@@ -842,6 +849,9 @@ async fn delete_key_chunk(
                         error_code = ?service_error_code(&error),
                         "destination DeleteObjects attempt failed; retrying"
                     );
+                    // The request-level retry replays the same chunk, which the
+                    // by-value request build consumed; restore it from the chunk slice.
+                    pending = keys.to_vec();
                     continue;
                 }
                 return Err(error)
