@@ -751,9 +751,6 @@ async fn delete_key_chunk(
             .set_objects(Some(objects))
             .quiet(true)
             .build()?;
-        if let Some(stats) = stats {
-            stats.record_delete_sdk_call(pending.len() as u64);
-        }
 
         let response = state
             .destination_s3
