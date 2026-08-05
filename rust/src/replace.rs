@@ -33,7 +33,12 @@ struct OutputAccounting {
     max_output_bytes: u64,
     output_bytes: u64,
     md5: Md5,
+    staging: Vec<u8>,
 }
+
+/// Physical-write coalescing threshold: adjacent small segments (prefixes and
+/// replacements in a marker-heavy stream) accumulate here before one pipe write.
+const OUTPUT_COALESCE_BYTES: usize = 8 * 1024;
 
 impl MarkerReplacements {
     pub(crate) fn new(markers: &HashMap<String, String>, config: &MarkerConfig) -> Result<Self> {
@@ -88,6 +93,7 @@ impl MarkerReplacements {
             if read == 0 {
                 self.emit_stable(&mut pending, true, output, &mut accounting)
                     .await?;
+                accounting.flush_staging(output).await?;
                 output.flush().await?;
                 return Ok(accounting.finish());
             }
@@ -152,6 +158,7 @@ impl OutputAccounting {
             max_output_bytes: options.max_output_bytes,
             output_bytes: 0,
             md5: Md5::new(),
+            staging: Vec::with_capacity(OUTPUT_COALESCE_BYTES),
         }
     }
 
@@ -182,8 +189,23 @@ impl OutputAccounting {
         }
 
         self.md5.update(bytes);
-        output.write_all(bytes).await?;
         self.output_bytes = next;
+        // Coalesce adjacent writes (a marker-heavy stream emits many tiny segments)
+        // into fewer pipe writes; flush only once the staging buffer is full or the
+        // stream ends.
+        self.staging.extend_from_slice(bytes);
+        if self.staging.len() >= OUTPUT_COALESCE_BYTES {
+            output.write_all(&self.staging).await?;
+            self.staging.clear();
+        }
+        Ok(())
+    }
+
+    async fn flush_staging<W: AsyncWrite + Unpin>(&mut self, output: &mut W) -> io::Result<()> {
+        if !self.staging.is_empty() {
+            output.write_all(&self.staging).await?;
+            self.staging.clear();
+        }
         Ok(())
     }
 

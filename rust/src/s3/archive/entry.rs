@@ -219,7 +219,7 @@ impl UploadBodyAttemptSnapshot {
 
 pub(crate) struct ZipEntryAsyncReader {
     store: Arc<SourceBlockStore>,
-    plan: ZipEntryPlan,
+    plan: std::sync::Arc<ZipEntryPlan>,
     attempt_claim: Option<EntryAttemptClaim>,
     reader: Option<EntryDataReader>,
     init: Option<Pin<Box<dyn Future<Output = io::Result<EntryDataReader>> + Send>>>,
@@ -264,7 +264,7 @@ pub(super) enum BodyFrame {
 
 struct ReceiverBodyInit {
     store: Arc<SourceBlockStore>,
-    plan: ZipEntryPlan,
+    plan: std::sync::Arc<ZipEntryPlan>,
     body_state: Arc<UploadBodyState>,
     attempts: Arc<AtomicUsize>,
     marker: Option<MarkerBodyContext>,
@@ -284,7 +284,7 @@ struct ZipEntryInputValidator<'a> {
 }
 
 impl ZipEntryAsyncReader {
-    pub(crate) fn new(store: Arc<SourceBlockStore>, plan: ZipEntryPlan) -> Self {
+    pub(crate) fn new(store: Arc<SourceBlockStore>, plan: std::sync::Arc<ZipEntryPlan>) -> Self {
         Self {
             store,
             plan,
@@ -296,7 +296,7 @@ impl ZipEntryAsyncReader {
 
     fn with_attempt_claim(
         store: Arc<SourceBlockStore>,
-        plan: ZipEntryPlan,
+        plan: std::sync::Arc<ZipEntryPlan>,
         attempt_claim: EntryAttemptClaim,
     ) -> Self {
         Self {
@@ -318,14 +318,17 @@ impl AsyncRead for ZipEntryAsyncReader {
         if self.reader.is_none() {
             if self.init.is_none() {
                 let store = self.store.clone();
-                let plan = self.plan.clone();
+                let plan = std::sync::Arc::clone(&self.plan);
                 let attempt_claim = self.attempt_claim.take();
                 self.init = Some(Box::pin(async move {
                     match attempt_claim {
                         Some(attempt_claim) => {
                             open_entry_data_reader_with_claim(store, plan, attempt_claim).await
                         }
-                        None => open_entry_data_reader(store, plan).await,
+                        None => {
+                            let attempt_claim = store.claim_zip_entry_attempt(&plan);
+                            open_entry_data_reader_with_claim(store, plan, attempt_claim).await
+                        }
                     }
                 }));
             }
@@ -352,17 +355,18 @@ impl AsyncRead for ZipEntryAsyncReader {
     }
 }
 
+#[cfg(test)]
 pub(super) async fn open_entry_data_reader(
     store: Arc<SourceBlockStore>,
     plan: ZipEntryPlan,
 ) -> io::Result<EntryDataReader> {
     let attempt_claim = store.claim_zip_entry_attempt(&plan);
-    open_entry_data_reader_with_claim(store, plan, attempt_claim).await
+    open_entry_data_reader_with_claim(store, std::sync::Arc::new(plan), attempt_claim).await
 }
 
 async fn open_entry_data_reader_with_claim(
     store: Arc<SourceBlockStore>,
-    plan: ZipEntryPlan,
+    plan: std::sync::Arc<ZipEntryPlan>,
     attempt_claim: EntryAttemptClaim,
 ) -> io::Result<EntryDataReader> {
     let header_end = plan
@@ -630,17 +634,24 @@ impl AsyncRead for EntryDataReader {
 
 pub(crate) fn zip_entry_body(
     store: Arc<SourceBlockStore>,
-    plan: ZipEntryPlan,
+    plan: impl Into<std::sync::Arc<ZipEntryPlan>>,
     content_length: u64,
     body_state: Arc<UploadBodyState>,
     attempts: Arc<AtomicUsize>,
 ) -> ByteStream {
-    zip_entry_body_inner(store, plan, content_length, body_state, attempts, None)
+    zip_entry_body_inner(
+        store,
+        plan.into(),
+        content_length,
+        body_state,
+        attempts,
+        None,
+    )
 }
 
 pub(crate) fn marker_zip_entry_body(
     store: Arc<SourceBlockStore>,
-    plan: ZipEntryPlan,
+    plan: impl Into<std::sync::Arc<ZipEntryPlan>>,
     content_length: u64,
     body_state: Arc<UploadBodyState>,
     attempts: Arc<AtomicUsize>,
@@ -648,7 +659,7 @@ pub(crate) fn marker_zip_entry_body(
 ) -> ByteStream {
     zip_entry_body_inner(
         store,
-        plan,
+        plan.into(),
         content_length,
         body_state,
         attempts,
@@ -658,7 +669,7 @@ pub(crate) fn marker_zip_entry_body(
 
 fn zip_entry_body_inner(
     store: Arc<SourceBlockStore>,
-    plan: ZipEntryPlan,
+    plan: std::sync::Arc<ZipEntryPlan>,
     content_length: u64,
     body_state: Arc<UploadBodyState>,
     attempts: Arc<AtomicUsize>,
@@ -668,7 +679,7 @@ fn zip_entry_body_inner(
         zip_entry_sdk_body(
             ReceiverBodyInit {
                 store: store.clone(),
-                plan: plan.clone(),
+                plan: std::sync::Arc::clone(&plan),
                 body_state: Arc::clone(&body_state),
                 attempts: Arc::clone(&attempts),
                 marker: marker.clone(),
@@ -710,17 +721,24 @@ pub(crate) async fn plan_marker_zip_entry(
     marker_replacements: &MarkerReplacements,
 ) -> io::Result<ReplacementResult> {
     let mut output = tokio::io::sink();
-    replace_marker_zip_entry(store, plan, None, marker_replacements, &mut output).await
+    replace_marker_zip_entry(
+        store,
+        std::sync::Arc::new(plan),
+        None,
+        marker_replacements,
+        &mut output,
+    )
+    .await
 }
 
 async fn replace_marker_zip_entry<W: AsyncWrite + Unpin>(
     store: Arc<SourceBlockStore>,
-    plan: ZipEntryPlan,
+    plan: std::sync::Arc<ZipEntryPlan>,
     attempt_claim: Option<EntryAttemptClaim>,
     marker_replacements: &MarkerReplacements,
     output: &mut W,
 ) -> io::Result<ReplacementResult> {
-    let mut reader = zip_entry_reader_inner(store, plan.clone(), attempt_claim)?;
+    let mut reader = zip_entry_reader_inner(store, std::sync::Arc::clone(&plan), attempt_claim)?;
     let mut validator = ZipEntryInputValidator::new(&plan);
     let result = marker_replacements
         .replace_stream(
@@ -740,27 +758,37 @@ pub(crate) fn zip_entry_reader(
     store: Arc<SourceBlockStore>,
     plan: ZipEntryPlan,
 ) -> io::Result<Pin<Box<dyn AsyncRead + Send>>> {
-    zip_entry_reader_inner(store, plan, None)
+    zip_entry_reader_inner(store, std::sync::Arc::new(plan), None)
 }
 
 fn zip_entry_reader_inner(
     store: Arc<SourceBlockStore>,
-    plan: ZipEntryPlan,
+    plan: std::sync::Arc<ZipEntryPlan>,
     attempt_claim: Option<EntryAttemptClaim>,
 ) -> io::Result<Pin<Box<dyn AsyncRead + Send>>> {
     let reader = match attempt_claim {
-        Some(attempt_claim) => {
-            ZipEntryAsyncReader::with_attempt_claim(store, plan.clone(), attempt_claim)
-        }
-        None => ZipEntryAsyncReader::new(store, plan.clone()),
+        Some(attempt_claim) => ZipEntryAsyncReader::with_attempt_claim(
+            store,
+            std::sync::Arc::clone(&plan),
+            attempt_claim,
+        ),
+        None => ZipEntryAsyncReader::new(store, std::sync::Arc::clone(&plan)),
     };
     match plan.compression_code {
         0 => Ok(Box::pin(reader)),
-        8 => Ok(Box::pin(
-            async_compression::tokio::bufread::DeflateDecoder::new(tokio::io::BufReader::new(
-                reader,
-            )),
-        )),
+        8 => {
+            // Size the decompression input buffer to the entry's compressed span,
+            // clamped so tiny entries do not under-size and huge entries do not
+            // over-allocate a fixed multi-megabyte buffer per active reader.
+            let capacity = usize::try_from(plan.compressed_size)
+                .unwrap_or(0)
+                .clamp(8 * 1024, 64 * 1024);
+            Ok(Box::pin(
+                async_compression::tokio::bufread::DeflateDecoder::new(
+                    tokio::io::BufReader::with_capacity(capacity, reader),
+                ),
+            ))
+        }
         _ => Err(invalid_entry(
             &plan,
             format!("unsupported compression method {}", plan.compression_code),
@@ -775,19 +803,27 @@ pub(super) async fn send_zip_entry_chunks(
     sender: mpsc::Sender<std::result::Result<BodyFrame, BodyError>>,
     body_state: Arc<UploadBodyState>,
 ) -> std::result::Result<(), BodyError> {
-    send_zip_entry_chunks_inner(store, plan, None, sender, body_state, None).await
+    send_zip_entry_chunks_inner(
+        store,
+        std::sync::Arc::new(plan),
+        None,
+        sender,
+        body_state,
+        None,
+    )
+    .await
 }
 
 async fn send_zip_entry_chunks_inner(
     store: Arc<SourceBlockStore>,
-    plan: ZipEntryPlan,
+    plan: std::sync::Arc<ZipEntryPlan>,
     attempt_claim: Option<EntryAttemptClaim>,
     sender: mpsc::Sender<std::result::Result<BodyFrame, BodyError>>,
     body_state: Arc<UploadBodyState>,
     attempt_number: Option<u64>,
 ) -> std::result::Result<(), BodyError> {
-    let mut reader =
-        zip_entry_reader_inner(store, plan.clone(), attempt_claim).map_err(boxed_body_error)?;
+    let mut reader = zip_entry_reader_inner(store, std::sync::Arc::clone(&plan), attempt_claim)
+        .map_err(boxed_body_error)?;
     let mut md5 = Md5::new();
     let mut crc32 = Crc32Hasher::new();
     let mut bytes = 0_u64;
@@ -872,7 +908,7 @@ pub(super) async fn send_marker_zip_entry_chunks(
 ) -> std::result::Result<(), BodyError> {
     send_marker_zip_entry_chunks_inner(
         store,
-        plan,
+        plan.into(),
         None,
         content_length,
         marker_replacements,
@@ -886,7 +922,7 @@ pub(super) async fn send_marker_zip_entry_chunks(
 #[allow(clippy::too_many_arguments)]
 async fn send_marker_zip_entry_chunks_inner(
     store: Arc<SourceBlockStore>,
-    plan: ZipEntryPlan,
+    plan: std::sync::Arc<ZipEntryPlan>,
     attempt_claim: Option<EntryAttemptClaim>,
     content_length: u64,
     marker_replacements: Arc<MarkerReplacements>,

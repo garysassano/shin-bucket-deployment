@@ -65,7 +65,7 @@ enum UploadPayload {
     },
     ZipEntry {
         store: Arc<SourceBlockStore>,
-        plan: ZipEntryPlan,
+        plan: std::sync::Arc<ZipEntryPlan>,
         content_length: u64,
         body_state: Arc<UploadBodyState>,
         body_attempts: Arc<AtomicUsize>,
@@ -104,7 +104,7 @@ impl UploadPayload {
     ) -> Self {
         Self::ZipEntry {
             store,
-            plan,
+            plan: std::sync::Arc::new(plan),
             content_length,
             body_state: Arc::new(UploadBodyState::new(detailed_failure_diagnostics)),
             body_attempts: Arc::new(AtomicUsize::new(0)),
@@ -123,7 +123,7 @@ impl UploadPayload {
     ) -> Self {
         Self::ZipEntry {
             store,
-            plan,
+            plan: std::sync::Arc::new(plan),
             content_length,
             body_state: Arc::new(UploadBodyState::new(detailed_failure_diagnostics)),
             body_attempts: Arc::new(AtomicUsize::new(0)),

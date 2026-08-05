@@ -124,6 +124,9 @@ impl SourceClient {
                 ),
             ));
         }
+        // Build the range header once: every retry attempt issues the same range GET,
+        // so formatting a fresh String per attempt is pure waste.
+        let range_header = format!("bytes={start}-{end}");
 
         for attempt in 1..=GET_OBJECT_MAX_ATTEMPTS {
             self.diagnostics
@@ -134,7 +137,7 @@ impl SourceClient {
                     .source_get_retries
                     .fetch_add(1, Ordering::Relaxed);
             }
-            match self.fetch_range_once(start, end).await {
+            match self.fetch_range_once(start, end, &range_header).await {
                 Ok(bytes) => return Ok(bytes),
                 Err(error) if error.retryable && attempt < GET_OBJECT_MAX_ATTEMPTS => {
                     self.diagnostics
@@ -182,6 +185,7 @@ impl SourceClient {
         &self,
         start: u64,
         end: u64,
+        range_header: &str,
     ) -> std::result::Result<Bytes, RangeGetError> {
         let _active_get = self.diagnostics.track_active_get();
         let request = self
@@ -189,7 +193,7 @@ impl SourceClient {
             .get_object()
             .bucket(&self.bucket)
             .key(&self.key)
-            .range(format!("bytes={start}-{end}"))
+            .range(range_header)
             .if_match(&self.etag);
 
         let output = request

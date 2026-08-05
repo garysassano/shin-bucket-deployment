@@ -314,11 +314,20 @@ impl SourceBlockStore {
         &self,
         task: impl Future<Output = ()> + Send + 'static,
     ) -> AbortHandle {
-        let mut tasks = self
-            .body_tasks
-            .lock()
-            .expect("source body task mutex should not be poisoned");
-        while let Some(result) = tasks.try_join_next() {
+        // Drain completed tasks and handle their panics without holding the body-task
+        // mutex across the sanitize/log work: collect under the lock, report after it.
+        let mut completed = Vec::new();
+        let handle = {
+            let mut tasks = self
+                .body_tasks
+                .lock()
+                .expect("source body task mutex should not be poisoned");
+            while let Some(result) = tasks.try_join_next() {
+                completed.push(result);
+            }
+            tasks.spawn(task)
+        };
+        for result in completed {
             if let Err(error) = result
                 && !error.is_cancelled()
             {
@@ -326,7 +335,7 @@ impl SourceBlockStore {
                 tracing::error!(error = %error, "source body task panicked");
             }
         }
-        tasks.spawn(task)
+        handle
     }
 
     pub(super) async fn reserve_fetch(
@@ -337,8 +346,10 @@ impl SourceBlockStore {
         if self.blocks.get(index).is_none() {
             return Ok(None);
         }
+        // The capacity wait is pinned on the stack per turn: pinning an OwnedNotified
+        // on the heap per retry would allocate once per wait.
         let (block, cancel_wait, restore_replay_priority) = loop {
-            let wait = {
+            let within_window = {
                 let mut state = self
                     .state
                     .lock()
@@ -382,13 +393,17 @@ impl SourceBlockStore {
                     );
                 }
 
-                enabled_notification(&self.capacity_notify)
+                false
             };
-            if self.budget.capacity_waiters.is_some() {
-                let _waiter = self.source.diagnostics.track_local_capacity_wait();
-                wait.await;
-            } else {
-                wait.await;
+            if !within_window {
+                let mut wait = std::pin::pin!(self.capacity_notify.notified());
+                wait.as_mut().enable();
+                if self.budget.capacity_waiters.is_some() {
+                    let _waiter = self.source.diagnostics.track_local_capacity_wait();
+                    wait.as_mut().await;
+                } else {
+                    wait.as_mut().await;
+                }
             }
         };
 
