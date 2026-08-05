@@ -6,4 +6,5 @@ cdk.out
 cdk.out.*
 target
 .benchmark-assets/
+.plans/
 .verification-assets/
