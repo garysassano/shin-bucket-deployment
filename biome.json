@@ -25,14 +25,9 @@
       "tsconfig*.json",
       "benchmarks/configs/**/*.json",
       "benchmarks/schemas/**/*.json",
-      "docs/**/*.md",
-      "benchmarks/**/*.md",
-      "scenarios/**/*.md",
-      "SECURITY.md",
       "package.json",
       "tsconfig.json",
-      "vitest.config.ts",
-      "README.md"
+      "vitest.config.ts"
     ]
   },
   "formatter": {
