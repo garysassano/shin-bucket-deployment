@@ -36,6 +36,17 @@ export class DemoStack extends Stack {
 }
 ```
 
+### Migrating from `BucketDeployment`
+
+Migration usually starts with this import change:
+
+```diff
+-import { BucketDeployment, Source } from "aws-cdk-lib/aws-s3-deployment";
++import { ShinBucketDeployment, Source } from "shin-bucket-deployment";
+```
+
+See the [full property mapping](#bucketdeployment-property-mapping) for replaced and unsupported properties.
+
 ## Why Build This
 
 The official `BucketDeployment` is a good default for many stacks, but its provider is built around AWS CLI copy/sync orchestration. Shin uses a purpose-built Rust Lambda function and a configuration model that exposes provider identity separately from request-scoped transfer controls.
@@ -158,6 +169,33 @@ The constructed deployment exposes these values and methods; these are construct
 | `deployment.handlerRole`       | Execution role used by the backing provider Lambda.                        |
 | `deployment.handlerFunction`   | Backing provider Lambda function.                                          |
 | `deployment.addSource(source)` | Adds another ordered source after construction.                            |
+
+## `BucketDeployment` Property Mapping
+
+`ShinBucketDeployment` accepts the same upstream CDK `ISource` implementations, but uses its own grouped configuration API. Keep `sources`, move the destination into `destination`, and then map only the behavior your deployment needs.
+
+### Replaced Properties
+
+| Upstream prop                     | Use instead                                                                                                    |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `prune`                           | `destinationLifecycle.onDeploy.deleteStaleObjects`                                                             |
+| `retainOnDelete`                  | `destinationLifecycle.onChange.deletePreviousObjects` and `destinationLifecycle.onDelete.deleteCurrentObjects` |
+| `distribution`                    | `cloudfrontInvalidation.distribution`                                                                          |
+| `distributionPaths`               | `cloudfrontInvalidation.paths`                                                                                 |
+| `waitForDistributionInvalidation` | `cloudfrontInvalidation.waitForCompletion`                                                                     |
+| `outputObjectKeys`                | `objectKeys`; Shin returns the key list only when this property is accessed.                                   |
+| `logRetention`                    | `providerLambda.logGroup`                                                                                      |
+
+### Unsupported Properties
+
+| Upstream prop                                                                                                                                                 | Shin behavior                                                                                                                                          |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `accessControl`, `cacheControl`, `contentDisposition`, `contentEncoding`, `contentLanguage`, `expires`, `metadata`, `storageClass`, `websiteRedirectLocation` | Object metadata is intentionally outside the deployment contract. Configure cache behavior in CloudFront and storage/lifecycle behavior on the bucket. |
+| `contentType`                                                                                                                                                 | Shin automatically infers `Content-Type` from each deployed object's file extension, with `application/octet-stream` as the fallback.                  |
+| `serverSideEncryption`, `serverSideEncryptionAwsKmsKeyId`, `serverSideEncryptionCustomerAlgorithm`                                                            | Only SSE-S3 destinations are supported, which S3 applies by default. SSE-C, SSE-KMS, and SSE-DSSE are rejected.                                        |
+| `ephemeralStorageSize`                                                                                                                                        | The provider does not stage archives or extracted files in Lambda `/tmp`.                                                                              |
+| `signContent`                                                                                                                                                 | The provider uses AWS SDK calls directly, not the upstream AWS CLI upload path.                                                                        |
+| `useEfs`                                                                                                                                                      | EFS is not needed because the provider streams data with bounded memory instead of staging archives or extracted files on disk.                        |
 
 ## Destination Lifecycle
 
