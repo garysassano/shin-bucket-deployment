@@ -346,10 +346,14 @@ impl SourceBlockStore {
         if self.blocks.get(index).is_none() {
             return Ok(None);
         }
-        // The capacity wait is pinned on the stack per turn: pinning an OwnedNotified
-        // on the heap per retry would allocate once per wait.
+        // The capacity wait must be created AND enabled while the state lock is
+        // held: every capacity notifier uses notify_waiters, which stores no permit
+        // for future waiters, so enabling after the lock would lose a wake that
+        // arrives between the condition check and the enable (a body replay then
+        // hangs until the deployment deadline). This forces a per-turn allocation;
+        // the Box-pin is the price of the safe enable-under-lock pattern.
         let (block, cancel_wait, restore_replay_priority) = loop {
-            let within_window = {
+            let wait = {
                 let mut state = self
                     .state
                     .lock()
@@ -393,17 +397,13 @@ impl SourceBlockStore {
                     );
                 }
 
-                false
+                enabled_notification(&self.capacity_notify)
             };
-            if !within_window {
-                let mut wait = std::pin::pin!(self.capacity_notify.notified());
-                wait.as_mut().enable();
-                if self.budget.capacity_waiters.is_some() {
-                    let _waiter = self.source.diagnostics.track_local_capacity_wait();
-                    wait.as_mut().await;
-                } else {
-                    wait.as_mut().await;
-                }
+            if self.budget.capacity_waiters.is_some() {
+                let _waiter = self.source.diagnostics.track_local_capacity_wait();
+                wait.await;
+            } else {
+                wait.await;
             }
         };
 
