@@ -41,6 +41,7 @@ README benchmark snapshots use sanitized records from `benchmarks/results.jsonl`
 Only README-linked snapshot SVGs are committed under `benchmarks/snapshots`. The current set is `mixed`, `tiny-many`, and `large-few` at 2048 MiB / max concurrency 64, rendered in preview mode from repetition 1 and replaced once repetitions 2–5 complete. Temporary alternate layouts can be regenerated locally with `benchmarks/src/render/readme-snapshot.ts`, but should not be kept as committed design history.
 
 <!-- benchmark-ci:start -->
+
 ## Latest Methodology-v2 CI Benchmark
 
 No run is published yet. The next canonical run regenerates this section and its charts.

@@ -7,6 +7,7 @@ Runbooks, evidence collection rules, schema guidance, and sanitization rules liv
 Provider-summary schema-5 result rows, their generated reports, and their chart live in `archive/` and are not current evidence.
 
 <!-- benchmark-ci:start -->
+
 ## Latest Canonical Benchmark
 
 No completed provider-summary schema-6 canonical run is published. The active ledger holds repetition 1 only, so reports, telemetry tables, and charts will be regenerated from a completed approved run. Archived schema-5 evidence is not used for current claims.
@@ -22,12 +23,12 @@ AWS evidence remains approval-gated. Run one complete repetition per selected va
 
 ## Where To Look
 
-| Artifact | Purpose |
-| --- | --- |
-| `benchmarks/README.md` | Benchmark runbook and current publication state. |
-| `benchmarks/results.jsonl` | Structured sanitized current benchmark result rows used by reports and profile snapshots. |
-| `benchmarks/configs/` | Curated benchmark run matrices. |
-| `benchmarks/src/` | Benchmark runner, collector, table renderer, report renderer, and profile-snapshot renderer. |
+| Artifact                   | Purpose                                                                                      |
+| -------------------------- | -------------------------------------------------------------------------------------------- |
+| `benchmarks/README.md`     | Benchmark runbook and current publication state.                                             |
+| `benchmarks/results.jsonl` | Structured sanitized current benchmark result rows used by reports and profile snapshots.    |
+| `benchmarks/configs/`      | Curated benchmark run matrices.                                                              |
+| `benchmarks/src/`          | Benchmark runner, collector, table renderer, report renderer, and profile-snapshot renderer. |
 
 ## Reading Results
 
