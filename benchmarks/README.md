@@ -44,7 +44,36 @@ Only README-linked snapshot SVGs are committed under `benchmarks/snapshots`. The
 
 ## Latest Methodology-v2 CI Benchmark
 
-No run is published yet. The next canonical run regenerates this section and its charts.
+GitHub Actions last published a complete five-repetition canonical run dated 2026-08-06 (run `e654d1fe-261d-4700-95af-0a7518520e5a`).
+
+- [Comparison report](ci-report.md)
+- [Shin provider telemetry](ci-telemetry.md)
+- [Sanitized structured results](results.jsonl)
+
+### large-few / 1024 MiB / max concurrency 32
+
+![Latest large-few CI benchmark](snapshots/ci-large-few-1024mib-32.svg)
+
+### large-few / 2048 MiB / max concurrency 64
+
+![Latest large-few CI benchmark](snapshots/ci-large-few-2048mib-64.svg)
+
+### mixed / 1024 MiB / max concurrency 32
+
+![Latest mixed CI benchmark](snapshots/ci-mixed-1024mib-32.svg)
+
+### mixed / 2048 MiB / max concurrency 64
+
+![Latest mixed CI benchmark](snapshots/ci-mixed-2048mib-64.svg)
+
+### tiny-many / 1024 MiB / max concurrency 32
+
+![Latest tiny-many CI benchmark](snapshots/ci-tiny-many-1024mib-32.svg)
+
+### tiny-many / 2048 MiB / max concurrency 64
+
+![Latest tiny-many CI benchmark](snapshots/ci-tiny-many-2048mib-64.svg)
+
 <!-- benchmark-ci:end -->
 
 ## Shin Provider Telemetry
