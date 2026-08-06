@@ -1406,6 +1406,7 @@ describe("ShinBucketDeployment validation and option coverage", () => {
       new ShinBucketDeployment(stack, "Deploy", {
         sources: [Source.data("index.html", "ok")],
         destination: { bucket: destinationBucket },
+        providerLambda: { localBuild: testLocalProviderBuild() },
         sourceProcessing: {
           include: ["**/*.html", "assets/[a-z]/file?.js", "assets/\\[literal\\]", "a{1,2,3}"],
           exclude: ["*.map", "tmp/[!a]/*"],
@@ -1450,6 +1451,7 @@ describe("ShinBucketDeployment validation and option coverage", () => {
       new ShinBucketDeployment(stack, "Deploy", {
         sources: [Source.data("index.html", "ok")],
         destination: { bucket: destinationBucket },
+        providerLambda: { localBuild: testLocalProviderBuild() },
         cloudfrontInvalidation: {
           distribution: distributionRef("E1EXAMPLE"),
           paths: [
@@ -1469,6 +1471,7 @@ describe("ShinBucketDeployment validation and option coverage", () => {
       new ShinBucketDeployment(stack, "Deploy", {
         sources: [Source.data("index.html", "ok")],
         destination: { bucket: destinationBucket },
+        providerLambda: { localBuild: testLocalProviderBuild() },
         cloudfrontInvalidation: {
           distribution: distributionRef("E1EXAMPLE"),
           paths: Array.from({ length: 16 }, (_, index) => `/a*b-${index}`),

@@ -17,6 +17,13 @@ import { afterEach, describe, expect, test } from "vitest";
 // check run.
 const packagedEntry = join(__dirname, "..", "..", "lib", "index.js");
 const packagedBuildPresent = existsSync(packagedEntry);
+// Synthesizing with the prebuilt provider needs the bootstrap archive, which is
+// produced by the Bootstrap jobs, not by `pnpm build:package` alone. Without it
+// synth falls back to compiling the Rust provider, which is not available in the
+// Node CI job — skip the synth smoke test when no prebuilt archive is present.
+const prebuiltArchivePresent =
+  existsSync(join(__dirname, "..", "..", "assets", "bootstrap-arm64", "bootstrap.zip")) ||
+  existsSync(join(__dirname, "..", "..", "assets", "bootstrap-x86_64", "bootstrap.zip"));
 
 const cleanupDirectories: string[] = [];
 afterEach(() => {
@@ -27,36 +34,40 @@ afterEach(() => {
 });
 
 describe.skipIf(!packagedBuildPresent)("packaged entry smoke test", () => {
-  test("the packaged entry synthesizes a deployment with the prebuilt provider", () => {
-    const packaged = require(packagedEntry) as typeof import("../../src");
-    const outdir = mkdtempSync(join(tmpdir(), "shin-packaged-smoke-"));
-    cleanupDirectories.push(outdir);
-    const app = new App({ outdir });
-    const stack = new Stack(app, "PackagedSmoke");
-    const destinationBucket = new Bucket(stack, "Dest");
+  test.skipIf(!prebuiltArchivePresent)(
+    "the packaged entry synthesizes a deployment with the prebuilt provider",
+    () => {
+      const packaged = require(packagedEntry) as typeof import("../../src");
+      const outdir = mkdtempSync(join(tmpdir(), "shin-packaged-smoke-"));
+      cleanupDirectories.push(outdir);
+      const app = new App({ outdir });
+      const stack = new Stack(app, "PackagedSmoke");
+      const destinationBucket = new Bucket(stack, "Dest");
 
-    new packaged.ShinBucketDeployment(stack, "Deploy", {
-      sources: [packaged.Source.data("index.html", "ok")],
-      destination: { bucket: destinationBucket },
-    });
+      new packaged.ShinBucketDeployment(stack, "Deploy", {
+        sources: [packaged.Source.data("index.html", "ok")],
+        destination: { bucket: destinationBucket },
+      });
 
-    const template = Template.fromStack(stack).toJSON() as {
-      Resources?: Record<string, unknown>;
-    };
-    const customResource = Object.values(template.Resources ?? {}).find(
-      (resource) => (resource as { Type?: string }).Type === "AWS::CloudFormation::CustomResource",
-    ) as { Properties?: Record<string, unknown> } | undefined;
-    expect(customResource?.Properties?.DestinationBucketName).toEqual({
-      Ref: expect.stringMatching(/^Dest/),
-    });
-    // The packaged entry must resolve the prebuilt bootstrap archive relative
-    // to lib/, or no Lambda function would render.
-    expect(
-      Object.values(template.Resources ?? {}).some(
-        (resource) => (resource as { Type?: string }).Type === "AWS::Lambda::Function",
-      ),
-    ).toBe(true);
-  });
+      const template = Template.fromStack(stack).toJSON() as {
+        Resources?: Record<string, unknown>;
+      };
+      const customResource = Object.values(template.Resources ?? {}).find(
+        (resource) =>
+          (resource as { Type?: string }).Type === "AWS::CloudFormation::CustomResource",
+      ) as { Properties?: Record<string, unknown> } | undefined;
+      expect(customResource?.Properties?.DestinationBucketName).toEqual({
+        Ref: expect.stringMatching(/^Dest/),
+      });
+      // The packaged entry must resolve the prebuilt bootstrap archive relative
+      // to lib/, or no Lambda function would render.
+      expect(
+        Object.values(template.Resources ?? {}).some(
+          (resource) => (resource as { Type?: string }).Type === "AWS::Lambda::Function",
+        ),
+      ).toBe(true);
+    },
+  );
 
   test("the packaged entry exports the public API surface", () => {
     const packaged = require(packagedEntry) as typeof import("../../src");
