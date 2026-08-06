@@ -23,6 +23,7 @@
   },
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
+  "sideEffects": false,
   "exports": {
     ".": {
       "types": "./lib/index.d.ts",
@@ -96,7 +97,7 @@
   },
   "peerDependencies": {
     "aws-cdk-lib": "^2.257.0",
-    "cargo-lambda-cdk": "^0.0.36",
+    "cargo-lambda-cdk": ">=0.0.36 <1.0.0",
     "constructs": "^10.0.0"
   },
   "peerDependenciesMeta": {

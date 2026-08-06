@@ -30,6 +30,7 @@ const expectedLibraryFiles = [
   "package/lib/enums.js",
   "package/lib/errors.d.ts",
   "package/lib/errors.js",
+  "package/lib/glob.js",
   "package/lib/iam.js",
   "package/lib/index.d.ts",
   "package/lib/index.js",

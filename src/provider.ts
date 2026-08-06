@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { Duration, Stack } from "aws-cdk-lib";
+import { Duration, Stack, Validations } from "aws-cdk-lib";
 import type { ISecurityGroup, IVpc, SubnetSelection } from "aws-cdk-lib/aws-ec2";
 import type { IRole } from "aws-cdk-lib/aws-iam";
 import { Architecture, Code, Function as LambdaFunction, Runtime } from "aws-cdk-lib/aws-lambda";
@@ -152,7 +152,12 @@ function sharedHandlerSourceIdentity(
     return {
       kind: "compile",
       packageVersion,
-      manifestPath,
+      // Hash the manifest content rather than its absolute path so a moved
+      // checkout (different machine or directory) keeps handler identity; the
+      // prebuilt path already hashes the archive bytes for the same reason.
+      // A missing manifest falls back to the path because compilation will
+      // fail later anyway with a proper diagnostic.
+      manifestSha256: existsSync(manifestPath) ? fileSha256(manifestPath) : manifestPath,
     };
   }
   throw new ValidationError(
@@ -191,11 +196,16 @@ function resolvePackageVersion(scope: Construct): string {
       return packageVersionCache;
     }
   }
-  throw new ValidationError(
-    "ShinBucketDeploymentPackageManifest",
-    `Unable to locate ${PACKAGE_NAME} package metadata with a non-empty version.`,
-    scope,
+  // Bundlers (esbuild/webpack) may rewrite `__dirname` so neither candidate
+  // resolves at runtime. Fall back to a stable sentinel instead of failing
+  // synthesis: version participates only in handler identity, and a bundled
+  // consumer's version cannot change under them at runtime anyway.
+  packageVersionCache = `${PACKAGE_NAME}@bundled`;
+  Validations.of(scope).addWarning(
+    "ShinBucketDeploymentPackageVersionUnresolved",
+    `Unable to locate ${PACKAGE_NAME} package metadata. The provider handler identity falls back to a bundled-version sentinel; report this if you did not bundle ${PACKAGE_NAME} yourself.`,
   );
+  return packageVersionCache;
 }
 
 function fileSha256(path: string): string {
@@ -222,9 +232,14 @@ function resolveDefaultRustProjectPath(scope: Construct): string {
 
 function resolvePrebuiltBootstrapArchive(architecture: Architecture): string | undefined {
   const dirName = `bootstrap-${architecture.name}`;
+  // Package-local assets first: the `..` candidate exists for the repository
+  // layout (built output under dist/ or lib/ with assets/ at the repo root)
+  // but must not shadow the package's own archive when this package is
+  // installed inside a larger tree that happens to have an assets/ directory
+  // at the parent level.
   const candidates = [
-    join(__dirname, "..", "..", "assets", dirName),
     join(__dirname, "..", "assets", dirName),
+    join(__dirname, "..", "..", "assets", dirName),
   ];
   for (const candidate of candidates) {
     const archive = join(candidate, "bootstrap.zip");

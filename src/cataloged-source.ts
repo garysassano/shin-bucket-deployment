@@ -2,8 +2,7 @@ import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
-import { AssetHashType, IgnoreStrategy } from "aws-cdk-lib";
-import type { IRole } from "aws-cdk-lib/aws-iam";
+import { AssetHashType, AssetStaging, IgnoreStrategy } from "aws-cdk-lib";
 import type { IBucket } from "aws-cdk-lib/aws-s3";
 import { Asset, type AssetOptions } from "aws-cdk-lib/aws-s3-assets";
 import {
@@ -33,6 +32,25 @@ const LINK_COPY_FALLBACK_ERRORS = new Set([
   "EPERM",
   "EXDEV",
 ]);
+
+// CDK's `AssetStaging` keeps a process-global cache keyed by the staged source
+// path (plus hash options). Cataloged materialization must therefore stage at a
+// *deterministic* path per source directory, or every bind would miss that
+// cache and re-walk, re-hash, and re-copy the tree. The path is keyed by the
+// resolved source path and the options that change the materialized tree
+// (`exclude` / `ignoreMode`), and is scoped to this process so concurrent
+// processes (test workers, parallel synthesizers) cannot interleave wipes of
+// the same directory.
+const nextCatalogedAssetIds = new WeakMap<Construct, number>();
+
+// CDK's `AssetStaging` cache is keyed by staged path + options only, not by
+// content. The deterministic staging directory makes that cache hit across
+// binds of an unchanged tree (the TS-P1 win), but a tree that changed between
+// binds in one process would otherwise serve the previous bind's stale hash
+// and staged ZIP. The catalog SHA-256 covers every materialized byte, so a
+// change is detected by comparing it with the last bind's value; on change,
+// the process-global asset cache is dropped before staging.
+const lastCatalogShaByStagingDirectory = new Map<string, string>();
 
 interface CatalogedSourceFileSystem {
   readonly linkSync: typeof fs.linkSync;
@@ -136,7 +154,7 @@ export class Source {
       bind(scope: Construct, context?: DeploymentSourceContext): SourceConfig {
         if (!context) {
           throw new ValidationError(
-            literalString("ShinBucketDeploymentCatalogedSourceContext"),
+            "ShinBucketDeploymentCatalogedSourceContext",
             "Use Source.asset() through ShinBucketDeployment.sources or addSource(); binding a cataloged asset directly requires a deployment source context.",
             scope,
           );
@@ -145,7 +163,7 @@ export class Source {
         const sourcePath = resolve(path);
         if (!fs.existsSync(sourcePath)) {
           throw new ValidationError(
-            literalString("ShinBucketDeploymentCatalogedSourceMissing"),
+            "ShinBucketDeploymentCatalogedSourceMissing",
             `Asset path does not exist: ${sourcePath}`,
             scope,
           );
@@ -155,7 +173,7 @@ export class Source {
         const sourceStat = fs.lstatSync(sourcePath);
         if (sourceStat.isSymbolicLink()) {
           throw new ValidationError(
-            literalString("ShinBucketDeploymentCatalogedSourceSymlink"),
+            "ShinBucketDeploymentCatalogedSourceSymlink",
             `Cataloged Source.asset does not support symbolic links: ${sourcePath}`,
             scope,
           );
@@ -163,7 +181,7 @@ export class Source {
         if (!sourceStat.isDirectory()) {
           if (!sourceStat.isFile()) {
             throw new ValidationError(
-              literalString("ShinBucketDeploymentCatalogedSourceRegularFile"),
+              "ShinBucketDeploymentCatalogedSourceRegularFile",
               `Cataloged Source.asset requires a directory or regular ZIP file: ${sourcePath}`,
               scope,
             );
@@ -174,43 +192,50 @@ export class Source {
 
         if (scope.node.tryGetContext(DISABLE_ASSET_STAGING_CONTEXT)) {
           throw new ValidationError(
-            literalString("ShinBucketDeploymentCatalogedSourceRequiresAssetStaging"),
+            "ShinBucketDeploymentCatalogedSourceRequiresAssetStaging",
             `Cataloged Source.asset requires CDK asset staging; remove the ${DISABLE_ASSET_STAGING_CONTEXT} context setting or pass embeddedCatalog:false.`,
             scope,
           );
         }
 
-        const tempDir = fs.mkdtempSync(join(tmpdir(), TEMP_DIRECTORY_PREFIX));
-        return withTemporaryDirectory(tempDir, () => {
-          const materialized = materializeCatalogedDirectory(sourcePath, tempDir, options);
-          let id = 1;
-          while (scope.node.tryFindChild(`CatalogedAsset${id}`)) {
-            id++;
-          }
-          const asset = new Asset(scope, `CatalogedAsset${id}`, {
-            path: materialized.directory,
-            assetHash: options?.assetHash,
-            assetHashType: options?.assetHashType,
-            readers: options?.readers,
-            deployTime: options?.deployTime,
-            sourceKMSKey: options?.sourceKMSKey,
-            displayName: options?.displayName,
-          });
-          validateSnapshots(materialized.snapshots);
-          asset.grantRead(context.handlerRole as IRole);
-          const config: SourceConfig = {
-            bucket: asset.bucket,
-            zipObjectKey: asset.s3ObjectKey,
-          };
-          trustedSourceCatalogs.set(
-            config,
-            Object.freeze({
-              Version: CATALOG_VERSION,
-              Sha256: materialized.catalogSha256,
-            }),
-          );
-          return config;
+        const stagingDirectory = catalogedSourceStagingDirectory(sourcePath, options);
+        // Wipe the previous materialization first so files removed or renamed in
+        // the source tree cannot linger in the staged directory. The directory
+        // itself is deliberately kept (it is the AssetStaging cache key); only
+        // its contents are refreshed per bind.
+        catalogedSourceFileSystem.rmSync(stagingDirectory, { recursive: true, force: true });
+        const materialized = materializeCatalogedDirectory(sourcePath, stagingDirectory, options);
+        const previousCatalogSha = lastCatalogShaByStagingDirectory.get(stagingDirectory);
+        if (previousCatalogSha !== undefined && previousCatalogSha !== materialized.catalogSha256) {
+          // The tree changed since the last bind of this staging directory;
+          // drop CDK's process-global asset cache so the Asset below cannot
+          // reuse the stale hash and staged ZIP.
+          AssetStaging.clearAssetHashCache();
+        }
+        lastCatalogShaByStagingDirectory.set(stagingDirectory, materialized.catalogSha256);
+        const asset = new Asset(scope, `CatalogedAsset${nextCatalogedAssetId(scope)}`, {
+          path: materialized.directory,
+          assetHash: options?.assetHash,
+          assetHashType: options?.assetHashType,
+          readers: options?.readers,
+          deployTime: options?.deployTime,
+          sourceKMSKey: options?.sourceKMSKey,
+          displayName: options?.displayName,
         });
+        validateSnapshots(materialized.snapshots);
+        asset.grantRead(context.handlerRole);
+        const config: SourceConfig = {
+          bucket: asset.bucket,
+          zipObjectKey: asset.s3ObjectKey,
+        };
+        trustedSourceCatalogs.set(
+          config,
+          Object.freeze({
+            Version: CATALOG_VERSION,
+            Sha256: materialized.catalogSha256,
+          }),
+        );
+        return config;
       },
     };
   }
@@ -290,21 +315,21 @@ function validateCatalogedOptions(scope: Construct, options?: CatalogedOptions):
   const runtimeOptions = options as AssetOptions | undefined;
   if (runtimeOptions?.bundling) {
     throw new ValidationError(
-      literalString("ShinBucketDeploymentCatalogedSourceBundling"),
+      "ShinBucketDeploymentCatalogedSourceBundling",
       "Cataloged Source.asset does not support bundling; pass embeddedCatalog:false to use CDK bundling.",
       scope,
     );
   }
   if (runtimeOptions?.followSymlinks !== undefined) {
     throw new ValidationError(
-      literalString("ShinBucketDeploymentCatalogedSourceFollowSymlinks"),
+      "ShinBucketDeploymentCatalogedSourceFollowSymlinks",
       "Cataloged Source.asset does not support followSymlinks; pass embeddedCatalog:false to use CDK symlink handling.",
       scope,
     );
   }
   if (runtimeOptions?.assetHashType === AssetHashType.OUTPUT) {
     throw new ValidationError(
-      literalString("ShinBucketDeploymentCatalogedSourceOutputHash"),
+      "ShinBucketDeploymentCatalogedSourceOutputHash",
       "Cataloged Source.asset does not support AssetHashType.OUTPUT because cataloged assets are not bundled.",
       scope,
     );
@@ -317,6 +342,14 @@ function materializeCatalogedDirectory(
   options?: CatalogedOptions,
 ): MaterializedDirectory {
   const directory = join(tempDir, "asset");
+  // The deterministic staging parent is kept across binds but wiped at the
+  // start of each bind, so it may not exist on the first bind (or after an
+  // OS temp cleanup). Create it explicitly so the parent matches the 0o700
+  // asset subdirectory (a recursive mkdir alone would leave the parent at the
+  // umask default; the hard-linked copies themselves live in the 0o700 leaf,
+  // so this is parity with the old mkdtempSync behavior rather than a content
+  // exposure fix).
+  fs.mkdirSync(tempDir, { recursive: true, mode: 0o700 });
   fs.mkdirSync(directory, { mode: 0o700 });
   const files = collectAssetFiles(sourcePath, options);
   const readBuffer = Buffer.allocUnsafe(FILE_READ_BYTES);
@@ -364,14 +397,18 @@ function collectAssetFiles(sourcePath: string, options?: CatalogedOptions): Sour
   const result: SourceFile[] = [];
   const normalizedPaths = new Map<string, string>();
 
-  const visit = (directory: string): void => {
+  // Iterative walk: recursion depth would otherwise track directory nesting
+  // depth, which is unbounded for adversarial or generated trees.
+  const pendingDirectories: string[] = [sourcePath];
+  while (pendingDirectories.length > 0) {
+    const directory = pendingDirectories.pop() as string;
     const names = fs.readdirSync(directory).sort(compareUtf8);
     for (const name of names) {
       const absolutePath = join(directory, name);
       const stat = fs.lstatSync(absolutePath);
       if (stat.isDirectory()) {
         if (!ignore.completelyIgnores(absolutePath)) {
-          visit(absolutePath);
+          pendingDirectories.push(absolutePath);
         }
         continue;
       }
@@ -398,9 +435,8 @@ function collectAssetFiles(sourcePath: string, options?: CatalogedOptions): Sour
       normalizedPaths.set(catalogPath, absolutePath);
       result.push({ absolutePath, catalogPath });
     }
-  };
+  }
 
-  visit(sourcePath);
   result.sort((left, right) => compareUtf8(left.catalogPath, right.catalogPath));
   return result;
 }
@@ -553,41 +589,47 @@ function validateSnapshots(snapshots: FileSnapshot[]): void {
   }
 }
 
-function withTemporaryDirectory<T>(tempDir: string, operation: () => T): T {
-  let result: T | undefined;
-  let operationError: unknown;
-  try {
-    result = operation();
-  } catch (error) {
-    operationError = error;
-  }
+/**
+ * Deterministic staging directory for one cataloged source.
+ *
+ * Keyed by the resolved source path and the options that change the
+ * materialized tree (`exclude`, `ignoreMode`), so repeated binds of the same
+ * source land at the same path and hit CDK's process-global `AssetStaging`
+ * cache instead of re-walking, re-hashing, and re-copying the tree. Scoped to
+ * this process so concurrent processes cannot interleave materialization.
+ *
+ * @internal
+ */
+export function catalogedSourceStagingDirectory(
+  sourcePath: string,
+  options?: CatalogedOptions,
+): string {
+  const key = JSON.stringify({
+    sourcePath,
+    exclude: [...(options?.exclude ?? [])].sort(),
+    ignoreMode: options?.ignoreMode,
+  });
+  const digest = createHash("sha256").update(key).digest("hex").slice(0, 16);
+  return join(tmpdir(), `${TEMP_DIRECTORY_PREFIX}${process.pid}-${digest}`);
+}
 
-  let cleanupError: unknown;
-  try {
-    catalogedSourceFileSystem.rmSync(tempDir, { recursive: true, force: true });
-  } catch (error) {
-    cleanupError = error;
-  }
-
-  if (operationError !== undefined && cleanupError !== undefined) {
-    throw new AggregateError(
-      [operationError, cleanupError],
-      "Cataloged Source.asset construction and temporary-directory cleanup both failed",
-    );
-  }
-  if (operationError !== undefined) {
-    throw operationError;
-  }
-  if (cleanupError !== undefined) {
-    throw cleanupError;
-  }
-  return result as T;
+function nextCatalogedAssetId(scope: Construct): number {
+  const next = (nextCatalogedAssetIds.get(scope) ?? 0) + 1;
+  nextCatalogedAssetIds.set(scope, next);
+  return next;
 }
 
 function compareUtf8(left: string, right: string): number {
-  return Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8"));
-}
-
-function literalString(value: string): string {
-  return value;
+  // String comparison orders UTF-16 code units. That agrees with code-point
+  // order (and therefore with UTF-8 byte order) for ASCII, BMP characters
+  // below U+E000, and astral planes, but diverges for BMP characters in
+  // U+E000–U+FFFF versus astral characters (a high surrogate 0xD800–0xDBFF
+  // sorts below e.g. U+FFFD in UTF-16 while its code point sorts above). The
+  // previous Buffer-per-comparison form produced true UTF-8 byte order at the
+  // cost of two allocations per comparison. The catalog is consumed as a
+  // SHA-verified blob, so only the exact sort of such mixed trees differs;
+  // both orderings are deterministic. The lone-surrogate case (invalid UTF-8
+  // filename) behaves the same way: Buffer.from would replace the surrogate
+  // with U+FFFD, while string comparison keeps the surrogate value.
+  return left < right ? -1 : left > right ? 1 : 0;
 }

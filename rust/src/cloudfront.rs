@@ -12,6 +12,12 @@ const INVALIDATION_POLL_INTERVAL: Duration = Duration::from_secs(20);
 /// settle into one synchronized 20-second GetInvalidation cadence.
 const INVALIDATION_POLL_JITTER: Duration = Duration::from_secs(5);
 const MAX_INVALIDATION_PATH_CHARACTERS: usize = 4_000;
+/// CloudFront's documented per-invalidation-batch path limit. See
+/// .plans/plan-consolidated.md T-5; the construct enforces the same bound at synthesis.
+const MAX_INVALIDATION_PATHS: usize = 3_000;
+/// CloudFront's documented per-invalidation-batch wildcard-path limit. A wildcard path
+/// is one whose final character is `*`.
+const MAX_WILDCARD_INVALIDATION_PATHS: usize = 15;
 
 /// An invalidation created by [`create_invalidation`], ready to be awaited by
 /// [`wait_for_invalidation`]. Splitting creation from the completion wait lets a
@@ -160,6 +166,15 @@ pub(crate) fn validate_invalidation_paths(paths: &[String]) -> Result<i32> {
         !paths.is_empty(),
         "CloudFront invalidation requires at least one path"
     );
+    ensure!(
+        paths.len() <= MAX_INVALIDATION_PATHS,
+        "CloudFront invalidation exceeds the maximum of {MAX_INVALIDATION_PATHS} paths"
+    );
+    let wildcard_path_count = paths.iter().filter(|path| path.ends_with('*')).count();
+    ensure!(
+        wildcard_path_count <= MAX_WILDCARD_INVALIDATION_PATHS,
+        "CloudFront invalidation exceeds the maximum of {MAX_WILDCARD_INVALIDATION_PATHS} wildcard paths"
+    );
     let quantity = invalidation_quantity(paths.len())?;
 
     for (index, path) in paths.iter().enumerate() {
@@ -215,7 +230,8 @@ mod tests {
 
     use super::{
         INVALIDATION_POLL_INTERVAL, INVALIDATION_POLL_JITTER, MAX_INVALIDATION_PATH_CHARACTERS,
-        invalidation_quantity, next_poll_at, poll_interval, validate_invalidation_paths,
+        MAX_INVALIDATION_PATHS, MAX_WILDCARD_INVALIDATION_PATHS, invalidation_quantity,
+        next_poll_at, poll_interval, validate_invalidation_paths,
     };
 
     #[test]
@@ -264,6 +280,31 @@ mod tests {
                 "`{path:?}` must be rejected"
             );
         }
+    }
+
+    #[test]
+    fn invalidation_paths_enforce_the_documented_batch_limits() {
+        let max_paths = vec!["/a".to_string(); MAX_INVALIDATION_PATHS];
+        assert_eq!(
+            validate_invalidation_paths(&max_paths).expect("valid path count"),
+            MAX_INVALIDATION_PATHS as i32
+        );
+
+        let too_many_paths = vec!["/a".to_string(); MAX_INVALIDATION_PATHS + 1];
+        assert!(validate_invalidation_paths(&too_many_paths).is_err());
+
+        let max_wildcards = vec!["/*".to_string(); MAX_WILDCARD_INVALIDATION_PATHS];
+        assert_eq!(
+            validate_invalidation_paths(&max_wildcards).expect("valid wildcard count"),
+            MAX_WILDCARD_INVALIDATION_PATHS as i32
+        );
+
+        let too_many_wildcards = vec!["/*".to_string(); MAX_WILDCARD_INVALIDATION_PATHS + 1];
+        assert!(validate_invalidation_paths(&too_many_wildcards).is_err());
+
+        // `*` anywhere but the final character is a literal, not a wildcard path.
+        let literal_stars = vec!["/a*b".to_string(); MAX_WILDCARD_INVALIDATION_PATHS + 1];
+        assert!(validate_invalidation_paths(&literal_stars).is_ok());
     }
 
     #[test]

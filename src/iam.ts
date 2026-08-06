@@ -1,4 +1,4 @@
-import { Stack, Token } from "aws-cdk-lib";
+import { Stack, Validations } from "aws-cdk-lib";
 import type { IDistributionRef } from "aws-cdk-lib/aws-cloudfront";
 import { Effect, PolicyStatement } from "aws-cdk-lib/aws-iam";
 import type { Function as LambdaFunction } from "aws-cdk-lib/aws-lambda";
@@ -12,6 +12,14 @@ interface DestinationPermissions {
   readonly previousBucket?: IBucket;
   readonly distribution?: IDistributionRef;
   readonly previousDistribution?: IDistributionRef;
+  /**
+   * Whether the provider waits for CloudFront invalidation completion after
+   * creating it. When false the provider never calls `GetInvalidation`, so the
+   * role does not need that action.
+   *
+   * @default true
+   */
+  readonly waitForInvalidation?: boolean;
 }
 
 export function grantDestinationPermissions(
@@ -25,6 +33,13 @@ export function grantDestinationPermissions(
   );
   const destinationGrants = BucketGrants.fromBucket(permissions.destinationBucket);
   // Destinations are SSE-S3 only, so the provider needs no KMS authority at all.
+  //
+  // `s3:GetObject` is load-bearing and must not be removed: the provider's
+  // copy-identity reconciliation probes `HeadObject` against the destination
+  // (extract:false copies and marker entries), and S3 authorizes `HeadObject`
+  // via `s3:GetObject`. See finding N-1 in .plans/plan-consolidated.md; a plan
+  // that proposed trimming this grant was refuted because deployments would
+  // fail with AccessDenied.
   destinationGrants.actionsOnObjectKeys(
     handler,
     destinationObjectKeyPattern,
@@ -68,7 +83,11 @@ export function grantDestinationPermissions(
     addHandlerPolicy(
       handler,
       dependables,
-      cloudFrontPolicyStatement(scope, permissions.distribution.distributionRef.distributionId),
+      cloudFrontPolicyStatement(
+        scope,
+        permissions.distribution.distributionRef.distributionId,
+        permissions.waitForInvalidation,
+      ),
     );
   }
 
@@ -79,6 +98,7 @@ export function grantDestinationPermissions(
       cloudFrontPolicyStatement(
         scope,
         permissions.previousDistribution.distributionRef.distributionId,
+        permissions.waitForInvalidation,
       ),
     );
   }
@@ -108,12 +128,27 @@ function addHandlerPolicy(
   dependables: IDependable[],
   statement: PolicyStatement,
 ): void {
-  const role = handler.role;
-  if (!role) {
-    handler.addToRolePolicy(statement);
-    return;
-  }
+  // The handler role is guaranteed before grants run: `getOrCreateHandler`
+  // always creates the Function and the construct verifies
+  // `handlerFunction.role` right after. An imported function never reaches
+  // this path, so the assertion below would fail loudly (never silently
+  // degrade) if that invariant ever broke.
+  const role = handler.role as NonNullable<LambdaFunction["role"]>;
   const result = role.addToPrincipalPolicy(statement);
+  if (!result.statementAdded) {
+    // `statementAdded` is false for imported roles (`Role.fromRoleArn` and
+    // similar): the statement cannot be attached, and the failure is silent
+    // unless surfaced here. Imported roles are legitimate when they already
+    // carry the required permissions, so this is a warning rather than an
+    // error. Without it, the provider starts and fails with AccessDenied at
+    // deploy time.
+    Validations.of(handler).addWarning(
+      "ShinBucketDeploymentImportedRoleGrantDropped",
+      `The provider handler role is imported, so the ${statement.actions.join(
+        ", ",
+      )} grant could not be attached. Ensure the imported role already carries the required source, destination, and CloudFront permissions, or the deployment will fail with AccessDenied.`,
+    );
+  }
   if (result.policyDependable) {
     dependables.push(result.policyDependable);
   }
@@ -127,15 +162,30 @@ function bucketTagReadStatement(bucketArn: string): PolicyStatement {
   });
 }
 
-function cloudFrontPolicyStatement(scope: Construct, distributionId: string): PolicyStatement {
+function cloudFrontPolicyStatement(
+  scope: Construct,
+  distributionId: string,
+  waitForInvalidation: boolean | undefined,
+): PolicyStatement {
+  const actions =
+    waitForInvalidation === false
+      ? ["cloudfront:CreateInvalidation"]
+      : ["cloudfront:GetInvalidation", "cloudfront:CreateInvalidation"];
   return new PolicyStatement({
     effect: Effect.ALLOW,
-    actions: ["cloudfront:GetInvalidation", "cloudfront:CreateInvalidation"],
+    actions,
     resources: [cloudFrontDistributionArn(scope, distributionId)],
   });
 }
 
 function cloudFrontDistributionArn(scope: Construct, distributionId: string): string {
+  // CloudFront is a global service and its ARNs carry no region, but the ARN
+  // still includes the account that owns the distribution. Stack.formatArn uses
+  // this stack's account, which is correct for same-account distributions.
+  // Cross-account distributions are not detected here: the provider uses the
+  // distribution ID directly against the global CloudFront endpoint, and the
+  // ARN exists only for IAM, whose resource matching for cross-account use
+  // must be configured by the caller.
   return Stack.of(scope).formatArn({
     service: "cloudfront",
     region: "",
@@ -145,7 +195,10 @@ function cloudFrontDistributionArn(scope: Construct, distributionId: string): st
 }
 
 function destinationObjectGrantPattern(prefix: string | undefined): string {
-  if (!prefix || prefix === "/" || Token.isUnresolved(prefix)) {
+  // `destination.keyPrefix` is validated as a concrete string before grants
+  // run (validateDestinationKeyPrefix rejects unresolved tokens), so no token
+  // guard is needed here; the root spellings map to a bucket-wide pattern.
+  if (!prefix || prefix === "/") {
     return "*";
   }
   return prefix.endsWith("/") ? `${prefix}*` : `${prefix}/*`;
@@ -165,7 +218,8 @@ function destinationListPolicyStatement(
 }
 
 function destinationListPrefix(prefix: string | undefined): string | undefined {
-  if (!prefix || prefix === "/" || Token.isUnresolved(prefix)) {
+  // See destinationObjectGrantPattern: keyPrefix is concrete by grant time.
+  if (!prefix || prefix === "/") {
     return undefined;
   }
   return prefix.endsWith("/") ? prefix : `${prefix}/`;
