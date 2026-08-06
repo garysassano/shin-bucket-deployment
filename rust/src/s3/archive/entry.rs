@@ -230,7 +230,7 @@ pub(crate) struct ZipEntryAsyncReader {
 pub(super) struct EntryDataReader {
     store: Arc<SourceBlockStore>,
     position: u64,
-    end: u64,
+    end_exclusive: u64,
     buffer_start: u64,
     buffer: Bytes,
     in_flight: Option<Pin<Box<dyn Future<Output = io::Result<Bytes>> + Send>>>,
@@ -371,18 +371,18 @@ async fn open_entry_data_reader_with_claim(
     plan: std::sync::Arc<ZipEntryPlan>,
     attempt_claim: EntryAttemptClaim,
 ) -> io::Result<EntryDataReader> {
-    let header_end = plan
+    let header_end_exclusive = plan
         .source_offset
         .checked_add(LOCAL_FILE_HEADER_LEN as u64)
         .ok_or_else(|| invalid_entry(&plan, "local file header offset overflowed"))?;
-    if header_end > plan.source_span_end {
+    if header_end_exclusive > plan.source_span_end_exclusive {
         return Err(invalid_entry(
             &plan,
             "local file header extends beyond the planned source span",
         ));
     }
 
-    let header = read_local_file_header(&store, &plan, header_end).await?;
+    let header = read_local_file_header(&store, &plan, header_end_exclusive).await?;
     let signature = u32::from_le_bytes([header[0], header[1], header[2], header[3]]);
     if signature != LOCAL_FILE_HEADER_SIGNATURE {
         return Err(invalid_entry(
@@ -433,17 +433,17 @@ async fn open_entry_data_reader_with_claim(
         .and_then(|offset| offset.checked_add(file_name_len))
         .and_then(|offset| offset.checked_add(extra_field_len))
         .ok_or_else(|| invalid_entry(&plan, "local file data offset overflowed"))?;
-    let data_end = data_offset
+    let data_end_exclusive = data_offset
         .checked_add(plan.compressed_size)
         .ok_or_else(|| invalid_entry(&plan, "local file compressed data offset overflowed"))?;
-    if data_end > plan.source_span_end {
+    if data_end_exclusive > plan.source_span_end_exclusive {
         return Err(invalid_entry(
             &plan,
             "local file data extends beyond the planned source span",
         ));
     }
 
-    EntryDataReader::new(store, attempt_claim, data_offset, data_end)
+    EntryDataReader::new(store, attempt_claim, data_offset, data_end_exclusive)
 }
 
 /// Reads the 30-byte local file header, stitching it across source blocks if it straddles
@@ -468,14 +468,17 @@ async fn open_entry_data_reader_with_claim(
 async fn read_local_file_header(
     store: &Arc<SourceBlockStore>,
     plan: &ZipEntryPlan,
-    header_end: u64,
+    header_end_exclusive: u64,
 ) -> io::Result<[u8; LOCAL_FILE_HEADER_LEN]> {
     let mut header = [0_u8; LOCAL_FILE_HEADER_LEN];
     let mut filled = 0_usize;
     let mut position = plan.source_offset;
 
     while filled < LOCAL_FILE_HEADER_LEN {
-        let slice = store.slice_from(position, header_end).await?.bytes;
+        let slice = store
+            .slice_from(position, header_end_exclusive)
+            .await?
+            .bytes;
         if slice.is_empty() {
             return Err(invalid_entry(
                 plan,
@@ -496,13 +499,13 @@ impl EntryDataReader {
         store: Arc<SourceBlockStore>,
         attempt_claim: EntryAttemptClaim,
         start: u64,
-        end: u64,
+        end_exclusive: u64,
     ) -> io::Result<Self> {
         let remaining_blocks = attempt_claim.activate()?;
         Ok(Self {
             store,
             position: start,
-            end,
+            end_exclusive,
             buffer_start: start,
             buffer: Bytes::new(),
             in_flight: None,
@@ -523,21 +526,24 @@ impl EntryDataReader {
 
     fn start_fetch(&mut self) {
         let start = self.position;
-        let end = self.end;
+        let end_exclusive = self.end_exclusive;
         let store = Arc::clone(&self.store);
         self.in_flight_start = start;
         self.in_flight = Some(Box::pin(async move {
-            store.slice_from(start, end).await.map(|slice| slice.bytes)
+            store
+                .slice_from(start, end_exclusive)
+                .await
+                .map(|slice| slice.bytes)
         }));
     }
 
     fn release_finished_blocks(&mut self) {
         while let Some(index) = self.remaining_blocks.front().copied() {
-            let Some(end) = self.store.block_end(index) else {
+            let Some(end_inclusive) = self.store.block_end_inclusive(index) else {
                 self.remaining_blocks.pop_front();
                 continue;
             };
-            if end < self.position {
+            if end_inclusive < self.position {
                 self.remaining_blocks.pop_front();
                 self.store.release_block_reader(index);
             } else {
@@ -560,7 +566,7 @@ impl EntryDataReader {
     }
 
     fn poll_fetch(&mut self, cx: &mut TaskContext<'_>) -> Poll<io::Result<()>> {
-        if self.position >= self.end {
+        if self.position >= self.end_exclusive {
             return Poll::Ready(Ok(()));
         }
 
@@ -611,7 +617,7 @@ impl AsyncRead for EntryDataReader {
         cx: &mut TaskContext<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        if self.position >= self.end || buf.remaining() == 0 {
+        if self.position >= self.end_exclusive || buf.remaining() == 0 {
             self.clear_consumed_buffer();
             self.release_finished_blocks();
             return Poll::Ready(Ok(()));
@@ -624,7 +630,7 @@ impl AsyncRead for EntryDataReader {
         }
 
         let available = self.available().unwrap_or_default();
-        let remaining = usize::try_from(self.end - self.position).unwrap_or(usize::MAX);
+        let remaining = usize::try_from(self.end_exclusive - self.position).unwrap_or(usize::MAX);
         let len = available.len().min(remaining).min(buf.remaining());
         buf.put_slice(&available[..len]);
         self.position += len as u64;
@@ -1377,16 +1383,8 @@ mod diagnostic_tests {
     #[test]
     fn invalid_entry_diagnostic_escapes_and_caps_the_zip_path() {
         let plan = ZipEntryPlan {
-            source_index: 0,
             relative_key: format!("zip/\r\nforged\u{2028}{}", "x".repeat(400)),
-            destination_key: "destination".to_string(),
-            size: 1,
-            compressed_size: 1,
-            compression_code: 0,
-            crc32: 0,
-            trusted_integrity: None,
-            source_offset: 0,
-            source_span_end: 1,
+            ..ZipEntryPlan::for_test("placeholder", 1, 0, 1)
         };
 
         let error = invalid_entry(&plan, "invalid metadata").to_string();
@@ -1399,16 +1397,9 @@ mod diagnostic_tests {
     #[test]
     fn decoded_output_cannot_cross_the_planned_entry_ceiling() {
         let plan = ZipEntryPlan {
-            source_index: 0,
-            relative_key: "bounded.bin".to_string(),
-            destination_key: "bounded.bin".to_string(),
-            size: 1_024,
             compressed_size: 10,
             compression_code: 8,
-            crc32: 0,
-            trusted_integrity: None,
-            source_offset: 0,
-            source_span_end: 1,
+            ..ZipEntryPlan::for_test("bounded.bin", 1_024, 0, 1)
         };
 
         validate_zip_entry_size_not_exceeded(&plan, 1_024)

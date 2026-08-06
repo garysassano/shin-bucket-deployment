@@ -3060,19 +3060,12 @@ mod tests {
 
     fn integrity_plan(bytes: &[u8], md5: Option<String>) -> ZipEntryPlan {
         ZipEntryPlan {
-            source_index: 0,
-            relative_key: "entry.txt".to_string(),
-            destination_key: "entry.txt".to_string(),
-            size: bytes.len() as u64,
-            compressed_size: bytes.len() as u64,
-            compression_code: 0,
             crc32: crc32fast::hash(bytes),
             trusted_integrity: md5.map(|md5| TrustedEntryIntegrity {
                 size: bytes.len() as u64,
                 md5,
             }),
-            source_offset: 0,
-            source_span_end: bytes.len() as u64,
+            ..ZipEntryPlan::for_test("entry.txt", bytes.len() as u64, 0, bytes.len() as u64)
         }
     }
 
@@ -3265,17 +3258,11 @@ mod tests {
     }
 
     fn summary_request() -> crate::types::DeploymentRequest {
-        let raw: crate::request::RawDeploymentRequest = serde_json::from_value(serde_json::json!({
-            "SourceBucketNames": ["source"],
-            "SourceObjectKeys": ["archive.zip"],
-            "DestinationBucketName": "destination",
-            "DestinationOwnerId": "summary-owner",
-            "MaxUncompressedEntryBytes": 1073741824,
-            "MaxCompressionRatio": 100,
-            "Extract": false
-        }))
-        .expect("raw deployment request");
-        crate::request::parse_request_with_memory(raw, "1024").expect("valid request")
+        crate::types::DeploymentRequest {
+            source_object_keys: vec!["archive.zip".to_string()],
+            destination_owner_id: "summary-owner".to_string(),
+            ..crate::types::DeploymentRequest::for_test()
+        }
     }
 
     /// Drives a real replayed copy (one failure, one success) so the counters come

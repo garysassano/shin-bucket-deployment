@@ -115,6 +115,110 @@ pub(crate) struct DeploymentRequest {
     pub(crate) runtime: RuntimeOptions,
 }
 
+#[cfg(test)]
+impl DeploymentRequest {
+    /// Shared defaults for the common single-archive, single-destination test shape.
+    /// Module-local test builders that need different policies override fields
+    /// directly (`DeploymentRequest` fields are `pub(crate)`), so a test keeps the
+    /// values that are its point while the rest of the boilerplate lives here.
+    pub(crate) fn for_test() -> Self {
+        DeploymentRequest {
+            source_bucket_names: vec!["source".to_string()],
+            source_object_keys: vec!["source.zip".to_string()],
+            source_catalogs: vec![None],
+            source_markers: vec![HashMap::new()],
+            source_markers_config: vec![MarkerConfig::default()],
+            dest_bucket_name: "destination".to_string(),
+            dest_bucket_prefix: "site".to_string(),
+            extract: false,
+            delete_current_objects_on_delete: false,
+            distribution_id: None,
+            distribution_paths: vec!["/*".to_string()],
+            wait_for_distribution_invalidation: true,
+            delete_stale_objects_on_deployment: true,
+            exclude: Vec::new(),
+            include: Vec::new(),
+            output_object_keys: true,
+            destination_bucket_arn: None,
+            destination_owner_id: "owner".to_string(),
+            delete_previous_objects_on_change: None,
+            invalidate_previous_distribution_on_change: None,
+            archive_expansion: ArchiveExpansionLimits {
+                max_uncompressed_entry_bytes: 1024 * 1024 * 1024,
+                max_compression_ratio: 100,
+            },
+            runtime: test_runtime_options(),
+        }
+    }
+}
+
+/// Deterministic runtime profile for unit tests: a single parallel transfer, no retry
+/// backoff, and a small source block so tests stay exact and fast.
+#[cfg(test)]
+pub(crate) fn test_runtime_options() -> RuntimeOptions {
+    RuntimeOptions {
+        available_memory_mb: 1024,
+        max_parallel_transfers: 1,
+        source_block_bytes: 1024,
+        source_block_merge_gap_bytes: 0,
+        source_get_concurrency: 1,
+        source_window_bytes: None,
+        source_memory_budget_bytes: 256 * 1024 * 1024,
+        put_object_retry: PutObjectRetryOptions {
+            max_attempts: 1,
+            retry_base_delay_ms: 0,
+            retry_max_delay_ms: 0,
+            slowdown_retry_base_delay_ms: 0,
+            slowdown_retry_max_delay_ms: 0,
+            jitter: PutObjectRetryJitter::None,
+        },
+    }
+}
+
+#[cfg(test)]
+use aws_smithy_http_client::test_util::StaticReplayClient;
+
+/// `AppState` with deterministic test clients: an S3 client pinned to a replayed
+/// endpoint and a CloudFront client with test credentials.
+#[cfg(test)]
+pub(crate) fn test_app_state_with_replay(replay: StaticReplayClient) -> AppState {
+    let s3 = S3Client::from_conf(
+        aws_sdk_s3::Config::builder()
+            .behavior_version_latest()
+            .region(aws_sdk_s3::config::Region::new("us-east-1"))
+            .credentials_provider(aws_sdk_s3::config::Credentials::new(
+                "test-access-key",
+                "test-secret-key",
+                None,
+                None,
+                "shin-bucket-deployment-test",
+            ))
+            .endpoint_url("https://s3.test")
+            .force_path_style(true)
+            .http_client(replay)
+            .build(),
+    );
+    AppState {
+        source_s3: s3.clone(),
+        destination_s3: s3,
+        cloudfront: CloudFrontClient::from_conf(
+            aws_sdk_cloudfront::Config::builder()
+                .behavior_version_latest()
+                .region(aws_sdk_cloudfront::config::Region::new("us-east-1"))
+                .credentials_provider(aws_sdk_cloudfront::config::Credentials::new(
+                    "test-access-key",
+                    "test-secret-key",
+                    None,
+                    None,
+                    "shin-bucket-deployment-test",
+                ))
+                .build(),
+        ),
+        http: HttpClient::new(),
+        detailed_failure_diagnostics: false,
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ArchiveExpansionLimits {
     pub(crate) max_uncompressed_entry_bytes: u64,
@@ -201,7 +305,7 @@ pub(crate) enum PlannedAction {
         crc32: u32,
         trusted_integrity: Option<TrustedEntryIntegrity>,
         source_offset: u64,
-        source_span_end: u64,
+        source_span_end_exclusive: u64,
     },
 }
 

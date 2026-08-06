@@ -148,16 +148,15 @@ async fn external_zip_local_extra_fields_stream_with_directory_bounds() {
         );
 
         let plan = ZipEntryPlan {
-            source_index: 0,
-            relative_key: "index.html".to_string(),
-            destination_key: "index.html".to_string(),
-            size: stored.uncompressed_size(),
             compressed_size: stored.compressed_size(),
             compression_code: u16::from(stored.compression()),
             crc32: stored.crc32(),
-            trusted_integrity: None,
-            source_offset,
-            source_span_end: central_directory_start,
+            ..ZipEntryPlan::for_test(
+                "index.html",
+                stored.uncompressed_size(),
+                source_offset,
+                central_directory_start,
+            )
         };
         let store = ready_store_for_plan(&bytes, &plan);
         let mut entry = zip_entry_reader(store, plan).expect("fixture entry reader");
@@ -762,7 +761,7 @@ async fn unpolled_retryable_clone_does_not_overwrite_consumed_attempt_state() {
 async fn abandoned_polled_upload_body_releases_claims_without_retry() {
     let zip = zip_from_entry("abandoned.txt", b"abandoned body");
     let plan = zip_plan_from_archive(&zip, "abandoned.txt");
-    let block_bytes = usize::try_from(plan.source_span_end - plan.source_offset).unwrap();
+    let block_bytes = usize::try_from(plan.source_span_end_exclusive - plan.source_offset).unwrap();
     let stats = Arc::new(DeploymentStats::default());
     let budget = SourceByteBudget::new(block_bytes, Arc::clone(&stats), false)
         .expect("valid test source budget");
@@ -872,7 +871,7 @@ async fn abandoned_polled_upload_body_releases_claims_without_retry() {
 async fn abandoned_polled_upload_body_captures_detailed_state_before_abort() {
     let zip = zip_from_entry("abandoned-detailed.txt", b"abandoned detailed body");
     let plan = zip_plan_from_archive(&zip, "abandoned-detailed.txt");
-    let block_bytes = usize::try_from(plan.source_span_end - plan.source_offset).unwrap();
+    let block_bytes = usize::try_from(plan.source_span_end_exclusive - plan.source_offset).unwrap();
     let stats = Arc::new(DeploymentStats::new(true));
     let budget = SourceByteBudget::new(block_bytes, Arc::clone(&stats), true)
         .expect("valid test source budget");
@@ -1047,8 +1046,9 @@ async fn empty_upload_body_completes_on_terminal_poll() {
 async fn dropped_upload_body_cancels_global_capacity_wait_and_replays() {
     let zip = zip_from_entry("capacity.txt", b"capacity replay");
     let plan = zip_plan_from_archive(&zip, "capacity.txt");
-    let block_bytes = usize::try_from(plan.source_span_end - plan.source_offset).unwrap();
-    let response_bytes = zip[plan.source_offset as usize..plan.source_span_end as usize].to_vec();
+    let block_bytes = usize::try_from(plan.source_span_end_exclusive - plan.source_offset).unwrap();
+    let response_bytes =
+        zip[plan.source_offset as usize..plan.source_span_end_exclusive as usize].to_vec();
     let replay = StaticReplayClient::new(vec![get_range_success_bytes(
         response_bytes,
         plan.source_offset,
@@ -1453,18 +1453,7 @@ async fn open_entry_data_reader_rejects_header_bytes_outside_every_planned_block
         vec![1],
         vec![bytes::Bytes::from(vec![0u8; short_len as usize])],
     );
-    let plan = ZipEntryPlan {
-        source_index: 0,
-        relative_key: "entry.txt".to_string(),
-        destination_key: "entry.txt".to_string(),
-        size: 1,
-        compressed_size: 1,
-        compression_code: 0,
-        crc32: 0,
-        trusted_integrity: None,
-        source_offset: 0,
-        source_span_end: 64,
-    };
+    let plan = ZipEntryPlan::for_test("entry.txt", 1, 0, 64);
 
     let error = match open_entry_data_reader(store, plan).await {
         Ok(_) => panic!("expected unplanned local header bytes to be rejected"),
@@ -1604,7 +1593,7 @@ fn ready_store_for_plan_with_claims(
 ) -> Arc<SourceBlockStore> {
     let block = SourceBlockRange {
         start: plan.source_offset,
-        end_exclusive: plan.source_span_end,
+        end_exclusive: plan.source_span_end_exclusive,
     };
     ready_store(
         zip.len() as u64,
@@ -1702,16 +1691,15 @@ fn zip_plan_from_archive(bytes: &[u8], name: &str) -> ZipEntryPlan {
         method => panic!("unsupported test compression method {method:?}"),
     };
     ZipEntryPlan {
-        source_index: 0,
-        relative_key: name.to_string(),
-        destination_key: name.to_string(),
-        size: file.size(),
         compressed_size: file.compressed_size(),
         compression_code,
         crc32: file.crc32(),
-        trusted_integrity: None,
-        source_offset: file.header_start(),
-        source_span_end: data_start + file.compressed_size(),
+        ..ZipEntryPlan::for_test(
+            name,
+            file.size(),
+            file.header_start(),
+            data_start + file.compressed_size(),
+        )
     }
 }
 
@@ -1733,19 +1721,17 @@ fn stored_zip_from_entry(name: &str, bytes: &[u8]) -> Vec<u8> {
     writer.finish().unwrap().into_inner()
 }
 
-fn plan_with_span(relative_key: &str, source_offset: u64, source_span_end: u64) -> ZipEntryPlan {
-    ZipEntryPlan {
-        source_index: 0,
-        relative_key: relative_key.to_string(),
-        destination_key: relative_key.to_string(),
-        size: source_span_end - source_offset,
-        compressed_size: source_span_end - source_offset,
-        compression_code: 0,
-        crc32: 0,
-        trusted_integrity: None,
+fn plan_with_span(
+    relative_key: &str,
+    source_offset: u64,
+    source_span_end_exclusive: u64,
+) -> ZipEntryPlan {
+    ZipEntryPlan::for_test(
+        relative_key,
+        source_span_end_exclusive - source_offset,
         source_offset,
-        source_span_end,
-    }
+        source_span_end_exclusive,
+    )
 }
 
 fn dummy_s3_client() -> aws_sdk_s3::Client {
@@ -1860,41 +1846,7 @@ fn head_replay_event(etag: Option<&str>, len: u64) -> ReplayEvent {
 }
 
 fn replay_app_state(replay: StaticReplayClient) -> AppState {
-    let s3 = aws_sdk_s3::Client::from_conf(
-        aws_sdk_s3::Config::builder()
-            .behavior_version_latest()
-            .region(aws_sdk_s3::config::Region::new("us-east-1"))
-            .credentials_provider(aws_sdk_s3::config::Credentials::new(
-                "test-access-key",
-                "test-secret-key",
-                None,
-                None,
-                "shin-bucket-deployment-test",
-            ))
-            .endpoint_url("https://s3.test")
-            .force_path_style(true)
-            .http_client(replay)
-            .build(),
-    );
-    AppState {
-        source_s3: s3.clone(),
-        destination_s3: s3,
-        cloudfront: aws_sdk_cloudfront::Client::from_conf(
-            aws_sdk_cloudfront::Config::builder()
-                .behavior_version_latest()
-                .region(aws_sdk_cloudfront::config::Region::new("us-east-1"))
-                .credentials_provider(aws_sdk_cloudfront::config::Credentials::new(
-                    "test-access-key",
-                    "test-secret-key",
-                    None,
-                    None,
-                    "shin-bucket-deployment-test",
-                ))
-                .build(),
-        ),
-        http: reqwest::Client::new(),
-        detailed_failure_diagnostics: false,
-    }
+    crate::types::test_app_state_with_replay(replay)
 }
 
 #[tokio::test]

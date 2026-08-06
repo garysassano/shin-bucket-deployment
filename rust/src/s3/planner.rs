@@ -64,7 +64,7 @@ pub(crate) struct ZipEntryPlan {
     pub(super) crc32: u32,
     pub(super) trusted_integrity: Option<TrustedEntryIntegrity>,
     pub(super) source_offset: u64,
-    pub(super) source_span_end: u64,
+    pub(super) source_span_end_exclusive: u64,
 }
 
 struct ArchivePlanningContext<'a> {
@@ -96,6 +96,32 @@ impl ZipEntryPlan {
                 sanitize_diagnostic(&self.relative_key, MAX_DIAGNOSTIC_VALUE_BYTES)
             ),
         ))
+    }
+}
+
+#[cfg(test)]
+impl ZipEntryPlan {
+    /// Stored-entry plan with synthetic metadata: zero compression, no trusted
+    /// integrity, and the relative key used verbatim as the destination key. Tests
+    /// that need real ZIP metadata override the specific fields afterwards.
+    pub(crate) fn for_test(
+        relative_key: &str,
+        size: u64,
+        source_offset: u64,
+        source_span_end_exclusive: u64,
+    ) -> Self {
+        ZipEntryPlan {
+            source_index: 0,
+            relative_key: relative_key.to_string(),
+            destination_key: relative_key.to_string(),
+            size,
+            compressed_size: size,
+            compression_code: 0,
+            crc32: 0,
+            trusted_integrity: None,
+            source_offset,
+            source_span_end_exclusive,
+        }
     }
 }
 
@@ -280,7 +306,7 @@ pub(super) fn collect_zip_entry_plans(
             crc32,
             trusted_integrity,
             source_offset,
-            source_span_end,
+            source_span_end_exclusive,
         } = &planned.action
         {
             grouped
@@ -296,7 +322,7 @@ pub(super) fn collect_zip_entry_plans(
                     crc32: *crc32,
                     trusted_integrity: trusted_integrity.clone(),
                     source_offset: *source_offset,
-                    source_span_end: *source_span_end,
+                    source_span_end_exclusive: *source_span_end_exclusive,
                 });
         }
     }
@@ -462,7 +488,7 @@ async fn add_archive_entries_to_manifest(
                 source.len()
             ));
         }
-        // `source_span_end` is what keeps an entry's bytes out of the central directory:
+        // `source_span_end_exclusive` is what keeps an entry's bytes out of the central directory:
         // `open_entry_data_reader` refuses a local header or data range extending past it,
         // so a hostile archive fails when the entry is opened rather than reading
         // directory bytes as entry content.
@@ -472,12 +498,12 @@ async fn add_archive_entries_to_manifest(
         // `validate_archive_directory`, so `next_source_offset` cannot return a larger
         // value. It is kept so this span stays self-evidently bounded without depending on
         // a precondition established in another function; don't drop it as redundant.
-        let source_span_end = next_source_offset(&source_offsets, source_offset)
+        let source_span_end_exclusive = next_source_offset(&source_offsets, source_offset)
             .unwrap_or(central_directory_start)
             .min(central_directory_start);
-        if source_span_end <= source_offset {
+        if source_span_end_exclusive <= source_offset {
             return Err(anyhow!(
-                "local file source span {source_offset}..{source_span_end} for `{}` is empty",
+                "local file source span {source_offset}..{source_span_end_exclusive} for `{}` is empty",
                 sanitize_diagnostic(&relative_key, MAX_DIAGNOSTIC_VALUE_BYTES)
             ));
         }
@@ -499,7 +525,7 @@ async fn add_archive_entries_to_manifest(
                 crc32: stored.crc32(),
                 trusted_integrity,
                 source_offset,
-                source_span_end,
+                source_span_end_exclusive,
             },
         };
         insert_manifest_object(manifest, planned);
@@ -655,7 +681,10 @@ fn catalog_memory_estimate(uncompressed_size: u64) -> Result<u64> {
 fn catalog_source_block_bytes(request: &DeploymentRequest, plan: &ZipEntryPlan) -> u64 {
     u64::try_from(request.runtime.source_block_bytes)
         .unwrap_or(u64::MAX)
-        .min(plan.source_span_end.saturating_sub(plan.source_offset))
+        .min(
+            plan.source_span_end_exclusive
+                .saturating_sub(plan.source_offset),
+        )
 }
 
 fn catalog_budget_error(detail: String) -> anyhow::Error {
@@ -799,7 +828,7 @@ fn zip_entry_plan(
     source_index: usize,
     stored: &StoredZipEntry,
     relative_key: String,
-    source_span_end: u64,
+    source_span_end_exclusive: u64,
 ) -> Result<ZipEntryPlan> {
     let source_offset = stored.header_offset();
     if source_offset >= source_len {
@@ -808,9 +837,9 @@ fn zip_entry_plan(
             sanitize_diagnostic(&relative_key, MAX_DIAGNOSTIC_VALUE_BYTES)
         ));
     }
-    if source_span_end > source_len || source_span_end <= source_offset {
+    if source_span_end_exclusive > source_len || source_span_end_exclusive <= source_offset {
         return Err(anyhow!(
-            "local file source span {source_offset}..{source_span_end} for `{}` is outside source ZIP length {source_len}",
+            "local file source span {source_offset}..{source_span_end_exclusive} for `{}` is outside source ZIP length {source_len}",
             sanitize_diagnostic(&relative_key, MAX_DIAGNOSTIC_VALUE_BYTES)
         ));
     }
@@ -825,7 +854,7 @@ fn zip_entry_plan(
         crc32: stored.crc32(),
         trusted_integrity: None,
         source_offset,
-        source_span_end,
+        source_span_end_exclusive,
     })
 }
 
@@ -1072,8 +1101,8 @@ mod tests {
     use crate::s3::destination::{DestinationObject, DestinationWritePrecondition};
     use crate::types::DeploymentStats;
     use crate::types::{
-        ArchiveExpansionLimits, DeploymentManifest, DeploymentRequest, MarkerConfig, PlannedAction,
-        PlannedObject, PutObjectRetryJitter, PutObjectRetryOptions, RuntimeOptions,
+        ArchiveExpansionLimits, DeploymentManifest, DeploymentRequest, PlannedAction,
+        PlannedObject, PutObjectRetryOptions, RuntimeOptions,
     };
 
     #[derive(Clone, Default)]
@@ -1209,7 +1238,7 @@ mod tests {
                     crc32: 0,
                     trusted_integrity: None,
                     source_offset: 100,
-                    source_span_end: 120,
+                    source_span_end_exclusive: 120,
                 },
             },
         );
@@ -1227,7 +1256,7 @@ mod tests {
                     crc32: 0,
                     trusted_integrity: None,
                     source_offset: 10,
-                    source_span_end: 30,
+                    source_span_end_exclusive: 30,
                 },
             },
         );
@@ -1486,7 +1515,7 @@ mod tests {
                     crc32: 0,
                     trusted_integrity: None,
                     source_offset: 0,
-                    source_span_end: 1,
+                    source_span_end_exclusive: 1,
                 },
             },
         )]);
@@ -1514,7 +1543,7 @@ mod tests {
                     crc32: 0,
                     trusted_integrity: None,
                     source_offset: 0,
-                    source_span_end: 1,
+                    source_span_end_exclusive: 1,
                 },
             },
         )]);
@@ -1790,19 +1819,13 @@ mod tests {
         assert!(message.contains("nothing fits"));
     }
 
-    fn catalog_plan(source_offset: u64, source_span_end: u64) -> ZipEntryPlan {
-        ZipEntryPlan {
-            source_index: 0,
-            relative_key: ".shin/catalog.json".to_string(),
-            destination_key: ".shin/catalog.json".to_string(),
-            size: 0,
-            compressed_size: 0,
-            compression_code: 0,
-            crc32: 0,
-            trusted_integrity: None,
+    fn catalog_plan(source_offset: u64, source_span_end_exclusive: u64) -> ZipEntryPlan {
+        ZipEntryPlan::for_test(
+            ".shin/catalog.json",
+            0,
             source_offset,
-            source_span_end,
-        }
+            source_span_end_exclusive,
+        )
     }
 
     #[test]
@@ -2028,42 +2051,21 @@ mod tests {
         DeploymentRequest {
             source_bucket_names: vec!["source-bucket".to_string()],
             source_object_keys: vec!["assets/archive.zip".to_string()],
-            source_catalogs: vec![None],
-            source_markers: vec![HashMap::new()],
-            source_markers_config: vec![MarkerConfig::default()],
             dest_bucket_name: "destination-bucket".to_string(),
-            dest_bucket_prefix: "site".to_string(),
-            extract: false,
-            delete_current_objects_on_delete: false,
-            distribution_id: None,
-            distribution_paths: vec!["/*".to_string()],
-            wait_for_distribution_invalidation: true,
-            delete_stale_objects_on_deployment: true,
-            exclude: Vec::new(),
-            include: Vec::new(),
-            output_object_keys: true,
-            destination_bucket_arn: None,
             destination_owner_id: "test-owner".to_string(),
-            delete_previous_objects_on_change: None,
-            invalidate_previous_distribution_on_change: None,
-            archive_expansion: archive_expansion_limits(),
             runtime: RuntimeOptions {
-                available_memory_mb: 1024,
-                max_parallel_transfers: 1,
                 source_block_bytes: 8 * 1024 * 1024,
                 source_block_merge_gap_bytes: 256 * 1024,
-                source_get_concurrency: 1,
-                source_window_bytes: None,
-                source_memory_budget_bytes: 256 * 1024 * 1024,
                 put_object_retry: PutObjectRetryOptions {
-                    max_attempts: 1,
                     retry_base_delay_ms: 1,
                     retry_max_delay_ms: 1,
                     slowdown_retry_base_delay_ms: 1,
                     slowdown_retry_max_delay_ms: 1,
-                    jitter: PutObjectRetryJitter::None,
+                    ..crate::types::test_runtime_options().put_object_retry
                 },
+                ..crate::types::test_runtime_options()
             },
+            ..DeploymentRequest::for_test()
         }
     }
 

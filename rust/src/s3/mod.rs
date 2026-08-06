@@ -244,16 +244,13 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use aws_sdk_cloudfront::Client as CloudFrontClient;
-    use aws_sdk_s3::Client as S3Client;
     use aws_smithy_http_client::test_util::StaticReplayClient;
-    use reqwest::Client as HttpClient;
     use serde_json::json;
     use tokio::time::Instant as TokioInstant;
 
     use crate::deadline::InvocationDeadlines;
     use crate::request::{RawDeploymentRequest, parse_request_with_memory};
-    use crate::types::{AppState, DeploymentStats};
+    use crate::types::DeploymentStats;
 
     use super::{adaptive_source_window_bytes, deploy};
 
@@ -281,41 +278,7 @@ mod tests {
     #[tokio::test]
     async fn empty_sources_are_rejected_before_any_s3_request() {
         let replay = StaticReplayClient::new(Vec::new());
-        let s3 = S3Client::from_conf(
-            aws_sdk_s3::Config::builder()
-                .behavior_version_latest()
-                .region(aws_sdk_s3::config::Region::new("us-east-1"))
-                .credentials_provider(aws_sdk_s3::config::Credentials::new(
-                    "test-access-key",
-                    "test-secret-key",
-                    None,
-                    None,
-                    "shin-bucket-deployment-test",
-                ))
-                .endpoint_url("https://s3.test")
-                .force_path_style(true)
-                .http_client(replay.clone())
-                .build(),
-        );
-        let state = AppState {
-            source_s3: s3.clone(),
-            destination_s3: s3,
-            cloudfront: CloudFrontClient::from_conf(
-                aws_sdk_cloudfront::Config::builder()
-                    .behavior_version_latest()
-                    .region(aws_sdk_cloudfront::config::Region::new("us-east-1"))
-                    .credentials_provider(aws_sdk_cloudfront::config::Credentials::new(
-                        "test-access-key",
-                        "test-secret-key",
-                        None,
-                        None,
-                        "shin-bucket-deployment-test",
-                    ))
-                    .build(),
-            ),
-            http: HttpClient::new(),
-            detailed_failure_diagnostics: false,
-        };
+        let state = crate::types::test_app_state_with_replay(replay.clone());
         let raw: RawDeploymentRequest = serde_json::from_value(json!({
             "SourceBucketNames": [],
             "SourceObjectKeys": [],
