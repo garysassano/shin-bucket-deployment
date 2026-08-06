@@ -499,6 +499,12 @@ async fn prepare_zip_entry_upload(
         )));
     }
 
+    // Every entry admitted to the pre-upload comparison pass is counted exactly once
+    // as an MD5 hash attempt, whichever pass runs: marker planning, or the untrusted
+    // marker-free fallback. Trusted marker-free entries never reach this point (they
+    // are catalog-skipped or validated inline during upload), so the two counters
+    // here cover the comparison pass completely. The fallback is also reported
+    // separately as `catalog.fallbackHashAttempts`.
     if marker_replacements.is_none() && plan.trusted_integrity.is_none() {
         stats.add_catalog_fallback_hash_attempt();
     } else {

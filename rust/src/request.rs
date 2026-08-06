@@ -531,8 +531,22 @@ pub(crate) fn compile_filters(exclude: &[String], include: &[String]) -> Result<
     })
 }
 
+/// Canonicalizes a destination prefix to its namespace form: leading and trailing
+/// slashes are trimmed, so `"/"`, `"//"`, `"site/"`, and `"/site/"` all normalize the
+/// way only the exact `"/"` root previously did. Interior repeated slashes are
+/// preserved because S3 keys may legitimately contain them; only the boundary slashes
+/// are namespace punctuation.
+///
+/// **This is a deployed-state breaking change.** The normalized value is hashed into
+/// the destination physical resource ID (`destination_physical_resource_id`), so any
+/// existing stack whose configured prefix carries a leading or trailing slash gets a
+/// new physical resource ID on its next update, and CloudFormation replaces the custom
+/// resource: the new namespace is created and the old one is deleted, which removes the
+/// previously deployed objects under it. Stacks with a slash-free prefix, or with no
+/// prefix, are unaffected. Taken deliberately under the pre-`1.0` clean-break policy in
+/// `AGENTS.md` rather than carrying a compatibility path.
 pub(crate) fn normalize_destination_prefix(prefix: String) -> String {
-    if prefix == "/" { String::new() } else { prefix }
+    prefix.trim_matches('/').to_string()
 }
 
 /// Borrows when the entry path is already canonical, which is the overwhelmingly common
@@ -610,7 +624,21 @@ pub(crate) fn strip_destination_prefix(prefix: &str, key: &str) -> String {
         return key.to_string();
     }
 
-    key.strip_prefix(prefix).unwrap_or(key).to_string()
+    match key.strip_prefix(prefix) {
+        Some(stripped) => stripped.to_string(),
+        None => {
+            // Every production caller derives `prefix` from the same namespace the
+            // listing was requested under, so a mismatch is a programming error
+            // rather than a runtime condition. Release builds keep the historical
+            // pass-through fallback so behavior is unchanged; debug builds trip so
+            // the bug is caught.
+            debug_assert!(
+                false,
+                "destination key `{key}` does not start with the strip prefix `{prefix}`"
+            );
+            key.to_string()
+        }
+    }
 }
 
 fn default_distribution_path(dest_bucket_prefix: &str) -> String {
@@ -1104,6 +1132,55 @@ mod tests {
             "index.html"
         );
         assert_eq!(strip_destination_prefix("", "//index.html"), "//index.html");
+    }
+
+    #[test]
+    fn normalize_destination_prefix_collapses_root_and_boundary_slashes() {
+        for (raw, expected) in [
+            ("", ""),
+            ("/", ""),
+            ("//", ""),
+            ("///", ""),
+            ("site", "site"),
+            ("site/", "site"),
+            ("site//", "site"),
+            ("/site", "site"),
+            ("/site/", "site"),
+            ("nested/site", "nested/site"),
+            ("nested/site/", "nested/site"),
+        ] {
+            assert_eq!(
+                normalize_destination_prefix(raw.to_string()),
+                expected,
+                "normalizing {raw:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn normalize_destination_prefix_preserves_interior_repeated_slashes() {
+        // S3 keys may legitimately contain repeated separators, so only boundary
+        // slashes are namespace punctuation.
+        assert_eq!(normalize_destination_prefix("a//b".to_string()), "a//b");
+        assert_eq!(normalize_destination_prefix("a//b/".to_string()), "a//b");
+    }
+
+    #[test]
+    fn normalize_destination_prefix_changes_the_physical_resource_id_for_slashed_prefixes() {
+        // Pins the deployed-state breakage documented on the function: a configured
+        // "site/" and "site" now normalize to the same value, so a stack written with
+        // the trailing slash resolves to the identity a slash-free stack already had.
+        assert_eq!(
+            normalize_destination_prefix("site/".to_string()),
+            normalize_destination_prefix("site".to_string())
+        );
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "does not start with the strip prefix")]
+    fn strip_destination_prefix_trips_on_unmatched_prefix_in_debug_builds() {
+        let _ = strip_destination_prefix("site/", "other/index.html");
     }
 
     #[test]

@@ -608,6 +608,12 @@ impl SourceBlockStore {
                 .state
                 .lock()
                 .expect("source block state mutex should not be poisoned");
+            // Mirrors the claim-accounting invariant established when blocks were
+            // planned: every claim's bytes belong to at most one block, so releasing
+            // an entry attempt decrements exactly the per-block counts its span
+            // claimed, and a ready block is released only once its final claim is
+            // gone. The same assumption makes the release exact on the replay-claim
+            // path, which re-adds the same per-block counts.
             for &index in indices {
                 let Some(slot) = state.slots.get(index) else {
                     continue;

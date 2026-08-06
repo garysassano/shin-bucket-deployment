@@ -67,7 +67,9 @@ impl SourceByteBudget {
             .context("source byte budget permit count cannot be represented safely")?;
         anyhow::ensure!(
             permit_count <= Semaphore::MAX_PERMITS,
-            "source byte budget requires more semaphore permits than the provider supports"
+            "configured source byte budget of {limit_bytes} bytes needs {permit_count} \
+             semaphore permits, which exceeds the provider maximum of {}",
+            Semaphore::MAX_PERMITS
         );
         stats.configure_source_global_budget(limit_bytes);
         Ok(Arc::new(Self {
@@ -110,7 +112,8 @@ impl SourceByteBudget {
                 io::Error::new(
                     io::ErrorKind::InvalidInput,
                     format!(
-                        "reserving {bytes} bytes exceeds the remaining {}-byte invocation-global source budget",
+                        "reserving {bytes} bytes exceeds the remaining invocation-global \
+                         source budget (the total budget is {} bytes)",
                         self.limit_bytes
                     ),
                 )

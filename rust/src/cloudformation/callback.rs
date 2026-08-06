@@ -284,9 +284,14 @@ async fn send_response_with_policy(
 
 fn callback_status_is_retryable(status: reqwest::StatusCode) -> bool {
     status.is_server_error()
-        || status.is_redirection()
         || status == reqwest::StatusCode::REQUEST_TIMEOUT
         || status == reqwest::StatusCode::TOO_MANY_REQUESTS
+        // Only the two explicit redirect statuses that preserve the request method
+        // and body are safe to replay on a callback PUT. Other 3xx responses are
+        // non-retryable: replaying a body across them is undefined, and CloudFormation
+        // callback endpoints do not use them.
+        || status == reqwest::StatusCode::TEMPORARY_REDIRECT
+        || status == reqwest::StatusCode::PERMANENT_REDIRECT
 }
 
 fn callback_retry_delay(attempt: usize, retry: CallbackRetryPolicy) -> Duration {
@@ -630,7 +635,7 @@ mod tests {
     #[tokio::test]
     async fn callback_retries_redirect_timeout_and_throttle_statuses() {
         let server = MockCallbackServer::start(vec![
-            MockCallback::Status(302),
+            MockCallback::Status(307),
             MockCallback::Status(408),
             MockCallback::Status(429),
             MockCallback::Status(200),
@@ -648,8 +653,13 @@ mod tests {
 
         assert!(result.is_ok());
         assert_eq!(requests, 4);
-        for status in 300..400 {
+        for status in [307, 308] {
             assert!(callback_status_is_retryable(
+                StatusCode::from_u16(status).expect("3xx status")
+            ));
+        }
+        for status in (300..400).filter(|status| !matches!(status, 307 | 308)) {
+            assert!(!callback_status_is_retryable(
                 StatusCode::from_u16(status).expect("3xx status")
             ));
         }

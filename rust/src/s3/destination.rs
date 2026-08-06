@@ -277,7 +277,17 @@ pub(super) async fn plan_destination(
             .set_prefix(list_prefix.clone())
             .set_start_after(start_after.clone())
             .send()
-            .await?;
+            .await
+            .with_context(|| match list_prefix.as_deref() {
+                Some(prefix) => format!(
+                    "failed to list destination bucket {} with prefix {prefix}",
+                    request.dest_bucket_name
+                ),
+                None => format!(
+                    "failed to list destination bucket {}",
+                    request.dest_bucket_name
+                ),
+            })?;
         stats.record_destination_page_objects(response.contents().len() as u64);
         listed_objects = listed_objects.saturating_add(response.contents().len() as u64);
 
@@ -668,14 +678,28 @@ async fn list_destination_page(
         .destination_s3
         .list_objects_v2()
         .bucket(bucket)
-        .set_prefix(prefix)
+        .set_prefix(prefix.clone())
         .set_start_after(start_after)
         .send()
         .await
     {
         Ok(response) => Ok(Some(response)),
-        Err(error) if service_error_code(&error) == Some("NoSuchBucket") => Ok(None),
-        Err(error) => Err(error.into()),
+        Err(error) if service_error_code(&error) == Some("NoSuchBucket") => {
+            // A missing bucket makes the namespace empty by definition. Cleanup must
+            // stay non-fatal here (the bucket may already have been removed), but it
+            // must not be silent either.
+            warn!(
+                bucket,
+                "destination bucket does not exist during cleanup listing; treating the namespace as empty"
+            );
+            Ok(None)
+        }
+        Err(error) => Err(error).with_context(|| match prefix.as_deref() {
+            Some(prefix) => {
+                format!("failed to list destination bucket {bucket} with prefix {prefix}")
+            }
+            None => format!("failed to list destination bucket {bucket}"),
+        }),
     }
 }
 
@@ -815,6 +839,10 @@ async fn delete_key_chunk(
                 return Err(partial_delete_error(bucket, response.errors()));
             }
             Err(error) if service_error_code(&error) == Some("NoSuchBucket") => {
+                warn!(
+                    bucket,
+                    "destination bucket does not exist during cleanup deletion; treating the requested objects as deleted"
+                );
                 if let Some(stats) = stats {
                     stats.record_delete_no_such_bucket(requested as u64);
                 }
@@ -1146,6 +1174,16 @@ fn key_is_excluded(key: &str, excluded_namespace: Option<&str>) -> bool {
 /// `strip_destination_prefix(strip_prefix, key)`: sharing one strip and one manifest
 /// lookup between this function and the caller's previous-namespace predicate avoids
 /// a second per-key allocation and BTreeMap lookup on destination moves.
+///
+/// A key whose relative form is empty is the namespace root itself (for example the
+/// object `site/` under the `site/` prefix). It is deliberately excluded from both
+/// the metadata map and the stale-candidate predicate: no archive entry can produce
+/// an empty relative key, so it can never be part of the manifest. The deliberate
+/// consequence is that a zero-byte folder-marker object at the exact namespace root
+/// is immortal across Create/Update stale cleanup — it is only removed by Delete
+/// lifecycle cleanup, which deletes every key under the namespace including the root
+/// key itself. This is a documented limitation, not a bug: treating the root marker
+/// as stale would risk deleting a key that an external writer owns.
 fn record_destination_object(
     key: &str,
     relative_key: &str,
@@ -1232,11 +1270,15 @@ fn unplanned_destination_key(
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::io::Write;
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
     use aws_sdk_s3::primitives::SdkBody;
     use aws_smithy_http_client::test_util::{ReplayEvent, StaticReplayClient};
     use http::{Request, Response};
+    use tracing_subscriber::fmt::MakeWriter;
+    use tracing_subscriber::layer::SubscriberExt;
 
     use super::{
         DeleteRetryCoordinator, DeletionCandidates, DestinationObject, DestinationRecordContext,
@@ -1286,7 +1328,6 @@ mod tests {
             "site/",                // empty relative key: ignored
             "site/old/index.html",  // previous namespace, not in manifest
             "site/old/keep.txt",    // previous namespace, but in the manifest
-            "other/foreign.txt",    // outside the namespace entirely
         ];
         let previous_namespace = Some("site/old/");
         let context = |detect| DestinationRecordContext {
@@ -1712,6 +1753,96 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn cleanup_listing_errors_name_the_bucket_and_prefix() {
+        let replay = StaticReplayClient::new(vec![error_event(500, "InternalError")]);
+        let state = replay_app_state(replay.clone());
+
+        let error = delete_listed_objects(
+            &state,
+            "destination",
+            Some("site/"),
+            None,
+            &retry_options(1, 0),
+            tokio::time::Instant::now() + Duration::from_secs(10),
+            |_| false,
+        )
+        .await
+        .expect_err("a listing failure must fail cleanup");
+
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("list destination bucket destination"),
+            "listing error must name the bucket: {message}"
+        );
+        assert!(
+            message.contains("prefix site/"),
+            "listing error must name the prefix: {message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn missing_bucket_during_cleanup_listing_warns_and_stays_non_fatal() {
+        let logs = TestWriter::default();
+        let replay = StaticReplayClient::new(vec![error_event(404, "NoSuchBucket")]);
+        let state = replay_app_state(replay.clone());
+
+        let _guard = tracing::subscriber::set_default(log_subscriber(logs.clone()));
+        let deleted = delete_listed_objects(
+            &state,
+            "destination",
+            Some("site/"),
+            None,
+            &retry_options(1, 0),
+            tokio::time::Instant::now() + Duration::from_secs(10),
+            |_| true,
+        )
+        .await
+        .expect("a missing bucket during cleanup listing must stay non-fatal");
+        drop(_guard);
+
+        assert_eq!(deleted, 0);
+        let output = String::from_utf8(logs.0.lock().expect("test log buffer").clone())
+            .expect("UTF-8 tracing output");
+        assert!(
+            output.contains("does not exist during cleanup listing"),
+            "missing bucket must be visible: {output}"
+        );
+        assert!(output.contains("destination"));
+    }
+
+    #[tokio::test]
+    async fn missing_bucket_during_cleanup_deletion_warns_and_stays_non_fatal() {
+        let logs = TestWriter::default();
+        let replay = StaticReplayClient::new(vec![error_event(404, "NoSuchBucket")]);
+        let state = replay_app_state(replay.clone());
+        let coordinator = DeleteRetryCoordinator::new();
+
+        let _guard = tracing::subscriber::set_default(log_subscriber(logs.clone()));
+        let (deleted, bucket_missing) = delete_key_chunk(
+            &state,
+            "destination",
+            &["site/a.txt".to_string()],
+            None,
+            &retry_options(1, 0),
+            &coordinator,
+            tokio::time::Instant::now() + Duration::from_secs(10),
+        )
+        .await
+        .expect("a missing bucket during cleanup deletion must stay non-fatal");
+        drop(_guard);
+
+        assert_eq!(deleted, 0);
+        assert!(bucket_missing);
+        let output = String::from_utf8(logs.0.lock().expect("test log buffer").clone())
+            .expect("UTF-8 tracing output");
+        assert!(
+            output.contains("does not exist during cleanup deletion"),
+            "missing bucket must be visible: {output}"
+        );
+        assert!(output.contains("destination"));
+    }
+
     #[test]
     fn namespace_list_prefix_preserves_existing_trailing_slash() {
         assert_eq!(namespace_list_prefix("site/"), Some("site/".to_string()));
@@ -2064,6 +2195,42 @@ mod tests {
             slowdown_retry_max_delay_ms: delay_ms,
             jitter: PutObjectRetryJitter::None,
         }
+    }
+
+    #[derive(Clone, Default)]
+    struct TestWriter(Arc<Mutex<Vec<u8>>>);
+
+    struct TestWriterGuard(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for TestWriterGuard {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0
+                .lock()
+                .expect("test log buffer")
+                .extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'writer> MakeWriter<'writer> for TestWriter {
+        type Writer = TestWriterGuard;
+
+        fn make_writer(&'writer self) -> Self::Writer {
+            TestWriterGuard(Arc::clone(&self.0))
+        }
+    }
+
+    fn log_subscriber(logs: TestWriter) -> impl tracing::Subscriber + Send + Sync + 'static {
+        tracing_subscriber::registry().with(
+            tracing_subscriber::fmt::layer()
+                .without_time()
+                .with_ansi(false)
+                .with_writer(logs),
+        )
     }
 
     fn replay_event(status: u16, body: impl Into<Vec<u8>>) -> ReplayEvent {

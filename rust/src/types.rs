@@ -373,6 +373,14 @@ pub(crate) struct DeploymentCounts {
     pub(crate) skipped_objects: u64,
     pub(crate) conditional_conflicts: u64,
     pub(crate) copied_objects: u64,
+    /// Planned entries whose content (or marker-replaced output) was read and hashed
+    /// with MD5 for a pre-upload destination comparison pass. This aggregates the
+    /// marker planning-pass hashes and the untrusted marker-free catalog-fallback
+    /// hash (which the `catalog` section also reports separately as
+    /// `fallbackHashAttempts`). Trusted marker-free entries are catalog-skipped or
+    /// validated inline during upload and never count here. The serialized field
+    /// name is part of the published diagnostics contract, so the aggregated meaning
+    /// is documented here rather than by renaming the field.
     pub(crate) md5_hash_attempts: u64,
     pub(crate) md5_skips: u64,
     pub(crate) catalog_skips: u64,
@@ -969,6 +977,12 @@ impl DeploymentStats {
                 skipped_objects: self.skipped_objects.load(Ordering::Relaxed),
                 conditional_conflicts: self.conditional_conflicts.load(Ordering::Relaxed),
                 copied_objects: self.copied_objects.load(Ordering::Relaxed),
+                // `md5HashAttempts` is the sum of both hash-attempt counters: every
+                // entry admitted to the pre-upload comparison pass hashes its content
+                // (or its marker-replaced output) with MD5, whether that pass plans
+                // marker output or falls back to hashing an untrusted marker-free
+                // entry. The fallback half is also reported separately as
+                // `catalog.fallbackHashAttempts`.
                 md5_hash_attempts: self
                     .md5_non_fallback_hash_attempts
                     .load(Ordering::Relaxed)
