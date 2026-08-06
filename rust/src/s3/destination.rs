@@ -12,14 +12,13 @@ use fastrand::Rng;
 use tokio::time::{Instant, sleep_until};
 use tracing::warn;
 
+use crate::namespace::{key_is_excluded, namespace_list_prefix, read_bucket_owner_tags};
 use crate::request::strip_destination_prefix;
 use crate::types::{
     AppState, DeploymentManifest, DeploymentRequest, DeploymentStats, Filters,
     PutObjectRetryJitter, PutObjectRetryOptions,
 };
-use crate::util::{MAX_DIAGNOSTIC_VALUE_BYTES, sanitize_diagnostic};
 
-const OWNER_TAG_BASE: &str = "aws-cdk:cr-owned";
 const MAX_RETAINED_DELETION_KEY_BYTES: usize = 4 * 1024 * 1024;
 
 pub(super) struct DestinationPlan {
@@ -193,63 +192,6 @@ async fn delete_namespace(
     .await
 }
 
-/// The bucket's ownership tag keys, read once so several namespace checks against the same
-/// bucket share one `GetBucketTagging` call.
-pub(super) struct BucketOwnerTags {
-    keys: Vec<String>,
-}
-
-impl BucketOwnerTags {
-    pub(super) fn has_competing_owner(
-        &self,
-        prefix: &str,
-        excluded_prefix: Option<&str>,
-        current_owner_id: &str,
-    ) -> bool {
-        self.keys
-            .iter()
-            .any(|key| owner_tag_overlaps_cleanup(key, prefix, excluded_prefix, current_owner_id))
-    }
-}
-
-pub(super) async fn read_bucket_owner_tags(
-    state: &AppState,
-    bucket: &str,
-) -> Result<BucketOwnerTags> {
-    match state
-        .destination_s3
-        .get_bucket_tagging()
-        .bucket(bucket)
-        .send()
-        .await
-    {
-        Ok(response) => Ok(BucketOwnerTags {
-            keys: response
-                .tag_set()
-                .iter()
-                .map(|tag| tag.key().to_owned())
-                .collect(),
-        }),
-        Err(err)
-            if err
-                .as_service_error()
-                .and_then(|service_err| service_err.code())
-                .is_some_and(|code| matches!(code, "NoSuchTagSet" | "NoSuchBucket")) =>
-        {
-            Ok(BucketOwnerTags { keys: Vec::new() })
-        }
-        Err(err) => {
-            let diagnostic = sanitize_diagnostic(&err.to_string(), MAX_DIAGNOSTIC_VALUE_BYTES);
-            warn!(error = %diagnostic, bucket, "failed to read bucket tags");
-            Err(err).with_context(|| {
-                format!(
-                    "unable to determine whether bucket {bucket} has a competing custom resource owner"
-                )
-            })
-        }
-    }
-}
-
 pub(super) async fn plan_destination(
     state: &AppState,
     request: &DeploymentRequest,
@@ -263,31 +205,14 @@ pub(super) async fn plan_destination(
     let strip_prefix = list_prefix.as_deref().unwrap_or("");
     let protected_namespace = protected_prefix.and_then(namespace_list_prefix);
     let previous_cleanup_namespace = previous_cleanup_prefix.and_then(namespace_list_prefix);
-    let mut start_after = None;
     let mut objects = HashMap::new();
     let mut listed_objects = 0_u64;
     let mut current_stale = DeletionCandidates::default();
     let mut previous_stale = DeletionCandidates::default();
+    let mut pager =
+        DestinationListPager::new(state, &request.dest_bucket_name, list_prefix.as_deref());
 
-    loop {
-        let response = state
-            .destination_s3
-            .list_objects_v2()
-            .bucket(&request.dest_bucket_name)
-            .set_prefix(list_prefix.clone())
-            .set_start_after(start_after.clone())
-            .send()
-            .await
-            .with_context(|| match list_prefix.as_deref() {
-                Some(prefix) => format!(
-                    "failed to list destination bucket {} with prefix {prefix}",
-                    request.dest_bucket_name
-                ),
-                None => format!(
-                    "failed to list destination bucket {}",
-                    request.dest_bucket_name
-                ),
-            })?;
+    while let Some(response) = pager.next_page().await? {
         stats.record_destination_page_objects(response.contents().len() as u64);
         listed_objects = listed_objects.saturating_add(response.contents().len() as u64);
 
@@ -325,18 +250,6 @@ pub(super) async fn plan_destination(
                 previous_stale.retain(key);
             }
         }
-
-        let last_key = response
-            .contents()
-            .iter()
-            .filter_map(|object| object.key())
-            .next_back()
-            .map(ToOwned::to_owned);
-
-        if !response.is_truncated().unwrap_or(false) || last_key.is_none() {
-            break;
-        }
-        start_after = last_key;
     }
 
     stats.add_destination_objects(listed_objects);
@@ -599,9 +512,8 @@ async fn delete_listed_objects_with_coordinator<F>(
 where
     F: Fn(&str) -> bool,
 {
-    let list_prefix = list_prefix.map(ToOwned::to_owned);
-    let mut response = match list_destination_page(state, bucket, list_prefix.clone(), None).await?
-    {
+    let mut pager = DestinationListPager::allow_missing_bucket(state, bucket, list_prefix);
+    let mut response = match pager.next_page().await? {
         Some(response) => response,
         None => return Ok(0),
     };
@@ -618,23 +530,12 @@ where
             .filter(|key| should_delete(key))
             .map(ToOwned::to_owned)
             .collect::<Vec<_>>();
-        let last_key = response
-            .contents()
-            .iter()
-            .filter_map(|object| object.key())
-            .next_back()
-            .map(ToOwned::to_owned);
-        let next_start_after = response
-            .is_truncated()
-            .unwrap_or(false)
-            .then_some(last_key)
-            .flatten();
 
-        if let Some(start_after) = next_start_after {
+        if pager.has_more() {
             // The cursor is fixed by the current page, so listing the next page is
             // independent of deleting keys behind that cursor.
             let (next_page, deleted_page) = tokio::join!(
-                list_destination_page(state, bucket, list_prefix.clone(), Some(start_after)),
+                pager.next_page(),
                 delete_keys_optional_stats(
                     state,
                     bucket,
@@ -646,10 +547,10 @@ where
                 ),
             );
             deleted = deleted.saturating_add(deleted_page?);
-            response = match next_page? {
-                Some(response) => response,
+            match next_page? {
+                Some(next) => response = next,
                 None => return Ok(deleted),
-            };
+            }
         } else {
             deleted = deleted.saturating_add(
                 delete_keys_optional_stats(
@@ -668,38 +569,102 @@ where
     }
 }
 
-async fn list_destination_page(
-    state: &AppState,
-    bucket: &str,
-    prefix: Option<String>,
+/// Drives one destination `ListObjectsV2` pagination loop.
+///
+/// Each `next_page` call issues exactly one list request whose cursor is the last
+/// key of the previous page, and `has_more` reports whether the last returned page
+/// was truncated (so the caller can fetch the next page concurrently with work on
+/// the current one). The cursor and stop condition match the S3 `start-after`
+/// pagination contract byte for byte, including the `IsTruncated` fallback and the
+/// empty-page guard.
+struct DestinationListPager<'a> {
+    state: &'a AppState,
+    bucket: &'a str,
+    prefix: Option<&'a str>,
     start_after: Option<String>,
-) -> Result<Option<aws_sdk_s3::operation::list_objects_v2::ListObjectsV2Output>> {
-    match state
-        .destination_s3
-        .list_objects_v2()
-        .bucket(bucket)
-        .set_prefix(prefix.clone())
-        .set_start_after(start_after)
-        .send()
-        .await
-    {
-        Ok(response) => Ok(Some(response)),
-        Err(error) if service_error_code(&error) == Some("NoSuchBucket") => {
-            // A missing bucket makes the namespace empty by definition. Cleanup must
-            // stay non-fatal here (the bucket may already have been removed), but it
-            // must not be silent either.
-            warn!(
-                bucket,
-                "destination bucket does not exist during cleanup listing; treating the namespace as empty"
-            );
-            Ok(None)
+    finished: bool,
+    missing_bucket_is_empty: bool,
+}
+
+impl<'a> DestinationListPager<'a> {
+    fn new(state: &'a AppState, bucket: &'a str, prefix: Option<&'a str>) -> Self {
+        Self {
+            state,
+            bucket,
+            prefix,
+            start_after: None,
+            finished: false,
+            missing_bucket_is_empty: false,
         }
-        Err(error) => Err(error).with_context(|| match prefix.as_deref() {
-            Some(prefix) => {
-                format!("failed to list destination bucket {bucket} with prefix {prefix}")
+    }
+
+    /// Cleanup-listing variant: a missing bucket makes the namespace empty by
+    /// definition, so `next_page` returns `Ok(None)` instead of an error.
+    fn allow_missing_bucket(state: &'a AppState, bucket: &'a str, prefix: Option<&'a str>) -> Self {
+        Self {
+            missing_bucket_is_empty: true,
+            ..Self::new(state, bucket, prefix)
+        }
+    }
+
+    /// Whether the last returned page was truncated and therefore has a successor.
+    fn has_more(&self) -> bool {
+        !self.finished
+    }
+
+    async fn next_page(
+        &mut self,
+    ) -> Result<Option<aws_sdk_s3::operation::list_objects_v2::ListObjectsV2Output>> {
+        if self.finished {
+            return Ok(None);
+        }
+        let response = self
+            .state
+            .destination_s3
+            .list_objects_v2()
+            .bucket(self.bucket)
+            .set_prefix(self.prefix.map(ToOwned::to_owned))
+            .set_start_after(self.start_after.take())
+            .send()
+            .await;
+        let response = match response {
+            Ok(response) => response,
+            Err(error)
+                if self.missing_bucket_is_empty
+                    && service_error_code(&error) == Some("NoSuchBucket") =>
+            {
+                // A missing bucket makes the namespace empty by definition. Cleanup must
+                // stay non-fatal here (the bucket may already have been removed), but it
+                // must not be silent either.
+                warn!(
+                    bucket = self.bucket,
+                    "destination bucket does not exist during cleanup listing; treating the namespace as empty"
+                );
+                return Ok(None);
             }
-            None => format!("failed to list destination bucket {bucket}"),
-        }),
+            Err(error) => {
+                let bucket = self.bucket;
+                return Err(error).with_context(|| match self.prefix {
+                    Some(prefix) => {
+                        format!("failed to list destination bucket {bucket} with prefix {prefix}")
+                    }
+                    None => format!("failed to list destination bucket {bucket}"),
+                });
+            }
+        };
+
+        let last_key = response
+            .contents()
+            .iter()
+            .filter_map(|object| object.key())
+            .next_back()
+            .map(ToOwned::to_owned);
+        if !response.is_truncated().unwrap_or(false) || last_key.is_none() {
+            self.finished = true;
+        } else {
+            self.start_after = last_key;
+        }
+        Ok(Some(response))
     }
 }
 
@@ -1090,18 +1055,6 @@ pub(super) fn normalize_etag(etag: &str) -> Option<String> {
     }
 }
 
-fn namespace_list_prefix(prefix: &str) -> Option<String> {
-    if prefix.is_empty() {
-        return None;
-    }
-
-    let mut normalized = prefix.to_string();
-    if !normalized.ends_with('/') {
-        normalized.push('/');
-    }
-    Some(normalized)
-}
-
 fn service_error_code<E>(error: &aws_sdk_s3::error::SdkError<E>) -> Option<&str>
 where
     E: ProvideErrorMetadata,
@@ -1109,64 +1062,6 @@ where
     error
         .as_service_error()
         .and_then(ProvideErrorMetadata::code)
-}
-
-fn owner_tag_overlaps_cleanup(
-    tag_key: &str,
-    cleanup_prefix: &str,
-    excluded_prefix: Option<&str>,
-    current_owner_id: &str,
-) -> bool {
-    let Some((owner_prefix, owner_id)) = parse_owner_tag(tag_key) else {
-        return false;
-    };
-    if current_owner_id == owner_id {
-        return false;
-    }
-
-    let owner_namespace = namespace(owner_prefix);
-    let cleanup_namespace = namespace(cleanup_prefix);
-    if !namespaces_overlap(&owner_namespace, &cleanup_namespace) {
-        return false;
-    }
-
-    if let Some(excluded_prefix) = excluded_prefix {
-        let excluded_namespace = namespace(excluded_prefix);
-        if namespace_contains(&excluded_namespace, &owner_namespace) {
-            return false;
-        }
-    }
-
-    true
-}
-
-fn parse_owner_tag(tag_key: &str) -> Option<(&str, &str)> {
-    let suffix = tag_key.strip_prefix(&format!("{OWNER_TAG_BASE}:"))?;
-    if suffix.is_empty() {
-        return None;
-    }
-
-    match suffix.rsplit_once(':') {
-        Some((prefix, owner_id)) if !owner_id.is_empty() => Some((prefix, owner_id)),
-        None => Some(("", suffix)),
-        _ => None,
-    }
-}
-
-fn namespace(prefix: &str) -> String {
-    namespace_list_prefix(prefix).unwrap_or_default()
-}
-
-fn namespace_contains(parent: &str, child: &str) -> bool {
-    parent.is_empty() || child.starts_with(parent)
-}
-
-fn namespaces_overlap(left: &str, right: &str) -> bool {
-    namespace_contains(left, right) || namespace_contains(right, left)
-}
-
-fn key_is_excluded(key: &str, excluded_namespace: Option<&str>) -> bool {
-    excluded_namespace.is_some_and(|excluded| key.starts_with(excluded))
 }
 
 /// Records one listed destination object and reports whether it is a stale candidate
@@ -1283,8 +1178,7 @@ mod tests {
     use super::{
         DeleteRetryCoordinator, DeletionCandidates, DestinationObject, DestinationRecordContext,
         GuardedDeleteContext, GuardedDeleteOutcome, UnplannedDeletionContext, delete_key_chunk,
-        delete_listed_objects, guarded_delete_namespace, inferred_delete_counts, key_is_excluded,
-        namespace_list_prefix, normalize_etag, owner_tag_overlaps_cleanup, parse_owner_tag,
+        delete_listed_objects, guarded_delete_namespace, inferred_delete_counts, normalize_etag,
         record_destination_object, record_destination_object_original, stale_destination_key,
         unplanned_cleanup_key, unplanned_destination_key,
     };
@@ -1293,11 +1187,6 @@ mod tests {
         AppState, DeploymentManifest, PlannedAction, PlannedObject, PutObjectRetryJitter,
         PutObjectRetryOptions,
     };
-
-    #[test]
-    fn namespace_list_prefix_adds_trailing_slash() {
-        assert_eq!(namespace_list_prefix("site"), Some("site/".to_string()));
-    }
 
     #[test]
     fn fused_per_key_checks_match_the_original_two_predicate_path() {
@@ -1844,16 +1733,6 @@ mod tests {
     }
 
     #[test]
-    fn namespace_list_prefix_preserves_existing_trailing_slash() {
-        assert_eq!(namespace_list_prefix("site/"), Some("site/".to_string()));
-    }
-
-    #[test]
-    fn namespace_list_prefix_omits_empty_prefix() {
-        assert_eq!(namespace_list_prefix(""), None);
-    }
-
-    #[test]
     fn normalize_etag_strips_quotes_and_lowercases() {
         assert_eq!(normalize_etag("\"A1B2C3\""), Some("a1b2c3".to_string()));
     }
@@ -2076,73 +1955,6 @@ mod tests {
 
         assert!(objects.is_empty());
         assert!(!has_stale_candidate);
-    }
-
-    #[test]
-    fn owner_tags_parse_root_and_prefixed_namespaces() {
-        assert_eq!(
-            parse_owner_tag("aws-cdk:cr-owned:deadbeef"),
-            Some(("", "deadbeef"))
-        );
-        assert_eq!(
-            parse_owner_tag("aws-cdk:cr-owned:site:blue:deadbeef"),
-            Some(("site:blue", "deadbeef"))
-        );
-        assert_eq!(parse_owner_tag("unrelated"), None);
-    }
-
-    #[test]
-    fn owner_overlap_is_segment_aware_and_ignores_the_current_owner() {
-        assert!(owner_tag_overlaps_cleanup(
-            "aws-cdk:cr-owned:site:other",
-            "site",
-            None,
-            "current"
-        ));
-        assert!(!owner_tag_overlaps_cleanup(
-            "aws-cdk:cr-owned:site2:other",
-            "site",
-            None,
-            "current"
-        ));
-        assert!(!owner_tag_overlaps_cleanup(
-            "aws-cdk:cr-owned:site:current",
-            "site",
-            None,
-            "current"
-        ));
-    }
-
-    #[test]
-    fn owners_wholly_inside_the_excluded_namespace_are_safe() {
-        assert!(!owner_tag_overlaps_cleanup(
-            "aws-cdk:cr-owned:site/v2:other",
-            "site",
-            Some("site/v2"),
-            "current"
-        ));
-        assert!(owner_tag_overlaps_cleanup(
-            "aws-cdk:cr-owned:site/v1:other",
-            "site",
-            Some("site/v2"),
-            "current"
-        ));
-        assert!(owner_tag_overlaps_cleanup(
-            "aws-cdk:cr-owned:site:other",
-            "site",
-            Some("site/v2"),
-            "current"
-        ));
-    }
-
-    #[test]
-    fn cleanup_exclusion_preserves_only_the_complete_child_namespace() {
-        assert!(key_is_excluded("site/v2/index.html", Some("site/v2/")));
-        assert!(key_is_excluded("site/v2/nested/app.js", Some("site/v2/")));
-        assert!(!key_is_excluded("site/v20/index.html", Some("site/v2/")));
-        assert!(!key_is_excluded("site/v1/index.html", Some("site/v2/")));
-        assert!(!key_is_excluded("site/v2", Some("site/v2/")));
-        assert!(!key_is_excluded("site/v2/index.html", None));
     }
 
     fn replay_app_state(replay: StaticReplayClient) -> AppState {

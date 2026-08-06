@@ -1,3 +1,6 @@
+use crate::namespace::{
+    NamespaceRelation, canonical_namespace, namespace_relation, namespaces_overlap,
+};
 use crate::types::{DeploymentRequest, PreviousDestination};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -29,14 +32,6 @@ pub(crate) enum DestinationChangeCleanupDecision {
     NotNeeded(NoCleanupReason),
     Retain(RetainReason),
     Delete(DeletePreviousDestination),
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum NamespaceRelation {
-    Same,
-    PreviousContainsCurrent,
-    CurrentContainsPrevious,
-    Disjoint,
 }
 
 pub(crate) fn plan_destination_change_cleanup(
@@ -119,36 +114,6 @@ fn previous_namespace_authorized(
         .delete_previous_objects_on_change
         .as_ref()
         .is_some_and(|authorization| authorization.bucket_name == previous.bucket_name)
-}
-
-pub(crate) fn canonical_namespace(prefix: &str) -> String {
-    if prefix.is_empty() || prefix == "/" {
-        return String::new();
-    }
-    if prefix.ends_with('/') {
-        prefix.to_string()
-    } else {
-        format!("{prefix}/")
-    }
-}
-
-fn namespace_relation(previous: &str, current: &str) -> NamespaceRelation {
-    let previous = canonical_namespace(previous);
-    let current = canonical_namespace(current);
-
-    if previous == current {
-        NamespaceRelation::Same
-    } else if previous.is_empty() || current.starts_with(&previous) {
-        NamespaceRelation::PreviousContainsCurrent
-    } else if current.is_empty() || previous.starts_with(&current) {
-        NamespaceRelation::CurrentContainsPrevious
-    } else {
-        NamespaceRelation::Disjoint
-    }
-}
-
-fn namespaces_overlap(left: &str, right: &str) -> bool {
-    left.is_empty() || right.is_empty() || left.starts_with(right) || right.starts_with(left)
 }
 
 #[cfg(test)]

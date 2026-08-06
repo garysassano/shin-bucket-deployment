@@ -25,7 +25,9 @@ use super::super::{
     ZIP_ENTRY_READ_CHUNK_BYTES,
 };
 use super::block_store::{EntryAttemptClaim, SourceAttemptSnapshot, SourceBlockStore};
-use crate::util::{MAX_DIAGNOSTIC_VALUE_BYTES, finalize_md5, lock_telemetry, sanitize_diagnostic};
+use crate::util::{
+    MAX_DIAGNOSTIC_VALUE_BYTES, finalize_digest, lock_telemetry, sanitize_diagnostic,
+};
 
 const LOCAL_FILE_HEADER_SIGNATURE: u32 = 0x0403_4b50;
 pub(super) const LOCAL_FILE_HEADER_LEN: usize = 30;
@@ -874,7 +876,7 @@ async fn send_zip_entry_chunks_inner(
     }
 
     validate_zip_entry_output(&plan, bytes, crc32.finalize()).map_err(boxed_body_error)?;
-    let etag_md5 = finalize_md5(md5);
+    let etag_md5 = finalize_digest(md5);
     plan.validate_trusted_md5(&etag_md5)
         .map_err(boxed_body_error)?;
     body_state.record_etag_md5(etag_md5);
@@ -1063,7 +1065,7 @@ impl ZipEntryInputValidator<'_> {
     fn finish(self) -> io::Result<()> {
         validate_zip_entry_output(self.plan, self.bytes, self.crc32.finalize())?;
         if let Some(md5) = self.md5 {
-            self.plan.validate_trusted_md5(&finalize_md5(md5))?;
+            self.plan.validate_trusted_md5(&finalize_digest(md5))?;
         }
         Ok(())
     }

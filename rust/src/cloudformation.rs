@@ -26,9 +26,7 @@ use crate::s3::{
     guarded_delete_namespace,
 };
 use crate::types::{AppState, DeploymentStats, ResponsePayload};
-use crate::util::{
-    MAX_DIAGNOSTIC_VALUE_BYTES, duration_ms, finalize_md5, lower_hex, sanitize_diagnostic,
-};
+use crate::util::{MAX_DIAGNOSTIC_VALUE_BYTES, duration_ms, finalize_digest, sanitize_diagnostic};
 
 mod callback;
 
@@ -149,28 +147,21 @@ pub(crate) async fn handle_event(
                 Err(err) => {
                     let reason = sanitize_failure_reason(&format!("{err:#}"));
                     error!(error = %reason, "request failed");
-                    let failure = ResponsePayload {
-                        physical_resource_id: physical_resource_id(&request)
-                            .map(ToOwned::to_owned)
-                            .unwrap_or_else(|| request_id.to_string()),
-                        reason: Some(reason),
-                        data: Map::new(),
-                    };
-                    let failure_body = serialize_failure_response(
+                    send_failure_response(
+                        &state,
+                        &response_url,
                         stack_id,
                         request_id,
                         logical_resource_id,
-                        &failure,
-                    )?;
-                    send_response(
-                        &state.http,
-                        &response_url,
-                        &failure_body,
-                        deadlines.callback(),
+                        physical_resource_id(&request)
+                            .map(ToOwned::to_owned)
+                            .unwrap_or_else(|| request_id.to_string()),
+                        reason,
+                        deadlines,
                         Some(&processed.stats),
+                        "failed to send failure response",
                     )
                     .await
-                    .context("failed to send failure response")
                 }
             };
             log_deployment_summary(
@@ -184,25 +175,21 @@ pub(crate) async fn handle_event(
         Err(err) => {
             let reason = sanitize_failure_reason(&format!("{err:#}"));
             error!(error = %reason, "request failed");
-            let failure = ResponsePayload {
-                physical_resource_id: physical_resource_id(&request)
+            send_failure_response(
+                &state,
+                &response_url,
+                stack_id,
+                request_id,
+                logical_resource_id,
+                physical_resource_id(&request)
                     .map(ToOwned::to_owned)
                     .unwrap_or_else(|| request_id.to_string()),
-                reason: Some(reason),
-                data: Map::new(),
-            };
-            let failure_body =
-                serialize_failure_response(stack_id, request_id, logical_resource_id, &failure)?;
-
-            send_response(
-                &state.http,
-                &response_url,
-                &failure_body,
-                deadlines.callback(),
+                reason,
+                deadlines,
                 None,
+                "failed to send failure response",
             )
-            .await
-            .context("failed to send failure response")?;
+            .await?;
         }
     }
 
@@ -227,29 +214,52 @@ async fn report_envelope_failure(
     let response_url = validate_response_url(&target.response_url)
         .with_context(|| format!("while reporting envelope failure: {reason}"))?;
     error!(error = %reason, "request envelope failed");
-    let failure = ResponsePayload {
-        physical_resource_id: target
-            .physical_resource_id
-            .unwrap_or_else(|| target.request_id.clone()),
-        reason: Some(reason),
-        data: Map::new(),
-    };
-    let body = serialize_failure_response(
+    send_failure_response(
+        state,
+        &response_url,
         &target.stack_id,
         &target.request_id,
         &target.logical_resource_id,
-        &failure,
-    )?;
+        target
+            .physical_resource_id
+            .unwrap_or_else(|| target.request_id.clone()),
+        reason,
+        deadlines,
+        None,
+        "failed to send request-envelope failure response",
+    )
+    .await?;
+    Ok(json!({}))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn send_failure_response(
+    state: &AppState,
+    response_url: &reqwest::Url,
+    stack_id: &str,
+    request_id: &str,
+    logical_resource_id: &str,
+    physical_resource_id: String,
+    reason: String,
+    deadlines: InvocationDeadlines,
+    stats: Option<&DeploymentStats>,
+    failure_context: &'static str,
+) -> Result<()> {
+    let failure = ResponsePayload {
+        physical_resource_id,
+        reason: Some(reason),
+        data: Map::new(),
+    };
+    let body = serialize_failure_response(stack_id, request_id, logical_resource_id, &failure)?;
     send_response(
         &state.http,
-        &response_url,
+        response_url,
         &body,
         deadlines.callback(),
-        None,
+        stats,
     )
     .await
-    .context("failed to send request-envelope failure response")?;
-    Ok(json!({}))
+    .context(failure_context)
 }
 
 fn decode_request_envelope(payload: Value) -> Result<RequestEnvelope> {
@@ -784,7 +794,7 @@ fn cloudfront_caller_reference(
         hash_caller_reference_field(&mut hasher, path);
     }
 
-    format!("shin-bucket-deployment-{}", finalize_md5(hasher))
+    format!("shin-bucket-deployment-{}", finalize_digest(hasher))
 }
 
 fn destination_physical_resource_id(request: &crate::types::DeploymentRequest) -> String {
@@ -794,10 +804,7 @@ fn destination_physical_resource_id(request: &crate::types::DeploymentRequest) -
     hash_identity_field(&mut hasher, &request.dest_bucket_name);
     hash_identity_field(&mut hasher, &request.dest_bucket_prefix);
 
-    format!(
-        "aws.cdk.shinbucketdeployment.{}",
-        lower_hex(hasher.finalize().as_ref())
-    )
+    format!("aws.cdk.shinbucketdeployment.{}", finalize_digest(hasher))
 }
 
 fn response_physical_resource_id(
