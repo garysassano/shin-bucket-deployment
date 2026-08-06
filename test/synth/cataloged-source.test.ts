@@ -13,7 +13,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   App,
   AssetHashType,
@@ -31,7 +31,10 @@ import { Bucket } from "aws-cdk-lib/aws-s3";
 import type { AssetOptions } from "aws-cdk-lib/aws-s3-assets";
 import { afterEach, describe, expect, test } from "vitest";
 import { type CatalogedAssetOptions, ShinBucketDeployment, Source } from "../../src";
-import { overrideCatalogedSourceFileSystemForTesting } from "../../src/cataloged-source";
+import {
+  catalogedSourceStagingDirectory,
+  overrideCatalogedSourceFileSystemForTesting,
+} from "../../src/cataloged-source";
 import { testLocalProviderBuild } from "../support/bundling";
 
 const SCRATCH_PREFIX = "shin-bucket-deployment-catalog-";
@@ -364,46 +367,131 @@ describe("cataloged directory assets", () => {
     expect(largeRssKb - smallRssKb).toBeLessThan(64 * 1024);
   }, 120_000);
 
-  test("leaves the scratch-directory set unchanged on success and ordinary failure", () => {
-    const before = scratchDirectories();
-    synthesizeCatalog(writeFixture({ "index.html": "ok" }));
-    expect(scratchDirectories()).toEqual(before);
-
-    const invalid = writeFixture({ "index.html": "ok" });
-    symlinkSync("index.html", join(invalid, "link.html"));
-    expect(() => synthesizeCatalog(invalid)).toThrow(/symbolic links/);
-    expect(scratchDirectories()).toEqual(before);
-  });
-
-  test("surfaces cleanup errors and aggregates them with construction errors", () => {
-    const originalRemove = require("node:fs").rmSync as typeof import("node:fs").rmSync;
-    const cleanupError = new Error("induced cleanup failure");
+  test("reuses a deterministic staging directory across binds and refreshes it", () => {
+    const source = writeFixture({ "index.html": "ok" });
+    const linkedDestinations: string[] = [];
+    const originalLink = require("node:fs").linkSync as typeof import("node:fs").linkSync;
     restoreFileSystem = overrideCatalogedSourceFileSystemForTesting({
-      rmSync: (path, options) => {
-        if (String(path).includes(SCRATCH_PREFIX)) {
-          throw cleanupError;
-        }
-        return originalRemove(path, options);
+      linkSync: (from, to) => {
+        linkedDestinations.push(String(to));
+        return originalLink(from, to);
       },
     });
 
-    expect(() => synthesizeCatalog(writeFixture({ "index.html": "ok" }))).toThrow(cleanupError);
-
-    const invalid = writeFixture({ "index.html": "ok" });
-    symlinkSync("index.html", join(invalid, "link.html"));
-    try {
-      synthesizeCatalog(invalid);
-      throw new Error("expected catalog synthesis to fail");
-    } catch (error) {
-      expect(error).toBeInstanceOf(AggregateError);
-      expect((error as AggregateError).errors).toHaveLength(2);
+    synthesizeCatalog(source);
+    const firstBindLinks = linkedDestinations.length;
+    expect(firstBindLinks).toBeGreaterThan(0);
+    const firstDestination = linkedDestinations[0];
+    if (firstDestination === undefined) {
+      throw new Error("expected at least one cataloged link destination");
     }
+    const stagingDirectory = dirname(firstDestination);
+
+    // A second bind of the same source lands in the same staging directory, so
+    // CDK's process-global AssetStaging cache can hit instead of re-walking,
+    // re-hashing, and re-copying the tree.
+    synthesizeCatalog(source);
+    expect(linkedDestinations.length).toBe(2 * firstBindLinks);
+    for (const destination of linkedDestinations.slice(firstBindLinks)) {
+      expect(dirname(destination)).toBe(stagingDirectory);
+    }
+
+    // A different source gets its own staging directory.
+    synthesizeCatalog(writeFixture({ "other.html": "other" }));
+    const lastDestination = linkedDestinations.at(-1);
+    if (lastDestination === undefined) {
+      throw new Error("expected at least one cataloged link destination");
+    }
+    expect(dirname(lastDestination)).not.toBe(stagingDirectory);
 
     restoreFileSystem();
     restoreFileSystem = undefined;
     for (const entry of scratchDirectories()) {
       cleanupPaths.add(join(tmpdir(), entry));
     }
+  });
+
+  test("re-fingerprints a tree changed between two binds in one app", () => {
+    // CDK's AssetStaging cache is keyed by staged path + options, so a
+    // same-path bind of changed content must drop the process-global cache or
+    // the second deployment would deploy the first tree's stale ZIP.
+    const source = writeFixture({ "index.html": "one" });
+    const outdir = tempDirectory("shin-catalog-change-out-");
+    const app = new App({ outdir });
+    const stack = new Stack(app, "CatalogStack");
+    const destinationBucket = new Bucket(stack, "Destination");
+
+    new ShinBucketDeployment(stack, "DeployOne", {
+      sources: [Source.asset(source)],
+      destination: { bucket: destinationBucket },
+      providerLambda: { localBuild: testLocalProviderBuild() },
+    });
+    writeFileSync(join(source, "index.html"), "two");
+    new ShinBucketDeployment(stack, "DeployTwo", {
+      sources: [Source.asset(source)],
+      destination: { bucket: destinationBucket },
+      providerLambda: { localBuild: testLocalProviderBuild() },
+    });
+
+    app.synth();
+    const manifest = JSON.parse(readFileSync(join(outdir, "CatalogStack.assets.json"), "utf8")) as {
+      files?: Record<string, ManifestAsset>;
+    };
+    const catalogedAssets = Object.entries(manifest.files ?? {}).filter(([, asset]) => {
+      const path = asset.source?.path;
+      return (
+        asset.source?.packaging === "zip" &&
+        path !== undefined &&
+        existsSync(join(outdir, path, ".shin", "catalog.v1.json"))
+      );
+    });
+    expect(catalogedAssets).toHaveLength(2);
+    const [firstHash, secondHash] = catalogedAssets.map(([hash]) => hash);
+    expect(secondHash).not.toBe(firstHash);
+  });
+
+  test("derives one staging directory per source path and option set", () => {
+    const source = writeFixture({ "index.html": "ok" });
+    const other = writeFixture({ "index.html": "ok" });
+
+    const first = catalogedSourceStagingDirectory(source);
+    expect(first).toContain(SCRATCH_PREFIX);
+    expect(catalogedSourceStagingDirectory(source)).toBe(first);
+    expect(catalogedSourceStagingDirectory(source, { exclude: ["*.map"] })).not.toBe(first);
+    expect(catalogedSourceStagingDirectory(other)).not.toBe(first);
+  });
+
+  test("recovers from a failed bind because the next bind wipes the staging directory", () => {
+    const source = writeFixture({ "index.html": "ok" });
+    const invalid = writeFixture({ "index.html": "ok" });
+    symlinkSync("index.html", join(invalid, "link.html"));
+
+    const first = synthesizeCatalog(source);
+    // A failed bind leaves its staging directory behind (it is the cache), but
+    // the next bind of the same source wipes and re-materializes it.
+    expect(() => synthesizeCatalog(invalid)).toThrow(/symbolic links/);
+    expect(synthesizeCatalog(source).catalogSha256).toBe(first.catalogSha256);
+
+    for (const entry of scratchDirectories()) {
+      cleanupPaths.add(join(tmpdir(), entry));
+    }
+  });
+
+  test("surfaces staging-directory wipe failures as bind errors", () => {
+    const originalRemove = require("node:fs").rmSync as typeof import("node:fs").rmSync;
+    const wipeError = new Error("induced wipe failure");
+    restoreFileSystem = overrideCatalogedSourceFileSystemForTesting({
+      rmSync: (path, options) => {
+        if (String(path).includes(SCRATCH_PREFIX)) {
+          throw wipeError;
+        }
+        return originalRemove(path, options);
+      },
+    });
+
+    expect(() => synthesizeCatalog(writeFixture({ "index.html": "ok" }))).toThrow(wipeError);
+    restoreFileSystem();
+    restoreFileSystem = undefined;
   });
 
   test("fails before scratch creation when asset staging is disabled", () => {

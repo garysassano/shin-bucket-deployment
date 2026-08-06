@@ -1573,3 +1573,140 @@ test.each([
     expect(dependencies).toContain(policy);
   }
 });
+
+// N-1: the destination `s3:GetObject` grant is load-bearing. The provider's
+// copy-identity reconciliation probes destination objects with `HeadObject`
+// (extract:false copies and marker entries), and S3 authorizes `HeadObject`
+// via `s3:GetObject`. A plan that proposed trimming this grant was refuted;
+// this test pins the grant so a future cleanup cannot silently drop it.
+test("keeps the destination s3:GetObject grant for HeadObject identity reconciliation", () => {
+  const stack = new Stack();
+  const destinationBucket = new Bucket(stack, "Dest");
+
+  new ShinBucketDeployment(stack, "Deploy", {
+    sources: [Source.data("index.html", "ok")],
+    destination: { bucket: destinationBucket },
+    providerLambda: { localBuild: testLocalProviderBuild() },
+  });
+
+  const template = Template.fromStack(stack).toJSON() as {
+    Resources?: Record<string, unknown>;
+  };
+  const rendered = JSON.stringify(template);
+  expect(rendered).toContain("s3:GetObject");
+  expect(rendered).toContain("s3:PutObject");
+
+  const policies = Object.values(template.Resources ?? {}).filter(
+    (resource) => (resource as { Type?: string }).Type === "AWS::IAM::Policy",
+  );
+  const statementActions = policies.flatMap((policy) => {
+    const statements = (policy as { Properties?: { PolicyDocument?: { Statement?: unknown } } })
+      .Properties?.PolicyDocument?.Statement;
+    return Array.isArray(statements)
+      ? statements.flatMap((statement) => {
+          const actions = (statement as { Action?: string | string[] }).Action;
+          return Array.isArray(actions) ? actions : actions ? [actions] : [];
+        })
+      : [];
+  });
+  expect(statementActions).toContain("s3:GetObject");
+});
+
+// T-2: addSource must not bind (and therefore stage) a source object that is
+// already part of the deployment. Binding materializes catalogs and creates
+// Asset constructs, so a duplicate bound first would leave orphan staged
+// assets behind.
+test("addSource skips binding for a source object already in the deployment", () => {
+  const stack = new Stack();
+  const destinationBucket = new Bucket(stack, "Dest");
+  const deployment = new ShinBucketDeployment(stack, "Deploy", {
+    sources: [Source.data("first.txt", "first")],
+    destination: { bucket: destinationBucket },
+    providerLambda: { localBuild: testLocalProviderBuild() },
+  });
+
+  const duplicate = Source.data("duplicate.txt", "duplicate");
+  deployment.addSource(duplicate);
+  deployment.addSource(duplicate);
+
+  const template = Template.fromStack(stack).toJSON() as {
+    Resources?: Record<string, unknown>;
+  };
+  const customResource = Object.values(template.Resources ?? {}).find(
+    (resource) => (resource as { Type?: string }).Type === "AWS::CloudFormation::CustomResource",
+  ) as { Properties?: { SourceObjectKeys?: string[] } } | undefined;
+  // Only the constructor source and the single addSource instance are kept;
+  // the re-added duplicate was skipped before binding, so no third source ZIP
+  // was created or staged.
+  expect(customResource?.Properties?.SourceObjectKeys).toHaveLength(2);
+});
+
+test("addSource skips binding for a source object already passed in sources", () => {
+  const stack = new Stack();
+  const destinationBucket = new Bucket(stack, "Dest");
+  const shared = Source.data("shared.txt", "shared");
+  const deployment = new ShinBucketDeployment(stack, "Deploy", {
+    sources: [shared],
+    destination: { bucket: destinationBucket },
+    providerLambda: { localBuild: testLocalProviderBuild() },
+  });
+
+  deployment.addSource(shared);
+
+  const template = Template.fromStack(stack).toJSON() as {
+    Resources?: Record<string, unknown>;
+  };
+  const customResource = Object.values(template.Resources ?? {}).find(
+    (resource) => (resource as { Type?: string }).Type === "AWS::CloudFormation::CustomResource",
+  ) as { Properties?: { SourceObjectKeys?: string[] } } | undefined;
+  expect(customResource?.Properties?.SourceObjectKeys).toHaveLength(1);
+});
+
+// T-10: with waitForCompletion:false the provider only creates invalidations
+// and never polls, so the role must not receive cloudfront:GetInvalidation.
+test("grants cloudfront:GetInvalidation only when waiting for completion", () => {
+  const stack = new Stack();
+  const destinationBucket = new Bucket(stack, "Dest");
+  const distribution = new Distribution(stack, "Distribution", {
+    defaultBehavior: {
+      origin: S3BucketOrigin.withOriginAccessControl(destinationBucket),
+      viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+    },
+  });
+
+  new ShinBucketDeployment(stack, "Deploy", {
+    sources: [Source.data("index.html", "ok")],
+    destination: { bucket: destinationBucket },
+    cloudfrontInvalidation: { distribution, paths: ["/*"], waitForCompletion: false },
+    providerLambda: { localBuild: testLocalProviderBuild() },
+  });
+
+  const template = Template.fromStack(stack).toJSON() as {
+    Resources?: Record<string, unknown>;
+  };
+  const rendered = JSON.stringify(template);
+  expect(rendered).toContain("cloudfront:CreateInvalidation");
+  expect(rendered).not.toContain("cloudfront:GetInvalidation");
+});
+
+test("grants cloudfront:GetInvalidation when waiting is the default", () => {
+  const stack = new Stack();
+  const destinationBucket = new Bucket(stack, "Dest");
+  const distribution = new Distribution(stack, "Distribution", {
+    defaultBehavior: {
+      origin: S3BucketOrigin.withOriginAccessControl(destinationBucket),
+      viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+    },
+  });
+
+  new ShinBucketDeployment(stack, "Deploy", {
+    sources: [Source.data("index.html", "ok")],
+    destination: { bucket: destinationBucket },
+    cloudfrontInvalidation: { distribution, paths: ["/*"] },
+    providerLambda: { localBuild: testLocalProviderBuild() },
+  });
+
+  const rendered = JSON.stringify(Template.fromStack(stack).toJSON());
+  expect(rendered).toContain("cloudfront:GetInvalidation");
+  expect(rendered).toContain("cloudfront:CreateInvalidation");
+});

@@ -1,14 +1,17 @@
 import { join } from "node:path";
 import { App, Aws, CfnParameter, RemovalPolicy, Stack, Tags } from "aws-cdk-lib";
 import { Annotations, Match, Template } from "aws-cdk-lib/assertions";
+import type { IDistributionRef } from "aws-cdk-lib/aws-cloudfront";
 import { AllowedMethods, Distribution, ViewerProtocolPolicy } from "aws-cdk-lib/aws-cloudfront";
 import { S3BucketOrigin } from "aws-cdk-lib/aws-cloudfront-origins";
+import { Role } from "aws-cdk-lib/aws-iam";
 import { Bucket, type CfnBucket } from "aws-cdk-lib/aws-s3";
 import { describe, expect, test } from "vitest";
 import {
   DEFAULT_MAX_COMPRESSION_RATIO,
   DEFAULT_MAX_UNCOMPRESSED_ENTRY_BYTES,
   DestinationWriteRetryJitter,
+  ProviderSharing,
   ShinBucketDeployment,
   type ShinBucketDeploymentProps,
   Source,
@@ -30,6 +33,11 @@ function customResourceProperties(stack: Stack) {
   }
 
   return resource.Properties;
+}
+
+/** Minimal distribution ref stub for validation-focused tests. */
+function distributionRef(distributionId: string): IDistributionRef {
+  return { distributionRef: { distributionId } } as unknown as IDistributionRef;
 }
 
 describe("ShinBucketDeployment validation and option coverage", () => {
@@ -955,8 +963,11 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     template.hasResourceProperties("AWS::IAM::Policy", {
       PolicyDocument: {
         Statement: Match.arrayWith([
+          // T-10 grant trim: with waitForCompletion:false the provider never
+          // polls, so GetInvalidation is not granted. A single granted action
+          // renders as a string, not an array.
           Match.objectLike({
-            Action: ["cloudfront:GetInvalidation", "cloudfront:CreateInvalidation"],
+            Action: "cloudfront:CreateInvalidation",
             Resource: {
               "Fn::Join": Match.anyValue(),
             },
@@ -1360,5 +1371,245 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     expect(customResourceProperties(stack).DestinationBucketArn).toMatchObject({
       "Fn::GetAtt": [expect.any(String), "Arn"],
     });
+  });
+
+  test.each([
+    [
+      "unclosed character class",
+      ["assets/[abc"],
+      /not a valid include\/exclude pattern: unclosed character class/,
+    ],
+    ["empty class", ["[]"], /unclosed character class/],
+    ["invalid range", ["[z-a]"], /invalid character class range/],
+    ["range closed by dash", ["[z--]"], /invalid character class range/],
+    ["dangling escape", ["assets\\"], /dangling escape/],
+    ["unclosed alternates", ["{a,b"], /unclosed alternates/],
+    ["unopened alternates", ["a,b}"], /unopened alternates/],
+  ] as const)("rejects an include/exclude glob with an %s at synthesis", (_label, patterns, message) => {
+    const stack = new Stack();
+    const destinationBucket = new Bucket(stack, "Dest");
+
+    expect(() => {
+      new ShinBucketDeployment(stack, "Deploy", {
+        sources: [Source.data("index.html", "ok")],
+        destination: { bucket: destinationBucket },
+        sourceProcessing: { include: patterns as unknown as string[] },
+      });
+    }).toThrow(message);
+  });
+
+  test("accepts globs the provider's globset parser accepts", () => {
+    const stack = new Stack();
+    const destinationBucket = new Bucket(stack, "Dest");
+
+    expect(() => {
+      new ShinBucketDeployment(stack, "Deploy", {
+        sources: [Source.data("index.html", "ok")],
+        destination: { bucket: destinationBucket },
+        sourceProcessing: {
+          include: ["**/*.html", "assets/[a-z]/file?.js", "assets/\\[literal\\]", "a{1,2,3}"],
+          exclude: ["*.map", "tmp/[!a]/*"],
+        },
+      });
+    }).not.toThrow();
+  });
+
+  test("rejects cloudfront invalidation path counts above the CloudFront batch limits", () => {
+    const tooManyPaths = Array.from({ length: 3001 }, (_, index) => `/path-${index}`);
+    expect(() => {
+      const stack = new Stack();
+      new ShinBucketDeployment(stack, "Deploy", {
+        sources: [Source.data("index.html", "ok")],
+        destination: { bucket: new Bucket(stack, "Dest") },
+        cloudfrontInvalidation: {
+          distribution: distributionRef("E1EXAMPLE"),
+          paths: tooManyPaths,
+        },
+      });
+    }).toThrow(/at most 3000 paths/);
+
+    const tooManyWildcards = Array.from({ length: 16 }, (_, index) => `/wild-${index}/*`);
+    expect(() => {
+      const stack = new Stack();
+      new ShinBucketDeployment(stack, "Deploy", {
+        sources: [Source.data("index.html", "ok")],
+        destination: { bucket: new Bucket(stack, "Dest") },
+        cloudfrontInvalidation: {
+          distribution: distributionRef("E1EXAMPLE"),
+          paths: tooManyWildcards,
+        },
+      });
+    }).toThrow(/at most 15 wildcard paths/);
+  });
+
+  test("accepts the CloudFront batch limits at their boundaries", () => {
+    const stack = new Stack();
+    const destinationBucket = new Bucket(stack, "Dest");
+
+    expect(() => {
+      new ShinBucketDeployment(stack, "Deploy", {
+        sources: [Source.data("index.html", "ok")],
+        destination: { bucket: destinationBucket },
+        cloudfrontInvalidation: {
+          distribution: distributionRef("E1EXAMPLE"),
+          paths: [
+            ...Array.from({ length: 15 }, (_, index) => `/wild-${index}/*`),
+            ...Array.from({ length: 2985 }, (_, index) => `/path-${index}`),
+          ],
+        },
+      });
+    }).not.toThrow();
+  });
+
+  test("counts only trailing-asterisk paths as CloudFront wildcard paths", () => {
+    const stack = new Stack();
+    const destinationBucket = new Bucket(stack, "Dest");
+
+    expect(() => {
+      new ShinBucketDeployment(stack, "Deploy", {
+        sources: [Source.data("index.html", "ok")],
+        destination: { bucket: destinationBucket },
+        cloudfrontInvalidation: {
+          distribution: distributionRef("E1EXAMPLE"),
+          paths: Array.from({ length: 16 }, (_, index) => `/a*b-${index}`),
+        },
+      });
+    }).not.toThrow();
+  });
+
+  test("warns when the destination bucket has versioning enabled", () => {
+    const app = new App();
+    const stack = new Stack(app, "VersionedDest");
+    const destinationBucket = new Bucket(stack, "Dest", { versioned: true });
+
+    new ShinBucketDeployment(stack, "Deploy", {
+      sources: [Source.data("index.html", "ok")],
+      destination: { bucket: destinationBucket },
+      providerLambda: { localBuild: testLocalProviderBuild() },
+    });
+
+    Annotations.fromStack(stack).hasWarning(
+      "/VersionedDest/Deploy",
+      Match.stringLikeRegexp("versioning enabled.*delete markers.*noncurrent versions"),
+    );
+  });
+
+  test("warns when versioning is enabled by escape hatch override", () => {
+    const app = new App();
+    const stack = new Stack(app, "OverriddenVersioning");
+    const destinationBucket = new Bucket(stack, "Dest");
+    (destinationBucket.node.defaultChild as CfnBucket).addPropertyOverride(
+      "VersioningConfiguration",
+      { Status: "Enabled" },
+    );
+
+    new ShinBucketDeployment(stack, "Deploy", {
+      sources: [Source.data("index.html", "ok")],
+      destination: { bucket: destinationBucket },
+      providerLambda: { localBuild: testLocalProviderBuild() },
+    });
+
+    Annotations.fromStack(stack).hasWarning(
+      "/OverriddenVersioning/Deploy",
+      Match.stringLikeRegexp("versioning enabled"),
+    );
+  });
+
+  test("does not warn about versioning for an unversioned destination", () => {
+    const app = new App();
+    const stack = new Stack(app, "UnversionedDest");
+    const destinationBucket = new Bucket(stack, "Dest");
+
+    new ShinBucketDeployment(stack, "Deploy", {
+      sources: [Source.data("index.html", "ok")],
+      destination: { bucket: destinationBucket },
+      providerLambda: { localBuild: testLocalProviderBuild() },
+    });
+
+    Annotations.fromStack(stack).hasNoWarning(
+      "/UnversionedDest/Deploy",
+      Match.stringLikeRegexp("versioning enabled"),
+    );
+  });
+
+  test("warns that previous-bucket delete grants accumulate on the shared provider role", () => {
+    const app = new App();
+    const stack = new Stack(app, "SharedRoleDelete");
+    const destinationBucket = new Bucket(stack, "Dest");
+
+    new ShinBucketDeployment(stack, "Deploy", {
+      sources: [Source.data("index.html", "ok")],
+      destination: { bucket: destinationBucket },
+      destinationLifecycle: { onChange: { deletePreviousObjects: true } },
+      providerLambda: { localBuild: testLocalProviderBuild() },
+    });
+
+    Annotations.fromStack(stack).hasWarning(
+      "/SharedRoleDelete/Deploy",
+      Match.stringLikeRegexp(
+        "s3:DeleteObject.*ProviderSharing.DEPLOYMENT.*bucket-wide delete grant",
+      ),
+    );
+  });
+
+  test("does not warn about the shared role when previous-bucket delete is not granted", () => {
+    const app = new App();
+    const stack = new Stack(app, "NoPreviousDelete");
+    const destinationBucket = new Bucket(stack, "Dest");
+
+    new ShinBucketDeployment(stack, "Deploy", {
+      sources: [Source.data("index.html", "ok")],
+      destination: { bucket: destinationBucket },
+      providerLambda: { localBuild: testLocalProviderBuild() },
+    });
+
+    Annotations.fromStack(stack).hasNoWarning(
+      "/NoPreviousDelete/Deploy",
+      Match.stringLikeRegexp("ProviderSharing.DEPLOYMENT"),
+    );
+  });
+
+  test("does not warn about the shared role with deployment-scoped sharing", () => {
+    const app = new App();
+    const stack = new Stack(app, "IsolatedDelete");
+    const destinationBucket = new Bucket(stack, "Dest");
+
+    new ShinBucketDeployment(stack, "Deploy", {
+      sources: [Source.data("index.html", "ok")],
+      destination: { bucket: destinationBucket },
+      destinationLifecycle: { onChange: { deletePreviousObjects: true } },
+      providerLambda: {
+        sharing: ProviderSharing.DEPLOYMENT,
+        localBuild: testLocalProviderBuild(),
+      },
+    });
+
+    Annotations.fromStack(stack).hasNoWarning(
+      "/IsolatedDelete/Deploy",
+      Match.stringLikeRegexp("ProviderSharing.DEPLOYMENT"),
+    );
+  });
+
+  test("warns when grants cannot be attached to an imported provider role", () => {
+    const app = new App();
+    const stack = new Stack(app, "ImportedRole");
+    const destinationBucket = new Bucket(stack, "Dest");
+    const importedRole = Role.fromRoleArn(
+      stack,
+      "ImportedRoleArn",
+      "arn:aws:iam::123456789012:role/provider-role",
+      { mutable: false, addGrantsToResources: true },
+    );
+
+    const deployment = new ShinBucketDeployment(stack, "Deploy", {
+      sources: [Source.data("index.html", "ok")],
+      destination: { bucket: destinationBucket },
+      providerLambda: { role: importedRole, localBuild: testLocalProviderBuild() },
+    });
+
+    Annotations.fromStack(stack).hasWarning(
+      `/${deployment.handlerFunction.node.path}`,
+      Match.stringLikeRegexp("grant could not be attached.*AccessDenied"),
+    );
   });
 });

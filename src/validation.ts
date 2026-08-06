@@ -3,6 +3,7 @@ import type { Construct } from "constructs";
 import { DEFAULT_PROVIDER_LAMBDA_MEMORY_SIZE_MIB } from "./defaults";
 import { DestinationWriteRetryJitter, FailureDiagnostics, ProviderSharing } from "./enums";
 import { ValidationError } from "./errors";
+import { globSyntaxError } from "./glob";
 import type {
   ShinBucketDeploymentAdvancedTransferTuning,
   ShinBucketDeploymentDestinationWriteRetryTuning,
@@ -25,6 +26,11 @@ const DEFAULT_DESTINATION_WRITE_SLOWDOWN_RETRY_BASE_DELAY_MS = 1_000;
 const DEFAULT_DESTINATION_WRITE_SLOWDOWN_RETRY_MAX_DELAY_MS = 30_000;
 const MAX_DESTINATION_KEY_PREFIX_LENGTH = 102;
 const MAX_CLOUDFRONT_INVALIDATION_PATH_CHARACTERS = 4_000;
+// CloudFront's documented per-invalidation-batch limits: at most 3,000 paths,
+// of which at most 15 may be wildcard paths (a path whose final character is
+// `*`). See .plans/plan-consolidated.md T-5.
+const MAX_CLOUDFRONT_INVALIDATION_PATHS = 3_000;
+const MAX_CLOUDFRONT_WILDCARD_INVALIDATION_PATHS = 15;
 const DESTINATION_OWNER_TAG_PREFIX_PATTERN = /^[\p{L}\p{Z}\p{N}_.:/=+\-@]*$/u;
 
 const ROOT_KEYS = [
@@ -220,6 +226,8 @@ export function validateDeploymentProps(scope: Construct, props: ShinBucketDeplo
   );
   validateOptionalStringArray(scope, sourceProcessing?.include, "sourceProcessing.include");
   validateOptionalStringArray(scope, sourceProcessing?.exclude, "sourceProcessing.exclude");
+  validateGlobPatterns(scope, sourceProcessing?.include, "sourceProcessing.include");
+  validateGlobPatterns(scope, sourceProcessing?.exclude, "sourceProcessing.exclude");
   validateOptionalString(scope, localBuild?.projectPath, "providerLambda.localBuild.projectPath");
   validateBundlingProps(scope, bundling, dockerOptions, commandHooks);
   validateProviderReferences(scope, providerLambda);
@@ -627,6 +635,23 @@ function validateCloudFrontPaths(scope: Construct, paths: unknown): void {
       scope,
     );
   }
+  if (paths.length > MAX_CLOUDFRONT_INVALIDATION_PATHS) {
+    throw new ValidationError(
+      "ShinBucketDeploymentCloudFrontPathsLimit",
+      `cloudfrontInvalidation.paths must contain at most ${MAX_CLOUDFRONT_INVALIDATION_PATHS} paths; ${paths.length} were provided.`,
+      scope,
+    );
+  }
+  const wildcardPathCount = paths.filter(
+    (path) => !Token.isUnresolved(path) && typeof path === "string" && path.endsWith("*"),
+  ).length;
+  if (wildcardPathCount > MAX_CLOUDFRONT_WILDCARD_INVALIDATION_PATHS) {
+    throw new ValidationError(
+      "ShinBucketDeploymentCloudFrontWildcardPathsLimit",
+      `cloudfrontInvalidation.paths must contain at most ${MAX_CLOUDFRONT_WILDCARD_INVALIDATION_PATHS} wildcard paths (paths ending in "*"); ${wildcardPathCount} were provided.`,
+      scope,
+    );
+  }
   for (const [index, path] of paths.entries()) {
     if (Token.isUnresolved(path)) continue;
     if (typeof path !== "string") {
@@ -733,6 +758,27 @@ function validateOptionalStringArray(scope: Construct, value: unknown, path: str
   }
 }
 
+/**
+ * Rejects include/exclude patterns the provider's `globset` parser would
+ * reject, so a pattern syntax error fails at synthesis instead of after the
+ * deployment's Lambda invocation. See `src/glob.ts` for the parity rules.
+ */
+function validateGlobPatterns(scope: Construct, value: unknown, path: string): void {
+  if (value === undefined || Token.isUnresolved(value)) return;
+  if (!Array.isArray(value)) return;
+  for (const [index, entry] of value.entries()) {
+    if (Token.isUnresolved(entry)) continue;
+    const syntaxError = globSyntaxError(entry as string);
+    if (syntaxError !== undefined) {
+      throw new ValidationError(
+        "ShinBucketDeploymentInvalidGlobPattern",
+        `${path}[${index}] is not a valid include/exclude pattern: ${syntaxError}`,
+        scope,
+      );
+    }
+  }
+}
+
 function validateOptionalStringMap(scope: Construct, value: unknown, path: string): void {
   if (value === undefined || Token.isUnresolved(value)) return;
   const map = requireObject(scope, value, path);
@@ -774,10 +820,23 @@ function validateOptionalObjectReference(scope: Construct, value: unknown, path:
 
 function invalidValue(scope: Construct, path: string, expected: string): ValidationError {
   return new ValidationError(
-    `ShinBucketDeploymentInvalid${path.replaceAll(/[^A-Za-z0-9]/g, "_")}`,
+    `ShinBucketDeploymentInvalid${errorCodeSuffix(path)}`,
     `${path} must be ${expected}.`,
     scope,
   );
+}
+
+/**
+ * Converts a dotted/braced property path into a PascalCase error-code suffix
+ * without punctuation, so machine-readable codes stay uniform regardless of
+ * which validator generated them.
+ */
+function errorCodeSuffix(path: string): string {
+  return path
+    .split(/[^A-Za-z0-9]+/)
+    .filter((segment) => segment.length > 0)
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join("");
 }
 
 function validateIntegerProps(
@@ -800,7 +859,7 @@ function validateIntegerProps(
     ) {
       const propPath = `${propPathPrefix}${propName}`;
       throw new ValidationError(
-        `ShinBucketDeploymentInvalid${propPath}`,
+        `ShinBucketDeploymentInvalid${errorCodeSuffix(propPath)}`,
         `${propPath} must be a safe integer in the inclusive range ${minimum}..${maximum}.`,
         scope,
       );
@@ -896,12 +955,12 @@ function validateSourceMemoryProps(
     tuning.sourceBlockBytes === undefined
       ? DEFAULT_SOURCE_BLOCK_BYTES
       : resolvedNumber(tuning.sourceBlockBytes);
-  const sourceGetConcurrency =
-    tuning.sourceGetConcurrency === undefined
-      ? lambdaMemoryMiB === undefined
-        ? undefined
-        : Math.min(8, Math.max(1, Math.floor(lambdaMemoryMiB / 256)))
-      : resolvedNumber(tuning.sourceGetConcurrency);
+  // When `sourceGetConcurrency` is unset, the provider derives its own adaptive
+  // default at runtime from the actual Lambda memory; the construct does not
+  // cross-check that derived value against the budget so a provider derivation
+  // change cannot make synthesis reject configurations the provider accepts.
+  // Only an explicit value is checked here.
+  const sourceGetConcurrency = resolvedNumber(tuning.sourceGetConcurrency);
   const windowBytes = resolvedNumber(tuning.sourceWindowBytes);
   if (blockBytes !== undefined && blockBytes > budgetBytes) {
     throw new ValidationError(

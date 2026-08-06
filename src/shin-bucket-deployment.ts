@@ -11,6 +11,7 @@ import {
   Stack,
   Tags,
   Token,
+  Validations,
 } from "aws-cdk-lib";
 import type { IDistributionRef } from "aws-cdk-lib/aws-cloudfront";
 import type { ISecurityGroup, IVpc, SubnetSelection } from "aws-cdk-lib/aws-ec2";
@@ -21,8 +22,13 @@ import { Bucket, type IBucket } from "aws-cdk-lib/aws-s3";
 import type { ISource, SourceConfig } from "aws-cdk-lib/aws-s3-deployment";
 import { Construct } from "constructs";
 import { DEFAULT_MAX_COMPRESSION_RATIO, DEFAULT_MAX_UNCOMPRESSED_ENTRY_BYTES } from "./defaults";
-import { inspectableDestinationBucketResource, validateDestinationEncryption } from "./destination";
-import type { DestinationWriteRetryJitter, FailureDiagnostics, ProviderSharing } from "./enums";
+import {
+  destinationVersioningWarnings,
+  inspectableDestinationBucketResource,
+  validateDestinationEncryption,
+} from "./destination";
+import type { DestinationWriteRetryJitter, FailureDiagnostics } from "./enums";
+import { ProviderSharing } from "./enums";
 import { ValidationError } from "./errors";
 import { grantDestinationPermissions } from "./iam";
 import { PROVIDER_TIMEOUT, type ProviderLambdaConfig, getOrCreateHandler } from "./provider";
@@ -544,9 +550,10 @@ export interface ShinBucketDeploymentCloudFrontInvalidation {
   /**
    * Distribution paths to invalidate.
    *
-   * A concrete list must contain at least one path. Every concrete path must
-   * start with `/`, contain at most 4,000 Unicode characters, and contain no
-   * control characters.
+   * A concrete list must contain at least one path and at most 3,000 paths, of
+   * which at most 15 may be wildcard paths (a path whose final character is
+   * `*`). Every concrete path must start with `/`, contain at most 4,000
+   * Unicode characters, and contain no control characters.
    *
    * Paths must not contain `~`, in either its literal or percent-encoded form.
    * CloudFront does not support that character for invalidations, so such a path
@@ -624,8 +631,10 @@ export interface ShinBucketDeploymentDestinationLifecycle {
      * bucket rather than a single prefix. The provider itself derives the actual
      * prefix from the Update event and confines deletion to that namespace, but
      * the IAM grant is bucket-wide and is inherited by every deployment sharing
-     * the handler role. Turn the option back off after the destination change if
-     * that authority is no longer needed.
+     * the handler role — synthesis emits an acknowledgeable warning
+     * recommending `ProviderSharing.DEPLOYMENT` for exactly this case. Turn the
+     * option back off after the destination change if that authority is no
+     * longer needed.
      *
      * @default false
      */
@@ -749,6 +758,7 @@ export class ShinBucketDeployment extends Construct {
   private readonly cr: CustomResource;
   private readonly destinationBucket: Bucket;
   private readonly sources: SourceConfig[];
+  private readonly boundSources: ISource[];
   private _deployedBucket?: IBucket;
   private requestDestinationArn = false;
   private requestObjectKeys = false;
@@ -825,6 +835,11 @@ export class ShinBucketDeployment extends Construct {
     }
     this.handlerRole = handlerRole;
 
+    // Track the original source objects as they are bound. `addSource` uses this
+    // to skip binding an identical source object again: binding materializes
+    // catalogs and creates `Asset` constructs, so a duplicate that is later
+    // dropped by the config-equality dedup would leave orphan staged assets.
+    this.boundSources = [...props.sources];
     this.sources = props.sources.map((source: ISource) =>
       source.bind(this, { handlerRole: this.handlerRole }),
     );
@@ -836,7 +851,18 @@ export class ShinBucketDeployment extends Construct {
       previousBucket,
       distribution: props.cloudfrontInvalidation?.distribution,
       previousDistribution,
+      waitForInvalidation: props.cloudfrontInvalidation?.waitForCompletion ?? true,
     });
+
+    if (
+      previousBucket &&
+      (providerLambda.sharing ?? ProviderSharing.STACK) === ProviderSharing.STACK
+    ) {
+      Validations.of(this).addWarning(
+        "ShinBucketDeploymentSharedRoleBucketWideDelete",
+        "destinationLifecycle.onChange.deletePreviousObjects grants the provider role s3:DeleteObject across the whole previous bucket, and with the default ProviderSharing.STACK every deployment in this stack shares that role and inherits the grant. The provider confines deletion to the previous namespace at runtime, but the IAM authority itself is bucket-wide. Consider ProviderSharing.DEPLOYMENT so the bucket-wide delete grant is not accumulated onto a role shared with other deployments.",
+      );
+    }
 
     this.node.addValidation({
       validate: () => {
@@ -889,7 +915,7 @@ export class ShinBucketDeployment extends Construct {
         DestinationBucketName: this.destinationBucket.bucketName,
         DestinationBucketKeyPrefix: destination.keyPrefix,
         DestinationOwnerId: Lazy.uncachedString({
-          produce: () => this.cr.node.addr.slice(-8),
+          produce: () => destinationOwnerId,
         }),
         DeletePreviousObjectsOnChange: previousBucket
           ? {
@@ -939,6 +965,15 @@ export class ShinBucketDeployment extends Construct {
       this.cr.node.addDependency(dependable);
     }
 
+    // 32-bit ownership suffix derived from the custom resource's tree address.
+    // S3 ownership tags are per-bucket and limited in number, so the suffix is
+    // deliberately short; under the birthday bound, ~92,000 deployments sharing
+    // one prefix would make a suffix collision plausible (p≈0.5). A collision
+    // merges co-tenant ownership, which only affects stale-object deletion
+    // scope, and the provider's runtime owner probes keep behavior confined to
+    // the deployment's namespace. Lengthen the suffix on a future
+    // provider-contract bump rather than here, where it would change every
+    // deployment's ownership tag.
     const destinationOwnerId = this.cr.node.addr.slice(-8);
     const ownerPrefix = destinationOwnerPrefix(destination.keyPrefix);
     const tagKey = `${CUSTOM_RESOURCE_OWNER_TAG}${ownerPrefix ? `:${ownerPrefix}` : ""}:${destinationOwnerId}`;
@@ -948,11 +983,14 @@ export class ShinBucketDeployment extends Construct {
       validate: () => validateDestinationBucketTagQuota(destinationBucketResource),
     });
     // Deferred to synthesis rather than checked here: an escape hatch that switches the
-    // bucket to KMS may be applied after this construct is created, and only the rendered
-    // resource reflects it.
+    // bucket to KMS or enables versioning may be applied after this construct is created,
+    // and only the rendered resource reflects it.
     this.node.addValidation({
       validate: () => {
         validateDestinationEncryption(this, destinationBucketResource);
+        for (const warning of destinationVersioningWarnings(this, destinationBucketResource)) {
+          Validations.of(this).addWarning("ShinBucketDeploymentVersionedDestination", warning);
+        }
         return [];
       },
     });
@@ -994,10 +1032,17 @@ export class ShinBucketDeployment extends Construct {
    *
    * The source is bound immediately and receives read permissions on the
    * shared provider role. An equivalent marker-free source already present in
-   * the deployment is not added twice.
+   * the deployment is not added twice. Re-adding the exact same source object
+   * (one already bound through `sources` or a previous `addSource` call) is
+   * skipped before binding, so no catalog materialization or `Asset` staging
+   * happens for it.
    */
   public addSource(source: ISource): void {
+    if (this.boundSources.includes(source)) {
+      return;
+    }
     const config = source.bind(this, { handlerRole: this.handlerRole });
+    this.boundSources.push(source);
     if (!this.sources.some((c) => sourceConfigEqual(Stack.of(this), c, config))) {
       this.sources.push(config);
     }

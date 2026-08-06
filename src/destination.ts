@@ -16,16 +16,16 @@ export function inspectableDestinationBucketResource(scope: Construct, bucket: B
 }
 
 /**
- * Reads the destination bucket's rendered `BucketEncryption`.
+ * Renders the destination bucket resource the way CDK will synthesize it.
  *
  * This deliberately renders the resource rather than reading the public
- * `CfnBucket.bucketEncryption` property. CDK keeps `addPropertyOverride` values
- * separate from the typed L1 model and merges them only while rendering, so the
- * public property reports `undefined` for a bucket encrypted purely by escape
- * hatch, and reports the pre-override algorithm when an override replaces it.
- * Trusting it would silently classify a KMS bucket as SSE-S3 and accept a
- * destination that cannot support incremental deployment. The rendered form is the
- * only representation of what actually deploys.
+ * `CfnBucket` properties. CDK keeps `addPropertyOverride` values separate from
+ * the typed L1 model and merges them only while rendering, so the public
+ * properties report `undefined` (or the pre-override value) for a bucket
+ * configured purely by escape hatch. Trusting them would silently classify a
+ * KMS bucket as SSE-S3 and accept a destination that cannot support
+ * incremental deployment, or miss versioning enabled by override. The rendered
+ * form is the only representation of what actually deploys.
  *
  * `_toCloudFormation` is CDK-internal, so a rendering failure is converted into a
  * distinct, stable error rather than surfacing as a raw `TypeError`. Note CDK
@@ -34,7 +34,10 @@ export function inspectableDestinationBucketResource(scope: Construct, bucket: B
  * still change this method and its internal caller together, which would break
  * this direct call while CDK kept working.
  */
-function renderedBucketEncryption(scope: Construct, bucketResource: CfnBucket): unknown {
+function renderedBucketResource(
+  scope: Construct,
+  bucketResource: CfnBucket,
+): Record<string, unknown> {
   const stack = Stack.of(scope);
   let template: unknown;
   try {
@@ -53,13 +56,11 @@ function renderedBucketEncryption(scope: Construct, bucketResource: CfnBucket): 
   if (!isRecord(resource)) {
     throw unsupportedCdkRendering(scope);
   }
-  // A consumer can publicly retype the resource with `addOverride("Type", ...)`,
-  // so this is a bucket-configuration problem rather than CDK contract drift.
-  if (resource.Type !== "AWS::S3::Bucket") {
-    throw unsupportedDestinationEncryption(scope);
-  }
-  const properties = resource.Properties;
-  return isRecord(properties) ? properties.BucketEncryption : undefined;
+  // `_toCloudFormation` renders exactly one resource (this bucket), so the
+  // single-value read above is safe; if a future CDK version changed the
+  // return shape to include more resources, the assertion below still fails
+  // loudly on the Type check rather than silently misreading the bucket.
+  return resource;
 }
 
 /**
@@ -77,7 +78,14 @@ function renderedBucketEncryption(scope: Construct, bucketResource: CfnBucket): 
  * satisfy.
  */
 export function validateDestinationEncryption(scope: Construct, bucketResource: CfnBucket): void {
-  const resolved = renderedBucketEncryption(scope, bucketResource);
+  const resource = renderedBucketResource(scope, bucketResource);
+  // A consumer can publicly retype the resource with `addOverride("Type", ...)`,
+  // so this is a bucket-configuration problem rather than CDK contract drift.
+  if (resource.Type !== "AWS::S3::Bucket") {
+    throw unsupportedDestinationEncryption(scope);
+  }
+  const properties = resource.Properties;
+  const resolved = isRecord(properties) ? properties.BucketEncryption : undefined;
   if (resolved === undefined) {
     // No explicit rule renders when the bucket relies on the account default, which
     // S3 guarantees is SSE-S3.
@@ -103,6 +111,34 @@ export function validateDestinationEncryption(scope: Construct, bucketResource: 
     default:
       throw unsupportedDestinationEncryption(scope);
   }
+}
+
+/**
+ * Returns a synthesis warning when the destination bucket has versioning
+ * enabled, where deletion only adds delete markers and stale content persists
+ * as noncurrent versions (cost and surprise).
+ *
+ * Reads the rendered resource like {@link validateDestinationEncryption} so an
+ * escape-hatch `VersioningConfiguration` override is seen too. The warning is
+ * a warning, not an error: versioned destinations deploy and update correctly;
+ * only the cleanup outcome is weaker than the lifecycle options imply.
+ */
+export function destinationVersioningWarnings(
+  scope: Construct,
+  bucketResource: CfnBucket,
+): string[] {
+  const resource = renderedBucketResource(scope, bucketResource);
+  if (resource.Type !== "AWS::S3::Bucket") {
+    return [];
+  }
+  const properties = resource.Properties;
+  const versioning = isRecord(properties) ? properties.VersioningConfiguration : undefined;
+  if (!isRecord(versioning) || versioning.Status !== "Enabled") {
+    return [];
+  }
+  return [
+    "destination.bucket has versioning enabled: deleting objects (stale-object cleanup, previous-namespace cleanup, or Delete cleanup) only adds delete markers, so superseded content persists as noncurrent versions and continues to incur storage cost. Keep versioning only when that history is intended.",
+  ];
 }
 
 function unsupportedDestinationKmsEncryption(scope: Construct): ValidationError {
