@@ -531,17 +531,22 @@ pub(crate) fn compile_filters(exclude: &[String], include: &[String]) -> Result<
     })
 }
 
-/// Only the exact `"/"` root collapses to the empty prefix. Near-miss shapes
-/// (`"//"`, `"site/"`, `"/site"`) are deliberately left alone: this value is hashed
-/// into the destination physical resource ID, so trimming boundary slashes would
-/// change that hash for every existing stack whose prefix carries a trailing slash
-/// and make CloudFormation replace the resource — a Delete of the old namespace.
-/// Every consumer already tolerates either shape (`join_s3_key` inserts the
-/// separator, `namespace_list_prefix` appends it, `default_distribution_path`
-/// appends it), so the inconsistency is cosmetic. Revisit only on a deliberate
-/// provider-contract bump.
+/// Canonicalizes a destination prefix to its namespace form: leading and trailing
+/// slashes are trimmed, so `"/"`, `"//"`, `"site/"`, and `"/site/"` all normalize the
+/// way only the exact `"/"` root previously did. Interior repeated slashes are
+/// preserved because S3 keys may legitimately contain them; only the boundary slashes
+/// are namespace punctuation.
+///
+/// **This is a deployed-state breaking change.** The normalized value is hashed into
+/// the destination physical resource ID (`destination_physical_resource_id`), so any
+/// existing stack whose configured prefix carries a leading or trailing slash gets a
+/// new physical resource ID on its next update, and CloudFormation replaces the custom
+/// resource: the new namespace is created and the old one is deleted, which removes the
+/// previously deployed objects under it. Stacks with a slash-free prefix, or with no
+/// prefix, are unaffected. Taken deliberately under the pre-`1.0` clean-break policy in
+/// `AGENTS.md` rather than carrying a compatibility path.
 pub(crate) fn normalize_destination_prefix(prefix: String) -> String {
-    if prefix == "/" { String::new() } else { prefix }
+    prefix.trim_matches('/').to_string()
 }
 
 /// Borrows when the entry path is already canonical, which is the overwhelmingly common
@@ -1130,14 +1135,45 @@ mod tests {
     }
 
     #[test]
-    fn normalize_destination_prefix_collapses_only_the_exact_root() {
-        // Pinned deliberately: this value is hashed into the destination physical
-        // resource ID, so trimming boundary slashes would replace the resource for
-        // every existing stack whose prefix ends in "/". See the function comment.
-        assert_eq!(normalize_destination_prefix("/".to_string()), "");
-        assert_eq!(normalize_destination_prefix("site/".to_string()), "site/");
-        assert_eq!(normalize_destination_prefix("/site".to_string()), "/site");
-        assert_eq!(normalize_destination_prefix("//".to_string()), "//");
+    fn normalize_destination_prefix_collapses_root_and_boundary_slashes() {
+        for (raw, expected) in [
+            ("", ""),
+            ("/", ""),
+            ("//", ""),
+            ("///", ""),
+            ("site", "site"),
+            ("site/", "site"),
+            ("site//", "site"),
+            ("/site", "site"),
+            ("/site/", "site"),
+            ("nested/site", "nested/site"),
+            ("nested/site/", "nested/site"),
+        ] {
+            assert_eq!(
+                normalize_destination_prefix(raw.to_string()),
+                expected,
+                "normalizing {raw:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn normalize_destination_prefix_preserves_interior_repeated_slashes() {
+        // S3 keys may legitimately contain repeated separators, so only boundary
+        // slashes are namespace punctuation.
+        assert_eq!(normalize_destination_prefix("a//b".to_string()), "a//b");
+        assert_eq!(normalize_destination_prefix("a//b/".to_string()), "a//b");
+    }
+
+    #[test]
+    fn normalize_destination_prefix_changes_the_physical_resource_id_for_slashed_prefixes() {
+        // Pins the deployed-state breakage documented on the function: a configured
+        // "site/" and "site" now normalize to the same value, so a stack written with
+        // the trailing slash resolves to the identity a slash-free stack already had.
+        assert_eq!(
+            normalize_destination_prefix("site/".to_string()),
+            normalize_destination_prefix("site".to_string())
+        );
     }
 
     #[cfg(debug_assertions)]
