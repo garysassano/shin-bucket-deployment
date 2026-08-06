@@ -4,7 +4,7 @@ use std::fmt::Write as _;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-use md5::{Digest, Md5};
+use md5::Digest;
 use serde::Deserializer;
 
 pub(crate) const MAX_DIAGNOSTIC_VALUE_BYTES: usize = 256;
@@ -84,8 +84,13 @@ pub(crate) fn lower_hex(bytes: &[u8]) -> String {
     output
 }
 
-/// Finishes an MD5 hasher and returns the lowercase hex digest.
-pub(crate) fn finalize_md5(hasher: Md5) -> String {
+/// Finishes any digest and returns the lowercase hex digest.
+///
+/// One generic helper covers every hasher the provider finishes (MD5 for S3
+/// comparisons and resource IDs, SHA-256 for physical resource IDs and copy
+/// reconciliation), so the per-type `finalize` + hex-encode tail is not written
+/// out again for each hasher.
+pub(crate) fn finalize_digest<D: Digest>(hasher: D) -> String {
     lower_hex(hasher.finalize().as_ref())
 }
 
@@ -168,7 +173,7 @@ mod tests {
 
     use md5::{Digest, Md5};
 
-    use super::{finalize_md5, lock_telemetry, lower_hex, sanitize_diagnostic};
+    use super::{finalize_digest, lock_telemetry, lower_hex, sanitize_diagnostic};
 
     #[test]
     fn diagnostic_sanitization_escapes_control_and_line_separator_characters() {
@@ -206,12 +211,15 @@ mod tests {
     }
 
     #[test]
-    fn finalize_md5_matches_the_known_empty_and_abc_digests() {
-        assert_eq!(finalize_md5(Md5::new()), "d41d8cd98f00b204e9800998ecf8427e");
+    fn finalize_digest_matches_the_known_empty_and_abc_digests() {
+        assert_eq!(
+            finalize_digest(Md5::new()),
+            "d41d8cd98f00b204e9800998ecf8427e"
+        );
 
         let mut hasher = Md5::new();
         hasher.update(b"abc");
-        assert_eq!(finalize_md5(hasher), "900150983cd24fb0d6963f7d28e17f72");
+        assert_eq!(finalize_digest(hasher), "900150983cd24fb0d6963f7d28e17f72");
     }
 
     #[test]

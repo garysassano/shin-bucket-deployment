@@ -8,7 +8,7 @@ use serde_json::Value;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use crate::types::MarkerConfig;
-use crate::util::finalize_md5;
+use crate::util::finalize_digest;
 
 const INPUT_CHUNK_BYTES: usize = 64 * 1024;
 
@@ -212,7 +212,7 @@ impl OutputAccounting {
     fn finish(self) -> ReplacementResult {
         ReplacementResult {
             output_bytes: self.output_bytes,
-            md5: finalize_md5(self.md5),
+            md5: finalize_digest(self.md5),
         }
     }
 }

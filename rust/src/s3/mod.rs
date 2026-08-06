@@ -56,6 +56,15 @@ impl OverlappingPreviousCleanup {
             Self::Retain { prefix } | Self::DeleteStale { prefix } => prefix,
         }
     }
+
+    /// The prefix whose stale objects the current deployment is authorized to clean
+    /// up, or `None` when the overlapping previous namespace must be retained.
+    fn previous_cleanup_prefix(&self) -> Option<&str> {
+        match self {
+            Self::DeleteStale { prefix } => Some(prefix.as_str()),
+            Self::Retain { .. } => None,
+        }
+    }
 }
 
 pub(crate) fn adaptive_source_get_concurrency(available_memory_mb: u64) -> usize {
@@ -133,6 +142,8 @@ pub(crate) async fn deploy(
     deadlines: InvocationDeadlines,
 ) -> Result<()> {
     let started = std::time::Instant::now();
+    let previous_cleanup_prefix =
+        overlapping_previous_cleanup.and_then(OverlappingPreviousCleanup::previous_cleanup_prefix);
     planner::validate_request_lengths(request)?;
     let source_budget = archive::budget::SourceByteBudget::new(
         request.runtime.source_memory_budget_bytes,
@@ -164,10 +175,7 @@ pub(crate) async fn deploy(
             state,
             request,
             overlapping_previous_cleanup.map(OverlappingPreviousCleanup::prefix),
-            overlapping_previous_cleanup.and_then(|cleanup| match cleanup {
-                OverlappingPreviousCleanup::DeleteStale { prefix } => Some(prefix.as_str()),
-                OverlappingPreviousCleanup::Retain { .. } => None,
-            }),
+            previous_cleanup_prefix,
             &filters,
             &deployment_manifest,
             &stats,
@@ -208,10 +216,6 @@ pub(crate) async fn deploy(
     }
     stats.add_transfer_millis(crate::util::duration_ms(started.elapsed()));
 
-    let previous_cleanup_prefix = overlapping_previous_cleanup.and_then(|cleanup| match cleanup {
-        OverlappingPreviousCleanup::DeleteStale { prefix } => Some(prefix.as_str()),
-        OverlappingPreviousCleanup::Retain { .. } => None,
-    });
     timeout_at(
         deadlines.work(),
         destination::delete_stale_objects(

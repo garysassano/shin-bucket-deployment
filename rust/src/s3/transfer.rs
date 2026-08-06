@@ -46,7 +46,7 @@ use super::destination::{
 };
 use super::planner::{CopyPlan, ZipEntryPlan};
 use super::{S3_SINGLE_PUT_LIMIT, ZIP_ENTRY_READ_CHUNK_BYTES, source_window_bytes_for_archive};
-use crate::util::{duration_ms, finalize_md5, lock_telemetry, lower_hex};
+use crate::util::{duration_ms, finalize_digest, lock_telemetry};
 
 mod scheduler;
 
@@ -735,7 +735,7 @@ fn copy_reconciliation_identity(destination_bucket: &str, plan: &CopyPlan) -> St
         hasher.update(component.as_bytes());
     }
     hasher.update(plan.size.to_be_bytes());
-    lower_hex(&hasher.finalize())
+    finalize_digest(hasher)
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -1217,7 +1217,7 @@ async fn digest_async_reader(
 
     let crc32 = crc32.finalize();
     validate_zip_entry_output(plan, bytes, crc32)?;
-    let md5 = finalize_md5(hasher);
+    let md5 = finalize_digest(hasher);
     plan.validate_trusted_md5(&md5)?;
     Ok((md5, bytes, crc32, spool))
 }
@@ -1251,7 +1251,7 @@ async fn read_async_reader_to_vec(
     let crc32 = crc32.finalize();
     validate_zip_entry_output(plan, total_bytes, crc32)?;
     if let Some(md5) = md5 {
-        plan.validate_trusted_md5(&finalize_md5(md5))?;
+        plan.validate_trusted_md5(&finalize_digest(md5))?;
     }
     Ok((bytes, total_bytes, crc32))
 }
@@ -1260,7 +1260,7 @@ async fn read_async_reader_to_vec(
 fn md5_hex(bytes: &[u8]) -> String {
     let mut hasher = Md5::new();
     hasher.update(bytes);
-    finalize_md5(hasher)
+    finalize_digest(hasher)
 }
 
 async fn abort_and_drain_body_tasks(

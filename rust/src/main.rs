@@ -2,6 +2,7 @@ mod cloudformation;
 mod cloudfront;
 mod deadline;
 mod lifecycle;
+mod namespace;
 mod replace;
 mod request;
 mod s3;
