@@ -830,6 +830,11 @@ fn log_deployment_summary(
     deployment_status: &str,
     request: &crate::types::DeploymentRequest,
 ) {
+    if !tracing::enabled!(tracing::Level::INFO) {
+        // The summary is only ever emitted at INFO, so snapshotting and serializing
+        // it when the level is disabled is pure wasted work.
+        return;
+    }
     match serde_json::to_string(&stats.snapshot(request_type, deployment_status, request)) {
         Ok(summary) => tracing::info!(summary, "shin deployment summary"),
         Err(error) => {

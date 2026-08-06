@@ -531,6 +531,15 @@ pub(crate) fn compile_filters(exclude: &[String], include: &[String]) -> Result<
     })
 }
 
+/// Only the exact `"/"` root collapses to the empty prefix. Near-miss shapes
+/// (`"//"`, `"site/"`, `"/site"`) are deliberately left alone: this value is hashed
+/// into the destination physical resource ID, so trimming boundary slashes would
+/// change that hash for every existing stack whose prefix carries a trailing slash
+/// and make CloudFormation replace the resource — a Delete of the old namespace.
+/// Every consumer already tolerates either shape (`join_s3_key` inserts the
+/// separator, `namespace_list_prefix` appends it, `default_distribution_path`
+/// appends it), so the inconsistency is cosmetic. Revisit only on a deliberate
+/// provider-contract bump.
 pub(crate) fn normalize_destination_prefix(prefix: String) -> String {
     if prefix == "/" { String::new() } else { prefix }
 }
@@ -610,7 +619,21 @@ pub(crate) fn strip_destination_prefix(prefix: &str, key: &str) -> String {
         return key.to_string();
     }
 
-    key.strip_prefix(prefix).unwrap_or(key).to_string()
+    match key.strip_prefix(prefix) {
+        Some(stripped) => stripped.to_string(),
+        None => {
+            // Every production caller derives `prefix` from the same namespace the
+            // listing was requested under, so a mismatch is a programming error
+            // rather than a runtime condition. Release builds keep the historical
+            // pass-through fallback so behavior is unchanged; debug builds trip so
+            // the bug is caught.
+            debug_assert!(
+                false,
+                "destination key `{key}` does not start with the strip prefix `{prefix}`"
+            );
+            key.to_string()
+        }
+    }
 }
 
 fn default_distribution_path(dest_bucket_prefix: &str) -> String {
@@ -1104,6 +1127,24 @@ mod tests {
             "index.html"
         );
         assert_eq!(strip_destination_prefix("", "//index.html"), "//index.html");
+    }
+
+    #[test]
+    fn normalize_destination_prefix_collapses_only_the_exact_root() {
+        // Pinned deliberately: this value is hashed into the destination physical
+        // resource ID, so trimming boundary slashes would replace the resource for
+        // every existing stack whose prefix ends in "/". See the function comment.
+        assert_eq!(normalize_destination_prefix("/".to_string()), "");
+        assert_eq!(normalize_destination_prefix("site/".to_string()), "site/");
+        assert_eq!(normalize_destination_prefix("/site".to_string()), "/site");
+        assert_eq!(normalize_destination_prefix("//".to_string()), "//");
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "does not start with the strip prefix")]
+    fn strip_destination_prefix_trips_on_unmatched_prefix_in_debug_builds() {
+        let _ = strip_destination_prefix("site/", "other/index.html");
     }
 
     #[test]
