@@ -405,7 +405,6 @@ mod tests {
     use serde_json::{Map, Value};
     use tokio::time::Instant as TokioInstant;
 
-    use crate::request::RawDeploymentRequest;
     use crate::types::ResponsePayload;
 
     use super::{
@@ -558,18 +557,12 @@ mod tests {
     }
 
     fn deployment_request_with_paths(paths: Vec<String>) -> crate::types::DeploymentRequest {
-        let raw: RawDeploymentRequest = serde_json::from_value(serde_json::json!({
-            "SourceBucketNames": ["source"],
-            "SourceObjectKeys": ["asset.zip"],
-            "DestinationBucketName": "destination",
-            "DestinationOwnerId": "callback-owner",
-            "MaxUncompressedEntryBytes": 1073741824,
-            "MaxCompressionRatio": 100,
-            "DistributionId": "distribution",
-            "DistributionPaths": paths
-        }))
-        .expect("raw deployment request");
-        crate::request::parse_request_with_memory(raw, "1024").expect("valid request")
+        crate::types::DeploymentRequest {
+            distribution_id: Some("distribution".to_string()),
+            distribution_paths: paths,
+            destination_owner_id: "callback-owner".to_string(),
+            ..crate::types::DeploymentRequest::for_test()
+        }
     }
 
     #[tokio::test]

@@ -118,58 +118,17 @@ fn previous_namespace_authorized(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
-    use crate::types::{
-        ArchiveExpansionLimits, DeletePreviousObjectsOnChange, DeploymentRequest,
-        PutObjectRetryJitter, PutObjectRetryOptions, RuntimeOptions,
-    };
+    use crate::types::{DeletePreviousObjectsOnChange, DeploymentRequest};
 
     use super::*;
 
     fn current(bucket: &str, prefix: &str) -> DeploymentRequest {
         DeploymentRequest {
-            source_bucket_names: vec!["source".to_string()],
-            source_object_keys: vec!["source.zip".to_string()],
-            source_catalogs: vec![None],
-            source_markers: vec![HashMap::new()],
-            source_markers_config: vec![Default::default()],
             dest_bucket_name: bucket.to_string(),
             dest_bucket_prefix: prefix.to_string(),
             extract: true,
             delete_current_objects_on_delete: true,
-            distribution_id: None,
-            distribution_paths: vec!["/*".to_string()],
-            wait_for_distribution_invalidation: true,
-            delete_stale_objects_on_deployment: true,
-            exclude: Vec::new(),
-            include: Vec::new(),
-            output_object_keys: true,
-            destination_bucket_arn: None,
-            destination_owner_id: "owner".to_string(),
-            delete_previous_objects_on_change: None,
-            invalidate_previous_distribution_on_change: None,
-            archive_expansion: ArchiveExpansionLimits {
-                max_uncompressed_entry_bytes: 1024 * 1024 * 1024,
-                max_compression_ratio: 100,
-            },
-            runtime: RuntimeOptions {
-                available_memory_mb: 1024,
-                max_parallel_transfers: 1,
-                source_block_bytes: 1024,
-                source_block_merge_gap_bytes: 0,
-                source_get_concurrency: 1,
-                source_window_bytes: None,
-                source_memory_budget_bytes: 256 * 1024 * 1024,
-                put_object_retry: PutObjectRetryOptions {
-                    max_attempts: 1,
-                    retry_base_delay_ms: 0,
-                    retry_max_delay_ms: 0,
-                    slowdown_retry_base_delay_ms: 0,
-                    slowdown_retry_max_delay_ms: 0,
-                    jitter: PutObjectRetryJitter::None,
-                },
-            },
+            ..DeploymentRequest::for_test()
         }
     }
 

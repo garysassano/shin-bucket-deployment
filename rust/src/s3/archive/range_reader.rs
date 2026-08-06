@@ -52,7 +52,7 @@ impl S3RangeReader {
     fn start_fetch(&mut self) -> bool {
         let chunk_size = self.chunk_size.max(1) as u64;
         let start = align_down(self.position, chunk_size);
-        let end = self
+        let end_inclusive = self
             .source
             .len
             .saturating_sub(1)
@@ -65,7 +65,9 @@ impl S3RangeReader {
         }
         let source = Arc::clone(&self.source);
         self.in_flight_start = start;
-        self.in_flight = Some(Box::pin(async move { source.get_range(start, end).await }));
+        self.in_flight = Some(Box::pin(async move {
+            source.get_range(start, end_inclusive).await
+        }));
         false
     }
 

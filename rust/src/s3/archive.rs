@@ -1,6 +1,5 @@
 use std::io;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
@@ -108,45 +107,40 @@ impl SourceClient {
         self.diagnostics.snapshot()
     }
 
-    async fn get_range(&self, start: u64, end: u64) -> io::Result<Bytes> {
-        if end < start {
+    async fn get_range(&self, start: u64, end_inclusive: u64) -> io::Result<Bytes> {
+        if end_inclusive < start {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                format!("invalid S3 range: start {start} is greater than end {end}"),
+                format!("invalid S3 range: start {start} is greater than end {end_inclusive}"),
             ));
         }
-        if start >= self.len || end >= self.len {
+        if start >= self.len || end_inclusive >= self.len {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!(
-                    "S3 range bytes={start}-{end} is outside source object length {}",
+                    "S3 range bytes={start}-{end_inclusive} is outside source object length {}",
                     self.len
                 ),
             ));
         }
         // Build the range header once: every retry attempt issues the same range GET,
         // so formatting a fresh String per attempt is pure waste.
-        let range_header = format!("bytes={start}-{end}");
+        let range_header = format!("bytes={start}-{end_inclusive}");
 
         for attempt in 1..=GET_OBJECT_MAX_ATTEMPTS {
-            self.diagnostics
-                .source_get_attempts
-                .fetch_add(1, Ordering::Relaxed);
+            self.diagnostics.source_get_attempts.record(1);
             if attempt > 1 {
-                self.diagnostics
-                    .source_get_retries
-                    .fetch_add(1, Ordering::Relaxed);
+                self.diagnostics.source_get_retries.record(1);
             }
-            match self.fetch_range_once(start, end, &range_header).await {
+            match self
+                .fetch_range_once(start, end_inclusive, &range_header)
+                .await
+            {
                 Ok(bytes) => return Ok(bytes),
                 Err(error) if error.retryable && attempt < GET_OBJECT_MAX_ATTEMPTS => {
-                    self.diagnostics
-                        .source_get_retryable_errors
-                        .fetch_add(1, Ordering::Relaxed);
+                    self.diagnostics.source_get_retryable_errors.record(1);
                     if error.throttled {
-                        self.diagnostics
-                            .source_get_throttled_attempts
-                            .fetch_add(1, Ordering::Relaxed);
+                        self.diagnostics.source_get_throttled_attempts.record(1);
                     }
                     tokio::time::sleep(source_get_retry_delay(
                         attempt,
@@ -157,22 +151,14 @@ impl SourceClient {
                 }
                 Err(error) => {
                     if error.retryable {
-                        self.diagnostics
-                            .source_get_retryable_errors
-                            .fetch_add(1, Ordering::Relaxed);
+                        self.diagnostics.source_get_retryable_errors.record(1);
                     } else {
-                        self.diagnostics
-                            .source_get_permanent_errors
-                            .fetch_add(1, Ordering::Relaxed);
+                        self.diagnostics.source_get_permanent_errors.record(1);
                     }
                     if error.throttled {
-                        self.diagnostics
-                            .source_get_throttled_attempts
-                            .fetch_add(1, Ordering::Relaxed);
+                        self.diagnostics.source_get_throttled_attempts.record(1);
                     }
-                    self.diagnostics
-                        .source_get_errors
-                        .fetch_add(1, Ordering::Relaxed);
+                    self.diagnostics.source_get_errors.record(1);
                     return Err(error.source);
                 }
             }
@@ -184,7 +170,7 @@ impl SourceClient {
     async fn fetch_range_once(
         &self,
         start: u64,
-        end: u64,
+        end_inclusive: u64,
         range_header: &str,
     ) -> std::result::Result<Bytes, RangeGetError> {
         let _active_get = self.diagnostics.track_active_get();
@@ -204,19 +190,17 @@ impl SourceClient {
             .send()
             .await
             .map_err(|error| {
-                self.diagnostics
-                    .source_get_request_errors
-                    .fetch_add(1, Ordering::Relaxed);
+                self.diagnostics.source_get_request_errors.record(1);
                 range_get_request_error(error)
             })?;
 
-        validate_content_range(output.content_range(), start, end, self.len).map_err(|source| {
-            RangeGetError {
+        validate_content_range(output.content_range(), start, end_inclusive, self.len).map_err(
+            |source| RangeGetError {
                 source,
                 retryable: true,
                 throttled: false,
-            }
-        })?;
+            },
+        )?;
 
         output
             .body
@@ -224,9 +208,7 @@ impl SourceClient {
             .await
             .map(|bytes| bytes.into_bytes())
             .map_err(|err| {
-                self.diagnostics
-                    .source_get_body_errors
-                    .fetch_add(1, Ordering::Relaxed);
+                self.diagnostics.source_get_body_errors.record(1);
                 RangeGetError {
                     source: io::Error::other(format!("S3 range body read failed: {err}")),
                     retryable: true,
@@ -234,7 +216,7 @@ impl SourceClient {
                 }
             })
             .and_then(|bytes| {
-                let expected_len = usize::try_from(end - start + 1).map_err(|_| {
+                let expected_len = usize::try_from(end_inclusive - start + 1).map_err(|_| {
                     RangeGetError {
                         source: io::Error::new(
                             io::ErrorKind::InvalidInput,
@@ -247,14 +229,12 @@ impl SourceClient {
                 if bytes.len() == expected_len {
                     Ok(bytes)
                 } else {
-                    self.diagnostics
-                        .source_get_short_body_errors
-                        .fetch_add(1, Ordering::Relaxed);
+                    self.diagnostics.source_get_short_body_errors.record(1);
                     Err(RangeGetError {
                         source: io::Error::new(
                             io::ErrorKind::UnexpectedEof,
                             format!(
-                                "S3 range bytes={start}-{end} returned {} bytes, expected {expected_len}",
+                                "S3 range bytes={start}-{end_inclusive} returned {} bytes, expected {expected_len}",
                                 bytes.len()
                             ),
                         ),
@@ -266,11 +246,16 @@ impl SourceClient {
     }
 }
 
-fn validate_content_range(value: Option<&str>, start: u64, end: u64, total: u64) -> io::Result<()> {
+fn validate_content_range(
+    value: Option<&str>,
+    start: u64,
+    end_inclusive: u64,
+    total: u64,
+) -> io::Result<()> {
     let Some(value) = value else {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("S3 range bytes={start}-{end} response is missing Content-Range"),
+            format!("S3 range bytes={start}-{end_inclusive} response is missing Content-Range"),
         ));
     };
     let parsed = value
@@ -284,12 +269,14 @@ fn validate_content_range(value: Option<&str>, start: u64, end: u64, total: u64)
                 total.parse::<u64>().ok()?,
             ))
         });
-    if parsed == Some((start, end, total)) {
+    if parsed == Some((start, end_inclusive, total)) {
         Ok(())
     } else {
         Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("S3 range bytes={start}-{end} response has a mismatched Content-Range"),
+            format!(
+                "S3 range bytes={start}-{end_inclusive} response has a mismatched Content-Range"
+            ),
         ))
     }
 }

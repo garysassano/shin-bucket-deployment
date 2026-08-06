@@ -858,7 +858,7 @@ mod tests {
     use serde_json::{Value, json};
 
     use crate::deadline::InvocationDeadlines;
-    use crate::request::{RawDeploymentRequest, parse_request_with_memory};
+    use crate::request::parse_request_with_memory;
     use crate::types::AppState;
 
     use super::{
@@ -870,18 +870,12 @@ mod tests {
     };
 
     fn deployment_request_with_paths(paths: Vec<String>) -> crate::types::DeploymentRequest {
-        let raw: RawDeploymentRequest = serde_json::from_value(json!({
-            "SourceBucketNames": ["source"],
-            "SourceObjectKeys": ["asset.zip"],
-            "DestinationBucketName": "destination",
-            "DestinationOwnerId": "summary-owner",
-            "MaxUncompressedEntryBytes": 1073741824,
-            "MaxCompressionRatio": 100,
-            "DistributionId": "distribution",
-            "DistributionPaths": paths
-        }))
-        .expect("raw deployment request");
-        parse_request_with_memory(raw, "1024").expect("valid request")
+        crate::types::DeploymentRequest {
+            distribution_id: Some("distribution".to_string()),
+            distribution_paths: paths,
+            destination_owner_id: "summary-owner".to_string(),
+            ..crate::types::DeploymentRequest::for_test()
+        }
     }
 
     fn deployment_request_for_destination(
@@ -889,12 +883,16 @@ mod tests {
         prefix: &str,
         owner_id: &str,
     ) -> crate::types::DeploymentRequest {
-        let raw: RawDeploymentRequest =
-            serde_json::from_value(deployment_request_properties(bucket, prefix, owner_id))
-                .expect("raw deployment request");
-        parse_request_with_memory(raw, "1024").expect("valid request")
+        crate::types::DeploymentRequest {
+            dest_bucket_name: bucket.to_string(),
+            dest_bucket_prefix: prefix.to_string(),
+            destination_owner_id: owner_id.to_string(),
+            ..crate::types::DeploymentRequest::for_test()
+        }
     }
 
+    /// Raw `ResourceProperties` JSON for envelope round-trip tests; the raw schema is
+    /// the point of those tests, so it stays spelled out here.
     fn deployment_request_properties(bucket: &str, prefix: &str, owner_id: &str) -> Value {
         json!({
             "SourceBucketNames": ["source"],

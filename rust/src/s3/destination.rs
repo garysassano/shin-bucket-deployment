@@ -1958,44 +1958,7 @@ mod tests {
     }
 
     fn replay_app_state(replay: StaticReplayClient) -> AppState {
-        let s3 = aws_sdk_s3::Client::from_conf(
-            aws_sdk_s3::Config::builder()
-                .behavior_version_latest()
-                .region(aws_sdk_s3::config::Region::new("us-east-1"))
-                .credentials_provider(aws_sdk_s3::config::Credentials::new(
-                    "test-access-key",
-                    "test-secret-key",
-                    None,
-                    None,
-                    "shin-bucket-deployment-test",
-                ))
-                .endpoint_url("https://s3.test")
-                .force_path_style(true)
-                .retry_config(
-                    aws_sdk_s3::config::retry::RetryConfig::standard().with_max_attempts(3),
-                )
-                .http_client(replay)
-                .build(),
-        );
-        AppState {
-            source_s3: s3.clone(),
-            destination_s3: s3,
-            cloudfront: aws_sdk_cloudfront::Client::from_conf(
-                aws_sdk_cloudfront::Config::builder()
-                    .behavior_version_latest()
-                    .region(aws_sdk_cloudfront::config::Region::new("us-east-1"))
-                    .credentials_provider(aws_sdk_cloudfront::config::Credentials::new(
-                        "test-access-key",
-                        "test-secret-key",
-                        None,
-                        None,
-                        "shin-bucket-deployment-test",
-                    ))
-                    .build(),
-            ),
-            http: reqwest::Client::new(),
-            detailed_failure_diagnostics: false,
-        }
+        crate::types::test_app_state_with_replay(replay)
     }
 
     fn retry_options(max_attempts: usize, delay_ms: u64) -> PutObjectRetryOptions {

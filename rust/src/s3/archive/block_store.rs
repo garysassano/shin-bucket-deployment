@@ -516,14 +516,11 @@ impl SourceBlockStore {
             }
             match result {
                 Ok(bytes) => {
+                    self.source.diagnostics.fetched_blocks.record(1);
                     self.source
                         .diagnostics
-                        .fetched_blocks
-                        .fetch_add(1, Ordering::Relaxed);
-                    self.source.diagnostics.fetched_source_bytes.fetch_add(
-                        u64::try_from(bytes.len()).unwrap_or(u64::MAX),
-                        Ordering::Relaxed,
-                    );
+                        .fetched_source_bytes
+                        .record(u64::try_from(bytes.len()).unwrap_or(u64::MAX));
                     if state.slots[index].remaining_claims == 0
                         && state.slots[index].live_claims == 0
                     {
@@ -532,10 +529,7 @@ impl SourceBlockStore {
                             state.window_committed_bytes.saturating_sub(block.len());
                         state.slots[index].budget_permit.take();
                         state.slots[index].status = SourceBlockStatus::Released;
-                        self.source
-                            .diagnostics
-                            .block_releases
-                            .fetch_add(1, Ordering::Relaxed);
+                        self.source.diagnostics.block_releases.record(1);
                         release_capacity = true;
                     } else {
                         state.slots[index].status = SourceBlockStatus::Ready(bytes);
@@ -596,7 +590,8 @@ impl SourceBlockStore {
     ) -> EntryAttemptClaim {
         EntryAttemptClaim {
             store: Arc::clone(self),
-            indices: self.block_indices_for_span(plan.source_offset, plan.source_span_end),
+            indices: self
+                .block_indices_for_span(plan.source_offset, plan.source_span_end_exclusive),
             armed: true,
         }
     }
@@ -628,10 +623,7 @@ impl SourceBlockStore {
                 if matches!(state.slots[index].status, SourceBlockStatus::Ready(_)) {
                     state.slots[index].budget_permit.take();
                     state.slots[index].status = SourceBlockStatus::Released;
-                    self.source
-                        .diagnostics
-                        .block_releases
-                        .fetch_add(1, Ordering::Relaxed);
+                    self.source.diagnostics.block_releases.record(1);
                     let block_len = self.blocks[index].len();
                     state.resident_bytes = state.resident_bytes.saturating_sub(block_len);
                     state.window_committed_bytes =
@@ -653,7 +645,7 @@ impl SourceBlockStore {
     }
 
     pub(crate) fn retain_zip_entry_for_replay(&self, plan: &ZipEntryPlan) {
-        self.add_replay_claims(plan.source_offset, plan.source_span_end);
+        self.add_replay_claims(plan.source_offset, plan.source_span_end_exclusive);
     }
 
     pub(super) fn add_replay_claims(&self, start: u64, end_exclusive: u64) {
@@ -712,10 +704,7 @@ impl SourceBlockStore {
                 }
                 match &state.slots[index].status {
                     SourceBlockStatus::Ready(bytes) => {
-                        self.source
-                            .diagnostics
-                            .block_hits
-                            .fetch_add(1, Ordering::Relaxed);
+                        self.source.diagnostics.block_hits.record(1);
                         let offset = usize::try_from(position - block.start).map_err(|_| {
                             io::Error::new(io::ErrorKind::InvalidInput, "source offset too large")
                         })?;
@@ -737,10 +726,7 @@ impl SourceBlockStore {
                         return Err(io::Error::other(message.clone()));
                     }
                     SourceBlockStatus::Released => {
-                        self.source
-                            .diagnostics
-                            .block_misses
-                            .fetch_add(1, Ordering::Relaxed);
+                        self.source.diagnostics.block_misses.record(1);
                         return Err(io::Error::other(
                             "source block was released before all claimed bytes were consumed",
                         ));
@@ -759,10 +745,7 @@ impl SourceBlockStore {
                                 "source block has no remaining planned claims",
                             ));
                         }
-                        self.source
-                            .diagnostics
-                            .block_misses
-                            .fetch_add(1, Ordering::Relaxed);
+                        self.source.diagnostics.block_misses.record(1);
                         SourceBlockAction::Reserve
                     }
                 }
@@ -797,7 +780,7 @@ impl SourceBlockStore {
         block_indices_for_span(&self.blocks, start, end_exclusive)
     }
 
-    pub(super) fn block_end(&self, index: usize) -> Option<u64> {
+    pub(super) fn block_end_inclusive(&self, index: usize) -> Option<u64> {
         self.blocks.get(index).map(|block| block.end_inclusive())
     }
 
@@ -833,10 +816,7 @@ impl SourceBlockStore {
             {
                 slot.budget_permit.take();
                 slot.status = SourceBlockStatus::Released;
-                self.source
-                    .diagnostics
-                    .block_releases
-                    .fetch_add(1, Ordering::Relaxed);
+                self.source.diagnostics.block_releases.record(1);
                 state.resident_bytes = state
                     .resident_bytes
                     .saturating_sub(self.blocks[index].len());
@@ -901,7 +881,7 @@ pub(super) fn plan_source_blocks(
         .iter()
         .filter_map(|plan| {
             let start = plan.source_offset.min(source_len);
-            let end = plan.source_span_end.min(source_len);
+            let end = plan.source_span_end_exclusive.min(source_len);
             (start < end).then_some((start, end))
         })
         .collect::<Vec<_>>();
@@ -956,7 +936,9 @@ pub(super) fn initial_claim_counts(
 ) -> Vec<usize> {
     let mut counts = vec![0_usize; blocks.len()];
     for plan in plans {
-        for index in block_indices_for_span(blocks, plan.source_offset, plan.source_span_end) {
+        for index in
+            block_indices_for_span(blocks, plan.source_offset, plan.source_span_end_exclusive)
+        {
             counts[index] = counts[index].saturating_add(1);
         }
     }
