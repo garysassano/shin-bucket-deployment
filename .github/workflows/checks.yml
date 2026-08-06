@@ -86,6 +86,72 @@ jobs:
       - name: Test
         run: cargo test --manifest-path rust/Cargo.toml --all-features
 
+  provider-smoke:
+    name: Provider smoke (S3 mock)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      MISE_DATA_DIR: ${{ github.workspace }}/.mise
+      MISE_RUSTUP_HOME: ${{ github.workspace }}/.mise/rustup
+      CARGO_TARGET_DIR: ${{ github.workspace }}/rust/target
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Install Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "lts/*"
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Setup Rust toolchain and tools
+        uses: jdx/mise-action@v4
+        with:
+          cache: true
+          install_args: rust zig cargo:cargo-lambda
+
+      - name: Install Rust target
+        run: rustup target add x86_64-unknown-linux-gnu
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust -> target
+          cache-targets: true
+          cache-workspace-crates: true
+          cache-all-crates: false
+          cache-bin: false
+          key: provider-smoke-x86_64
+
+      - name: Download MinIO server
+        run: |
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/minio" https://dl.min.io/server/minio/release/linux-amd64/minio
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/minio.sha256sum" https://dl.min.io/server/minio/release/linux-amd64/minio.sha256sum
+          # The published checksum names the release artifact (minio.RELEASE.<timestamp>),
+          # not the "minio" filename downloaded above, so `sha256sum -c` on it as-is fails
+          # to find the file. Re-point the recorded digest at the local name.
+          printf '%s  minio\n' "$(cut -d' ' -f1 "$RUNNER_TEMP/minio.sha256sum")" > "$RUNNER_TEMP/minio.sha256.local"
+          (cd "$RUNNER_TEMP" && sha256sum -c minio.sha256.local)
+          chmod +x "$RUNNER_TEMP/minio"
+
+      - name: Download Lambda Runtime Interface Emulator
+        run: |
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/aws-lambda-rie" https://github.com/aws/aws-lambda-runtime-interface-emulator/releases/latest/download/aws-lambda-rie
+          chmod +x "$RUNNER_TEMP/aws-lambda-rie"
+
+      - name: Run provider smoke test against a local S3 mock
+        run: node scripts/smoke-provider.mjs
+        env:
+          MINIO_BIN: ${{ runner.temp }}/minio
+          RIE_BIN: ${{ runner.temp }}/aws-lambda-rie
+
   supply-chain:
     name: Supply chain (npm audit, cargo audit, cargo deny)
     runs-on: ubuntu-24.04
