@@ -31,7 +31,6 @@ type ResumeIdentity = {
   readonly runId: string;
   readonly source: Omit<BenchmarkSourceMetadata, "gitDirty" | "changedPaths">;
   readonly configuration: {
-    readonly methodologyVersion: 2;
     readonly region: string;
     readonly destinationPrefix: string;
     readonly assetProfiles: BenchmarkRunOptions["assetProfiles"];
@@ -182,7 +181,6 @@ export function resumeIdentity(
     runId: options.runId,
     source,
     configuration: {
-      methodologyVersion: 2,
       region: options.region,
       destinationPrefix: options.destinationPrefix,
       assetProfiles: options.assetProfiles,
