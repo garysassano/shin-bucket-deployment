@@ -75,10 +75,7 @@ export function canonicalRunRecord(
 
 /** The canonical run ledger for both implementations of the given run options. */
 export function canonicalRuns(options: BenchmarkRunOptions): Array<Record<string, unknown>> {
-  return [
-    canonicalRunRecord(options, "shin"),
-    canonicalRunRecord(options, "aws"),
-  ];
+  return [canonicalRunRecord(options, "shin"), canonicalRunRecord(options, "aws")];
 }
 
 /**
@@ -136,9 +133,7 @@ export function canonicalRecord(
     repetition: sample.repetition,
     fileCount: 1,
     totalBytes: 1,
-    ...(shin
-      ? { detailedFailureDiagnostics: options.detailedFailureDiagnostics }
-      : {}),
+    ...(shin ? { detailedFailureDiagnostics: options.detailedFailureDiagnostics } : {}),
     ...(sample.sourceWindowBytes !== undefined && sample.sourceWindowBytes !== null
       ? { sourceWindowBytes: sample.sourceWindowBytes }
       : {}),

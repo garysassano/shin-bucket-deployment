@@ -1,10 +1,6 @@
 import type { BenchmarkRunOptions } from "./config";
 import { benchmarkConfigurationSha256, parseBenchmarkRunOptions } from "./config";
-import type {
-  BenchmarkRunRecord,
-  BenchmarkRunSample,
-  BenchmarkSampleRecord,
-} from "./model";
+import type { BenchmarkRunRecord, BenchmarkRunSample, BenchmarkSampleRecord } from "./model";
 import {
   benchmarkEvidenceErrors,
   benchmarkRunKey,
@@ -203,10 +199,7 @@ function validateCanonicalRecords(
       errors.push(`inconsistent run metadata field ${field}`);
     }
   }
-  for (const field of [
-    "benchmarkConfigSha256",
-    "memoryMeasurementScope",
-  ] as const) {
+  for (const field of ["benchmarkConfigSha256", "memoryMeasurementScope"] as const) {
     if (new Set(runs.map((run) => run.config?.[field])).size !== 1) {
       errors.push(`inconsistent run metadata field ${field}`);
     }

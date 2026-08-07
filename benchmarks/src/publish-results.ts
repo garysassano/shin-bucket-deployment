@@ -1,8 +1,5 @@
 import { parseCliOptions } from "./cli";
-import {
-  readBenchmarkEvidence,
-  runsFileFor,
-} from "./model";
+import { readBenchmarkEvidence, runsFileFor } from "./model";
 import { upsertBenchmarkRuns, upsertBenchmarkSamples } from "./persistence";
 import { selectValidatedBenchmarkRun } from "./validation";
 

@@ -300,12 +300,13 @@ function findSelections(records: BenchmarkRecord[]): DataSelection[] {
     }
     const awsRecords = records.filter(
       (record) =>
-        record.implementation === "aws" &&
-        record.runId === metadataRecord.runId &&
-        record.profile === metadataRecord.profile &&
-        record.memoryMb === metadataRecord.memoryMb &&
-        // AWS samples always omit `parallel`; Shin parallelism is not an upstream input.
-        record.parallel === null || record.parallel === undefined,
+        (record.implementation === "aws" &&
+          record.runId === metadataRecord.runId &&
+          record.profile === metadataRecord.profile &&
+          record.memoryMb === metadataRecord.memoryMb &&
+          // AWS samples always omit `parallel`; Shin parallelism is not an upstream input.
+          record.parallel === null) ||
+        record.parallel === undefined,
     );
     const runRecords = [...shinRecords, ...awsRecords];
     const phases = new Set(comparablePhases(runRecords));

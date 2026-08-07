@@ -272,9 +272,7 @@ function buildRunRecordSource(
     awsCdkLibVersion: options.awsCdkLibVersion ?? null,
     awsCdkLibInstalledSha256: options.awsCdkLibInstalledSha256 ?? null,
     constructsInstalledSha256: options.constructsInstalledSha256 ?? null,
-    ...(options.decisionRunId !== undefined
-      ? { decisionRunId: options.decisionRunId }
-      : {}),
+    ...(options.decisionRunId !== undefined ? { decisionRunId: options.decisionRunId } : {}),
     ...(options.comparisonVariant !== undefined
       ? { comparisonVariant: options.comparisonVariant }
       : {}),
@@ -445,9 +443,7 @@ function readReportFile(path: string): ReportEvidence | undefined {
     return undefined;
   }
   if (report.initDurationSeconds === null || report.requestId === null) {
-    throw new Error(
-      `Canonical REPORT event in ${path} is missing init duration or request ID.`,
-    );
+    throw new Error(`Canonical REPORT event in ${path} is missing init duration or request ID.`);
   }
   return report;
 }

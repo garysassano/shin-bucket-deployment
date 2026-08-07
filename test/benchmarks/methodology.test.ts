@@ -60,7 +60,12 @@ import {
   selectValidatedBenchmarkRun,
   validateMethodologyV2Run,
 } from "../../benchmarks/src/validation";
-import { canonicalRecord, canonicalRuns, canonicalRunRecord, canonicalSampleRecord } from "../support/benchmark-records";
+import {
+  canonicalRecord,
+  canonicalRunRecord,
+  canonicalRuns,
+  canonicalSampleRecord,
+} from "../support/benchmark-records";
 
 const usage = (): never => {
   throw new Error("usage");
@@ -397,10 +402,7 @@ describe("benchmark methodology", () => {
     const shinRecords = plan
       .filter((sample) => sample.implementation === "shin")
       .map((sample) => canonicalRecord(options, sample, phase));
-    expect(shinRecords.map((record) => record.sourceWindowBytes)).toEqual([
-      undefined,
-      134217728,
-    ]);
+    expect(shinRecords.map((record) => record.sourceWindowBytes)).toEqual([undefined, 134217728]);
     expect(
       aggregateMetric(shinRecords, "providerDurationSeconds").map((aggregate) => [
         aggregate.sourceWindowBytes,
@@ -681,9 +683,9 @@ describe("benchmark methodology", () => {
         cleanup: "partial",
       }),
     ).toBe(false);
-    expect(
-      isCanonicalBenchmarkRun(canonicalRunRecord(parseBenchmarkRunOptions([]), "shin")),
-    ).toBe(true);
+    expect(isCanonicalBenchmarkRun(canonicalRunRecord(parseBenchmarkRunOptions([]), "shin"))).toBe(
+      true,
+    );
     expect(isCanonicalBenchmarkSample(canonicalSampleRecord())).toBe(true);
     expect(() =>
       validateMethodologyV2Run({
@@ -1107,7 +1109,11 @@ describe("benchmark methodology", () => {
       ["cargoLambdaVersion", "", "missing provider.bootstrap.cargoLambdaVersion"],
       ["zigVersion", "", "missing provider.bootstrap.zigVersion"],
       ["buildToolchainSha256", "0".repeat(64), "invalid provider.bootstrap.buildToolchainSha256"],
-      ["buildEnvironmentSha256", "0".repeat(64), "invalid provider.bootstrap.buildEnvironmentSha256"],
+      [
+        "buildEnvironmentSha256",
+        "0".repeat(64),
+        "invalid provider.bootstrap.buildEnvironmentSha256",
+      ],
     ] as const) {
       const changedRuns = runs.map((run, index) => {
         if (index !== 0) return run;

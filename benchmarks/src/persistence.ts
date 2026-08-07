@@ -57,10 +57,7 @@ export function completedSampleIds(
   );
 }
 
-export function upsertBenchmarkSample(
-  outputFile: string,
-  record: BenchmarkSampleRecord,
-): void {
+export function upsertBenchmarkSample(outputFile: string, record: BenchmarkSampleRecord): void {
   upsertBenchmarkSamples(outputFile, [record]);
 }
 

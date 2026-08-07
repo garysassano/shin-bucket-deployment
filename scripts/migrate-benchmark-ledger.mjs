@@ -60,15 +60,6 @@ const RETAINED_SAMPLE_FIELDS = new Set([
   "providerInvoked",
   "providerSummary",
 ]);
-const DROPPED_FIELDS = [
-  "notes",
-  "resultDocumentationCommit",
-  "providerPackageName",
-  "providerImplementationSubject",
-  "awsCdkLibIntegrity",
-  "resultSchemaVersion",
-  "methodologyVersion",
-];
 
 function fail(message) {
   throw new Error(`migrate-benchmark-ledger: ${message}`);
@@ -186,10 +177,7 @@ function sampleRecordFrom(oldRow) {
 }
 
 function summaryWithoutSchemaVersion(summary) {
-  assert(
-    summary !== null && typeof summary === "object",
-    "shin sample has no provider summary",
-  );
+  assert(summary !== null && typeof summary === "object", "shin sample has no provider summary");
   assert(
     summary.schemaVersion === 6,
     `provider summary schemaVersion is ${JSON.stringify(summary.schemaVersion)}, expected 6`,
@@ -210,19 +198,20 @@ function assertNoNulls(record, label) {
 }
 
 function main() {
-  const lines = readFileSync(LEDGER, "utf8").split(/\r?\n/).filter((line) => line.trim() !== "");
+  const lines = readFileSync(LEDGER, "utf8")
+    .split(/\r?\n/)
+    .filter((line) => line.trim() !== "");
   const oldRows = lines.map((line, index) => {
     try {
       return JSON.parse(line);
     } catch (cause) {
       fail(`invalid JSONL record at ${LEDGER}:${index + 1}: ${cause.message}`);
+      return undefined;
     }
   });
   assert(oldRows.length > 0, `${LEDGER} contains no records`);
   if (oldRows.some((row) => !("resultSchemaVersion" in row))) {
-    fail(
-      `${LEDGER} is already in the two-file shape; refusing to migrate a migrated ledger`,
-    );
+    fail(`${LEDGER} is already in the two-file shape; refusing to migrate a migrated ledger`);
   }
 
   const groups = new Map();
@@ -236,11 +225,7 @@ function main() {
   const runRecords = [...groups.values()].map((rows) => {
     const run = runRecordFrom(rows[0]);
     assert(
-      rows.every(
-        (row) =>
-          row.runId === run.runId &&
-          row.implementation === run.implementation,
-      ),
+      rows.every((row) => row.runId === run.runId && row.implementation === run.implementation),
       `run group ${run.runId}/${run.implementation} has mixed identities`,
     );
     return run;
@@ -275,12 +260,11 @@ function main() {
             JSON.stringify(newRow.providerSummary) !==
               JSON.stringify(summaryWithoutSchemaVersion(oldRow.providerSummary))
           ) {
-            rowFailures.push(`row ${index + 1}: providerSummary not byte-identical minus schemaVersion`);
+            rowFailures.push(
+              `row ${index + 1}: providerSummary not byte-identical minus schemaVersion`,
+            );
           }
-        } else if (
-          newRow.providerSummary !== undefined ||
-          oldRow.providerSummary !== null
-        ) {
+        } else if (newRow.providerSummary !== undefined || oldRow.providerSummary !== null) {
           rowFailures.push(`row ${index + 1}: AWS providerSummary must be omitted`);
         }
         continue;
@@ -296,9 +280,7 @@ function main() {
         rowFailures.push(`row ${index + 1}: retained value ${field} not byte-identical`);
       }
     }
-    if (
-      [...Object.keys(newRow)].some((field) => !RETAINED_SAMPLE_FIELDS.has(field))
-    ) {
+    if ([...Object.keys(newRow)].some((field) => !RETAINED_SAMPLE_FIELDS.has(field))) {
       rowFailures.push(`row ${index + 1}: unexpected sample field emitted`);
     }
     recordRow(index, oldRow.sampleId, rowFailures);
@@ -315,9 +297,7 @@ function main() {
       continue;
     }
     const groupFailures = [];
-    if (
-      [...Object.keys(run)].some((field) => !RETAINED_RUN_FIELDS.has(field))
-    ) {
+    if ([...Object.keys(run)].some((field) => !RETAINED_RUN_FIELDS.has(field))) {
       groupFailures.push(`run ${runId}/${implementation}: unexpected run field emitted`);
     }
     for (const field of Object.keys(run.config ?? {})) {
@@ -345,10 +325,7 @@ function main() {
   // Dropped fields: prove each is constant, all-null, or derivable, so nothing
   // measured is lost.
   const droppedChecks = [
-    [
-      oldRows.every((row) => row.notes === null),
-      "dropped notes: null on every row",
-    ],
+    [oldRows.every((row) => row.notes === null), "dropped notes: null on every row"],
     [
       oldRows.every((row) => row.resultDocumentationCommit === null),
       "dropped resultDocumentationCommit: null on every row",
@@ -393,9 +370,7 @@ function main() {
     `migrate-benchmark-ledger: grouped ${oldRows.length} rows into ${runRecords.length} (runId x implementation) records`,
   );
   console.log("round-trip assertions:");
-  console.log(
-    `  ✓ sample row count preserved (${sampleRecords.length} === ${oldRows.length})`,
-  );
+  console.log(`  ✓ sample row count preserved (${sampleRecords.length} === ${oldRows.length})`);
   console.log(
     `  ✓ run record count matches distinct (runId x implementation) groups (${runRecords.length} === ${groups.size})`,
   );

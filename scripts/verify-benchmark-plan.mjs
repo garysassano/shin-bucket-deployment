@@ -27,9 +27,7 @@ if (new Set(plan.map((sample) => sample.sampleId)).size !== plan.length) {
   throw new Error("Canonical benchmark sample IDs are not unique.");
 }
 
-const runs = ["shin", "aws"].map((implementation) =>
-  canonicalRunRecord(options, implementation),
-);
+const runs = ["shin", "aws"].map((implementation) => canonicalRunRecord(options, implementation));
 const samples = plan.flatMap((sample) =>
   options.phases.map((phase) => canonicalSampleRecord(options, sample, phase)),
 );
@@ -120,7 +118,13 @@ function canonicalSampleRecord(options, sample, phase) {
     maxMemoryMb: 1,
     providerInvoked: true,
     ...(shin
-      ? { providerSummary: providerSummary(sample.memoryMb, sample.parallel, phase.name === "cold-create") }
+      ? {
+          providerSummary: providerSummary(
+            sample.memoryMb,
+            sample.parallel,
+            phase.name === "cold-create",
+          ),
+        }
       : {}),
   };
 }

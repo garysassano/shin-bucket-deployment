@@ -11,8 +11,8 @@ import { renderBenchmarkResultsTable } from "../../benchmarks/src/render/telemet
 import { CANONICAL_BENCHMARK_CONFIG } from "../../benchmarks/src/validation";
 import {
   canonicalRecord,
-  canonicalRuns,
   canonicalRunRecord,
+  canonicalRuns,
   canonicalSampleRecord,
 } from "../support/benchmark-records";
 
@@ -301,7 +301,9 @@ describe("benchmark result collector", () => {
     writeFileSync(inputFile, `${records.map((record) => JSON.stringify(record)).join("\n")}\n`);
     writeFileSync(
       join(dir, "runs.jsonl"),
-      `${canonicalRuns(options).map((run) => JSON.stringify(run)).join("\n")}\n`,
+      `${canonicalRuns(options)
+        .map((run) => JSON.stringify(run))
+        .join("\n")}\n`,
     );
 
     const report = renderBenchmarkReport({ inputFile, outputFile, preview: true });
@@ -335,7 +337,9 @@ describe("benchmark result collector", () => {
     writeFileSync(inputFile, `${records.map((record) => JSON.stringify(record)).join("\n")}\n`);
     writeFileSync(
       join(dir, "runs.jsonl"),
-      `${canonicalRuns(options).map((run) => JSON.stringify(run)).join("\n")}\n`,
+      `${canonicalRuns(options)
+        .map((run) => JSON.stringify(run))
+        .join("\n")}\n`,
     );
 
     const table = renderBenchmarkResultsTable({ inputFile, outputFile, preview: true });
@@ -539,8 +543,11 @@ function collectCurrentRecord(
 ) {
   const decisionRunId = overrides.decisionRunId as string | undefined;
   const comparisonVariant = overrides.comparisonVariant as string | undefined;
-  const { decisionRunId: _decisionRunId, comparisonVariant: _comparisonVariant, ...sampleOverrides } =
-    overrides;
+  const {
+    decisionRunId: _decisionRunId,
+    comparisonVariant: _comparisonVariant,
+    ...sampleOverrides
+  } = overrides;
   const record = canonicalSampleRecord({
     providerSummary: summaryFixture(),
     ...sampleOverrides,

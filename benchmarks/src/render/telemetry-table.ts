@@ -484,9 +484,7 @@ function readTelemetryRows(
       line,
       record: joinedByKey.get(benchmarkSampleKey(record)),
     }))
-    .filter(
-      (row): row is { line: number; record: BenchmarkRunSample } => row.record !== undefined,
-    )
+    .filter((row): row is { line: number; record: BenchmarkRunSample } => row.record !== undefined)
     .filter(({ record }) => record.providerSummary !== undefined && record.providerSummary !== null)
     .map(({ line, record }) => ({
       line,

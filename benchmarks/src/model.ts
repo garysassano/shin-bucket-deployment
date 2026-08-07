@@ -471,9 +471,7 @@ function readJsonlRecords<T>(filePath: string): Array<{ line: number; record: T 
     });
 }
 
-export function benchmarkRunKey(
-  run: Pick<BenchmarkRunRecord, "runId" | "implementation">,
-): string {
+export function benchmarkRunKey(run: Pick<BenchmarkRunRecord, "runId" | "implementation">): string {
   return [run.runId, run.implementation].join("\u0000");
 }
 
@@ -645,11 +643,7 @@ export function benchmarkRunRecordErrors(run: BenchmarkRunRecord): string[] {
   if (typeof run.region !== "string" || run.region.length === 0) {
     errors.push(`${label}: missing region`);
   }
-  if (
-    run.cleanup !== "destroyed" &&
-    run.cleanup !== "partial" &&
-    run.cleanup !== "failed"
-  ) {
+  if (run.cleanup !== "destroyed" && run.cleanup !== "partial" && run.cleanup !== "failed") {
     errors.push(`${label}: cleanup must be destroyed, partial, or failed`);
   }
   for (const name of ["decisionRunId", "comparisonVariant"] as const) {
@@ -729,7 +723,11 @@ export function benchmarkRunRecordErrors(run: BenchmarkRunRecord): string[] {
       errors.push(`${label}: missing cdk.${name}`);
     }
   }
-  for (const name of ["cliInstalledSha256", "libInstalledSha256", "constructsInstalledSha256"] as const) {
+  for (const name of [
+    "cliInstalledSha256",
+    "libInstalledSha256",
+    "constructsInstalledSha256",
+  ] as const) {
     if (!hexSha256.test(cdk?.[name] ?? "")) errors.push(`${label}: invalid cdk.${name}`);
   }
   const implementation = implementationLabel(run);
@@ -792,11 +790,13 @@ export function benchmarkRunRecordErrors(run: BenchmarkRunRecord): string[] {
       if (bootstrap?.buildDirty !== false) {
         errors.push(`${label}: provider.bootstrap.buildDirty must be false`);
       }
-      for (const name of ["cargoVersion", "rustcVersion", "cargoLambdaVersion", "zigVersion"] as const) {
-        if (
-          typeof bootstrap?.[name] !== "string" ||
-          (bootstrap?.[name] as string).length === 0
-        ) {
+      for (const name of [
+        "cargoVersion",
+        "rustcVersion",
+        "cargoLambdaVersion",
+        "zigVersion",
+      ] as const) {
+        if (typeof bootstrap?.[name] !== "string" || (bootstrap?.[name] as string).length === 0) {
           errors.push(`${label}: missing provider.bootstrap.${name}`);
         }
       }
@@ -872,7 +872,13 @@ export function benchmarkSampleRecordErrors(sample: BenchmarkSampleRecord): stri
       errors.push(`${label}: missing ${name}`);
     }
   }
-  for (const name of ["repetition", "memoryMb", "fileCount", "totalBytes", "maxMemoryMb"] as const) {
+  for (const name of [
+    "repetition",
+    "memoryMb",
+    "fileCount",
+    "totalBytes",
+    "maxMemoryMb",
+  ] as const) {
     const value = sample[name];
     if (typeof value === "number" && (!Number.isInteger(value) || value < 0)) {
       errors.push(`${label}: ${name} must be a non-negative integer`);
@@ -913,7 +919,11 @@ export function benchmarkSampleRecordErrors(sample: BenchmarkSampleRecord): stri
       if (Object.hasOwn(sample, name)) errors.push(`${label}: AWS ${name} must be omitted`);
     }
   } else if (implementation === "shin") {
-    if (typeof sample.parallel !== "number" || !Number.isInteger(sample.parallel) || (sample.parallel ?? 0) <= 0) {
+    if (
+      typeof sample.parallel !== "number" ||
+      !Number.isInteger(sample.parallel) ||
+      (sample.parallel ?? 0) <= 0
+    ) {
       errors.push(`${label}: Shin parallel must be a positive integer`);
     }
     if (sample.detailedFailureDiagnostics !== true) {
@@ -1021,8 +1031,7 @@ export function selectBenchmarkRuns(
   runs: readonly BenchmarkRunRecord[],
   requestedRunId?: string,
 ): BenchmarkRunRecord[] {
-  const runId =
-    requestedRunId ?? [...runs].reverse().find((run) => run.runId)?.runId ?? undefined;
+  const runId = requestedRunId ?? [...runs].reverse().find((run) => run.runId)?.runId ?? undefined;
   return runId === undefined || runId === null
     ? [...runs]
     : runs.filter((run) => run.runId === runId);

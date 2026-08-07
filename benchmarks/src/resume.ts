@@ -18,12 +18,13 @@ import type {
   BenchmarkRunRecordSource,
   BenchmarkSampleRecord,
 } from "./model";
-import { benchmarkRunKey, benchmarkRunRecordFrom, normalizeImplementation, runsFileFor } from "./model";
 import {
-  previewBenchmarkRuns,
-  previewBenchmarkSamples,
-  writeBenchmarkLedger,
-} from "./persistence";
+  benchmarkRunKey,
+  benchmarkRunRecordFrom,
+  normalizeImplementation,
+  runsFileFor,
+} from "./model";
+import { previewBenchmarkRuns, previewBenchmarkSamples, writeBenchmarkLedger } from "./persistence";
 import { createBenchmarkPlan } from "./plan";
 
 type ResumeIdentity = {
@@ -265,9 +266,7 @@ function runRecordSource(
     awsCdkLibVersion: source.awsCdkLibVersion,
     awsCdkLibInstalledSha256: source.awsCdkLibInstalledSha256,
     constructsInstalledSha256: source.constructsInstalledSha256,
-    ...(options.decisionRunId !== undefined
-      ? { decisionRunId: options.decisionRunId }
-      : {}),
+    ...(options.decisionRunId !== undefined ? { decisionRunId: options.decisionRunId } : {}),
     ...(options.comparisonVariant !== undefined
       ? { comparisonVariant: options.comparisonVariant }
       : {}),

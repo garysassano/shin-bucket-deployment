@@ -51,9 +51,8 @@ export function renderBenchmarkCiSummary(options: SummaryOptions): string {
     scratchRoot: options.scratchRoot,
   });
   const repetitions = uniqueNumbers(records.map((record) => record.repetition));
-  const sourceCommit = records.find(
-    (record) => implementationLabel(record) === "shin",
-  )?.provider?.implementationCommit;
+  const sourceCommit = records.find((record) => implementationLabel(record) === "shin")?.provider
+    ?.implementationCommit;
   const cleanupValues = uniqueStrings(records.map((record) => record.cleanup));
   const comparisonTable = renderComparisonTable(records);
   const pressureTable = renderPressureTable(records);

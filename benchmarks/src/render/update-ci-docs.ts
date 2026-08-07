@@ -1,10 +1,6 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { parseCliOptions } from "../cli";
-import {
-  type BenchmarkRunSample,
-  implementationLabel,
-  readBenchmarkEvidence,
-} from "../model";
+import { type BenchmarkRunSample, implementationLabel, readBenchmarkEvidence } from "../model";
 import { selectValidatedBenchmarkRun } from "../validation";
 import { renderComparisonTable } from "./ci-summary";
 
