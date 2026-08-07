@@ -212,8 +212,8 @@ export function collectBenchmarkResult(options: CollectBenchmarkOptions): Benchm
       implementation === "aws"
         ? undefined
         : options.sourceWindowBytes === undefined
-          ? outputSourceWindowBytes(logText)
-          : options.sourceWindowBytes,
+          ? (outputSourceWindowBytes(logText) ?? undefined)
+          : (options.sourceWindowBytes ?? undefined),
     cdkDeploySeconds: parseSeconds(logText, /Deployment time: ([\d.]+)s/),
     localWallSeconds: parseSeconds(logText, /^real ([\d.]+)$/m),
     providerDurationSeconds: report?.durationSeconds ?? null,

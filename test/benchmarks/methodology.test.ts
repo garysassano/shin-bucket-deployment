@@ -869,7 +869,7 @@ describe("benchmark methodology", () => {
       .map((line) => JSON.parse(line) as unknown);
     expect(rows).toHaveLength(2);
     expect(rows[0]).toMatchObject({ phase: "history" });
-    expect(rows[1]).toMatchObject({ cleanup: undefined });
+    expect(rows[1]).not.toHaveProperty("cleanup");
     expect(rows[1]).toMatchObject({ sampleId: sample.sampleId });
     const runRows = readFileSync(runsFile, "utf8")
       .trim()
@@ -1102,16 +1102,16 @@ describe("benchmark methodology", () => {
       }),
     ).toThrow("inconsistent run metadata field sourceTreeSha256");
     for (const [field, value, message] of [
-      ["provenanceSha256", "0".repeat(64), "invalid provider.bootstrap.provenanceSha256"],
+      ["provenanceSha256", "z".repeat(64), "invalid provider.bootstrap.provenanceSha256"],
       ["buildDirty", true, "provider.bootstrap.buildDirty must be false"],
       ["cargoVersion", "", "missing provider.bootstrap.cargoVersion"],
       ["rustcVersion", "", "missing provider.bootstrap.rustcVersion"],
       ["cargoLambdaVersion", "", "missing provider.bootstrap.cargoLambdaVersion"],
       ["zigVersion", "", "missing provider.bootstrap.zigVersion"],
-      ["buildToolchainSha256", "0".repeat(64), "invalid provider.bootstrap.buildToolchainSha256"],
+      ["buildToolchainSha256", "z".repeat(64), "invalid provider.bootstrap.buildToolchainSha256"],
       [
         "buildEnvironmentSha256",
-        "0".repeat(64),
+        "z".repeat(64),
         "invalid provider.bootstrap.buildEnvironmentSha256",
       ],
     ] as const) {
