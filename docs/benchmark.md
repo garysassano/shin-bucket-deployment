@@ -64,7 +64,7 @@ The [complete generated report](../benchmarks/ci-report.md) includes quartiles, 
 
 ## Methodology
 
-Methodology v2 is the only methodology. It requires five sequential repetitions, opaque UUID run and sample identities, a clean Git tree, exact package/CDK/provider identities, Lambda architecture, deployed code and Shin bootstrap SHA-256 values, phase-local execution-environment memory scope, and verified cleanup. A scratch resume manifest binds the source, normalized config, phases, destination, and exact sample matrix, while a two-phase ledger digest distinguishes runner persistence from preexisting or external evidence edits. Binary fixtures use deterministic SHA-256 counter bytes and a per-file digest manifest; retained files in stale-deletion phases are byte-identical to their baseline versions. AWS CDK rows use `parallel: null`; comparison pairing does not treat Shin parallelism as an upstream input.
+The canonical methodology is the only methodology. It requires five sequential repetitions, opaque UUID run and sample identities, a clean Git tree, exact package/CDK/provider identities, Lambda architecture, deployed code and Shin bootstrap SHA-256 values, phase-local execution-environment memory scope, and verified cleanup. Evidence lives in two JSONL files: `benchmarks/runs.jsonl` holds one record per (runId × implementation) with everything constant across that run's samples, grouped into `config`/`environment`/`cdk`/`provider` (including `provider.bootstrap`); `benchmarks/results.jsonl` holds one record per sample with only what varies — about 18 fields plus the provider summary. Fields that are absent are omitted, never written as null. A scratch resume manifest binds the source, normalized config, phases, destination, and exact sample matrix, while a two-phase ledger digest distinguishes runner persistence from preexisting or external evidence edits. Binary fixtures use deterministic SHA-256 counter bytes and a per-file digest manifest; retained files in stale-deletion phases are byte-identical to their baseline versions. AWS CDK samples omit `parallel`, `detailedFailureDiagnostics`, and the provider summary; comparison pairing does not treat Shin parallelism as an upstream input.
 
 Diagnostics are always on: a run cannot opt out of detailed failure diagnostics.
 
@@ -72,12 +72,13 @@ AWS evidence remains approval-gated. Run one complete repetition per selected va
 
 ## Where To Look
 
-| Artifact                   | Purpose                                                                                      |
-| -------------------------- | -------------------------------------------------------------------------------------------- |
-| `benchmarks/README.md`     | Benchmark runbook and current publication state.                                             |
-| `benchmarks/results.jsonl` | Structured sanitized current benchmark result rows used by reports and profile snapshots.    |
-| `benchmarks/configs/`      | Curated benchmark run matrices.                                                              |
-| `benchmarks/src/`          | Benchmark runner, collector, table renderer, report renderer, and profile-snapshot renderer. |
+| Artifact                   | Purpose                                                                                                                |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `benchmarks/README.md`     | Benchmark runbook and current publication state.                                                                       |
+| `benchmarks/results.jsonl` | Structured sanitized sample rows — one per measurement, only what varies — used by reports and profile snapshots.      |
+| `benchmarks/runs.jsonl`    | One record per (runId × implementation): constant run provenance grouped into `config`/`environment`/`cdk`/`provider`. |
+| `benchmarks/configs/`      | Curated benchmark run matrices.                                                                                        |
+| `benchmarks/src/`          | Benchmark runner, collector, table renderer, report renderer, and profile-snapshot renderer.                           |
 
 ## Reading Results
 
@@ -105,7 +106,7 @@ The `assets` benchmark scenario generates deterministic bundles under `.benchmar
 
 ## Telemetry Notes
 
-Shin rows require sanitized `shin_deployment_summary` telemetry at schema v6. It separates deployment work status from callback delivery, logical transfer objects from source and destination upload wire attempts, and deletion SDK calls from inferred object outcomes. It also exposes consumed body replays, typed throttling/errors, cancellations, invocation-global source memory and release anomalies, destination metadata/page high-water, callback attempts, bounded sanitized `PutObject` SDK/service classifications with correlated body/source failure groups, and direct-copy retry and throttle counters. Use `docs/architecture.md` for exact diagnostics meanings.
+Shin samples require sanitized `shin_deployment_summary` telemetry under the current diagnostics contract; stored summaries omit the constant `schemaVersion` member. The summary separates deployment work status from callback delivery, logical transfer objects from source and destination upload wire attempts, and deletion SDK calls from inferred object outcomes. It also exposes consumed body replays, typed throttling/errors, cancellations, invocation-global source memory and release anomalies, destination metadata/page high-water, callback attempts, bounded sanitized `PutObject` SDK/service classifications with correlated body/source failure groups, and direct-copy retry and throttle counters. Use `docs/architecture.md` for exact diagnostics meanings.
 
 Do not infer S3 throttling from source block waits alone. Source S3 pressure requires source `getRetries` or `getErrors`; destination S3 throttling requires `putObject.throttledAttempts` or retry evidence for extracted uploads, and `copyObject.throttledAttempts` or retry evidence for direct copies.
 
