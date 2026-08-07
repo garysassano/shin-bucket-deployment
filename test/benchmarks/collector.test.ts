@@ -165,6 +165,45 @@ describe("benchmark result collector", () => {
     expect(rows.map((row) => row.repetition)).toEqual([1, 2]);
   });
 
+  test("fails closed when the memory measurement scope is not supplied", () => {
+    const dir = mkdtempSync(join(tmpdir(), "shin-bench-collector-scope-"));
+    expect(() =>
+      collectCurrentRecord(dir, join(dir, "results.jsonl"), {
+        memoryMeasurementScope: undefined,
+      }),
+    ).toThrow("memoryMeasurementScope must be phase-local");
+  });
+
+  test("fails closed on a stale provider summary schema", () => {
+    const dir = mkdtempSync(join(tmpdir(), "shin-bench-collector-schema-"));
+    const logFile = join(dir, "deploy.log");
+    const summaryFile = join(dir, "summary.json");
+    writeFileSync(logFile, "Stack.BenchmarkImplementation = shin\n");
+    writeFileSync(
+      summaryFile,
+      JSON.stringify({
+        events: [
+          {
+            timestamp: 1,
+            logStreamName: "stream",
+            message: `requestId="summary-id": summary=${JSON.stringify(
+              JSON.stringify(liveSummaryFixture({ schemaVersion: 5 })),
+            )}`,
+          },
+        ],
+      }),
+    );
+    expect(() =>
+      collectBenchmarkResult({
+        implementation: "shin",
+        logFile,
+        summaryFile,
+        outputFile: join(dir, "results.jsonl"),
+        phase: "cold-create",
+      }),
+    ).toThrow("schemaVersion must be 6");
+  });
+
   test("round-trips strict current-schema PutObject failure diagnostics", () => {
     const summary = summaryFixture();
 
@@ -367,7 +406,7 @@ describe("benchmark result collector", () => {
           {
             timestamp: 1,
             logStreamName: "stream",
-            message: `requestId="summary-id": summary=${JSON.stringify(JSON.stringify(summaryFixture()))}`,
+            message: `requestId="summary-id": summary=${JSON.stringify(JSON.stringify(liveSummaryFixture()))}`,
           },
         ],
       }),
@@ -468,6 +507,16 @@ function summaryFixture() {
       throttleCooldownWaitMs: 300,
     },
   };
+}
+
+/**
+ * The current live provider output shape: the stored summary fields plus the
+ * constant `schemaVersion` marker the provider still emits (V-1 removes it in
+ * the provider contract bump). The collector requires exactly this value at the
+ * parse boundary and strips it before storing.
+ */
+function liveSummaryFixture(overrides: Record<string, unknown> = {}) {
+  return { ...summaryFixture(), schemaVersion: 6, ...overrides };
 }
 
 function summaryBaseFixture() {
@@ -667,6 +716,9 @@ function collectCurrentRecord(
   const cdk = run.cdk as Record<string, unknown>;
   const provider = run.provider as Record<string, unknown>;
   const bootstrap = provider.bootstrap as Record<string, unknown>;
+  const memoryMeasurementScope = Object.hasOwn(overrides, "memoryMeasurementScope")
+    ? (overrides.memoryMeasurementScope as "phase-local" | undefined)
+    : "phase-local";
   const sampleId = record.sampleId as string;
   const requestId = `request-${sampleId}`;
   const logStreamName = `stream-${sampleId}`;
@@ -712,7 +764,9 @@ function collectCurrentRecord(
         {
           timestamp: 1,
           logStreamName,
-          message: `requestId="${requestId}": summary=${JSON.stringify(JSON.stringify(record.providerSummary))}`,
+          message: `requestId="${requestId}": summary=${JSON.stringify(
+            JSON.stringify(liveSummaryFixture(record.providerSummary as Record<string, unknown>)),
+          )}`,
         },
       ],
     }),
@@ -757,7 +811,7 @@ function collectCurrentRecord(
     awsCdkLibInstalledSha256: cdk.libInstalledSha256 as string,
     constructsInstalledSha256: cdk.constructsInstalledSha256 as string,
     executionEnvironmentFresh: environment.executionEnvironmentFresh as boolean,
-    memoryMeasurementScope: runConfig.memoryMeasurementScope as "phase-local",
+    memoryMeasurementScope,
     region: run.region as string,
     implementation: record.implementation as string,
     assetProfile: record.profile as string,

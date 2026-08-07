@@ -306,7 +306,7 @@ export type BenchmarkCleanupStatus = "destroyed" | "partial" | "failed";
 
 export type BenchmarkRunConfig = {
   readonly benchmarkConfigSha256?: string | null;
-  readonly memoryMeasurementScope?: "phase-local" | "cumulative" | null;
+  readonly memoryMeasurementScope?: "phase-local" | null;
 };
 
 export type BenchmarkRunEnvironment = {
@@ -492,7 +492,7 @@ export type BenchmarkRunRecordSource = {
   readonly decisionRunId?: string | null;
   readonly comparisonVariant?: string | null;
   readonly benchmarkConfigSha256?: string | null;
-  readonly memoryMeasurementScope?: "phase-local" | "cumulative" | null;
+  readonly memoryMeasurementScope?: "phase-local" | null;
   readonly nodeVersion?: string | null;
   readonly pnpmVersion?: string | null;
   readonly executionEnvironmentSha256?: string | null;
@@ -622,7 +622,7 @@ export function isCompleteBenchmarkRun(run: BenchmarkRunRecord): boolean {
 }
 
 export function isCanonicalBenchmarkRun(run: BenchmarkRunRecord): boolean {
-  return benchmarkRunRecordErrors(run).length === 0;
+  return isCompleteBenchmarkRun(run) && benchmarkRunRecordErrors(run).length === 0;
 }
 
 export function isCanonicalBenchmarkSample(sample: BenchmarkSampleRecord): boolean {
@@ -679,11 +679,8 @@ export function benchmarkRunRecordErrors(run: BenchmarkRunRecord): string[] {
   if (!hexSha256.test(config?.benchmarkConfigSha256 ?? "")) {
     errors.push(`${label}: invalid benchmarkConfigSha256`);
   }
-  if (
-    config?.memoryMeasurementScope !== "phase-local" &&
-    config?.memoryMeasurementScope !== "cumulative"
-  ) {
-    errors.push(`${label}: memoryMeasurementScope must be phase-local or cumulative`);
+  if (config?.memoryMeasurementScope !== "phase-local") {
+    errors.push(`${label}: memoryMeasurementScope must be phase-local`);
   }
   const environment = run.environment;
   const environmentFields = new Set([
@@ -768,6 +765,9 @@ export function benchmarkRunRecordErrors(run: BenchmarkRunRecord): string[] {
       if (typeof provider.packageVersion !== "string" || provider.packageVersion.length === 0) {
         errors.push(`${label}: missing provider.packageVersion`);
       }
+      if (provider.packageVersion !== cdk?.libVersion) {
+        errors.push(`${label}: AWS provider package version must match cdk.libVersion`);
+      }
       if (provider.architecture !== "x86_64") {
         errors.push(`${label}: AWS provider.architecture must be x86_64`);
       }
@@ -785,6 +785,20 @@ export function benchmarkRunRecordErrors(run: BenchmarkRunRecord): string[] {
     if (provider === undefined || provider === null) {
       errors.push(`${label}: provider is required for Shin`);
     } else {
+      const shinProviderFields = new Set([
+        "implementationCommit",
+        "packageVersion",
+        "architecture",
+        "runtime",
+        "handler",
+        "codeSha256",
+        "bootstrap",
+      ]);
+      for (const name of Object.keys(provider)) {
+        if (!shinProviderFields.has(name)) {
+          errors.push(`${label}: unexpected Shin provider field ${name}`);
+        }
+      }
       if (!/^[0-9a-f]{40}$/i.test(provider.implementationCommit ?? "")) {
         errors.push(`${label}: invalid provider.implementationCommit`);
       }

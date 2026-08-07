@@ -113,6 +113,17 @@ function validateCanonicalRecords(
   }
   const errors: string[] = [];
   errors.push(...benchmarkEvidenceErrors({ runs, samples }));
+  // Run records are per (runId x implementation). An implementation present in
+  // the run ledger must be backed by samples: the expected matrix is derived
+  // from samples, so without this check an orphan AWS run record with zero
+  // samples would let a full Shin matrix publish with no upstream baseline.
+  const runImplementations = new Set(runs.map((run) => implementationLabel(run)));
+  const sampleImplementations = new Set(samples.map((sample) => implementationLabel(sample)));
+  for (const implementation of runImplementations) {
+    if (!sampleImplementations.has(implementation)) {
+      errors.push(`run record implementation ${implementation} has no samples`);
+    }
+  }
   const expected = new Map<
     string,
     {

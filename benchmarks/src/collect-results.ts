@@ -55,7 +55,7 @@ export type CollectBenchmarkOptions = {
   readonly awsCdkLibInstalledSha256?: string;
   readonly constructsInstalledSha256?: string;
   readonly executionEnvironmentFresh?: boolean;
-  readonly memoryMeasurementScope?: "phase-local" | "cumulative";
+  readonly memoryMeasurementScope?: "phase-local";
   readonly decisionRunId?: string;
   readonly fileCount?: number;
   readonly implementation?: string;
@@ -259,7 +259,7 @@ function buildRunRecordSource(
     region: options.region ?? null,
     cleanup: cleanupStatusFrom(options.cleanup),
     benchmarkConfigSha256: options.benchmarkConfigSha256 ?? null,
-    memoryMeasurementScope: options.memoryMeasurementScope ?? "phase-local",
+    memoryMeasurementScope: options.memoryMeasurementScope ?? null,
     nodeVersion: options.nodeVersion ?? null,
     pnpmVersion: options.pnpmVersion ?? null,
     executionEnvironmentSha256: options.executionEnvironmentSha256 ?? null,
@@ -368,9 +368,9 @@ function optionalBoolean(values: ReadonlyMap<string, string>, name: string): boo
   usage();
 }
 
-function optionalMemoryScope(value: string | undefined): "phase-local" | "cumulative" | undefined {
+function optionalMemoryScope(value: string | undefined): "phase-local" | undefined {
   if (value === undefined) return undefined;
-  if (value === "phase-local" || value === "cumulative") return value;
+  if (value === "phase-local") return value;
   usage();
 }
 
@@ -532,8 +532,16 @@ function summaryFromMessage(message: string): ProviderSummary | undefined {
 
 function isDeploymentSummary(value: unknown): value is ProviderSummary {
   if (!isRecord(value) || value.event !== "shin_deployment_summary") return false;
-  // `schemaVersion` is a constant discriminator, not a measurement. Stored summaries
-  // never carry it, so strip it from live provider output at the parse boundary.
+  // `schemaVersion` is a constant discriminator, not a measurement, and stored
+  // summaries never carry it. Live provider output still does (V-1 removes it in
+  // the provider contract bump); only the current contract value may cross the
+  // parse boundary -- anything else is a foreign or stale summary and must fail
+  // closed rather than being silently accepted as current.
+  if (value.schemaVersion !== 6) {
+    throw new Error(
+      `Invalid provider summary: schemaVersion must be 6, got ${String(value.schemaVersion)}`,
+    );
+  }
   delete value.schemaVersion;
   sanitizeProviderSummary(value);
   const errors = providerSummaryErrors(value);
