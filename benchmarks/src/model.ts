@@ -368,7 +368,9 @@ export type BenchmarkRunRecord = {
   readonly config?: BenchmarkRunConfig | null;
   readonly environment?: BenchmarkRunEnvironment | null;
   readonly cdk?: BenchmarkRunCdk | null;
-  /** Shin runs only; omitted for aws. */
+  /** Both implementations carry a provider block; AWS keeps only the five
+   * measured upstream-Lambda fields (packageVersion, architecture, runtime,
+   * handler, codeSha256) and omits implementationCommit and bootstrap. */
   readonly provider?: BenchmarkRunProvider | null;
 };
 
@@ -528,6 +530,18 @@ export type BenchmarkRunProviderSource = {
 };
 
 export function benchmarkRunRecordFrom(source: BenchmarkRunRecordSource): BenchmarkRunRecord {
+  const bootstrapMembers = {
+    sha256: source.provider?.bootstrapSha256 ?? null,
+    archiveSha256: source.provider?.bootstrapArchiveSha256 ?? null,
+    provenanceSha256: source.provider?.bootstrapProvenanceSha256 ?? null,
+    buildDirty: source.provider?.buildDirty ?? null,
+    cargoVersion: source.provider?.cargoVersion ?? null,
+    rustcVersion: source.provider?.rustcVersion ?? null,
+    cargoLambdaVersion: source.provider?.cargoLambdaVersion ?? null,
+    zigVersion: source.provider?.zigVersion ?? null,
+    buildToolchainSha256: source.provider?.buildToolchainSha256 ?? null,
+    buildEnvironmentSha256: source.provider?.buildEnvironmentSha256 ?? null,
+  };
   return {
     runId: source.runId ?? null,
     implementation: source.implementation ?? null,
@@ -564,29 +578,32 @@ export function benchmarkRunRecordFrom(source: BenchmarkRunRecordSource): Benchm
     },
     ...(source.provider !== undefined && source.provider !== null
       ? {
-          provider: {
+          provider: omitNullMembers({
             implementationCommit: source.provider.implementationCommit ?? null,
             packageVersion: source.provider.packageVersion ?? null,
             architecture: source.provider.architecture ?? null,
             runtime: source.provider.runtime ?? null,
             handler: source.provider.handler ?? null,
             codeSha256: source.provider.codeSha256 ?? null,
-            bootstrap: {
-              sha256: source.provider.bootstrapSha256 ?? null,
-              archiveSha256: source.provider.bootstrapArchiveSha256 ?? null,
-              provenanceSha256: source.provider.bootstrapProvenanceSha256 ?? null,
-              buildDirty: source.provider.buildDirty ?? null,
-              cargoVersion: source.provider.cargoVersion ?? null,
-              rustcVersion: source.provider.rustcVersion ?? null,
-              cargoLambdaVersion: source.provider.cargoLambdaVersion ?? null,
-              zigVersion: source.provider.zigVersion ?? null,
-              buildToolchainSha256: source.provider.buildToolchainSha256 ?? null,
-              buildEnvironmentSha256: source.provider.buildEnvironmentSha256 ?? null,
-            },
-          },
+            ...(Object.values(bootstrapMembers).some((value) => value !== null)
+              ? { bootstrap: omitNullMembers(bootstrapMembers) }
+              : {}),
+          }),
         }
       : {}),
   };
+}
+
+/**
+ * Drops null-valued members so the emitted record follows omit-when-absent.
+ * AWS run records carry only the five measured provider fields; the shin-only
+ * members (implementationCommit, bootstrap) stay absent instead of being
+ * written as null.
+ */
+function omitNullMembers(record: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(record).filter(([, value]) => value !== null && value !== undefined),
+  );
 }
 
 /**
@@ -731,10 +748,40 @@ export function benchmarkRunRecordErrors(run: BenchmarkRunRecord): string[] {
     if (!hexSha256.test(cdk?.[name] ?? "")) errors.push(`${label}: invalid cdk.${name}`);
   }
   const implementation = implementationLabel(run);
+  const provider = run.provider;
   if (implementation === "aws") {
-    if (Object.hasOwn(run, "provider")) errors.push(`${label}: AWS provider must be omitted`);
+    if (provider === undefined || provider === null) {
+      errors.push(`${label}: provider is required for AWS`);
+    } else {
+      const awsProviderFields = new Set([
+        "packageVersion",
+        "architecture",
+        "runtime",
+        "handler",
+        "codeSha256",
+      ]);
+      for (const name of Object.keys(provider)) {
+        if (!awsProviderFields.has(name)) {
+          errors.push(`${label}: unexpected AWS provider field ${name}`);
+        }
+      }
+      if (typeof provider.packageVersion !== "string" || provider.packageVersion.length === 0) {
+        errors.push(`${label}: missing provider.packageVersion`);
+      }
+      if (provider.architecture !== "x86_64") {
+        errors.push(`${label}: AWS provider.architecture must be x86_64`);
+      }
+      if (provider.runtime !== "python3.13") {
+        errors.push(`${label}: AWS provider.runtime must be python3.13`);
+      }
+      if (provider.handler !== "index.handler") {
+        errors.push(`${label}: AWS provider.handler must be index.handler`);
+      }
+      if (!isBase64Sha256(provider.codeSha256)) {
+        errors.push(`${label}: invalid provider.codeSha256`);
+      }
+    }
   } else if (implementation === "shin") {
-    const provider = run.provider;
     if (provider === undefined || provider === null) {
       errors.push(`${label}: provider is required for Shin`);
     } else {

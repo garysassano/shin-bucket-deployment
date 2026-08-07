@@ -4,7 +4,11 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { collectBenchmarkResult } from "../../benchmarks/src/collect-results";
 import { parseBenchmarkRunOptions } from "../../benchmarks/src/config";
-import { providerSummaryErrors, sanitizeProviderSummary } from "../../benchmarks/src/model";
+import {
+  benchmarkEvidenceErrors,
+  providerSummaryErrors,
+  sanitizeProviderSummary,
+} from "../../benchmarks/src/model";
 import { createBenchmarkPlan } from "../../benchmarks/src/plan";
 import { renderBenchmarkReport } from "../../benchmarks/src/render/comparison-report";
 import { renderBenchmarkResultsTable } from "../../benchmarks/src/render/telemetry-table";
@@ -14,9 +18,106 @@ import {
   canonicalRunRecord,
   canonicalRuns,
   canonicalSampleRecord,
+  codeSha256,
 } from "../support/benchmark-records";
 
 describe("benchmark result collector", () => {
+  test("collects AWS run records with the five measured provider fields", () => {
+    const dir = mkdtempSync(join(tmpdir(), "shin-bench-collector-aws-"));
+    const logFile = join(dir, "deploy.log");
+    const reportFile = join(dir, "report.json");
+    writeFileSync(
+      logFile,
+      [
+        "✨  Deployment time: 1s",
+        "Stack.BenchmarkImplementation = aws",
+        "Stack.BenchmarkAssetProfile = tiny-many",
+        "Stack.BenchmarkMemoryLimitMb = 1024",
+        "Stack.BenchmarkState = baseline",
+        "Stack.BenchmarkFileCount = 1",
+        "Stack.BenchmarkTotalBytes = 1",
+        `Stack.BenchmarkAssetManifestSha256 = ${"2".repeat(64)}`,
+        "Stack.BenchmarkSourceCount = 1",
+        "Stack.BenchmarkDetailedFailureDiagnostics = not-applicable",
+        "real 1",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(
+      reportFile,
+      JSON.stringify({
+        events: [
+          {
+            timestamp: 2,
+            logStreamName: "stream",
+            message:
+              "REPORT RequestId: aws-id Duration: 1000 ms Billed Duration: 1000 ms Memory Size: 1024 MB Max Memory Used: 1 MB Init Duration: 100 ms",
+          },
+        ],
+      }),
+    );
+    const providerCodeSha256 = codeSha256("b".repeat(64));
+    const collected = collectBenchmarkResult({
+      implementation: "aws",
+      runId: "00000000-0000-4000-a000-000000000099",
+      sampleId: "00000000-0000-5000-a000-000000000099",
+      snapshotDate: "2026-01-01",
+      region: "eu-central-1",
+      cleanup: "benchmark cleanup pending",
+      benchmarkConfigSha256: "2".repeat(64),
+      assetManifestSha256: "2".repeat(64),
+      dependencyLockSha256: "1".repeat(64),
+      applicationBuildSha256: "2".repeat(64),
+      installedDependenciesSha256: "7".repeat(64),
+      nodeVersion: "v24.0.0",
+      pnpmVersion: "11.0.0",
+      executionEnvironmentSha256: "8".repeat(64),
+      executionEnvironmentFresh: true,
+      sourceTreeSha256: "3".repeat(64),
+      gitDirty: false,
+      cdkCliVersion: "1.0.0",
+      cdkCliInstalledSha256: "c".repeat(64),
+      awsCdkLibVersion: "2.260.0",
+      awsCdkLibInstalledSha256: "d".repeat(64),
+      constructsInstalledSha256: "e".repeat(64),
+      memoryMeasurementScope: "phase-local",
+      providerPackageVersion: "2.260.0",
+      providerArchitecture: "x86_64",
+      providerRuntime: "python3.13",
+      providerHandler: "index.handler",
+      providerCodeSha256,
+      memoryMb: 1024,
+      parallel: null,
+      detailedFailureDiagnostics: null,
+      assetProfile: "tiny-many",
+      state: "baseline",
+      repetition: 1,
+      fileCount: 1,
+      totalBytes: 1,
+      sourceCount: 1,
+      phase: "cold-create",
+      logFile,
+      reportFile,
+      outputFile: join(dir, "results.jsonl"),
+    });
+
+    expect(collected.run.provider).toEqual({
+      packageVersion: "2.260.0",
+      architecture: "x86_64",
+      runtime: "python3.13",
+      handler: "index.handler",
+      codeSha256: providerCodeSha256,
+    });
+    expect(Object.hasOwn(collected.run.provider ?? {}, "implementationCommit")).toBe(false);
+    expect(Object.hasOwn(collected.run.provider ?? {}, "bootstrap")).toBe(false);
+    expect(
+      benchmarkEvidenceErrors(
+        { runs: [collected.run], samples: [collected.sample] },
+        { allowPendingCleanup: true },
+      ),
+    ).toEqual([]);
+  });
+
   test("collects and persists one complete current-schema record", () => {
     const dir = mkdtempSync(join(tmpdir(), "shin-bench-collector-"));
     const outputFile = join(dir, "results.jsonl");
@@ -674,7 +775,7 @@ function collectCurrentRecord(
     reportFile,
     summaryFile,
     outputFile,
-  });
+  }).sample;
 }
 
 function firstFailureState(summary: ReturnType<typeof summaryBaseFixture>) {

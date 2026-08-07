@@ -57,7 +57,11 @@ type ResumeManifest = {
 
 export type ResumeSession = {
   readonly gitDirty: boolean;
-  persist(records: readonly BenchmarkSampleRecord[], cleanup?: BenchmarkCleanupStatus): void;
+  persist(
+    records: readonly BenchmarkSampleRecord[],
+    cleanup?: BenchmarkCleanupStatus,
+    providedRuns?: readonly BenchmarkRunRecord[],
+  ): void;
   close(): void;
 };
 
@@ -137,14 +141,14 @@ export function openResumeSession(args: {
 
     return {
       gitDirty,
-      persist(records, cleanup = "partial"): void {
+      persist(records, cleanup = "partial", providedRuns?): void {
         if (!active) throw new Error("Benchmark resume session is closed.");
         if (records.length === 0) return;
         if (fileDigest(evidenceFile) !== manifest.ledgerSha256) {
           throw new Error("Benchmark evidence ledger changed during the active run.");
         }
         const sampleContents = previewBenchmarkSamples(evidenceFile, records);
-        const runs = buildRunRecords(args.options, identity.source, records, cleanup);
+        const runs = buildRunRecords(args.options, identity.source, records, cleanup, providedRuns);
         const runsFile = runsFileFor(evidenceFile);
         const runsContents = previewBenchmarkRuns(runsFile, runs);
         const nextDigest = digest(sampleContents);
@@ -223,17 +227,28 @@ function buildRunRecords(
   source: ResumeIdentity["source"],
   records: readonly BenchmarkSampleRecord[],
   cleanup: BenchmarkCleanupStatus,
+  providedRuns?: readonly BenchmarkRunRecord[],
 ): BenchmarkRunRecord[] {
+  const provided = new Map((providedRuns ?? []).map((run) => [benchmarkRunKey(run), run]));
   const runs = new Map<string, BenchmarkRunRecord>();
   for (const record of records) {
     const implementation = normalizeImplementation(record.implementation);
     if (implementation === null) continue;
     const key = benchmarkRunKey({ runId: options.runId, implementation });
     if (runs.has(key)) continue;
-    runs.set(
-      key,
-      benchmarkRunRecordFrom(runRecordSource(options, source, implementation, cleanup)),
-    );
+    const providedRun = provided.get(key);
+    if (providedRun !== undefined) {
+      runs.set(key, { ...providedRun, cleanup });
+    } else if (implementation === "shin") {
+      runs.set(
+        key,
+        benchmarkRunRecordFrom(runRecordSource(options, source, implementation, cleanup)),
+      );
+    } else {
+      throw new Error(
+        `AWS run records require the measured provider metadata; none was provided for ${options.runId}.`,
+      );
+    }
   }
   return [...runs.values()];
 }

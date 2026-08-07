@@ -19,7 +19,9 @@ import {
 } from "./metadata";
 import {
   type BenchmarkImplementation,
+  type BenchmarkRunRecord,
   type BenchmarkSampleRecord,
+  benchmarkRunKey,
   benchmarkSampleRecordErrors,
 } from "./model";
 import { completedSampleIds } from "./persistence";
@@ -29,6 +31,7 @@ import { type ResumeSession, openResumeSession } from "./resume";
 type PhaseEvidence = {
   readonly options: CollectBenchmarkOptions;
   readonly record: BenchmarkSampleRecord;
+  readonly run: BenchmarkRunRecord;
 };
 
 type StackResource = {
@@ -421,9 +424,9 @@ async function runBenchmarkStack(args: {
         providerHandler: runtimeMetadata.handler,
         persist: false,
       };
-      const record = collectBenchmarkResult(collectOptions);
-      evidence.push({ options: collectOptions, record });
-      resumeSession.persist([record]);
+      const collected = collectBenchmarkResult(collectOptions);
+      evidence.push({ options: collectOptions, record: collected.sample, run: collected.run });
+      resumeSession.persist([collected.sample], undefined, [collected.run]);
     }
   } catch (error) {
     runError = error;
@@ -478,7 +481,10 @@ async function runBenchmarkStack(args: {
         throw new Error(`Refusing to qualify invalid benchmark evidence: ${errors.join("; ")}`);
       }
     }
-    resumeSession.persist(qualifiedRecords, "destroyed");
+    const qualifiedRuns = [
+      ...new Map(evidence.map(({ run }) => [benchmarkRunKey(run), run])).values(),
+    ];
+    resumeSession.persist(qualifiedRecords, "destroyed", qualifiedRuns);
     removePreservationManifest(preservedStackFile);
   }
   if (runError !== undefined && cleanupError !== undefined) {

@@ -68,7 +68,15 @@ export function canonicalRunRecord(
             },
           },
         }
-      : {}),
+      : {
+          provider: {
+            packageVersion: "1.0.0",
+            architecture: "x86_64",
+            runtime: "python3.13",
+            handler: "index.handler",
+            codeSha256: codeSha256(archiveSha256),
+          },
+        }),
     ...overrides,
   };
 }

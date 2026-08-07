@@ -26,6 +26,7 @@ import {
 import {
   type BenchmarkRunRecord,
   type BenchmarkSampleRecord,
+  benchmarkRunRecordErrors,
   isCanonicalBenchmarkRun,
   isCanonicalBenchmarkSample,
   readBenchmarkRunRecords,
@@ -686,6 +687,9 @@ describe("benchmark methodology", () => {
     expect(isCanonicalBenchmarkRun(canonicalRunRecord(parseBenchmarkRunOptions([]), "shin"))).toBe(
       true,
     );
+    expect(isCanonicalBenchmarkRun(canonicalRunRecord(parseBenchmarkRunOptions([]), "aws"))).toBe(
+      true,
+    );
     expect(isCanonicalBenchmarkSample(canonicalSampleRecord())).toBe(true);
     expect(() =>
       validateMethodologyV2Run({
@@ -694,6 +698,49 @@ describe("benchmark methodology", () => {
         options: parseBenchmarkRunOptions([]),
       }),
     ).toThrow("missing planned sample/phase");
+  });
+
+  test("requires the five measured provider fields on AWS run records", () => {
+    const options = parseBenchmarkRunOptions([]);
+    const canonical = canonicalRunRecord(options, "aws");
+    expect(isCanonicalBenchmarkRun(canonical)).toBe(true);
+
+    const withoutProvider = { ...canonical };
+    delete withoutProvider.provider;
+    expect(benchmarkRunRecordErrors(withoutProvider).join("; ")).toContain(
+      "provider is required for AWS",
+    );
+
+    const withImplementationCommit = {
+      ...canonical,
+      provider: {
+        ...(canonical.provider as Record<string, unknown>),
+        implementationCommit: "9".repeat(40),
+      },
+    };
+    expect(benchmarkRunRecordErrors(withImplementationCommit).join("; ")).toContain(
+      "unexpected AWS provider field implementationCommit",
+    );
+
+    const withBootstrap = {
+      ...canonical,
+      provider: {
+        ...(canonical.provider as Record<string, unknown>),
+        bootstrap: { sha256: "a".repeat(64) },
+      },
+    };
+    expect(benchmarkRunRecordErrors(withBootstrap).join("; ")).toContain(
+      "unexpected AWS provider field bootstrap",
+    );
+
+    for (const name of ["packageVersion", "architecture", "runtime", "handler", "codeSha256"]) {
+      const missing = {
+        ...canonical,
+        provider: { ...(canonical.provider as Record<string, unknown>) },
+      };
+      delete missing.provider[name];
+      expect(benchmarkRunRecordErrors(missing)).not.toEqual([]);
+    }
   });
 
   test("selects the latest completed run instead of aggregating different runs", () => {
@@ -1160,7 +1207,11 @@ describe("benchmark methodology", () => {
       sourceMetadata: sourceMetadata(),
       repositoryRoot,
     });
-    session.persist(records as BenchmarkSampleRecord[], "destroyed");
+    session.persist(
+      records as BenchmarkSampleRecord[],
+      "destroyed",
+      canonicalRuns(options) as BenchmarkRunRecord[],
+    );
     session.close();
 
     expect(

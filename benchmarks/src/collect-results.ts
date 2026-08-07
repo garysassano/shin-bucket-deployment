@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { basename } from "node:path";
 import { parseCliOptions } from "./cli";
 import {
+  type BenchmarkRunRecord,
   type BenchmarkRunRecordSource,
   type BenchmarkSampleRecord,
   type ProviderSummary,
@@ -154,7 +155,10 @@ function main(): void {
   );
 }
 
-export function collectBenchmarkResult(options: CollectBenchmarkOptions): BenchmarkSampleRecord {
+export function collectBenchmarkResult(options: CollectBenchmarkOptions): {
+  readonly sample: BenchmarkSampleRecord;
+  readonly run: BenchmarkRunRecord;
+} {
   const logText = readFileSync(options.logFile, "utf8");
   const implementation = normalizeImplementation(
     options.implementation ?? outputString(logText, "BenchmarkImplementation"),
@@ -190,30 +194,12 @@ export function collectBenchmarkResult(options: CollectBenchmarkOptions): Benchm
     implementation: implementation ?? null,
     profile: options.assetProfile ?? outputString(logText, "BenchmarkAssetProfile"),
     memoryMb: options.memoryMb ?? outputNumber(logText, "BenchmarkMemoryLimitMb"),
-    parallel:
-      implementation === "aws"
-        ? undefined
-        : options.parallel === undefined
-          ? outputNumber(logText, "BenchmarkTransferMaxConcurrency")
-          : options.parallel,
     assetManifestSha256: options.assetManifestSha256 ?? null,
     phase: options.phase,
     state: options.state ?? outputString(logText, "BenchmarkState"),
     repetition: options.repetition ?? null,
     fileCount: options.fileCount ?? outputNumber(logText, "BenchmarkFileCount"),
     totalBytes: options.totalBytes ?? outputNumber(logText, "BenchmarkTotalBytes"),
-    detailedFailureDiagnostics:
-      implementation === "aws"
-        ? undefined
-        : options.detailedFailureDiagnostics === undefined
-          ? outputDetailedFailureDiagnostics(logText)
-          : options.detailedFailureDiagnostics,
-    sourceWindowBytes:
-      implementation === "aws"
-        ? undefined
-        : options.sourceWindowBytes === undefined
-          ? (outputSourceWindowBytes(logText) ?? undefined)
-          : (options.sourceWindowBytes ?? undefined),
     cdkDeploySeconds: parseSeconds(logText, /Deployment time: ([\d.]+)s/),
     localWallSeconds: parseSeconds(logText, /^real ([\d.]+)$/m),
     providerDurationSeconds: report?.durationSeconds ?? null,
@@ -221,7 +207,23 @@ export function collectBenchmarkResult(options: CollectBenchmarkOptions): Benchm
     initDurationSeconds: report?.initDurationSeconds ?? null,
     maxMemoryMb: report?.maxMemoryMb ?? null,
     providerInvoked: report !== undefined || summaryEvidence !== undefined,
-    providerSummary: summaryEvidence?.summary,
+    ...(implementation === "aws"
+      ? {}
+      : {
+          parallel:
+            options.parallel === undefined
+              ? outputNumber(logText, "BenchmarkTransferMaxConcurrency")
+              : options.parallel,
+          detailedFailureDiagnostics:
+            options.detailedFailureDiagnostics === undefined
+              ? outputDetailedFailureDiagnostics(logText)
+              : options.detailedFailureDiagnostics,
+          sourceWindowBytes:
+            options.sourceWindowBytes === undefined
+              ? (outputSourceWindowBytes(logText) ?? undefined)
+              : (options.sourceWindowBytes ?? undefined),
+        }),
+    ...(implementation === "aws" ? {} : { providerSummary: summaryEvidence?.summary }),
   };
 
   const sanitizationErrors = benchmarkEvidenceSanitizationErrors(run, sample, [
@@ -243,7 +245,7 @@ export function collectBenchmarkResult(options: CollectBenchmarkOptions): Benchm
     upsertBenchmarkSample(options.outputFile, sample);
     upsertBenchmarkRun(runsFileFor(options.outputFile), run);
   }
-  return sample;
+  return { sample, run };
 }
 
 function buildRunRecordSource(
@@ -276,25 +278,29 @@ function buildRunRecordSource(
     ...(options.comparisonVariant !== undefined
       ? { comparisonVariant: options.comparisonVariant }
       : {}),
-    ...(implementation === "shin"
+    ...(implementation === "shin" || implementation === "aws"
       ? {
           provider: {
-            implementationCommit: options.commit ?? null,
+            ...(implementation === "shin" ? { implementationCommit: options.commit ?? null } : {}),
             packageVersion: options.providerPackageVersion ?? null,
             architecture: options.providerArchitecture ?? null,
             runtime: options.providerRuntime ?? null,
             handler: options.providerHandler ?? null,
             codeSha256: options.providerCodeSha256 ?? null,
-            bootstrapSha256: options.providerBootstrapSha256 ?? null,
-            bootstrapArchiveSha256: options.providerBootstrapArchiveSha256 ?? null,
-            bootstrapProvenanceSha256: options.providerBootstrapProvenanceSha256 ?? null,
-            buildDirty: options.providerBootstrapBuildDirty ?? null,
-            cargoVersion: options.providerBootstrapCargoVersion ?? null,
-            rustcVersion: options.providerBootstrapRustcVersion ?? null,
-            cargoLambdaVersion: options.providerBootstrapCargoLambdaVersion ?? null,
-            zigVersion: options.providerBootstrapZigVersion ?? null,
-            buildToolchainSha256: options.providerBootstrapBuildToolchainSha256 ?? null,
-            buildEnvironmentSha256: options.providerBootstrapBuildEnvironmentSha256 ?? null,
+            ...(implementation === "shin"
+              ? {
+                  bootstrapSha256: options.providerBootstrapSha256 ?? null,
+                  bootstrapArchiveSha256: options.providerBootstrapArchiveSha256 ?? null,
+                  bootstrapProvenanceSha256: options.providerBootstrapProvenanceSha256 ?? null,
+                  buildDirty: options.providerBootstrapBuildDirty ?? null,
+                  cargoVersion: options.providerBootstrapCargoVersion ?? null,
+                  rustcVersion: options.providerBootstrapRustcVersion ?? null,
+                  cargoLambdaVersion: options.providerBootstrapCargoLambdaVersion ?? null,
+                  zigVersion: options.providerBootstrapZigVersion ?? null,
+                  buildToolchainSha256: options.providerBootstrapBuildToolchainSha256 ?? null,
+                  buildEnvironmentSha256: options.providerBootstrapBuildEnvironmentSha256 ?? null,
+                }
+              : {}),
           },
         }
       : {}),
