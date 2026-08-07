@@ -7,9 +7,6 @@
     "$schema": {
       "type": "string"
     },
-    "methodologyVersion": {
-      "enum": [1, 2]
-    },
     "runId": {
       "type": "string",
       "format": "uuid",

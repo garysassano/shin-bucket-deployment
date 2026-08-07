@@ -91,7 +91,7 @@ function selectValidatedRecords(
   return joinBenchmarkSamples(selectedRuns, selectedSamples);
 }
 
-export function validateMethodologyV2Run(args: {
+export function validateCompleteCanonicalRun(args: {
   readonly runs: readonly BenchmarkRunRecord[];
   readonly samples: readonly BenchmarkSampleRecord[];
   readonly options: BenchmarkRunOptions;

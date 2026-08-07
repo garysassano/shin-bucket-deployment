@@ -10,7 +10,7 @@ Provider-summary schema-5 result rows, their generated reports, and their chart 
 
 ## Latest CI benchmark
 
-The latest complete canonical methodology-v2 run was collected by GitHub Actions on 2026-08-06 from source commit `3d33549`. It contains five sequential repetitions of all canonical profiles across all four phases. The sanitized run UUID is `e654d1fe-261d-4700-95af-0a7518520e5a`; raw AWS output remains outside git.
+The latest complete canonical five-repetition run was collected by GitHub Actions on 2026-08-06 from source commit `3d33549`. It contains five sequential repetitions of all canonical profiles across all four phases. The sanitized run UUID is `e654d1fe-261d-4700-95af-0a7518520e5a`; raw AWS output remains outside git.
 
 | Field                 | Value                                                      |
 | --------------------- | ---------------------------------------------------------- |

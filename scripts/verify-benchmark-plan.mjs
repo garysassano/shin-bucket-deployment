@@ -4,7 +4,7 @@ import {
   parseBenchmarkRunOptions,
 } from "../dist/benchmarks/src/config.js";
 import { createBenchmarkPlan } from "../dist/benchmarks/src/plan.js";
-import { validateMethodologyV2Run } from "../dist/benchmarks/src/validation.js";
+import { validateCompleteCanonicalRun } from "../dist/benchmarks/src/validation.js";
 
 const runId = "00000000-0000-4000-a000-000000000001";
 const options = parseBenchmarkRunOptions([
@@ -31,7 +31,7 @@ const runs = ["shin", "aws"].map((implementation) => canonicalRunRecord(options,
 const samples = plan.flatMap((sample) =>
   options.phases.map((phase) => canonicalSampleRecord(options, sample, phase)),
 );
-validateMethodologyV2Run({ runs, samples, options });
+validateCompleteCanonicalRun({ runs, samples, options });
 console.log(
   `Verified canonical five-repetition dry-run plan and ${samples.length} complete cells.`,
 );

@@ -59,7 +59,7 @@ import {
 import {
   selectValidatedBenchmarkPreview,
   selectValidatedBenchmarkRun,
-  validateMethodologyV2Run,
+  validateCompleteCanonicalRun,
 } from "../../benchmarks/src/validation";
 import {
   canonicalRecord,
@@ -692,7 +692,7 @@ describe("benchmark methodology", () => {
     );
     expect(isCanonicalBenchmarkSample(canonicalSampleRecord())).toBe(true);
     expect(() =>
-      validateMethodologyV2Run({
+      validateCompleteCanonicalRun({
         runs: canonicalRuns(parseBenchmarkRunOptions([])),
         samples: [canonicalSampleRecord()],
         options: parseBenchmarkRunOptions([]),
@@ -1163,7 +1163,7 @@ describe("benchmark methodology", () => {
       }),
     ).toThrow("missing billedDurationSeconds");
     expect(() =>
-      validateMethodologyV2Run({
+      validateCompleteCanonicalRun({
         runs: runs.map((run, index) =>
           index === 0
             ? {
@@ -1203,7 +1203,7 @@ describe("benchmark methodology", () => {
         return { ...run, provider };
       });
       expect(() =>
-        validateMethodologyV2Run({ runs: changedRuns, samples: records, options }),
+        validateCompleteCanonicalRun({ runs: changedRuns, samples: records, options }),
       ).toThrow(message);
     }
   });
