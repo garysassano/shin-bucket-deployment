@@ -10,9 +10,20 @@ import {
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import type { BenchmarkRunOptions } from "./config";
+import { benchmarkConfigurationSha256 } from "./config";
 import { type BenchmarkSourceMetadata, changedPathFromStatusLine } from "./metadata";
-import type { BenchmarkResultRecord } from "./model";
-import { previewBenchmarkRecords, writeBenchmarkLedger } from "./persistence";
+import type {
+  BenchmarkCleanupStatus,
+  BenchmarkRunRecord,
+  BenchmarkRunRecordSource,
+  BenchmarkSampleRecord,
+} from "./model";
+import { benchmarkRunKey, benchmarkRunRecordFrom, normalizeImplementation, runsFileFor } from "./model";
+import {
+  previewBenchmarkRuns,
+  previewBenchmarkSamples,
+  writeBenchmarkLedger,
+} from "./persistence";
 import { createBenchmarkPlan } from "./plan";
 
 type ResumeIdentity = {
@@ -46,7 +57,7 @@ type ResumeManifest = {
 
 export type ResumeSession = {
   readonly gitDirty: boolean;
-  persist(records: readonly BenchmarkResultRecord[]): void;
+  persist(records: readonly BenchmarkSampleRecord[], cleanup?: BenchmarkCleanupStatus): void;
   close(): void;
 };
 
@@ -126,17 +137,23 @@ export function openResumeSession(args: {
 
     return {
       gitDirty,
-      persist(records): void {
+      persist(records, cleanup = "partial"): void {
         if (!active) throw new Error("Benchmark resume session is closed.");
         if (records.length === 0) return;
         if (fileDigest(evidenceFile) !== manifest.ledgerSha256) {
           throw new Error("Benchmark evidence ledger changed during the active run.");
         }
-        const contents = previewBenchmarkRecords(evidenceFile, records);
-        const nextDigest = digest(contents);
+        const sampleContents = previewBenchmarkSamples(evidenceFile, records);
+        const runs = buildRunRecords(args.options, identity.source, records, cleanup);
+        const runsFile = runsFileFor(evidenceFile);
+        const runsContents = previewBenchmarkRuns(runsFile, runs);
+        const nextDigest = digest(sampleContents);
         manifest = { ...manifest, pendingLedgerSha256: nextDigest };
         writeManifest(manifestFile, manifest);
-        writeBenchmarkLedger(evidenceFile, contents);
+        writeBenchmarkLedger(evidenceFile, sampleContents);
+        if (runs.length > 0) {
+          writeBenchmarkLedger(runsFile, runsContents);
+        }
         manifest = { ...manifest, ledgerSha256: nextDigest, pendingLedgerSha256: undefined };
         writeManifest(manifestFile, manifest);
       },
@@ -187,7 +204,7 @@ export function assertBenchmarkLedgerMatchesManifest(args: {
 }): void {
   const manifestFile = join(args.scratchRoot, "benchmark-run-manifest.json");
   if (!existsSync(manifestFile)) {
-    throw new Error("Methodology-v2 publication requires its external benchmark run manifest.");
+    throw new Error("Canonical publication requires its external benchmark run manifest.");
   }
   const manifest = JSON.parse(readFileSync(manifestFile, "utf8")) as ResumeManifest;
   const evidenceFile = resolve(args.evidenceFile);
@@ -202,12 +219,97 @@ export function assertBenchmarkLedgerMatchesManifest(args: {
   }
 }
 
+function buildRunRecords(
+  options: BenchmarkRunOptions,
+  source: ResumeIdentity["source"],
+  records: readonly BenchmarkSampleRecord[],
+  cleanup: BenchmarkCleanupStatus,
+): BenchmarkRunRecord[] {
+  const runs = new Map<string, BenchmarkRunRecord>();
+  for (const record of records) {
+    const implementation = normalizeImplementation(record.implementation);
+    if (implementation === null) continue;
+    const key = benchmarkRunKey({ runId: options.runId, implementation });
+    if (runs.has(key)) continue;
+    runs.set(
+      key,
+      benchmarkRunRecordFrom(runRecordSource(options, source, implementation, cleanup)),
+    );
+  }
+  return [...runs.values()];
+}
+
+function runRecordSource(
+  options: BenchmarkRunOptions,
+  source: ResumeIdentity["source"],
+  implementation: string,
+  cleanup: BenchmarkCleanupStatus,
+): BenchmarkRunRecordSource {
+  const runSource: BenchmarkRunRecordSource = {
+    runId: options.runId,
+    implementation,
+    snapshotDate: options.snapshotDate,
+    region: options.region,
+    cleanup,
+    benchmarkConfigSha256: benchmarkConfigurationSha256(options),
+    memoryMeasurementScope: "phase-local",
+    nodeVersion: source.nodeVersion,
+    pnpmVersion: source.pnpmVersion,
+    executionEnvironmentSha256: source.executionEnvironmentSha256,
+    executionEnvironmentFresh: true,
+    dependencyLockSha256: source.dependencyLockSha256,
+    installedDependenciesSha256: source.installedDependenciesSha256,
+    applicationBuildSha256: source.applicationBuildSha256,
+    sourceTreeSha256: source.sourceTreeSha256,
+    gitDirty: false,
+    cdkCliVersion: source.cdkCliVersion,
+    cdkCliInstalledSha256: source.cdkCliInstalledSha256,
+    awsCdkLibVersion: source.awsCdkLibVersion,
+    awsCdkLibInstalledSha256: source.awsCdkLibInstalledSha256,
+    constructsInstalledSha256: source.constructsInstalledSha256,
+    ...(options.decisionRunId !== undefined
+      ? { decisionRunId: options.decisionRunId }
+      : {}),
+    ...(options.comparisonVariant !== undefined
+      ? { comparisonVariant: options.comparisonVariant }
+      : {}),
+    ...(implementation === "shin"
+      ? {
+          // The runner verifies the deployed provider against these exact values before
+          // collection (see assertProviderRuntimeMetadata): arm64 bootstrap, and a code
+          // SHA-256 that decodes to the provider bootstrap archive digest.
+          provider: {
+            implementationCommit: source.commit,
+            packageVersion: source.providerPackageVersion,
+            architecture: "arm64",
+            runtime: "provided.al2023",
+            handler: "bootstrap",
+            codeSha256: Buffer.from(source.providerBootstrapArchiveSha256, "hex").toString(
+              "base64",
+            ),
+            bootstrapSha256: source.providerBootstrapSha256,
+            bootstrapArchiveSha256: source.providerBootstrapArchiveSha256,
+            bootstrapProvenanceSha256: source.providerBootstrapProvenanceSha256,
+            buildDirty: source.providerBootstrapBuildDirty,
+            cargoVersion: source.providerBootstrapCargoVersion,
+            rustcVersion: source.providerBootstrapRustcVersion,
+            cargoLambdaVersion: source.providerBootstrapCargoLambdaVersion,
+            zigVersion: source.providerBootstrapZigVersion,
+            buildToolchainSha256: source.providerBootstrapBuildToolchainSha256,
+            buildEnvironmentSha256: source.providerBootstrapBuildEnvironmentSha256,
+          },
+        }
+      : {}),
+  };
+  return runSource;
+}
+
 function ledgerContainsRun(path: string, runId: string): boolean {
   if (!existsSync(path)) return false;
   return readFileSync(path, "utf8")
     .split(/\r?\n/)
     .filter(Boolean)
-    .some((line) => (JSON.parse(line) as BenchmarkResultRecord).runId === runId);
+    .some((line) => (JSON.parse(line) as BenchmarkSampleRecord).runId === runId);
 }
 
 function writeManifest(path: string, manifest: ResumeManifest): void {

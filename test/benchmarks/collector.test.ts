@@ -9,7 +9,12 @@ import { createBenchmarkPlan } from "../../benchmarks/src/plan";
 import { renderBenchmarkReport } from "../../benchmarks/src/render/comparison-report";
 import { renderBenchmarkResultsTable } from "../../benchmarks/src/render/telemetry-table";
 import { CANONICAL_BENCHMARK_CONFIG } from "../../benchmarks/src/validation";
-import { canonicalBenchmarkRecord, canonicalRecord } from "../support/benchmark-records";
+import {
+  canonicalRecord,
+  canonicalRuns,
+  canonicalRunRecord,
+  canonicalSampleRecord,
+} from "../support/benchmark-records";
 
 describe("benchmark result collector", () => {
   test("collects and persists one complete current-schema record", () => {
@@ -20,8 +25,6 @@ describe("benchmark result collector", () => {
 
     expect(JSON.parse(readFileSync(outputFile, "utf8"))).toEqual(collected);
     expect(collected).toMatchObject({
-      resultSchemaVersion: 2,
-      methodologyVersion: 2,
       implementation: "shin",
       profile: "tiny-many",
       memoryMb: 1024,
@@ -232,7 +235,6 @@ describe("benchmark result collector", () => {
     expect(() =>
       sanitizeProviderSummary({
         event: "shin_deployment_summary",
-        schemaVersion: 6,
         requestId: "must-not-be-persisted",
       }),
     ).toThrow("unexpected field requestId");
@@ -297,6 +299,10 @@ describe("benchmark result collector", () => {
       .filter((sample) => sample.repetition === 1)
       .flatMap((sample) => options.phases.map((phase) => canonicalRecord(options, sample, phase)));
     writeFileSync(inputFile, `${records.map((record) => JSON.stringify(record)).join("\n")}\n`);
+    writeFileSync(
+      join(dir, "runs.jsonl"),
+      `${canonicalRuns(options).map((run) => JSON.stringify(run)).join("\n")}\n`,
+    );
 
     const report = renderBenchmarkReport({ inputFile, outputFile, preview: true });
 
@@ -327,6 +333,10 @@ describe("benchmark result collector", () => {
       .filter((sample) => sample.repetition === 1)
       .flatMap((sample) => options.phases.map((phase) => canonicalRecord(options, sample, phase)));
     writeFileSync(inputFile, `${records.map((record) => JSON.stringify(record)).join("\n")}\n`);
+    writeFileSync(
+      join(dir, "runs.jsonl"),
+      `${canonicalRuns(options).map((run) => JSON.stringify(run)).join("\n")}\n`,
+    );
 
     const table = renderBenchmarkResultsTable({ inputFile, outputFile, preview: true });
 
@@ -343,7 +353,6 @@ function summaryFixture() {
   const base = summaryBaseFixture();
   return {
     ...base,
-    schemaVersion: 6,
     copyObject: {
       wireAttempts: 12,
       failedAttempts: 3,
@@ -361,7 +370,6 @@ function summaryBaseFixture() {
   const range = (value: number, count = 2) => ({ min: value, max: value, total: value * count });
   return {
     event: "shin_deployment_summary",
-    schemaVersion: 6,
     requestType: "Create",
     deploymentStatus: "success",
     extract: true,
@@ -529,11 +537,28 @@ function collectCurrentRecord(
   outputFile: string,
   overrides: Record<string, unknown> = {},
 ) {
-  const record = canonicalBenchmarkRecord({
-    cleanup: "benchmark cleanup pending",
+  const decisionRunId = overrides.decisionRunId as string | undefined;
+  const comparisonVariant = overrides.comparisonVariant as string | undefined;
+  const { decisionRunId: _decisionRunId, comparisonVariant: _comparisonVariant, ...sampleOverrides } =
+    overrides;
+  const record = canonicalSampleRecord({
     providerSummary: summaryFixture(),
-    ...overrides,
+    ...sampleOverrides,
   });
+  const options = parseBenchmarkRunOptions([
+    "--run-id",
+    String(record.runId),
+    "--snapshot-date",
+    "2026-01-01",
+    ...(decisionRunId ? ["--decision-run-id", decisionRunId] : []),
+    ...(comparisonVariant ? ["--comparison-variant", comparisonVariant] : []),
+  ]);
+  const run = canonicalRunRecord(options, "shin") as Record<string, unknown>;
+  const runConfig = run.config as Record<string, unknown>;
+  const environment = run.environment as Record<string, unknown>;
+  const cdk = run.cdk as Record<string, unknown>;
+  const provider = run.provider as Record<string, unknown>;
+  const bootstrap = provider.bootstrap as Record<string, unknown>;
   const sampleId = record.sampleId as string;
   const requestId = `request-${sampleId}`;
   const logStreamName = `stream-${sampleId}`;
@@ -588,48 +613,44 @@ function collectCurrentRecord(
   return collectBenchmarkResult({
     runId: record.runId as string,
     sampleId,
-    snapshotDate: record.snapshotDate as string,
-    decisionRunId: (record.decisionRunId as string | null) ?? undefined,
-    comparisonVariant: (record.comparisonVariant as string | null) ?? undefined,
+    snapshotDate: run.snapshotDate as string,
+    decisionRunId,
+    comparisonVariant,
     repetition: record.repetition as number,
-    benchmarkConfigSha256: record.benchmarkConfigSha256 as string,
+    benchmarkConfigSha256: runConfig.benchmarkConfigSha256 as string,
     assetManifestSha256: record.assetManifestSha256 as string,
-    dependencyLockSha256: record.dependencyLockSha256 as string,
-    applicationBuildSha256: record.applicationBuildSha256 as string,
-    installedDependenciesSha256: record.installedDependenciesSha256 as string,
-    nodeVersion: record.nodeVersion as string,
-    pnpmVersion: record.pnpmVersion as string,
-    executionEnvironmentSha256: record.executionEnvironmentSha256 as string,
-    sourceTreeSha256: record.sourceTreeSha256 as string,
-    commit: record.providerImplementationCommit as string,
-    subject: record.providerImplementationSubject as string,
-    providerPackageName: record.providerPackageName as string,
-    providerPackageVersion: record.providerPackageVersion as string,
-    providerArchitecture: record.providerArchitecture as string,
-    providerRuntime: record.providerRuntime as string,
-    providerHandler: record.providerHandler as string,
-    providerCodeSha256: record.providerCodeSha256 as string,
-    providerBootstrapSha256: record.providerBootstrapSha256 as string,
-    providerBootstrapArchiveSha256: record.providerBootstrapArchiveSha256 as string,
-    providerBootstrapProvenanceSha256: record.providerBootstrapProvenanceSha256 as string,
-    providerBootstrapBuildDirty: record.providerBootstrapBuildDirty as boolean,
-    providerBootstrapCargoVersion: record.providerBootstrapCargoVersion as string,
-    providerBootstrapRustcVersion: record.providerBootstrapRustcVersion as string,
-    providerBootstrapCargoLambdaVersion: record.providerBootstrapCargoLambdaVersion as string,
-    providerBootstrapZigVersion: record.providerBootstrapZigVersion as string,
-    providerBootstrapBuildToolchainSha256: record.providerBootstrapBuildToolchainSha256 as string,
-    providerBootstrapBuildEnvironmentSha256:
-      record.providerBootstrapBuildEnvironmentSha256 as string,
-    gitDirty: record.gitDirty as boolean,
-    cdkCliVersion: record.cdkCliVersion as string,
-    cdkCliInstalledSha256: record.cdkCliInstalledSha256 as string,
-    awsCdkLibVersion: record.awsCdkLibVersion as string,
-    awsCdkLibIntegrity: record.awsCdkLibIntegrity as string,
-    awsCdkLibInstalledSha256: record.awsCdkLibInstalledSha256 as string,
-    constructsInstalledSha256: record.constructsInstalledSha256 as string,
-    executionEnvironmentFresh: record.executionEnvironmentFresh as boolean,
-    memoryMeasurementScope: record.memoryMeasurementScope as "phase-local",
-    region: record.region as string,
+    dependencyLockSha256: environment.dependencyLockSha256 as string,
+    applicationBuildSha256: environment.applicationBuildSha256 as string,
+    installedDependenciesSha256: environment.installedDependenciesSha256 as string,
+    nodeVersion: environment.nodeVersion as string,
+    pnpmVersion: environment.pnpmVersion as string,
+    executionEnvironmentSha256: environment.executionEnvironmentSha256 as string,
+    sourceTreeSha256: environment.sourceTreeSha256 as string,
+    commit: provider.implementationCommit as string,
+    providerPackageVersion: provider.packageVersion as string,
+    providerArchitecture: provider.architecture as string,
+    providerRuntime: provider.runtime as string,
+    providerHandler: provider.handler as string,
+    providerCodeSha256: provider.codeSha256 as string,
+    providerBootstrapSha256: bootstrap.sha256 as string,
+    providerBootstrapArchiveSha256: bootstrap.archiveSha256 as string,
+    providerBootstrapProvenanceSha256: bootstrap.provenanceSha256 as string,
+    providerBootstrapBuildDirty: bootstrap.buildDirty as boolean,
+    providerBootstrapCargoVersion: bootstrap.cargoVersion as string,
+    providerBootstrapRustcVersion: bootstrap.rustcVersion as string,
+    providerBootstrapCargoLambdaVersion: bootstrap.cargoLambdaVersion as string,
+    providerBootstrapZigVersion: bootstrap.zigVersion as string,
+    providerBootstrapBuildToolchainSha256: bootstrap.buildToolchainSha256 as string,
+    providerBootstrapBuildEnvironmentSha256: bootstrap.buildEnvironmentSha256 as string,
+    gitDirty: environment.gitDirty as boolean,
+    cdkCliVersion: cdk.cliVersion as string,
+    cdkCliInstalledSha256: cdk.cliInstalledSha256 as string,
+    awsCdkLibVersion: cdk.libVersion as string,
+    awsCdkLibInstalledSha256: cdk.libInstalledSha256 as string,
+    constructsInstalledSha256: cdk.constructsInstalledSha256 as string,
+    executionEnvironmentFresh: environment.executionEnvironmentFresh as boolean,
+    memoryMeasurementScope: runConfig.memoryMeasurementScope as "phase-local",
+    region: run.region as string,
     implementation: record.implementation as string,
     assetProfile: record.profile as string,
     memoryMb: record.memoryMb as number,
@@ -641,7 +662,7 @@ function collectCurrentRecord(
     fileCount: record.fileCount as number,
     totalBytes: record.totalBytes as number,
     sourceCount: 1,
-    cleanup: record.cleanup as string,
+    cleanup: "benchmark cleanup pending",
     logFile,
     reportFile,
     summaryFile,

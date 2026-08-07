@@ -7,7 +7,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { summarize } from "../aggregate";
 import { parseCliOptions } from "../cli";
-import { type BenchmarkResultRecord, phaseRank, readBenchmarkResultRecords } from "../model";
+import { type BenchmarkRunSample, phaseRank, readBenchmarkEvidence } from "../model";
 import { selectValidatedBenchmarkPreview, selectValidatedBenchmarkRun } from "../validation";
 
 type ChartVariant = "default" | "aws";
@@ -154,7 +154,7 @@ interface Row {
   aws: number;
 }
 
-type BenchmarkRecord = BenchmarkResultRecord;
+type BenchmarkRecord = BenchmarkRunSample;
 
 interface BenchmarkData {
   assets: string;
@@ -304,8 +304,8 @@ function findSelections(records: BenchmarkRecord[]): DataSelection[] {
         record.runId === metadataRecord.runId &&
         record.profile === metadataRecord.profile &&
         record.memoryMb === metadataRecord.memoryMb &&
-        // AWS rows always carry `parallel: null`; Shin parallelism is not an upstream input.
-        record.parallel === null,
+        // AWS samples always omit `parallel`; Shin parallelism is not an upstream input.
+        record.parallel === null || record.parallel === undefined,
     );
     const runRecords = [...shinRecords, ...awsRecords];
     const phases = new Set(comparablePhases(runRecords));
@@ -374,8 +374,8 @@ function buildBenchmarkData(selection: DataSelection): BenchmarkData {
     );
   }
   const awsMetadataRecord = selection.awsRecords.values().next().value;
-  const shinCommit = metadataRecord.providerImplementationCommit;
-  const awsCdkLibVersion = awsMetadataRecord?.providerPackageVersion;
+  const shinCommit = metadataRecord.provider?.implementationCommit;
+  const awsCdkLibVersion = awsMetadataRecord?.cdk?.libVersion;
   if (shinCommit === null || shinCommit === undefined || awsCdkLibVersion === undefined) {
     throw new Error(
       `Missing implementation identity for profile=${selection.profile}, memory=${selection.memoryMb}, maxConcurrency=${selection.parallel}`,
@@ -656,7 +656,7 @@ const selectRecords = requestedPreview
   : selectValidatedBenchmarkRun;
 const benchmarkDataItems = findSelections(
   selectRecords({
-    records: readBenchmarkResultRecords(inputFile),
+    ...readBenchmarkEvidence(inputFile),
     runId: requestedRunId,
     configFile: requestedConfigFile,
     inputFile,

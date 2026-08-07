@@ -19,8 +19,8 @@ import {
 } from "./metadata";
 import {
   type BenchmarkImplementation,
-  type BenchmarkResultRecord,
-  benchmarkRecordErrors,
+  type BenchmarkSampleRecord,
+  benchmarkSampleRecordErrors,
 } from "./model";
 import { completedSampleIds } from "./persistence";
 import { type PlannedBenchmarkRun, createBenchmarkPlan, wallClockCapReached } from "./plan";
@@ -28,7 +28,7 @@ import { type ResumeSession, openResumeSession } from "./resume";
 
 type PhaseEvidence = {
   readonly options: CollectBenchmarkOptions;
-  readonly record: BenchmarkResultRecord;
+  readonly record: BenchmarkSampleRecord;
 };
 
 type StackResource = {
@@ -361,9 +361,6 @@ async function runBenchmarkStack(args: {
         snapshotDate: options.snapshotDate,
         phase: phase.name,
         ...(run.implementation === "shin" ? { commit: sourceMetadata.commit } : {}),
-        ...(run.implementation === "shin" ? { subject: sourceMetadata.subject } : {}),
-        providerPackageName:
-          run.implementation === "shin" ? sourceMetadata.providerPackageName : "aws-cdk-lib",
         providerPackageVersion:
           run.implementation === "shin"
             ? sourceMetadata.providerPackageVersion
@@ -391,7 +388,6 @@ async function runBenchmarkStack(args: {
         cdkCliVersion: sourceMetadata.cdkCliVersion,
         cdkCliInstalledSha256: sourceMetadata.cdkCliInstalledSha256,
         awsCdkLibVersion: sourceMetadata.awsCdkLibVersion,
-        awsCdkLibIntegrity: sourceMetadata.awsCdkLibIntegrity,
         awsCdkLibInstalledSha256: sourceMetadata.awsCdkLibInstalledSha256,
         constructsInstalledSha256: sourceMetadata.constructsInstalledSha256,
         executionEnvironmentFresh: runtimeMetadata.executionEnvironmentFresh,
@@ -475,17 +471,14 @@ async function runBenchmarkStack(args: {
   if (cleanupError === undefined && !stackPreserved) {
     await assertSourceUnchanged(sourceMetadata, options);
     for (const bundle of bundles.values()) assertAssetsUnchanged(bundle);
-    const qualifiedRecords = evidence.map(({ record }) => ({
-      ...record,
-      cleanup: "all benchmark stacks destroyed",
-    }));
+    const qualifiedRecords = evidence.map(({ record }) => record);
     for (const record of qualifiedRecords) {
-      const errors = benchmarkRecordErrors(record);
+      const errors = benchmarkSampleRecordErrors(record);
       if (errors.length > 0) {
         throw new Error(`Refusing to qualify invalid benchmark evidence: ${errors.join("; ")}`);
       }
     }
-    resumeSession.persist(qualifiedRecords);
+    resumeSession.persist(qualifiedRecords, "destroyed");
     removePreservationManifest(preservedStackFile);
   }
   if (runError !== undefined && cleanupError !== undefined) {

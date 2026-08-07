@@ -4,71 +4,106 @@ import { benchmarkConfigurationSha256 } from "../../benchmarks/src/config";
 import type { createBenchmarkPlan } from "../../benchmarks/src/plan";
 
 /**
- * A complete, valid canonical benchmark result row. Every required field carries a
- * placeholder that passes `benchmarkRecordErrors`, so tests override only the fields
- * they actually assert on.
+ * A complete, valid canonical benchmark run record. Every required field carries a
+ * placeholder that passes `benchmarkRunRecordErrors`, so tests override only the
+ * fields they actually assert on.
  */
-export function canonicalBenchmarkRecord(
+export function canonicalRunRecord(
+  options: BenchmarkRunOptions,
+  implementation: "shin" | "aws",
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  const shin = implementation === "shin";
+  const archiveSha256 = shin ? "a".repeat(64) : "b".repeat(64);
+  return {
+    runId: options.runId,
+    implementation,
+    snapshotDate: options.snapshotDate,
+    region: options.region,
+    cleanup: "destroyed",
+    ...(options.decisionRunId ? { decisionRunId: options.decisionRunId } : {}),
+    ...(options.comparisonVariant ? { comparisonVariant: options.comparisonVariant } : {}),
+    config: {
+      benchmarkConfigSha256: benchmarkConfigurationSha256(options),
+      memoryMeasurementScope: "phase-local",
+    },
+    environment: {
+      nodeVersion: "v24.0.0",
+      pnpmVersion: "11.0.0",
+      executionEnvironmentSha256: "8".repeat(64),
+      executionEnvironmentFresh: true,
+      dependencyLockSha256: "1".repeat(64),
+      installedDependenciesSha256: "7".repeat(64),
+      applicationBuildSha256: "2".repeat(64),
+      sourceTreeSha256: "3".repeat(64),
+      gitDirty: false,
+    },
+    cdk: {
+      cliVersion: "1.0.0",
+      cliInstalledSha256: "c".repeat(64),
+      libVersion: "1.0.0",
+      libInstalledSha256: "d".repeat(64),
+      constructsInstalledSha256: "e".repeat(64),
+    },
+    ...(shin
+      ? {
+          provider: {
+            implementationCommit: "9".repeat(40),
+            packageVersion: "1.0.0",
+            architecture: "arm64",
+            runtime: "provided.al2023",
+            handler: "bootstrap",
+            codeSha256: codeSha256(archiveSha256),
+            bootstrap: {
+              sha256: "a".repeat(64),
+              archiveSha256,
+              provenanceSha256: "4".repeat(64),
+              buildDirty: false,
+              cargoVersion: "cargo 1.0.0",
+              rustcVersion: "rustc 1.0.0",
+              cargoLambdaVersion: "cargo-lambda 1.0.0",
+              zigVersion: "1.0.0",
+              buildToolchainSha256: "6".repeat(64),
+              buildEnvironmentSha256: "5".repeat(64),
+            },
+          },
+        }
+      : {}),
+    ...overrides,
+  };
+}
+
+/** The canonical run ledger for both implementations of the given run options. */
+export function canonicalRuns(options: BenchmarkRunOptions): Array<Record<string, unknown>> {
+  return [
+    canonicalRunRecord(options, "shin"),
+    canonicalRunRecord(options, "aws"),
+  ];
+}
+
+/**
+ * A complete, valid canonical benchmark sample record. Every required field carries
+ * a placeholder that passes `benchmarkSampleRecordErrors`, so tests override only
+ * the fields they actually assert on.
+ */
+export function canonicalSampleRecord(
   overrides: Record<string, unknown> = {},
 ): Record<string, unknown> {
   const shin = (overrides.implementation ?? "shin") === "shin";
-  const archiveSha256 = shin ? "a".repeat(64) : "b".repeat(64);
   return {
-    resultSchemaVersion: 2,
-    methodologyVersion: 2,
     runId: "00000000-0000-4000-a000-000000000001",
     sampleId: "00000000-0000-5000-a000-000000000001",
-    snapshotDate: "2026-01-01",
-    decisionRunId: null,
-    comparisonVariant: null,
-    repetition: 1,
-    benchmarkConfigSha256: "1".repeat(64),
-    assetManifestSha256: "2".repeat(64),
-    dependencyLockSha256: "3".repeat(64),
-    applicationBuildSha256: "4".repeat(64),
-    installedDependenciesSha256: "6".repeat(64),
-    nodeVersion: "v24.0.0",
-    pnpmVersion: "11.0.0",
-    executionEnvironmentSha256: "7".repeat(64),
-    sourceTreeSha256: "5".repeat(64),
-    providerImplementationCommit: shin ? "9".repeat(40) : null,
-    providerImplementationSubject: shin ? "subject" : null,
-    providerPackageName: shin ? "shin-bucket-deployment" : "aws-cdk-lib",
-    providerPackageVersion: "1.0.0",
-    providerArchitecture: shin ? "arm64" : "x86_64",
-    providerRuntime: shin ? "provided.al2023" : "python3.13",
-    providerHandler: shin ? "bootstrap" : "index.handler",
-    providerCodeSha256: Buffer.from(archiveSha256, "hex").toString("base64"),
-    providerBootstrapSha256: shin ? "a".repeat(64) : null,
-    providerBootstrapArchiveSha256: shin ? archiveSha256 : null,
-    providerBootstrapProvenanceSha256: shin ? "b".repeat(64) : null,
-    providerBootstrapBuildDirty: shin ? false : null,
-    providerBootstrapCargoVersion: shin ? "cargo 1.0.0" : null,
-    providerBootstrapRustcVersion: shin ? "rustc 1.0.0" : null,
-    providerBootstrapCargoLambdaVersion: shin ? "cargo-lambda 1.0.0" : null,
-    providerBootstrapZigVersion: shin ? "0.15.0" : null,
-    providerBootstrapBuildToolchainSha256: shin ? "e".repeat(64) : null,
-    providerBootstrapBuildEnvironmentSha256: shin ? "d".repeat(64) : null,
-    gitDirty: false,
-    cdkCliVersion: "1.0.0",
-    cdkCliInstalledSha256: "c".repeat(64),
-    awsCdkLibVersion: "1.0.0",
-    awsCdkLibIntegrity: "sha512-test",
-    awsCdkLibInstalledSha256: "d".repeat(64),
-    constructsInstalledSha256: "f".repeat(64),
-    executionEnvironmentFresh: true,
-    memoryMeasurementScope: "phase-local",
-    region: "eu-central-1",
     implementation: shin ? "shin" : "aws",
     profile: "tiny-many",
     memoryMb: 1024,
-    parallel: shin ? 32 : null,
-    sourceWindowBytes: null,
-    detailedFailureDiagnostics: shin ? true : null,
+    ...(shin ? { parallel: 32 } : {}),
+    assetManifestSha256: "2".repeat(64),
     phase: "cold-create",
     state: "baseline",
+    repetition: 1,
     fileCount: 1,
     totalBytes: 1,
+    ...(shin ? { detailedFailureDiagnostics: true } : {}),
     cdkDeploySeconds: 1,
     localWallSeconds: 1,
     providerDurationSeconds: 1,
@@ -76,80 +111,37 @@ export function canonicalBenchmarkRecord(
     initDurationSeconds: 0.1,
     maxMemoryMb: 1,
     providerInvoked: true,
-    cleanup: "all benchmark stacks destroyed",
-    resultDocumentationCommit: null,
-    notes: null,
-    providerSummary: null,
+    ...(shin ? { providerSummary: providerSummary(1024, 32, true) } : {}),
     ...overrides,
   };
 }
 
+/** The canonical sample for one planned cell of a canonical run. */
 export function canonicalRecord(
   options: BenchmarkRunOptions,
   sample: ReturnType<typeof createBenchmarkPlan>[number],
   phase: BenchmarkRunOptions["phases"][number],
 ) {
   const shin = sample.implementation === "shin";
-  const archiveSha256 = shin ? "a".repeat(64) : "b".repeat(64);
   return {
-    resultSchemaVersion: 2,
-    methodologyVersion: 2,
     runId: options.runId,
     sampleId: sample.sampleId,
-    snapshotDate: options.snapshotDate,
-    decisionRunId: options.decisionRunId ?? null,
-    comparisonVariant: options.comparisonVariant ?? null,
-    repetition: sample.repetition,
-    benchmarkConfigSha256: benchmarkConfigurationSha256(options),
-    assetManifestSha256: assetManifestSha256(sample.assetProfile, phase.assetState),
-    dependencyLockSha256: "1".repeat(64),
-    applicationBuildSha256: "2".repeat(64),
-    installedDependenciesSha256: "7".repeat(64),
-    nodeVersion: "v24.0.0",
-    pnpmVersion: "11.0.0",
-    executionEnvironmentSha256: "8".repeat(64),
-    sourceTreeSha256: "3".repeat(64),
-    providerImplementationCommit: shin ? "9".repeat(40) : null,
-    providerImplementationSubject: shin ? "subject" : null,
-    providerPackageName: shin ? "shin-bucket-deployment" : "aws-cdk-lib",
-    providerPackageVersion: "1.0.0",
-    providerArchitecture: shin ? "arm64" : "x86_64",
-    providerRuntime: shin ? "provided.al2023" : "python3.13",
-    providerHandler: shin ? "bootstrap" : "index.handler",
-    providerCodeSha256: codeSha256(archiveSha256),
-    providerBootstrapSha256: shin ? "a".repeat(64) : null,
-    providerBootstrapArchiveSha256: shin ? archiveSha256 : null,
-    providerBootstrapProvenanceSha256: shin ? "4".repeat(64) : null,
-    providerBootstrapBuildDirty: shin ? false : null,
-    providerBootstrapCargoVersion: shin ? "cargo 1.0.0" : null,
-    providerBootstrapRustcVersion: shin ? "rustc 1.0.0" : null,
-    providerBootstrapCargoLambdaVersion: shin ? "cargo-lambda 1.0.0" : null,
-    providerBootstrapZigVersion: shin ? "1.0.0" : null,
-    providerBootstrapBuildToolchainSha256: shin ? "6".repeat(64) : null,
-    providerBootstrapBuildEnvironmentSha256: shin ? "5".repeat(64) : null,
-    gitDirty: false,
-    cdkCliVersion: "1.0.0",
-    cdkCliInstalledSha256: "c".repeat(64),
-    awsCdkLibVersion: "1.0.0",
-    awsCdkLibIntegrity: "sha512-test",
-    awsCdkLibInstalledSha256: "d".repeat(64),
-    constructsInstalledSha256: "f".repeat(64),
-    executionEnvironmentFresh: true,
-    memoryMeasurementScope: "phase-local" as const,
-    resultDocumentationCommit: null,
-    region: options.region,
     implementation: sample.implementation,
     profile: sample.assetProfile,
     memoryMb: sample.memoryMb,
-    parallel: sample.parallel,
-    detailedFailureDiagnostics: shin ? options.detailedFailureDiagnostics : null,
-    ...(Object.hasOwn(sample, "sourceWindowBytes")
-      ? { sourceWindowBytes: sample.sourceWindowBytes ?? null }
-      : {}),
+    ...(shin ? { parallel: sample.parallel } : {}),
+    assetManifestSha256: assetManifestSha256(sample.assetProfile, phase.assetState),
     phase: phase.name,
     state: phase.assetState,
+    repetition: sample.repetition,
     fileCount: 1,
     totalBytes: 1,
+    ...(shin
+      ? { detailedFailureDiagnostics: options.detailedFailureDiagnostics }
+      : {}),
+    ...(sample.sourceWindowBytes !== undefined && sample.sourceWindowBytes !== null
+      ? { sourceWindowBytes: sample.sourceWindowBytes }
+      : {}),
     cdkDeploySeconds: 1,
     localWallSeconds: 1,
     providerDurationSeconds: 1,
@@ -157,11 +149,15 @@ export function canonicalRecord(
     initDurationSeconds: 0.1,
     maxMemoryMb: 1,
     providerInvoked: true,
-    cleanup: "all benchmark stacks destroyed",
-    notes: null,
-    providerSummary: shin
-      ? providerSummary(sample.memoryMb, sample.parallel as number, phase.name === "cold-create")
-      : null,
+    ...(shin
+      ? {
+          providerSummary: providerSummary(
+            sample.memoryMb,
+            sample.parallel as number,
+            phase.name === "cold-create",
+          ),
+        }
+      : {}),
   };
 }
 
@@ -172,7 +168,6 @@ function zeroFields(names: readonly string[]): Record<string, number> {
 export function providerSummary(memoryMb: number, parallel: number, create: boolean) {
   return {
     event: "shin_deployment_summary",
-    schemaVersion: 6,
     requestType: create ? "Create" : "Update",
     deploymentStatus: "success",
     extract: true,

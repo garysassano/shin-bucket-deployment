@@ -14,7 +14,6 @@ import { isAbsolute, join, relative, resolve } from "node:path";
 type PackageJson = { readonly name?: string; readonly version?: string };
 
 type BootstrapBuildProvenance = {
-  readonly schemaVersion?: number;
   readonly architecture?: string;
   readonly binaryName?: string;
   readonly target?: string;
@@ -229,7 +228,6 @@ export function assertBootstrapBuildProvenance(args: {
 }): void {
   const { provenance } = args;
   if (
-    provenance.schemaVersion !== 1 ||
     provenance.architecture !== "arm64" ||
     provenance.binaryName !== "shin-bucket-deployment-handler" ||
     provenance.target !== "aarch64-unknown-linux-gnu" ||

@@ -8,14 +8,14 @@ import {
 } from "../aggregate";
 import { parseCliOptions } from "../cli";
 import {
-  type BenchmarkResultRecord,
+  type BenchmarkRunSample,
   implementationLabel,
   phaseRank,
-  readBenchmarkResultRecords,
+  readBenchmarkEvidence,
 } from "../model";
 import { selectValidatedBenchmarkPreview, selectValidatedBenchmarkRun } from "../validation";
 
-type BenchmarkRecord = BenchmarkResultRecord;
+type BenchmarkRecord = BenchmarkRunSample;
 
 type MetricName =
   | "providerDurationSeconds"
@@ -68,8 +68,10 @@ export function renderBenchmarkReport(options: RenderOptions): string {
   const selectRecords = options.preview
     ? selectValidatedBenchmarkPreview
     : selectValidatedBenchmarkRun;
+  const evidence = readBenchmarkEvidence(options.inputFile);
   const records = selectRecords({
-    records: readBenchmarkResultRecords(options.inputFile),
+    runs: evidence.runs,
+    samples: evidence.samples,
     runId: options.runId,
     configFile: options.configFile,
     inputFile: options.inputFile,
@@ -98,7 +100,7 @@ function renderReport(records: BenchmarkRecord[], options: RenderOptions): strin
     ...(options.preview
       ? [
           "> [!WARNING]",
-          "> Preliminary preview from an incomplete methodology-v2 run. Do not treat these values as accepted benchmark evidence.",
+          "> Preliminary preview from an incomplete canonical run. Do not treat these values as accepted benchmark evidence.",
           "",
         ]
       : []),

@@ -27,90 +27,108 @@ if (new Set(plan.map((sample) => sample.sampleId)).size !== plan.length) {
   throw new Error("Canonical benchmark sample IDs are not unique.");
 }
 
-const records = plan.flatMap((sample) =>
-  options.phases.map((phase) => {
-    const shin = sample.implementation === "shin";
-    const archiveSha256 = shin ? "a".repeat(64) : "b".repeat(64);
-    return {
-      resultSchemaVersion: 2,
-      methodologyVersion: 2,
-      runId,
-      sampleId: sample.sampleId,
-      snapshotDate: options.snapshotDate,
-      decisionRunId: null,
-      comparisonVariant: null,
-      repetition: sample.repetition,
+const runs = ["shin", "aws"].map((implementation) =>
+  canonicalRunRecord(options, implementation),
+);
+const samples = plan.flatMap((sample) =>
+  options.phases.map((phase) => canonicalSampleRecord(options, sample, phase)),
+);
+validateMethodologyV2Run({ runs, samples, options });
+console.log(
+  `Verified canonical five-repetition dry-run plan and ${samples.length} complete cells.`,
+);
+
+function canonicalRunRecord(options, implementation) {
+  const shin = implementation === "shin";
+  const archiveSha256 = shin ? "a".repeat(64) : "b".repeat(64);
+  return {
+    runId: options.runId,
+    implementation,
+    snapshotDate: options.snapshotDate,
+    region: options.region,
+    cleanup: "destroyed",
+    config: {
       benchmarkConfigSha256: benchmarkConfigurationSha256(options),
-      assetManifestSha256: assetManifestSha256(sample.assetProfile, phase.assetState),
-      dependencyLockSha256: "1".repeat(64),
-      applicationBuildSha256: "2".repeat(64),
-      installedDependenciesSha256: "7".repeat(64),
+      memoryMeasurementScope: "phase-local",
+    },
+    environment: {
       nodeVersion: "v24.0.0",
       pnpmVersion: "11.0.0",
       executionEnvironmentSha256: "8".repeat(64),
-      sourceTreeSha256: "3".repeat(64),
-      providerImplementationCommit: shin ? "9".repeat(40) : null,
-      providerImplementationSubject: shin ? "subject" : null,
-      providerPackageName:
-        sample.implementation === "shin" ? "shin-bucket-deployment" : "aws-cdk-lib",
-      providerPackageVersion: "1.0.0",
-      providerArchitecture: shin ? "arm64" : "x86_64",
-      providerRuntime: shin ? "provided.al2023" : "python3.13",
-      providerHandler: shin ? "bootstrap" : "index.handler",
-      providerCodeSha256: Buffer.from(archiveSha256, "hex").toString("base64"),
-      providerBootstrapSha256: shin ? "a".repeat(64) : null,
-      providerBootstrapArchiveSha256: shin ? archiveSha256 : null,
-      providerBootstrapProvenanceSha256: shin ? "4".repeat(64) : null,
-      providerBootstrapBuildDirty: shin ? false : null,
-      providerBootstrapCargoVersion: shin ? "cargo 1.0.0" : null,
-      providerBootstrapRustcVersion: shin ? "rustc 1.0.0" : null,
-      providerBootstrapCargoLambdaVersion: shin ? "cargo-lambda 1.0.0" : null,
-      providerBootstrapZigVersion: shin ? "1.0.0" : null,
-      providerBootstrapBuildToolchainSha256: shin ? "6".repeat(64) : null,
-      providerBootstrapBuildEnvironmentSha256: shin ? "5".repeat(64) : null,
-      gitDirty: false,
-      cdkCliVersion: "1.0.0",
-      cdkCliInstalledSha256: "c".repeat(64),
-      awsCdkLibVersion: "1.0.0",
-      awsCdkLibIntegrity: "sha512-test",
-      awsCdkLibInstalledSha256: "d".repeat(64),
-      constructsInstalledSha256: "e".repeat(64),
       executionEnvironmentFresh: true,
-      memoryMeasurementScope: "phase-local",
-      region: options.region,
-      implementation: sample.implementation,
-      profile: sample.assetProfile,
-      memoryMb: sample.memoryMb,
-      parallel: sample.parallel,
-      detailedFailureDiagnostics: shin ? true : null,
-      phase: phase.name,
-      state: phase.assetState,
-      fileCount: 1,
-      totalBytes: 1,
-      cdkDeploySeconds: 1,
-      localWallSeconds: 1,
-      providerDurationSeconds: 1,
-      billedDurationSeconds: 1,
-      initDurationSeconds: 0.1,
-      maxMemoryMb: 1,
-      providerInvoked: true,
-      cleanup: "all benchmark stacks destroyed",
-      resultDocumentationCommit: null,
-      notes: null,
-      providerSummary: shin
-        ? providerSummary(sample.memoryMb, sample.parallel, phase.name === "cold-create")
-        : null,
-    };
-  }),
-);
-validateMethodologyV2Run(records, options);
-console.log(`Verified canonical methodology-v2 dry-run plan and ${records.length} complete cells.`);
+      dependencyLockSha256: "1".repeat(64),
+      installedDependenciesSha256: "7".repeat(64),
+      applicationBuildSha256: "2".repeat(64),
+      sourceTreeSha256: "3".repeat(64),
+      gitDirty: false,
+    },
+    cdk: {
+      cliVersion: "1.0.0",
+      cliInstalledSha256: "c".repeat(64),
+      libVersion: "1.0.0",
+      libInstalledSha256: "d".repeat(64),
+      constructsInstalledSha256: "e".repeat(64),
+    },
+    ...(shin
+      ? {
+          provider: {
+            implementationCommit: "9".repeat(40),
+            packageVersion: "1.0.0",
+            architecture: "arm64",
+            runtime: "provided.al2023",
+            handler: "bootstrap",
+            codeSha256: Buffer.from(archiveSha256, "hex").toString("base64"),
+            bootstrap: {
+              sha256: "a".repeat(64),
+              archiveSha256,
+              provenanceSha256: "4".repeat(64),
+              buildDirty: false,
+              cargoVersion: "cargo 1.0.0",
+              rustcVersion: "rustc 1.0.0",
+              cargoLambdaVersion: "cargo-lambda 1.0.0",
+              zigVersion: "1.0.0",
+              buildToolchainSha256: "6".repeat(64),
+              buildEnvironmentSha256: "5".repeat(64),
+            },
+          },
+        }
+      : {}),
+  };
+}
+
+function canonicalSampleRecord(options, sample, phase) {
+  const shin = sample.implementation === "shin";
+  return {
+    runId: options.runId,
+    sampleId: sample.sampleId,
+    implementation: sample.implementation,
+    profile: sample.assetProfile,
+    memoryMb: sample.memoryMb,
+    ...(shin ? { parallel: sample.parallel } : {}),
+    assetManifestSha256: assetManifestSha256(sample.assetProfile, phase.assetState),
+    phase: phase.name,
+    state: phase.assetState,
+    repetition: sample.repetition,
+    fileCount: 1,
+    totalBytes: 1,
+    ...(shin ? { detailedFailureDiagnostics: true } : {}),
+    cdkDeploySeconds: 1,
+    localWallSeconds: 1,
+    providerDurationSeconds: 1,
+    billedDurationSeconds: 1,
+    initDurationSeconds: 0.1,
+    maxMemoryMb: 1,
+    providerInvoked: true,
+    ...(shin
+      ? { providerSummary: providerSummary(sample.memoryMb, sample.parallel, phase.name === "cold-create") }
+      : {}),
+  };
+}
 
 function providerSummary(memoryMb, parallel, create) {
   const zeroFields = (names) => Object.fromEntries(names.map((name) => [name, 0]));
   return {
     event: "shin_deployment_summary",
-    schemaVersion: 6,
     requestType: create ? "Create" : "Update",
     deploymentStatus: "success",
     extract: true,
@@ -118,7 +136,7 @@ function providerSummary(memoryMb, parallel, create) {
     availableMemoryMb: memoryMb,
     maxParallelTransfers: parallel,
     detailedFailureDiagnosticsEnabled: true,
-    durationMs: 1,
+    durationMs: 1000,
     phaseMs: zeroFields([
       "plan",
       "destinationList",

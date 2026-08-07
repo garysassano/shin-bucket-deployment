@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 export const BENCHMARK_IMPLEMENTATIONS = ["shin", "aws"] as const;
 export type BenchmarkImplementation = (typeof BENCHMARK_IMPLEMENTATIONS)[number];
@@ -49,7 +50,6 @@ const PHASE_RANKS: ReadonlyMap<string, number> = new Map(
 
 export type ProviderSummary = {
   readonly event?: string | null;
-  readonly schemaVersion?: number | null;
   readonly requestType?: string | null;
   readonly deploymentStatus?: string | null;
   readonly extract?: boolean | null;
@@ -131,7 +131,6 @@ export type ProviderPutObjectSummary = Record<string, unknown> & {
 
 const PROVIDER_SUMMARY_SCALARS = {
   event: "string",
-  schemaVersion: "number",
   requestType: "string",
   deploymentStatus: "string",
   extract: "boolean",
@@ -303,63 +302,96 @@ const PRODUCER_STAGES = new Set([
   "not-observed",
 ]);
 
-export type BenchmarkResultRecord = {
-  readonly resultSchemaVersion?: number | null;
-  readonly methodologyVersion?: number | null;
-  readonly runId?: string | null;
-  readonly sampleId?: string | null;
-  readonly snapshotDate?: string | null;
-  readonly decisionRunId?: string | null;
-  readonly comparisonVariant?: string | null;
-  readonly repetition?: number | null;
+export type BenchmarkCleanupStatus = "destroyed" | "partial" | "failed";
+
+export type BenchmarkRunConfig = {
   readonly benchmarkConfigSha256?: string | null;
-  readonly assetManifestSha256?: string | null;
-  readonly dependencyLockSha256?: string | null;
-  readonly applicationBuildSha256?: string | null;
-  readonly installedDependenciesSha256?: string | null;
+  readonly memoryMeasurementScope?: "phase-local" | "cumulative" | null;
+};
+
+export type BenchmarkRunEnvironment = {
   readonly nodeVersion?: string | null;
   readonly pnpmVersion?: string | null;
   readonly executionEnvironmentSha256?: string | null;
-  readonly sourceTreeSha256?: string | null;
-  readonly providerImplementationCommit?: string | null;
-  readonly providerImplementationSubject?: string | null;
-  readonly providerPackageName?: string | null;
-  readonly providerPackageVersion?: string | null;
-  readonly providerArchitecture?: string | null;
-  readonly providerRuntime?: string | null;
-  readonly providerHandler?: string | null;
-  readonly providerCodeSha256?: string | null;
-  readonly providerBootstrapSha256?: string | null;
-  readonly providerBootstrapArchiveSha256?: string | null;
-  readonly providerBootstrapProvenanceSha256?: string | null;
-  readonly providerBootstrapBuildDirty?: boolean | null;
-  readonly providerBootstrapCargoVersion?: string | null;
-  readonly providerBootstrapRustcVersion?: string | null;
-  readonly providerBootstrapCargoLambdaVersion?: string | null;
-  readonly providerBootstrapZigVersion?: string | null;
-  readonly providerBootstrapBuildToolchainSha256?: string | null;
-  readonly providerBootstrapBuildEnvironmentSha256?: string | null;
-  readonly gitDirty?: boolean | null;
-  readonly cdkCliVersion?: string | null;
-  readonly cdkCliInstalledSha256?: string | null;
-  readonly awsCdkLibVersion?: string | null;
-  readonly awsCdkLibIntegrity?: string | null;
-  readonly awsCdkLibInstalledSha256?: string | null;
-  readonly constructsInstalledSha256?: string | null;
   readonly executionEnvironmentFresh?: boolean | null;
-  readonly memoryMeasurementScope?: "phase-local" | "cumulative" | null;
-  readonly resultDocumentationCommit?: string | null;
+  readonly dependencyLockSha256?: string | null;
+  readonly installedDependenciesSha256?: string | null;
+  readonly applicationBuildSha256?: string | null;
+  readonly sourceTreeSha256?: string | null;
+  readonly gitDirty?: boolean | null;
+};
+
+export type BenchmarkRunCdk = {
+  readonly cliVersion?: string | null;
+  readonly cliInstalledSha256?: string | null;
+  readonly libVersion?: string | null;
+  readonly libInstalledSha256?: string | null;
+  readonly constructsInstalledSha256?: string | null;
+};
+
+export type BenchmarkRunProviderBootstrap = {
+  readonly sha256?: string | null;
+  readonly archiveSha256?: string | null;
+  readonly provenanceSha256?: string | null;
+  readonly buildDirty?: boolean | null;
+  readonly cargoVersion?: string | null;
+  readonly rustcVersion?: string | null;
+  readonly cargoLambdaVersion?: string | null;
+  readonly zigVersion?: string | null;
+  readonly buildToolchainSha256?: string | null;
+  readonly buildEnvironmentSha256?: string | null;
+};
+
+export type BenchmarkRunProvider = {
+  readonly implementationCommit?: string | null;
+  readonly packageVersion?: string | null;
+  readonly architecture?: string | null;
+  readonly runtime?: string | null;
+  readonly handler?: string | null;
+  readonly codeSha256?: string | null;
+  readonly bootstrap?: BenchmarkRunProviderBootstrap | null;
+};
+
+/**
+ * One record per (runId x implementation) in `benchmarks/runs.jsonl`: everything
+ * constant across a run's samples, grouped instead of flat. Optional fields that
+ * are absent are omitted rather than written as null.
+ */
+export type BenchmarkRunRecord = {
+  readonly runId?: string | null;
+  readonly implementation?: string | null;
+  readonly snapshotDate?: string | null;
   readonly region?: string | null;
+  readonly cleanup?: BenchmarkCleanupStatus | null;
+  readonly decisionRunId?: string | null;
+  readonly comparisonVariant?: string | null;
+  readonly config?: BenchmarkRunConfig | null;
+  readonly environment?: BenchmarkRunEnvironment | null;
+  readonly cdk?: BenchmarkRunCdk | null;
+  /** Shin runs only; omitted for aws. */
+  readonly provider?: BenchmarkRunProvider | null;
+};
+
+/**
+ * One record per sample in `benchmarks/results.jsonl`: only what varies between
+ * samples of the same run. Optional fields that are absent are omitted rather
+ * than written as null.
+ */
+export type BenchmarkSampleRecord = {
+  readonly runId?: string | null;
+  readonly sampleId?: string | null;
   readonly implementation?: string | null;
   readonly profile?: string | null;
   readonly memoryMb?: number | null;
   readonly parallel?: number | null;
-  readonly sourceWindowBytes?: number | null;
-  readonly detailedFailureDiagnostics?: boolean | null;
+  readonly assetManifestSha256?: string | null;
   readonly phase?: string;
   readonly state?: string | null;
+  readonly repetition?: number | null;
   readonly fileCount?: number | null;
   readonly totalBytes?: number | null;
+  readonly detailedFailureDiagnostics?: boolean | null;
+  readonly sourceWindowBytes?: number | null;
   readonly cdkDeploySeconds?: number | null;
   readonly localWallSeconds?: number | null;
   readonly providerDurationSeconds?: number | null;
@@ -367,142 +399,441 @@ export type BenchmarkResultRecord = {
   readonly initDurationSeconds?: number | null;
   readonly maxMemoryMb?: number | null;
   readonly providerInvoked?: boolean | null;
-  readonly cleanup?: string | null;
-  readonly notes?: string | null;
+  /** Shin samples only; omitted for aws. */
   readonly providerSummary?: ProviderSummary | null;
 };
 
-export type BenchmarkResultRow = {
+export type BenchmarkSampleRow = {
   readonly line: number;
-  readonly record: BenchmarkResultRecord;
+  readonly record: BenchmarkSampleRecord;
 };
 
-export function readBenchmarkResultRecords(filePath: string): BenchmarkResultRecord[] {
-  return readBenchmarkResultRows(filePath).map((row) => row.record);
+export type BenchmarkRunRow = {
+  readonly line: number;
+  readonly record: BenchmarkRunRecord;
+};
+
+/** A sample joined with its run record, used by the render pipeline. */
+export type BenchmarkRunSample = BenchmarkSampleRecord & {
+  readonly snapshotDate?: string | null;
+  readonly region?: string | null;
+  readonly cleanup?: BenchmarkCleanupStatus | null;
+  readonly decisionRunId?: string | null;
+  readonly comparisonVariant?: string | null;
+  readonly config?: BenchmarkRunConfig | null;
+  readonly environment?: BenchmarkRunEnvironment | null;
+  readonly cdk?: BenchmarkRunCdk | null;
+  readonly provider?: BenchmarkRunProvider | null;
+};
+
+/** The run ledger file that accompanies a sample ledger file. */
+export function runsFileFor(resultsFile: string): string {
+  return join(dirname(resultsFile), "runs.jsonl");
 }
 
-export function readBenchmarkResultRows(filePath: string): BenchmarkResultRow[] {
+export function readBenchmarkRunRecords(filePath: string): BenchmarkRunRecord[] {
+  return readJsonlRecords<BenchmarkRunRecord>(filePath).map((row) => row.record);
+}
+
+export function readBenchmarkRunRows(filePath: string): BenchmarkRunRow[] {
+  return readJsonlRecords<BenchmarkRunRecord>(filePath);
+}
+
+export function readBenchmarkSampleRecords(filePath: string): BenchmarkSampleRecord[] {
+  return readJsonlRecords<BenchmarkSampleRecord>(filePath).map((row) => row.record);
+}
+
+export function readBenchmarkSampleRows(filePath: string): BenchmarkSampleRow[] {
+  return readJsonlRecords<BenchmarkSampleRecord>(filePath);
+}
+
+export function readBenchmarkEvidence(resultsFile: string): {
+  readonly runs: BenchmarkRunRecord[];
+  readonly samples: BenchmarkSampleRecord[];
+} {
+  return {
+    runs: readBenchmarkRunRecords(runsFileFor(resultsFile)),
+    samples: readBenchmarkSampleRecords(resultsFile),
+  };
+}
+
+function readJsonlRecords<T>(filePath: string): Array<{ line: number; record: T }> {
   return readFileSync(filePath, "utf8")
     .split(/\r?\n/)
     .map((line, index) => ({ line, lineNumber: index + 1 }))
     .filter(({ line }) => line.trim().length > 0)
     .map(({ line, lineNumber }) => {
       try {
-        return { line: lineNumber, record: JSON.parse(line) as BenchmarkResultRecord };
+        return { line: lineNumber, record: JSON.parse(line) as T };
       } catch (cause) {
         throw new Error(`Invalid JSONL record at ${filePath}:${lineNumber}`, { cause });
       }
     });
 }
 
-export function benchmarkResultKey(
-  record: Pick<
-    BenchmarkResultRecord,
-    | "profile"
-    | "memoryMb"
-    | "parallel"
-    | "sourceWindowBytes"
-    | "detailedFailureDiagnostics"
-    | "implementation"
-    | "phase"
-    | "state"
-    | "decisionRunId"
-    | "runId"
-    | "sampleId"
-    | "methodologyVersion"
-    | "comparisonVariant"
-    | "repetition"
-  >,
+export function benchmarkRunKey(
+  run: Pick<BenchmarkRunRecord, "runId" | "implementation">,
 ): string {
-  return [
-    record.profile,
-    record.memoryMb,
-    record.parallel,
-    record.sourceWindowBytes,
-    record.detailedFailureDiagnostics,
-    normalizeImplementation(record.implementation),
-    record.phase,
-    record.state,
-    record.decisionRunId,
-    record.methodologyVersion,
-    record.runId,
-    record.sampleId,
-    record.comparisonVariant,
-    record.repetition,
-  ]
-    .map((part) => part ?? "")
-    .join("\u0000");
+  return [run.runId, run.implementation].join("\u0000");
 }
 
-export function isCanonicalBenchmarkRecord(record: BenchmarkResultRecord): boolean {
-  return benchmarkRecordErrors(record).length === 0;
+export function benchmarkSampleKey(
+  sample: Pick<BenchmarkSampleRecord, "runId" | "sampleId" | "phase">,
+): string {
+  return [sample.runId, sample.sampleId, sample.phase].join("\u0000");
 }
 
-export function benchmarkRecordErrors(
-  record: BenchmarkResultRecord,
-  options: { readonly allowPendingCleanup?: boolean } = {},
-): string[] {
+export type BenchmarkRunRecordSource = {
+  readonly runId?: string | null;
+  readonly implementation?: string | null;
+  readonly snapshotDate?: string | null;
+  readonly region?: string | null;
+  readonly cleanup?: BenchmarkCleanupStatus | null;
+  readonly decisionRunId?: string | null;
+  readonly comparisonVariant?: string | null;
+  readonly benchmarkConfigSha256?: string | null;
+  readonly memoryMeasurementScope?: "phase-local" | "cumulative" | null;
+  readonly nodeVersion?: string | null;
+  readonly pnpmVersion?: string | null;
+  readonly executionEnvironmentSha256?: string | null;
+  readonly executionEnvironmentFresh?: boolean | null;
+  readonly dependencyLockSha256?: string | null;
+  readonly installedDependenciesSha256?: string | null;
+  readonly applicationBuildSha256?: string | null;
+  readonly sourceTreeSha256?: string | null;
+  readonly gitDirty?: boolean | null;
+  readonly cdkCliVersion?: string | null;
+  readonly cdkCliInstalledSha256?: string | null;
+  readonly awsCdkLibVersion?: string | null;
+  readonly awsCdkLibInstalledSha256?: string | null;
+  readonly constructsInstalledSha256?: string | null;
+  readonly provider?: BenchmarkRunProviderSource;
+};
+
+export type BenchmarkRunProviderSource = {
+  readonly implementationCommit?: string | null;
+  readonly packageVersion?: string | null;
+  readonly architecture?: string | null;
+  readonly runtime?: string | null;
+  readonly handler?: string | null;
+  readonly codeSha256?: string | null;
+  readonly bootstrapSha256?: string | null;
+  readonly bootstrapArchiveSha256?: string | null;
+  readonly bootstrapProvenanceSha256?: string | null;
+  readonly buildDirty?: boolean | null;
+  readonly cargoVersion?: string | null;
+  readonly rustcVersion?: string | null;
+  readonly cargoLambdaVersion?: string | null;
+  readonly zigVersion?: string | null;
+  readonly buildToolchainSha256?: string | null;
+  readonly buildEnvironmentSha256?: string | null;
+};
+
+export function benchmarkRunRecordFrom(source: BenchmarkRunRecordSource): BenchmarkRunRecord {
+  return {
+    runId: source.runId ?? null,
+    implementation: source.implementation ?? null,
+    snapshotDate: source.snapshotDate ?? null,
+    region: source.region ?? null,
+    cleanup: source.cleanup ?? null,
+    ...(source.decisionRunId !== undefined && source.decisionRunId !== null
+      ? { decisionRunId: source.decisionRunId }
+      : {}),
+    ...(source.comparisonVariant !== undefined && source.comparisonVariant !== null
+      ? { comparisonVariant: source.comparisonVariant }
+      : {}),
+    config: {
+      benchmarkConfigSha256: source.benchmarkConfigSha256 ?? null,
+      memoryMeasurementScope: source.memoryMeasurementScope ?? null,
+    },
+    environment: {
+      nodeVersion: source.nodeVersion ?? null,
+      pnpmVersion: source.pnpmVersion ?? null,
+      executionEnvironmentSha256: source.executionEnvironmentSha256 ?? null,
+      executionEnvironmentFresh: source.executionEnvironmentFresh ?? null,
+      dependencyLockSha256: source.dependencyLockSha256 ?? null,
+      installedDependenciesSha256: source.installedDependenciesSha256 ?? null,
+      applicationBuildSha256: source.applicationBuildSha256 ?? null,
+      sourceTreeSha256: source.sourceTreeSha256 ?? null,
+      gitDirty: source.gitDirty ?? null,
+    },
+    cdk: {
+      cliVersion: source.cdkCliVersion ?? null,
+      cliInstalledSha256: source.cdkCliInstalledSha256 ?? null,
+      libVersion: source.awsCdkLibVersion ?? null,
+      libInstalledSha256: source.awsCdkLibInstalledSha256 ?? null,
+      constructsInstalledSha256: source.constructsInstalledSha256 ?? null,
+    },
+    ...(source.provider !== undefined && source.provider !== null
+      ? {
+          provider: {
+            implementationCommit: source.provider.implementationCommit ?? null,
+            packageVersion: source.provider.packageVersion ?? null,
+            architecture: source.provider.architecture ?? null,
+            runtime: source.provider.runtime ?? null,
+            handler: source.provider.handler ?? null,
+            codeSha256: source.provider.codeSha256 ?? null,
+            bootstrap: {
+              sha256: source.provider.bootstrapSha256 ?? null,
+              archiveSha256: source.provider.bootstrapArchiveSha256 ?? null,
+              provenanceSha256: source.provider.bootstrapProvenanceSha256 ?? null,
+              buildDirty: source.provider.buildDirty ?? null,
+              cargoVersion: source.provider.cargoVersion ?? null,
+              rustcVersion: source.provider.rustcVersion ?? null,
+              cargoLambdaVersion: source.provider.cargoLambdaVersion ?? null,
+              zigVersion: source.provider.zigVersion ?? null,
+              buildToolchainSha256: source.provider.buildToolchainSha256 ?? null,
+              buildEnvironmentSha256: source.provider.buildEnvironmentSha256 ?? null,
+            },
+          },
+        }
+      : {}),
+  };
+}
+
+/**
+ * Maps the previous flat ledger cleanup wording onto the run-record cleanup enum.
+ * `destroyed` means the automated runner verified every stack absent; `partial`
+ * is the in-flight state; anything else is `failed`.
+ */
+export function cleanupStatusFrom(value: string | null | undefined): BenchmarkCleanupStatus {
+  if (value === "all benchmark stacks destroyed") return "destroyed";
+  if (value === "benchmark cleanup pending") return "partial";
+  return "failed";
+}
+
+export function isCompleteBenchmarkRun(run: BenchmarkRunRecord): boolean {
+  return run.cleanup === "destroyed";
+}
+
+export function isCanonicalBenchmarkRun(run: BenchmarkRunRecord): boolean {
+  return benchmarkRunRecordErrors(run).length === 0;
+}
+
+export function isCanonicalBenchmarkSample(sample: BenchmarkSampleRecord): boolean {
+  return benchmarkSampleRecordErrors(sample).length === 0;
+}
+
+export function benchmarkRunRecordErrors(run: BenchmarkRunRecord): string[] {
   const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   const hexSha256 = /^[0-9a-f]{64}$/i;
   const errors: string[] = [];
-  const label = `${record.sampleId ?? "missing-sample"}/${record.phase ?? "missing-phase"}`;
-  const recordFields = new Set([
-    "resultSchemaVersion",
-    "methodologyVersion",
+  const label = `${run.runId ?? "missing-run"}/${run.implementation ?? "missing-implementation"}`;
+  const runFields = new Set([
     "runId",
-    "sampleId",
+    "implementation",
     "snapshotDate",
+    "region",
+    "cleanup",
     "decisionRunId",
     "comparisonVariant",
-    "repetition",
-    "benchmarkConfigSha256",
-    "assetManifestSha256",
-    "dependencyLockSha256",
-    "applicationBuildSha256",
-    "installedDependenciesSha256",
+    "config",
+    "environment",
+    "cdk",
+    "provider",
+  ]);
+  for (const name of Object.keys(run)) {
+    if (!runFields.has(name)) errors.push(`${label}: unexpected run field ${name}`);
+  }
+  if (!uuid.test(run.runId ?? "")) errors.push(`${label}: runId must be a UUID`);
+  if (!isBenchmarkImplementation(run.implementation)) {
+    errors.push(`${label}: unsupported implementation`);
+  }
+  if (!isIsoDate(run.snapshotDate ?? "")) {
+    errors.push(`${label}: snapshotDate must use YYYY-MM-DD`);
+  }
+  if (typeof run.region !== "string" || run.region.length === 0) {
+    errors.push(`${label}: missing region`);
+  }
+  if (
+    run.cleanup !== "destroyed" &&
+    run.cleanup !== "partial" &&
+    run.cleanup !== "failed"
+  ) {
+    errors.push(`${label}: cleanup must be destroyed, partial, or failed`);
+  }
+  for (const name of ["decisionRunId", "comparisonVariant"] as const) {
+    const value = run[name];
+    if (value !== undefined && value !== null && !/^[A-Za-z0-9._-]+$/.test(value)) {
+      errors.push(`${label}: invalid ${name}`);
+    }
+  }
+  const config = run.config;
+  const configFields = new Set(["benchmarkConfigSha256", "memoryMeasurementScope"]);
+  if (isObject(config)) {
+    for (const name of Object.keys(config)) {
+      if (!configFields.has(name)) errors.push(`${label}: unexpected config field ${name}`);
+    }
+  }
+  if (!hexSha256.test(config?.benchmarkConfigSha256 ?? "")) {
+    errors.push(`${label}: invalid benchmarkConfigSha256`);
+  }
+  if (
+    config?.memoryMeasurementScope !== "phase-local" &&
+    config?.memoryMeasurementScope !== "cumulative"
+  ) {
+    errors.push(`${label}: memoryMeasurementScope must be phase-local or cumulative`);
+  }
+  const environment = run.environment;
+  const environmentFields = new Set([
     "nodeVersion",
     "pnpmVersion",
     "executionEnvironmentSha256",
-    "sourceTreeSha256",
-    "providerImplementationCommit",
-    "providerImplementationSubject",
-    "providerPackageName",
-    "providerPackageVersion",
-    "providerArchitecture",
-    "providerRuntime",
-    "providerHandler",
-    "providerCodeSha256",
-    "providerBootstrapSha256",
-    "providerBootstrapArchiveSha256",
-    "providerBootstrapProvenanceSha256",
-    "providerBootstrapBuildDirty",
-    "providerBootstrapCargoVersion",
-    "providerBootstrapRustcVersion",
-    "providerBootstrapCargoLambdaVersion",
-    "providerBootstrapZigVersion",
-    "providerBootstrapBuildToolchainSha256",
-    "providerBootstrapBuildEnvironmentSha256",
-    "gitDirty",
-    "cdkCliVersion",
-    "cdkCliInstalledSha256",
-    "awsCdkLibVersion",
-    "awsCdkLibIntegrity",
-    "awsCdkLibInstalledSha256",
-    "constructsInstalledSha256",
     "executionEnvironmentFresh",
-    "memoryMeasurementScope",
-    "resultDocumentationCommit",
-    "region",
+    "dependencyLockSha256",
+    "installedDependenciesSha256",
+    "applicationBuildSha256",
+    "sourceTreeSha256",
+    "gitDirty",
+  ]);
+  if (isObject(environment)) {
+    for (const name of Object.keys(environment)) {
+      if (!environmentFields.has(name)) {
+        errors.push(`${label}: unexpected environment field ${name}`);
+      }
+    }
+  }
+  for (const name of ["nodeVersion", "pnpmVersion"] as const) {
+    if (typeof environment?.[name] !== "string" || (environment?.[name] as string).length === 0) {
+      errors.push(`${label}: missing ${name}`);
+    }
+  }
+  for (const name of [
+    "executionEnvironmentSha256",
+    "dependencyLockSha256",
+    "installedDependenciesSha256",
+    "applicationBuildSha256",
+    "sourceTreeSha256",
+  ] as const) {
+    if (!hexSha256.test(environment?.[name] ?? "")) errors.push(`${label}: invalid ${name}`);
+  }
+  if (environment?.executionEnvironmentFresh !== true) {
+    errors.push(`${label}: executionEnvironmentFresh must be true`);
+  }
+  if (environment?.gitDirty !== false) errors.push(`${label}: gitDirty must be false`);
+  const cdk = run.cdk;
+  const cdkFields = new Set([
+    "cliVersion",
+    "cliInstalledSha256",
+    "libVersion",
+    "libInstalledSha256",
+    "constructsInstalledSha256",
+  ]);
+  if (isObject(cdk)) {
+    for (const name of Object.keys(cdk)) {
+      if (!cdkFields.has(name)) errors.push(`${label}: unexpected cdk field ${name}`);
+    }
+  }
+  for (const name of ["cliVersion", "libVersion"] as const) {
+    if (typeof cdk?.[name] !== "string" || (cdk?.[name] as string).length === 0) {
+      errors.push(`${label}: missing cdk.${name}`);
+    }
+  }
+  for (const name of ["cliInstalledSha256", "libInstalledSha256", "constructsInstalledSha256"] as const) {
+    if (!hexSha256.test(cdk?.[name] ?? "")) errors.push(`${label}: invalid cdk.${name}`);
+  }
+  const implementation = implementationLabel(run);
+  if (implementation === "aws") {
+    if (Object.hasOwn(run, "provider")) errors.push(`${label}: AWS provider must be omitted`);
+  } else if (implementation === "shin") {
+    const provider = run.provider;
+    if (provider === undefined || provider === null) {
+      errors.push(`${label}: provider is required for Shin`);
+    } else {
+      if (!/^[0-9a-f]{40}$/i.test(provider.implementationCommit ?? "")) {
+        errors.push(`${label}: invalid provider.implementationCommit`);
+      }
+      if (typeof provider.packageVersion !== "string" || provider.packageVersion.length === 0) {
+        errors.push(`${label}: missing provider.packageVersion`);
+      }
+      if (provider.architecture !== "arm64") {
+        errors.push(`${label}: Shin provider.architecture must be arm64`);
+      }
+      if (provider.runtime !== "provided.al2023") {
+        errors.push(`${label}: Shin provider.runtime must be provided.al2023`);
+      }
+      if (provider.handler !== "bootstrap") {
+        errors.push(`${label}: Shin provider.handler must be bootstrap`);
+      }
+      if (!isBase64Sha256(provider.codeSha256)) {
+        errors.push(`${label}: invalid provider.codeSha256`);
+      }
+      const bootstrap = provider.bootstrap;
+      const bootstrapFields = new Set([
+        "sha256",
+        "archiveSha256",
+        "provenanceSha256",
+        "buildDirty",
+        "cargoVersion",
+        "rustcVersion",
+        "cargoLambdaVersion",
+        "zigVersion",
+        "buildToolchainSha256",
+        "buildEnvironmentSha256",
+      ]);
+      if (isObject(bootstrap)) {
+        for (const name of Object.keys(bootstrap)) {
+          if (!bootstrapFields.has(name)) {
+            errors.push(`${label}: unexpected provider.bootstrap field ${name}`);
+          }
+        }
+      }
+      for (const name of [
+        "sha256",
+        "archiveSha256",
+        "provenanceSha256",
+        "buildToolchainSha256",
+        "buildEnvironmentSha256",
+      ] as const) {
+        if (!hexSha256.test(bootstrap?.[name] ?? "")) {
+          errors.push(`${label}: invalid provider.bootstrap.${name}`);
+        }
+      }
+      if (bootstrap?.buildDirty !== false) {
+        errors.push(`${label}: provider.bootstrap.buildDirty must be false`);
+      }
+      for (const name of ["cargoVersion", "rustcVersion", "cargoLambdaVersion", "zigVersion"] as const) {
+        if (
+          typeof bootstrap?.[name] !== "string" ||
+          (bootstrap?.[name] as string).length === 0
+        ) {
+          errors.push(`${label}: missing provider.bootstrap.${name}`);
+        }
+      }
+      if (
+        isBase64Sha256(provider.codeSha256) &&
+        bootstrap?.archiveSha256 !== undefined &&
+        Buffer.from(provider.codeSha256, "base64").toString("hex") !== bootstrap.archiveSha256
+      ) {
+        errors.push(`${label}: deployed Shin code does not match provider bootstrap archive`);
+      }
+    }
+  } else {
+    errors.push(`${label}: unsupported implementation`);
+  }
+  return errors;
+}
+
+export function benchmarkSampleRecordErrors(sample: BenchmarkSampleRecord): string[] {
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  const hexSha256 = /^[0-9a-f]{64}$/i;
+  const errors: string[] = [];
+  const label = `${sample.sampleId ?? "missing-sample"}/${sample.phase ?? "missing-phase"}`;
+  const sampleFields = new Set([
+    "runId",
+    "sampleId",
     "implementation",
     "profile",
     "memoryMb",
     "parallel",
-    "sourceWindowBytes",
-    "detailedFailureDiagnostics",
+    "assetManifestSha256",
     "phase",
     "state",
+    "repetition",
     "fileCount",
     "totalBytes",
+    "detailedFailureDiagnostics",
+    "sourceWindowBytes",
     "cdkDeploySeconds",
     "localWallSeconds",
     "providerDurationSeconds",
@@ -510,62 +841,21 @@ export function benchmarkRecordErrors(
     "initDurationSeconds",
     "maxMemoryMb",
     "providerInvoked",
-    "cleanup",
-    "notes",
     "providerSummary",
   ]);
-  for (const name of Object.keys(record)) {
-    if (!recordFields.has(name)) errors.push(`${label}: unexpected record field ${name}`);
+  for (const name of Object.keys(sample)) {
+    if (!sampleFields.has(name)) errors.push(`${label}: unexpected sample field ${name}`);
   }
-  const requireString = (name: keyof BenchmarkResultRecord): void => {
-    if (typeof record[name] !== "string" || (record[name] as string).length === 0) {
+  if (!uuid.test(sample.runId ?? "")) errors.push(`${label}: runId must be a UUID`);
+  if (!uuid.test(sample.sampleId ?? "")) errors.push(`${label}: sampleId must be an opaque UUID`);
+  for (const name of ["implementation", "profile", "phase", "state"] as const) {
+    if (typeof sample[name] !== "string" || (sample[name] as string).length === 0) {
       errors.push(`${label}: missing ${name}`);
     }
-  };
-  const requireNumber = (name: keyof BenchmarkResultRecord): void => {
-    const value = record[name];
-    if (typeof value !== "number" || !Number.isFinite(value))
-      errors.push(`${label}: missing ${name}`);
-  };
-  const requireNullableString = (name: keyof BenchmarkResultRecord): void => {
-    const value = record[name];
-    if (!Object.hasOwn(record, name) || (value !== null && typeof value !== "string"))
-      errors.push(`${label}: missing or invalid ${name}`);
-  };
-  if (record.resultSchemaVersion !== 2) errors.push(`${label}: resultSchemaVersion must be 2`);
-  if (record.methodologyVersion !== 2) errors.push(`${label}: methodologyVersion must be 2`);
-  if (!uuid.test(record.runId ?? "")) errors.push(`${label}: runId must be a UUID`);
-  if (!uuid.test(record.sampleId ?? "")) errors.push(`${label}: sampleId must be an opaque UUID`);
-  for (const name of [
-    "snapshotDate",
-    "benchmarkConfigSha256",
-    "assetManifestSha256",
-    "dependencyLockSha256",
-    "applicationBuildSha256",
-    "installedDependenciesSha256",
-    "nodeVersion",
-    "pnpmVersion",
-    "executionEnvironmentSha256",
-    "sourceTreeSha256",
-    "providerPackageName",
-    "providerPackageVersion",
-    "providerArchitecture",
-    "providerRuntime",
-    "providerHandler",
-    "providerCodeSha256",
-    "cdkCliVersion",
-    "cdkCliInstalledSha256",
-    "awsCdkLibVersion",
-    "awsCdkLibIntegrity",
-    "awsCdkLibInstalledSha256",
-    "constructsInstalledSha256",
-    "region",
-    "implementation",
-    "profile",
-    "phase",
-    "state",
-  ] as const)
-    requireString(name);
+  }
+  if (!hexSha256.test(sample.assetManifestSha256 ?? "")) {
+    errors.push(`${label}: invalid assetManifestSha256`);
+  }
   for (const name of [
     "repetition",
     "memoryMb",
@@ -577,55 +867,16 @@ export function benchmarkRecordErrors(
     "billedDurationSeconds",
     "initDurationSeconds",
     "maxMemoryMb",
-  ] as const)
-    requireNumber(name);
-  requireNullableString("resultDocumentationCommit");
-  requireNullableString("notes");
-  requireNullableString("decisionRunId");
-  requireNullableString("comparisonVariant");
-  if (!isIsoDate(record.snapshotDate ?? ""))
-    errors.push(`${label}: snapshotDate must use YYYY-MM-DD`);
-  if (record.notes !== null) errors.push(`${label}: methodology-v2 notes must be null`);
-  if (
-    record.resultDocumentationCommit !== null &&
-    !/^[0-9a-f]{40}$/i.test(record.resultDocumentationCommit ?? "")
-  ) {
-    errors.push(`${label}: invalid resultDocumentationCommit`);
-  }
-  for (const name of ["decisionRunId", "comparisonVariant"] as const) {
-    const value = record[name];
-    if (value !== null && !/^[A-Za-z0-9._-]+$/.test(value ?? "")) {
-      errors.push(`${label}: invalid ${name}`);
+  ] as const) {
+    if (typeof sample[name] !== "number" || !Number.isFinite(sample[name])) {
+      errors.push(`${label}: missing ${name}`);
     }
   }
-  for (const name of [
-    "benchmarkConfigSha256",
-    "assetManifestSha256",
-    "dependencyLockSha256",
-    "applicationBuildSha256",
-    "installedDependenciesSha256",
-    "executionEnvironmentSha256",
-    "sourceTreeSha256",
-    "cdkCliInstalledSha256",
-    "awsCdkLibInstalledSha256",
-    "constructsInstalledSha256",
-  ] as const) {
-    if (!hexSha256.test(record[name] ?? "")) errors.push(`${label}: invalid ${name}`);
-  }
-  if (!isBase64Sha256(record.providerCodeSha256))
-    errors.push(`${label}: invalid providerCodeSha256`);
-  if (!(record.providerArchitecture === "arm64" || record.providerArchitecture === "x86_64"))
-    errors.push(`${label}: unsupported providerArchitecture`);
-  for (const name of [
-    "repetition",
-    "memoryMb",
-    "fileCount",
-    "totalBytes",
-    "maxMemoryMb",
-  ] as const) {
-    const value = record[name];
-    if (typeof value === "number" && (!Number.isInteger(value) || value < 0))
+  for (const name of ["repetition", "memoryMb", "fileCount", "totalBytes", "maxMemoryMb"] as const) {
+    const value = sample[name];
+    if (typeof value === "number" && (!Number.isInteger(value) || value < 0)) {
       errors.push(`${label}: ${name} must be a non-negative integer`);
+    }
   }
   for (const name of [
     "cdkDeploySeconds",
@@ -634,143 +885,158 @@ export function benchmarkRecordErrors(
     "billedDurationSeconds",
     "initDurationSeconds",
   ] as const) {
-    const value = record[name];
-    if (typeof value === "number" && value < 0)
+    const value = sample[name];
+    if (typeof value === "number" && value < 0) {
       errors.push(`${label}: ${name} must not be negative`);
+    }
   }
-  if ((record.memoryMb ?? 0) <= 0) errors.push(`${label}: memoryMb must be positive`);
-  if (
-    record.sourceWindowBytes !== undefined &&
-    record.sourceWindowBytes !== null &&
-    (!Number.isInteger(record.sourceWindowBytes) || record.sourceWindowBytes <= 0)
-  ) {
-    errors.push(`${label}: sourceWindowBytes must be null or a positive integer`);
-  }
-  if (
-    record.detailedFailureDiagnostics !== undefined &&
-    record.detailedFailureDiagnostics !== null &&
-    typeof record.detailedFailureDiagnostics !== "boolean"
-  ) {
-    errors.push(`${label}: detailedFailureDiagnostics must be null or boolean`);
-  }
-  if ((record.fileCount ?? 0) <= 0) errors.push(`${label}: fileCount must be positive`);
-  if ((record.totalBytes ?? 0) <= 0) errors.push(`${label}: totalBytes must be positive`);
-  if ((record.repetition ?? 0) < 1 || (record.repetition ?? 0) > 5)
+  if ((sample.memoryMb ?? 0) <= 0) errors.push(`${label}: memoryMb must be positive`);
+  if ((sample.fileCount ?? 0) <= 0) errors.push(`${label}: fileCount must be positive`);
+  if ((sample.totalBytes ?? 0) <= 0) errors.push(`${label}: totalBytes must be positive`);
+  if ((sample.repetition ?? 0) < 1 || (sample.repetition ?? 0) > 5) {
     errors.push(`${label}: repetition must be between 1 and 5`);
-  if ((record.maxMemoryMb ?? Number.POSITIVE_INFINITY) > (record.memoryMb ?? 0))
-    errors.push(`${label}: maxMemoryMb exceeds configured memoryMb`);
-  if (record.gitDirty !== false) errors.push(`${label}: gitDirty must be false`);
-  if (record.executionEnvironmentFresh !== true)
-    errors.push(`${label}: executionEnvironmentFresh must be true`);
-  if (record.memoryMeasurementScope !== "phase-local")
-    errors.push(`${label}: memoryMeasurementScope must be phase-local`);
-  if (record.providerInvoked !== true) errors.push(`${label}: providerInvoked must be true`);
-  if (
-    !isCompleteBenchmarkRecord(record) &&
-    !(options.allowPendingCleanup === true && record.cleanup === "benchmark cleanup pending")
-  ) {
-    errors.push(`${label}: cleanup is incomplete`);
   }
-  if (implementationLabel(record) === "aws") {
-    if (record.parallel !== null) errors.push(`${label}: AWS parallel must be null`);
-    if (
-      Object.hasOwn(record, "detailedFailureDiagnostics") &&
-      record.detailedFailureDiagnostics !== null
-    ) {
-      errors.push(`${label}: AWS detailedFailureDiagnostics must be null`);
+  if ((sample.maxMemoryMb ?? Number.POSITIVE_INFINITY) > (sample.memoryMb ?? 0)) {
+    errors.push(`${label}: maxMemoryMb exceeds configured memoryMb`);
+  }
+  if (
+    sample.sourceWindowBytes === null ||
+    (sample.sourceWindowBytes !== undefined &&
+      (!Number.isInteger(sample.sourceWindowBytes) || sample.sourceWindowBytes <= 0))
+  ) {
+    errors.push(`${label}: sourceWindowBytes must be omitted or a positive integer`);
+  }
+  if (sample.providerInvoked !== true) errors.push(`${label}: providerInvoked must be true`);
+  const implementation = implementationLabel(sample);
+  if (implementation === "aws") {
+    for (const name of ["parallel", "detailedFailureDiagnostics", "providerSummary"] as const) {
+      if (Object.hasOwn(sample, name)) errors.push(`${label}: AWS ${name} must be omitted`);
     }
-    for (const name of [
-      "providerImplementationCommit",
-      "providerImplementationSubject",
-      "providerBootstrapSha256",
-      "providerBootstrapArchiveSha256",
-      "providerBootstrapProvenanceSha256",
-      "providerBootstrapBuildDirty",
-      "providerBootstrapCargoVersion",
-      "providerBootstrapRustcVersion",
-      "providerBootstrapCargoLambdaVersion",
-      "providerBootstrapZigVersion",
-      "providerBootstrapBuildToolchainSha256",
-      "providerBootstrapBuildEnvironmentSha256",
-      "providerSummary",
-    ] as const) {
-      if (!Object.hasOwn(record, name) || record[name] !== null)
-        errors.push(`${label}: AWS ${name} must be null`);
-    }
-    if (record.providerPackageName !== "aws-cdk-lib")
-      errors.push(`${label}: AWS providerPackageName must be aws-cdk-lib`);
-    if (record.providerPackageVersion !== record.awsCdkLibVersion)
-      errors.push(`${label}: AWS package version must match awsCdkLibVersion`);
-    if (record.providerArchitecture !== "x86_64")
-      errors.push(`${label}: AWS providerArchitecture must be x86_64`);
-    if (record.providerRuntime !== "python3.13")
-      errors.push(`${label}: AWS providerRuntime must be python3.13`);
-    if (record.providerHandler !== "index.handler")
-      errors.push(`${label}: AWS providerHandler must be index.handler`);
-  } else if (implementationLabel(record) === "shin") {
-    requireNumber("parallel");
-    if (!Number.isInteger(record.parallel) || (record.parallel ?? 0) <= 0)
+  } else if (implementation === "shin") {
+    if (typeof sample.parallel !== "number" || !Number.isInteger(sample.parallel) || (sample.parallel ?? 0) <= 0) {
       errors.push(`${label}: Shin parallel must be a positive integer`);
-    if (
-      Object.hasOwn(record, "detailedFailureDiagnostics") &&
-      record.detailedFailureDiagnostics !== true
-    ) {
+    }
+    if (sample.detailedFailureDiagnostics !== true) {
       errors.push(`${label}: Shin detailedFailureDiagnostics must be true`);
     }
-    requireString("providerImplementationCommit");
-    requireString("providerImplementationSubject");
-    if (!/^[0-9a-f]{40}$/i.test(record.providerImplementationCommit ?? ""))
-      errors.push(`${label}: invalid providerImplementationCommit`);
-    if (record.providerPackageName !== "shin-bucket-deployment")
-      errors.push(`${label}: Shin providerPackageName must be shin-bucket-deployment`);
-    if (record.providerArchitecture !== "arm64")
-      errors.push(`${label}: Shin providerArchitecture must be arm64`);
-    if (record.providerRuntime !== "provided.al2023")
-      errors.push(`${label}: Shin providerRuntime must be provided.al2023`);
-    if (record.providerHandler !== "bootstrap")
-      errors.push(`${label}: Shin providerHandler must be bootstrap`);
-    if (!hexSha256.test(record.providerBootstrapSha256 ?? ""))
-      errors.push(`${label}: invalid providerBootstrapSha256`);
-    if (!hexSha256.test(record.providerBootstrapArchiveSha256 ?? ""))
-      errors.push(`${label}: invalid providerBootstrapArchiveSha256`);
-    if (!hexSha256.test(record.providerBootstrapProvenanceSha256 ?? ""))
-      errors.push(`${label}: invalid providerBootstrapProvenanceSha256`);
-    if (!hexSha256.test(record.providerBootstrapBuildToolchainSha256 ?? ""))
-      errors.push(`${label}: invalid providerBootstrapBuildToolchainSha256`);
-    if (!hexSha256.test(record.providerBootstrapBuildEnvironmentSha256 ?? ""))
-      errors.push(`${label}: invalid providerBootstrapBuildEnvironmentSha256`);
-    if (record.providerBootstrapBuildDirty !== false)
-      errors.push(`${label}: providerBootstrapBuildDirty must be false`);
-    for (const name of [
-      "providerBootstrapCargoVersion",
-      "providerBootstrapRustcVersion",
-      "providerBootstrapCargoLambdaVersion",
-      "providerBootstrapZigVersion",
-    ] as const)
-      requireString(name);
-    if (
-      isBase64Sha256(record.providerCodeSha256) &&
-      Buffer.from(record.providerCodeSha256 as string, "base64").toString("hex") !==
-        record.providerBootstrapArchiveSha256
-    ) {
-      errors.push(`${label}: deployed Shin code does not match provider bootstrap archive`);
-    }
-    if (record.providerSummary === undefined || record.providerSummary === null)
+    if (sample.providerSummary === undefined || sample.providerSummary === null) {
       errors.push(`${label}: providerSummary is required for Shin`);
-    else {
+    } else {
       errors.push(
-        ...providerSummaryErrors(record.providerSummary).map((error) => `${label}: ${error}`),
+        ...providerSummaryErrors(sample.providerSummary).map((error) => `${label}: ${error}`),
       );
-      const expectedExtract = profileExtractsSources(record.profile);
-      if (record.providerSummary.extract !== expectedExtract) {
+      const expectedExtract = profileExtractsSources(sample.profile);
+      if (sample.providerSummary.extract !== expectedExtract) {
         errors.push(`${label}: summary extract must be ${expectedExtract} for this profile`);
       }
     }
   } else {
     errors.push(`${label}: unsupported implementation`);
   }
-  errors.push(...benchmarkEvidenceSanitizationErrors(record));
   return errors;
+}
+
+/**
+ * Validates both ledgers together: every record against its shape, plus the
+ * referential checks that bind samples to runs -- every sample's runId (and
+ * implementation) must exist in `runs.jsonl`, run and sample identities must
+ * be unique, and a run must be cleanup-complete unless pending is allowed.
+ */
+export function benchmarkEvidenceErrors(
+  evidence: {
+    readonly runs: readonly BenchmarkRunRecord[];
+    readonly samples: readonly BenchmarkSampleRecord[];
+  },
+  options: { readonly allowPendingCleanup?: boolean } = {},
+): string[] {
+  const errors: string[] = [];
+  for (const run of evidence.runs) errors.push(...benchmarkRunRecordErrors(run));
+  for (const sample of evidence.samples) errors.push(...benchmarkSampleRecordErrors(sample));
+  const runsByKey = new Map<string, BenchmarkRunRecord>();
+  for (const run of evidence.runs) {
+    const key = benchmarkRunKey(run);
+    if (runsByKey.has(key)) {
+      errors.push(`duplicate run record ${run.runId}/${run.implementation}`);
+    } else {
+      runsByKey.set(key, run);
+    }
+  }
+  for (const run of evidence.runs) {
+    if (
+      !isCompleteBenchmarkRun(run) &&
+      !(options.allowPendingCleanup === true && run.cleanup === "partial")
+    ) {
+      errors.push(`${run.runId}/${run.implementation}: cleanup is incomplete`);
+    }
+  }
+  const sampleKeys = new Set<string>();
+  for (const sample of evidence.samples) {
+    const run = runsByKey.get(benchmarkRunKey(sample));
+    if (run === undefined) {
+      errors.push(
+        `${sample.sampleId ?? "missing-sample"}/${sample.phase ?? "missing-phase"}: runId ${sample.runId ?? "missing"} has no run record`,
+      );
+    }
+    const key = benchmarkSampleKey(sample);
+    if (sampleKeys.has(key)) {
+      errors.push(`duplicate sample ${sample.sampleId}/${sample.phase}`);
+    }
+    sampleKeys.add(key);
+  }
+  return errors;
+}
+
+/**
+ * Joins samples with their run records for rendering. Fails loudly when a sample
+ * references a runId with no run record.
+ */
+export function joinBenchmarkSamples(
+  runs: readonly BenchmarkRunRecord[],
+  samples: readonly BenchmarkSampleRecord[],
+): BenchmarkRunSample[] {
+  const runsByKey = new Map(runs.map((run) => [benchmarkRunKey(run), run]));
+  return samples.map((sample) => {
+    const run = runsByKey.get(benchmarkRunKey(sample));
+    if (run === undefined) {
+      throw new Error(
+        `Sample ${sample.sampleId ?? "missing"}/${sample.phase ?? "missing"} references runId ${sample.runId ?? "missing"} with no run record.`,
+      );
+    }
+    return {
+      ...sample,
+      snapshotDate: run.snapshotDate,
+      region: run.region,
+      cleanup: run.cleanup,
+      decisionRunId: run.decisionRunId ?? null,
+      comparisonVariant: run.comparisonVariant ?? null,
+      config: run.config,
+      environment: run.environment,
+      cdk: run.cdk,
+      provider: run.provider ?? null,
+    };
+  });
+}
+
+export function selectBenchmarkRuns(
+  runs: readonly BenchmarkRunRecord[],
+  requestedRunId?: string,
+): BenchmarkRunRecord[] {
+  const runId =
+    requestedRunId ?? [...runs].reverse().find((run) => run.runId)?.runId ?? undefined;
+  return runId === undefined || runId === null
+    ? [...runs]
+    : runs.filter((run) => run.runId === runId);
+}
+
+export function selectBenchmarkSamples(
+  samples: readonly BenchmarkSampleRecord[],
+  requestedRunId?: string,
+): BenchmarkSampleRecord[] {
+  const runId =
+    requestedRunId ?? [...samples].reverse().find((sample) => sample.runId)?.runId ?? undefined;
+  return runId === undefined || runId === null
+    ? [...samples]
+    : samples.filter((sample) => sample.runId === runId);
 }
 
 export function sanitizeProviderSummary(value: unknown): ProviderSummary {
@@ -843,14 +1109,11 @@ export function sanitizeProviderSummary(value: unknown): ProviderSummary {
 }
 
 /**
- * Validates a provider summary against the current schema (v6). Validation runs in three
- * stages -- copy section, detailed PutObject invariants, then the base shape -- which is a
- * factoring of one schema, not support for older ones. Only v6 is accepted.
+ * Validates a provider summary against the current diagnostics contract. Validation runs
+ * in three stages -- copy section, detailed PutObject invariants, then the base shape --
+ * which is a factoring of one schema, not support for older ones.
  */
 export function providerSummaryErrors(summary: ProviderSummary): string[] {
-  if (summary.schemaVersion !== 6) {
-    return [`summary schemaVersion must be 6, got ${String(summary.schemaVersion)}`];
-  }
   return summaryCopyErrors(summary);
 }
 
@@ -1049,27 +1312,25 @@ function summaryShapeErrors(summary: ProviderSummary): string[] {
 }
 
 export function benchmarkEvidenceSanitizationErrors(
-  record: BenchmarkResultRecord,
+  run: BenchmarkRunRecord,
+  sample: BenchmarkSampleRecord,
   forbiddenValues: readonly string[] = [],
 ): string[] {
   const errors: string[] = [];
-  const serialized = JSON.stringify(record);
+  const serialized = JSON.stringify({ run, sample });
   const sensitiveText = JSON.stringify([
-    record.providerImplementationSubject,
-    record.providerPackageName,
-    record.providerPackageVersion,
-    record.providerRuntime,
-    record.providerHandler,
-    record.cdkCliVersion,
-    record.awsCdkLibVersion,
-    record.region,
-    record.profile,
-    record.phase,
-    record.state,
-    record.cleanup,
-    record.notes,
-    record.decisionRunId,
-    record.comparisonVariant,
+    run.provider?.packageVersion,
+    run.provider?.runtime,
+    run.provider?.handler,
+    run.cdk?.cliVersion,
+    run.cdk?.libVersion,
+    run.region,
+    run.cleanup,
+    run.decisionRunId,
+    run.comparisonVariant,
+    sample.profile,
+    sample.phase,
+    sample.state,
   ]);
   if (/arn:aws(?:-[a-z0-9-]+)?:/i.test(serialized)) errors.push("record contains an ARN");
   if (/\b(?:request[ -]?id|etag)\b\s*(?::|=|\s)/i.test(sensitiveText))
@@ -1088,29 +1349,14 @@ export function benchmarkEvidenceSanitizationErrors(
   return [...new Set(errors)];
 }
 
-export function isCompleteBenchmarkRecord(record: BenchmarkResultRecord): boolean {
-  return record.cleanup === "all benchmark stacks destroyed";
-}
-
-export function selectBenchmarkRun(
-  records: readonly BenchmarkResultRecord[],
-  requestedRunId?: string,
-): BenchmarkResultRecord[] {
-  const runId = requestedRunId ?? [...records].reverse().find((record) => record.runId)?.runId;
-  return runId === undefined || runId === null
-    ? [...records]
-    : records.filter((record) => record.runId === runId);
-}
-
 export function phaseRank(phase: string | null | undefined): number {
   return PHASE_RANKS.get(phase ?? "") ?? Number.MAX_SAFE_INTEGER;
 }
 
-export function implementationLabel(record: BenchmarkResultRecord): string {
-  const implementation = normalizeImplementation(
-    record.implementation ?? inferImplementation(record),
-  );
-  return implementation ?? "unknown";
+export function implementationLabel(
+  record: Pick<BenchmarkRunRecord | BenchmarkSampleRecord, "implementation">,
+): string {
+  return normalizeImplementation(record.implementation) ?? "unknown";
 }
 
 export function normalizeImplementation(value: string | null | undefined): string | null {
@@ -1118,31 +1364,28 @@ export function normalizeImplementation(value: string | null | undefined): strin
 }
 
 export function isBenchmarkImplementation(
-  value: string | undefined,
+  value: string | null | undefined,
 ): value is BenchmarkImplementation {
   return includesString(BENCHMARK_IMPLEMENTATIONS, value);
 }
 
-export function isBenchmarkAssetProfile(value: string | undefined): value is BenchmarkAssetProfile {
+export function isBenchmarkAssetProfile(
+  value: string | null | undefined,
+): value is BenchmarkAssetProfile {
   return includesString(BENCHMARK_ASSET_PROFILES, value);
 }
 
-export function isBenchmarkAssetState(value: string | undefined): value is BenchmarkAssetState {
+export function isBenchmarkAssetState(
+  value: string | null | undefined,
+): value is BenchmarkAssetState {
   return includesString(BENCHMARK_ASSET_STATES, value);
-}
-
-function inferImplementation(record: BenchmarkResultRecord): string | null {
-  if (record.providerImplementationCommit || record.providerSummary) {
-    return "shin";
-  }
-  return null;
 }
 
 function includesString<T extends string>(
   values: readonly T[],
-  value: string | undefined,
+  value: string | null | undefined,
 ): value is T {
-  return value !== undefined && values.includes(value as T);
+  return value !== undefined && value !== null && values.includes(value as T);
 }
 
 function sanitizedValue(

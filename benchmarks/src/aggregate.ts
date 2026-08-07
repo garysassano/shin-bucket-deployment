@@ -1,4 +1,4 @@
-import { type BenchmarkResultRecord, implementationLabel } from "./model";
+import { type BenchmarkSampleRecord, implementationLabel } from "./model";
 
 export type BenchmarkStatistics = {
   readonly count: number;
@@ -56,10 +56,10 @@ export function summarize(values: readonly number[]): BenchmarkStatistics {
 }
 
 export function aggregateMetric(
-  records: readonly BenchmarkResultRecord[],
-  metric: keyof BenchmarkResultRecord,
+  records: readonly BenchmarkSampleRecord[],
+  metric: keyof BenchmarkSampleRecord,
 ): BenchmarkAggregate[] {
-  const groups = new Map<string, { record: BenchmarkResultRecord; values: number[] }>();
+  const groups = new Map<string, { record: BenchmarkSampleRecord; values: number[] }>();
   for (const record of records) {
     const value = record[metric];
     if (typeof value !== "number" || !Number.isFinite(value)) {
@@ -105,7 +105,7 @@ export function assertCompleteSamples(
       )
       .join(", ");
     throw new Error(
-      `Incomplete methodology-v2 benchmark samples; expected n=${expectedRepetitions}: ${details}`,
+      `Incomplete canonical benchmark samples; expected n=${expectedRepetitions}: ${details}`,
     );
   }
 }
