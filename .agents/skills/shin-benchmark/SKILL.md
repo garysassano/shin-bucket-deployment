@@ -150,68 +150,32 @@ pnpm benchmark:collect -- \
   --snapshot-date <YYYY-MM-DD> \
   --phase <phase> \
   --commit <short-sha> \
-  --subject "<commit subject>" \
   --region <region> \
   --implementation shin \
   --asset-profile <benchmark-profile> \
   --asset-state <state> \
   --transfer-max-concurrency <parallel> \
   --lambda-memory-mb <memory> \
-  --cleanup "all benchmark stacks destroyed" \
-  --notes "<sanitized note>"
+  --cleanup destroyed
 ```
 
 Do not parse `summary=...` tracing lines by hand. If parsing fails, fix `benchmarks/src/collect-results.ts` and add a test in `test/benchmarks/collector.test.ts`.
 
 ## Benchmark Records
 
-Write one JSON object per measured phase to `benchmarks/results.jsonl`. This file is current-result data for reports and profile snapshots, not append-only history. Rows are upserted by their run, sample, repetition, implementation, configuration, phase, and state identity. There is one methodology and one result schema; rows that do not conform are not readable and belong in `archive/`.
+Write one JSON object per measured phase to `benchmarks/results.jsonl`, and one per (`runId` × `implementation`) to `benchmarks/runs.jsonl`. Both are current-result data for reports and profile snapshots, not append-only history. Samples are upserted by their run, sample, repetition, implementation, configuration, phase, and state identity. There is one evidence shape; records that do not conform are not readable and belong in `archive/`.
 
 `AGENTS.md` owns the evidence persistence and provenance policy. Operationally: benchmark the implementation commit once it is on `main`, then open a follow-up evidence PR containing the updated `benchmarks/results.jsonl` and human benchmark page. Accepted evidence must not remain only in external scratch.
 
-Required fields:
+Evidence lives in **two** files. `benchmarks/runs.jsonl` holds one record per (`runId` × `implementation`) with everything constant across that run's samples; `benchmarks/results.jsonl` holds one record per sample with only what varies. A sample's `runId` must resolve to a run record.
 
-- `resultSchemaVersion`
-- `methodologyVersion`
-- `runId`
-- `sampleId`
-- `repetition`
-- `snapshotDate`
-- `providerImplementationCommit`
-- `providerImplementationSubject`
-- `providerPackageName`
-- `providerPackageVersion`
-- `providerArchitecture`
-- `providerCodeSha256`
-- `providerBootstrapSha256` for Shin
-- `gitDirty`
-- `cdkCliVersion`
-- `awsCdkLibVersion`
-- `awsCdkLibIntegrity`
-- `executionEnvironmentFresh`
-- `memoryMeasurementScope`
-- `resultDocumentationCommit`
-- `region`
-- `implementation`: `shin` or `aws`
-- `profile`
-- `memoryMb`
-- `parallel`
-- `phase`
-- `state`
-- `fileCount`
-- `totalBytes`
-- `cdkDeploySeconds`
-- `localWallSeconds`
-- `providerDurationSeconds`
-- `billedDurationSeconds`
-- `initDurationSeconds`
-- `maxMemoryMb`
-- `providerInvoked`
-- `cleanup`
-- `notes`
-- `providerSummary` for Shin records when a sanitized summary is available
+Run record (`runs.jsonl`): `runId`, `implementation`, `snapshotDate`, `region`, `cleanup`, and the grouped `config` (`benchmarkConfigSha256`, `memoryMeasurementScope`), `environment` (node/pnpm versions, execution-environment, dependency-lock, application-build and source-tree digests, `executionEnvironmentFresh`, `gitDirty`), `cdk` (`cliVersion`, `cliInstalledSha256`, `libVersion`, `libInstalledSha256`, `constructsInstalledSha256`) and `provider` objects. `provider` carries `packageVersion`, `architecture`, `runtime`, `handler` and `codeSha256` for **both** implementations — the AWS values describe the upstream `BucketDeployment` Lambda and are measured evidence. Shin runs additionally carry `provider.implementationCommit` and the whole `provider.bootstrap` object; AWS runs omit those two.
 
-Use `null` for unavailable values. Do not invent data. Keep `notes` as `null` for normal successful rows; populate it only for runner-detected factual anomalies or caveats. Put narrative interpretation in `docs/benchmark.md`.
+Sample record (`results.jsonl`): `runId`, `sampleId`, `implementation`, `profile`, `memoryMb`, `phase`, `state`, `repetition`, `fileCount`, `totalBytes`, `assetManifestSha256`, `cdkDeploySeconds`, `localWallSeconds`, `providerDurationSeconds`, `billedDurationSeconds`, `initDurationSeconds`, `maxMemoryMb`, `providerInvoked`, plus `parallel` and `detailedFailureDiagnostics` for Shin, `sourceWindowBytes` only when explicitly overridden, and `providerSummary` for Shin records when a sanitized summary is available.
+
+`cleanup` is an enum: `destroyed`, `partial`, or `failed`.
+
+**Omit absent fields; never write `null`.** Do not invent data. Put narrative interpretation in `docs/benchmark.md`.
 
 For Shin records with provider invocation, prefer a record with both CloudWatch `REPORT` metrics and `providerSummary`. Missing provider telemetry is acceptable only when the provider was not invoked or when the record notes why capture was impossible.
 

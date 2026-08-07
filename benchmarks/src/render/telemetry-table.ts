@@ -2,10 +2,12 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { basename, dirname } from "node:path";
 import { parseCliOptions } from "../cli";
 import {
-  type BenchmarkResultRecord,
+  type BenchmarkRunSample,
   type ProviderSummary,
+  benchmarkSampleKey,
   phaseRank,
-  readBenchmarkResultRows,
+  readBenchmarkEvidence,
+  readBenchmarkSampleRows,
 } from "../model";
 import { selectValidatedBenchmarkPreview, selectValidatedBenchmarkRun } from "../validation";
 
@@ -20,7 +22,7 @@ type RenderOptions = {
 
 type TelemetryRow = {
   readonly line: number;
-  readonly record: BenchmarkResultRecord;
+  readonly record: BenchmarkRunSample;
   readonly summary: ProviderSummary;
 };
 
@@ -316,7 +318,7 @@ function renderResultsMarkdown(
     ...(preview
       ? [
           "> [!WARNING]",
-          "> Preliminary preview from an incomplete methodology-v2 run. Do not treat these values as accepted benchmark evidence.",
+          "> Preliminary preview from an incomplete canonical run. Do not treat these values as accepted benchmark evidence.",
           "",
         ]
       : []),
@@ -464,27 +466,31 @@ function readTelemetryRows(
   scratchRoot: string | undefined,
   preview: boolean,
 ): TelemetryRow[] {
-  const allRows = readBenchmarkResultRows(filePath);
+  const allRows = readBenchmarkSampleRows(filePath);
+  const evidence = readBenchmarkEvidence(filePath);
   const selectRecords = preview ? selectValidatedBenchmarkPreview : selectValidatedBenchmarkRun;
-  const selectedRecords = new Set(
+  const joinedByKey = new Map(
     selectRecords({
-      records: allRows.map(({ record }) => record),
+      runs: evidence.runs,
+      samples: evidence.samples,
       runId: requestedRunId,
       configFile,
       inputFile: filePath,
       scratchRoot,
-    }),
+    }).map((record) => [benchmarkSampleKey(record), record]),
   );
-  const rows = allRows
-    .filter(({ record }) => selectedRecords.has(record))
-    .filter(
-      ({ record }) => record.providerSummary !== undefined && record.providerSummary !== null,
-    );
-  return rows.map(({ line, record }) => ({
-    line,
-    record,
-    summary: record.providerSummary as ProviderSummary,
-  }));
+  return allRows
+    .map(({ line, record }) => ({
+      line,
+      record: joinedByKey.get(benchmarkSampleKey(record)),
+    }))
+    .filter((row): row is { line: number; record: BenchmarkRunSample } => row.record !== undefined)
+    .filter(({ record }) => record.providerSummary !== undefined && record.providerSummary !== null)
+    .map(({ line, record }) => ({
+      line,
+      record,
+      summary: record.providerSummary as ProviderSummary,
+    }));
 }
 
 function unique<T>(values: Array<T | null | undefined>): T[] {

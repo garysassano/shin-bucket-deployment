@@ -159,6 +159,7 @@ jobs:
         if: ${{ inputs.mode == 'continue' }}
         run: |
           cp "$RUNNER_TEMP/benchmark-resume/results.jsonl" "$RESULTS_FILE"
+          cp "$RUNNER_TEMP/benchmark-resume/runs.jsonl" "$EVIDENCE_ROOT/runs.jsonl"
           cp "$RUNNER_TEMP/benchmark-resume/benchmark-run-manifest.json" "$SCRATCH_ROOT/benchmark-run-manifest.json"
           mkdir -p assets/bootstrap-arm64
           cp "$RUNNER_TEMP/benchmark-resume/bootstrap.zip" assets/bootstrap-arm64/bootstrap.zip
@@ -215,6 +216,7 @@ jobs:
           resume="$RUNNER_TEMP/benchmark-resume-upload"
           mkdir -p "$resume"
           cp "$RESULTS_FILE" "$resume/results.jsonl"
+          cp "$EVIDENCE_ROOT/runs.jsonl" "$resume/runs.jsonl"
           cp "$SCRATCH_ROOT/benchmark-run-manifest.json" "$resume/benchmark-run-manifest.json"
           cp assets/bootstrap-arm64/bootstrap.zip "$resume/bootstrap.zip"
           cp assets/bootstrap-arm64/build-provenance.json "$resume/build-provenance.json"
@@ -259,6 +261,7 @@ jobs:
           } >>"$GITHUB_ENV"
           mkdir -p "$report_root/snapshots"
           cp "$RESULTS_FILE" "$report_root/results.jsonl"
+          cp "$EVIDENCE_ROOT/runs.jsonl" "$report_root/runs.jsonl"
 
       - name: Render Actions summary
         run: |
@@ -307,7 +310,7 @@ jobs:
         env:
           IMPLEMENTATIONS: ${{ inputs.implementations }}
         run: |
-          expected=(report.md results.jsonl summary.md telemetry.md)
+          expected=(report.md results.jsonl runs.jsonl summary.md telemetry.md)
           if [[ "$IMPLEMENTATIONS" == "shin,aws" ]]; then
             expected+=(
               "snapshots/${SNAPSHOT_PREFIX}large-few-1024mib-32.svg"
@@ -389,6 +392,7 @@ jobs:
           } >>"$GITHUB_ENV"
           mkdir -p "$evidence_root/scratch"
           cp "$RUNNER_TEMP/benchmark-resume/results.jsonl" "$evidence_root/results.jsonl"
+          cp "$RUNNER_TEMP/benchmark-resume/runs.jsonl" "$evidence_root/runs.jsonl"
           cp "$RUNNER_TEMP/benchmark-resume/benchmark-run-manifest.json" "$evidence_root/scratch/benchmark-run-manifest.json"
 
       - name: Build reporting tools
@@ -448,6 +452,7 @@ jobs:
         run: |
           test -s benchmarks/ci-report.md
           test -s benchmarks/ci-telemetry.md
+          test -s benchmarks/runs.jsonl
           test -s benchmarks/snapshots/ci-large-few-1024mib-32.svg
           test -s benchmarks/snapshots/ci-large-few-2048mib-64.svg
           test -s benchmarks/snapshots/ci-mixed-1024mib-32.svg
@@ -456,6 +461,7 @@ jobs:
           test -s benchmarks/snapshots/ci-tiny-many-2048mib-64.svg
           git add \
             benchmarks/results.jsonl \
+            benchmarks/runs.jsonl \
             benchmarks/ci-report.md \
             benchmarks/ci-telemetry.md \
             benchmarks/snapshots/ci-large-few-1024mib-32.svg \
@@ -468,7 +474,7 @@ jobs:
             docs/benchmark.md
           git diff --cached --check
           git diff --check
-          unexpected="$(git status --porcelain --untracked-files=all | sed -E 's/^.. //;' | rg -v '^(benchmarks/results\.jsonl|benchmarks/ci-report\.md|benchmarks/ci-telemetry\.md|benchmarks/snapshots/ci-(large-few|mixed|tiny-many)-(1024mib-32|2048mib-64)\.svg|benchmarks/README\.md|docs/benchmark\.md)$' || true)"
+          unexpected="$(git status --porcelain --untracked-files=all | sed -E 's/^.. //;' | rg -v '^(benchmarks/results\.jsonl|benchmarks/runs\.jsonl|benchmarks/ci-report\.md|benchmarks/ci-telemetry\.md|benchmarks/snapshots/ci-(large-few|mixed|tiny-many)-(1024mib-32|2048mib-64)\.svg|benchmarks/README\.md|docs/benchmark\.md)$' || true)"
           test -z "$unexpected"
 
       - name: Commit and push benchmark publication

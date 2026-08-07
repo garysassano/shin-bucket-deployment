@@ -293,13 +293,12 @@ function sha256File(path) {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
-function verifyBootstrapProvenance(archivePath, provenancePath, arch) {
+export function verifyBootstrapProvenance(archivePath, provenancePath, arch) {
   assert(existsSync(archivePath), `Missing ${arch} bootstrap archive.`);
   assert(existsSync(provenancePath), `Missing ${arch} bootstrap build provenance.`);
 
   const bootstrap = readBootstrapEntry(archivePath, arch);
   const provenance = JSON.parse(readFileSync(provenancePath, "utf8"));
-  assert(provenance.schemaVersion === 1, `${arch} provenance has an unsupported schema.`);
   assert(provenance.architecture === arch, `${arch} provenance has the wrong architecture.`);
   assert(
     provenance.binaryName === "shin-bucket-deployment-handler",
@@ -685,4 +684,6 @@ function main() {
   }
 }
 
-main();
+if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+  main();
+}

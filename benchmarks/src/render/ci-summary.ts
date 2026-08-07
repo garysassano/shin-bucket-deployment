@@ -3,10 +3,11 @@ import { dirname } from "node:path";
 import { type BenchmarkAggregate, aggregateMetric } from "../aggregate";
 import { parseCliOptions } from "../cli";
 import {
-  type BenchmarkResultRecord,
+  type BenchmarkRunSample,
+  type BenchmarkSampleRecord,
   implementationLabel,
   phaseRank,
-  readBenchmarkResultRecords,
+  readBenchmarkEvidence,
 } from "../model";
 import { selectValidatedBenchmarkPreview, selectValidatedBenchmarkRun } from "../validation";
 
@@ -40,17 +41,18 @@ export function renderBenchmarkCiSummary(options: SummaryOptions): string {
   const selectRecords = options.preview
     ? selectValidatedBenchmarkPreview
     : selectValidatedBenchmarkRun;
+  const evidence = readBenchmarkEvidence(options.inputFile);
   const records = selectRecords({
-    records: readBenchmarkResultRecords(options.inputFile),
+    runs: evidence.runs,
+    samples: evidence.samples,
     runId: options.runId,
     configFile: options.configFile,
     inputFile: options.inputFile,
     scratchRoot: options.scratchRoot,
   });
   const repetitions = uniqueNumbers(records.map((record) => record.repetition));
-  const sourceCommit = records.find(
-    (record) => implementationLabel(record) === "shin",
-  )?.providerImplementationCommit;
+  const sourceCommit = records.find((record) => implementationLabel(record) === "shin")?.provider
+    ?.implementationCommit;
   const cleanupValues = uniqueStrings(records.map((record) => record.cleanup));
   const comparisonTable = renderComparisonTable(records);
   const pressureTable = renderPressureTable(records);
@@ -88,7 +90,7 @@ export function renderBenchmarkCiSummary(options: SummaryOptions): string {
   ].join("\n");
 }
 
-export function renderComparisonTable(records: readonly BenchmarkResultRecord[]): string {
+export function renderComparisonTable(records: readonly BenchmarkRunSample[]): string {
   const durationRows = metricRows(records, "providerDurationSeconds");
   const wallRows = metricRows(records, "localWallSeconds");
   const memoryRows = metricRows(records, "maxMemoryMb");
@@ -128,8 +130,8 @@ export function renderComparisonTable(records: readonly BenchmarkResultRecord[])
   ].join("\n");
 }
 
-function renderPressureTable(records: readonly BenchmarkResultRecord[]): string {
-  const grouped = new Map<string, BenchmarkResultRecord[]>();
+function renderPressureTable(records: readonly BenchmarkRunSample[]): string {
+  const grouped = new Map<string, BenchmarkRunSample[]>();
   for (const record of records.filter((row) => implementationLabel(row) === "shin")) {
     const profile = record.profile ?? "unknown";
     const rows = grouped.get(profile) ?? [];
@@ -156,8 +158,8 @@ function renderPressureTable(records: readonly BenchmarkResultRecord[]): string 
 }
 
 function metricRows(
-  records: readonly BenchmarkResultRecord[],
-  metric: keyof BenchmarkResultRecord,
+  records: readonly BenchmarkRunSample[],
+  metric: keyof BenchmarkSampleRecord,
 ): BenchmarkAggregate[] {
   return aggregateMetric(records, metric);
 }
@@ -187,7 +189,7 @@ function comparable(
 }
 
 function sum(
-  records: readonly BenchmarkResultRecord[],
+  records: readonly BenchmarkRunSample[],
   section: "source" | "putObject" | "copyObject" | "transfer",
   field: string,
 ): number {

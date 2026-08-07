@@ -1,10 +1,6 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { parseCliOptions } from "../cli";
-import {
-  type BenchmarkResultRecord,
-  implementationLabel,
-  readBenchmarkResultRecords,
-} from "../model";
+import { type BenchmarkRunSample, implementationLabel, readBenchmarkEvidence } from "../model";
 import { selectValidatedBenchmarkRun } from "../validation";
 import { renderComparisonTable } from "./ci-summary";
 
@@ -24,8 +20,10 @@ function main(): void {
   const inputFile = required(values, "input-file");
   const runId = required(values, "run-id");
   const scratchRoot = required(values, "scratch-root");
+  const evidence = readBenchmarkEvidence(inputFile);
   const records = selectValidatedBenchmarkRun({
-    records: readBenchmarkResultRecords(inputFile),
+    runs: evidence.runs,
+    samples: evidence.samples,
     runId,
     configFile: values.get("config"),
     inputFile,
@@ -38,7 +36,7 @@ function main(): void {
   console.log(`updated CI benchmark documentation in ${docsFile} and ${benchmarkReadme}`);
 }
 
-function lambdaConfigurations(records: BenchmarkResultRecord[]): string {
+function lambdaConfigurations(records: BenchmarkRunSample[]): string {
   const configurations = new Set<string>();
   for (const { memoryMb, parallel } of shinGroups(records)) {
     configurations.add(`${memoryMb} MiB / ${parallel} Shin transfers`);
@@ -47,7 +45,7 @@ function lambdaConfigurations(records: BenchmarkResultRecord[]): string {
 }
 
 function shinGroups(
-  records: BenchmarkResultRecord[],
+  records: BenchmarkRunSample[],
 ): Array<{ readonly profile: string; readonly memoryMb: number; readonly parallel: number }> {
   const groups = new Map<
     string,
@@ -71,14 +69,14 @@ function shinGroups(
   );
 }
 
-function renderDocsBlock(records: BenchmarkResultRecord[], runId: string): string {
+function renderDocsBlock(records: BenchmarkRunSample[], runId: string): string {
   const first = records[0];
   const source = records.find((record) => implementationLabel(record) === "shin");
   return [
     START,
     "## Latest CI benchmark",
     "",
-    `The latest complete canonical methodology-v2 run was collected by GitHub Actions on ${first?.snapshotDate ?? "unknown"} from source commit \`${source?.providerImplementationCommit?.slice(0, 7) ?? "unknown"}\`. It contains five sequential repetitions of all canonical profiles across all four phases. The sanitized run UUID is \`${runId}\`; raw AWS output remains outside git.`,
+    `The latest complete canonical five-repetition run was collected by GitHub Actions on ${first?.snapshotDate ?? "unknown"} from source commit \`${source?.provider?.implementationCommit?.slice(0, 7) ?? "unknown"}\`. It contains five sequential repetitions of all canonical profiles across all four phases. The sanitized run UUID is \`${runId}\`; raw AWS output remains outside git.`,
     "",
     "| Field | Value |",
     "| --- | --- |",
@@ -99,17 +97,18 @@ function renderDocsBlock(records: BenchmarkResultRecord[], runId: string): strin
   ].join("\n");
 }
 
-function renderReadmeBlock(records: BenchmarkResultRecord[], runId: string): string {
+function renderReadmeBlock(records: BenchmarkRunSample[], runId: string): string {
   const first = records[0];
   return [
     START,
-    "## Latest Methodology-v2 CI Benchmark",
+    "## Latest Canonical CI Benchmark",
     "",
     `GitHub Actions last published a complete five-repetition canonical run dated ${first?.snapshotDate ?? "unknown"} (run \`${runId}\`).`,
     "",
     "- [Comparison report](ci-report.md)",
     "- [Shin provider telemetry](ci-telemetry.md)",
     "- [Sanitized structured results](results.jsonl)",
+    "- [Run provenance records](runs.jsonl)",
     "",
     ...shinGroups(records).flatMap(({ profile, memoryMb, parallel }) => [
       `### ${profile} / ${memoryMb} MiB / max concurrency ${parallel}`,

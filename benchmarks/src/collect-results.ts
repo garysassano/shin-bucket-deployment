@@ -2,15 +2,20 @@ import { existsSync, readFileSync } from "node:fs";
 import { basename } from "node:path";
 import { parseCliOptions } from "./cli";
 import {
-  type BenchmarkResultRecord,
+  type BenchmarkRunRecord,
+  type BenchmarkRunRecordSource,
+  type BenchmarkSampleRecord,
   type ProviderSummary,
+  benchmarkEvidenceErrors,
   benchmarkEvidenceSanitizationErrors,
-  benchmarkRecordErrors,
+  benchmarkRunRecordFrom,
+  cleanupStatusFrom,
   normalizeImplementation,
   providerSummaryErrors,
+  runsFileFor,
   sanitizeProviderSummary,
 } from "./model";
-import { upsertBenchmarkRecord } from "./persistence";
+import { upsertBenchmarkRun, upsertBenchmarkSample } from "./persistence";
 
 export type CollectBenchmarkOptions = {
   readonly runId?: string;
@@ -28,7 +33,6 @@ export type CollectBenchmarkOptions = {
   readonly pnpmVersion?: string;
   readonly executionEnvironmentSha256?: string;
   readonly sourceTreeSha256?: string;
-  readonly providerPackageName?: string;
   readonly providerPackageVersion?: string;
   readonly providerArchitecture?: string;
   readonly providerRuntime?: string;
@@ -48,17 +52,15 @@ export type CollectBenchmarkOptions = {
   readonly cdkCliVersion?: string;
   readonly cdkCliInstalledSha256?: string;
   readonly awsCdkLibVersion?: string;
-  readonly awsCdkLibIntegrity?: string;
   readonly awsCdkLibInstalledSha256?: string;
   readonly constructsInstalledSha256?: string;
   readonly executionEnvironmentFresh?: boolean;
-  readonly memoryMeasurementScope?: "phase-local" | "cumulative";
+  readonly memoryMeasurementScope?: "phase-local";
   readonly decisionRunId?: string;
   readonly fileCount?: number;
   readonly implementation?: string;
   readonly logFile: string;
   readonly memoryMb?: number;
-  readonly notes?: string;
   readonly outputFile: string;
   readonly persist?: boolean;
   readonly parallel?: number | null;
@@ -68,11 +70,9 @@ export type CollectBenchmarkOptions = {
   readonly region?: string;
   readonly repetition?: number;
   readonly reportFile?: string;
-  readonly resultCommit?: string;
   readonly snapshotDate?: string;
   readonly state?: string;
   readonly sourceCount?: number;
-  readonly subject?: string;
   readonly summaryFile?: string;
   readonly totalBytes?: number;
   readonly cleanupVerified?: boolean;
@@ -110,7 +110,6 @@ const CLI_OPTIONS = [
   "commit",
   "run-id",
   "sample-id",
-  "provider-package-name",
   "provider-package-version",
   "provider-architecture",
   "provider-runtime",
@@ -122,7 +121,6 @@ const CLI_OPTIONS = [
   "cdk-cli-version",
   "cdk-cli-installed-sha256",
   "aws-cdk-lib-version",
-  "aws-cdk-lib-integrity",
   "aws-cdk-lib-installed-sha256",
   "constructs-installed-sha256",
   "benchmark-config-sha256",
@@ -138,15 +136,12 @@ const CLI_OPTIONS = [
   "lambda-memory-mb",
   "source-window-bytes",
   "log-file",
-  "notes",
   "output-file",
   "phase",
   "region",
   "repetition",
   "report-file",
-  "result-commit",
   "snapshot-date",
-  "subject",
   "summary-file",
   "source-count",
   "total-bytes",
@@ -160,7 +155,10 @@ function main(): void {
   );
 }
 
-export function collectBenchmarkResult(options: CollectBenchmarkOptions): BenchmarkResultRecord {
+export function collectBenchmarkResult(options: CollectBenchmarkOptions): {
+  readonly sample: BenchmarkSampleRecord;
+  readonly run: BenchmarkRunRecord;
+} {
   const logText = readFileSync(options.logFile, "utf8");
   const implementation = normalizeImplementation(
     options.implementation ?? outputString(logText, "BenchmarkImplementation"),
@@ -168,94 +166,38 @@ export function collectBenchmarkResult(options: CollectBenchmarkOptions): Benchm
   const report = options.reportFile ? readReportFile(options.reportFile) : undefined;
   const summaryEvidence = options.summaryFile ? readSummaryFile(options.summaryFile) : undefined;
   if (report === undefined) {
-    throw new Error("Methodology-v2 collection requires one complete CloudWatch REPORT event.");
+    throw new Error("Canonical collection requires one complete CloudWatch REPORT event.");
   }
   if (implementation === "shin" && summaryEvidence === undefined) {
-    throw new Error("Methodology-v2 Shin collection requires one provider summary event.");
+    throw new Error("Canonical Shin collection requires one provider summary event.");
   }
   if (summaryEvidence !== undefined) {
     assertCorrelatedTelemetry(report, summaryEvidence);
     const summaryErrors = providerSummaryErrors(summaryEvidence.summary);
     if (summaryErrors.length > 0) {
-      throw new Error(`Invalid methodology-v2 provider summary: ${summaryErrors.join("; ")}`);
+      throw new Error(`Invalid canonical provider summary: ${summaryErrors.join("; ")}`);
     }
   }
   assertObservedOutputs(logText, options, implementation);
   if (report.memorySizeMb !== options.memoryMb) {
     throw new Error(
-      `Methodology-v2 REPORT memory size ${report.memorySizeMb} does not match planned memory ${options.memoryMb ?? "missing"}.`,
+      `Canonical REPORT memory size ${report.memorySizeMb} does not match planned memory ${options.memoryMb ?? "missing"}.`,
     );
   }
   if (options.cleanup === "all benchmark stacks destroyed" && options.cleanupVerified !== true) {
-    throw new Error("Methodology-v2 cleanup can only be qualified by the automated runner.");
+    throw new Error("Canonical cleanup can only be qualified by the automated runner.");
   }
-  const record: BenchmarkResultRecord = {
-    resultSchemaVersion: 2,
-    methodologyVersion: 2,
+  const run = benchmarkRunRecordFrom(buildRunRecordSource(options, implementation));
+  const sample: BenchmarkSampleRecord = {
     runId: options.runId ?? null,
     sampleId: options.sampleId ?? null,
-    snapshotDate: options.snapshotDate ?? today(),
-    decisionRunId: options.decisionRunId ?? null,
-    comparisonVariant: options.comparisonVariant ?? null,
-    repetition: options.repetition ?? null,
-    benchmarkConfigSha256: options.benchmarkConfigSha256 ?? null,
-    assetManifestSha256: options.assetManifestSha256 ?? null,
-    dependencyLockSha256: options.dependencyLockSha256 ?? null,
-    applicationBuildSha256: options.applicationBuildSha256 ?? null,
-    installedDependenciesSha256: options.installedDependenciesSha256 ?? null,
-    nodeVersion: options.nodeVersion ?? null,
-    pnpmVersion: options.pnpmVersion ?? null,
-    executionEnvironmentSha256: options.executionEnvironmentSha256 ?? null,
-    sourceTreeSha256: options.sourceTreeSha256 ?? null,
-    providerImplementationCommit: options.commit ?? null,
-    providerImplementationSubject: options.subject ?? null,
-    providerPackageName: options.providerPackageName ?? null,
-    providerPackageVersion: options.providerPackageVersion ?? null,
-    providerArchitecture: options.providerArchitecture ?? null,
-    providerRuntime: options.providerRuntime ?? null,
-    providerHandler: options.providerHandler ?? null,
-    providerCodeSha256: options.providerCodeSha256 ?? null,
-    providerBootstrapSha256: options.providerBootstrapSha256 ?? null,
-    providerBootstrapArchiveSha256: options.providerBootstrapArchiveSha256 ?? null,
-    providerBootstrapProvenanceSha256: options.providerBootstrapProvenanceSha256 ?? null,
-    providerBootstrapBuildDirty: options.providerBootstrapBuildDirty ?? null,
-    providerBootstrapCargoVersion: options.providerBootstrapCargoVersion ?? null,
-    providerBootstrapRustcVersion: options.providerBootstrapRustcVersion ?? null,
-    providerBootstrapCargoLambdaVersion: options.providerBootstrapCargoLambdaVersion ?? null,
-    providerBootstrapZigVersion: options.providerBootstrapZigVersion ?? null,
-    providerBootstrapBuildToolchainSha256: options.providerBootstrapBuildToolchainSha256 ?? null,
-    providerBootstrapBuildEnvironmentSha256:
-      options.providerBootstrapBuildEnvironmentSha256 ?? null,
-    gitDirty: options.gitDirty ?? null,
-    cdkCliVersion: options.cdkCliVersion ?? null,
-    cdkCliInstalledSha256: options.cdkCliInstalledSha256 ?? null,
-    awsCdkLibVersion: options.awsCdkLibVersion ?? null,
-    awsCdkLibIntegrity: options.awsCdkLibIntegrity ?? null,
-    awsCdkLibInstalledSha256: options.awsCdkLibInstalledSha256 ?? null,
-    constructsInstalledSha256: options.constructsInstalledSha256 ?? null,
-    executionEnvironmentFresh: options.executionEnvironmentFresh ?? null,
-    memoryMeasurementScope: options.memoryMeasurementScope ?? null,
-    resultDocumentationCommit: options.resultCommit ?? null,
-    region: options.region ?? null,
-    implementation,
+    implementation: implementation ?? null,
     profile: options.assetProfile ?? outputString(logText, "BenchmarkAssetProfile"),
     memoryMb: options.memoryMb ?? outputNumber(logText, "BenchmarkMemoryLimitMb"),
-    parallel:
-      implementation === "aws"
-        ? null
-        : options.parallel === undefined
-          ? outputNumber(logText, "BenchmarkTransferMaxConcurrency")
-          : options.parallel,
-    sourceWindowBytes:
-      options.sourceWindowBytes === undefined
-        ? outputSourceWindowBytes(logText)
-        : options.sourceWindowBytes,
-    detailedFailureDiagnostics:
-      options.detailedFailureDiagnostics === undefined
-        ? outputDetailedFailureDiagnostics(logText)
-        : options.detailedFailureDiagnostics,
+    assetManifestSha256: options.assetManifestSha256 ?? null,
     phase: options.phase,
     state: options.state ?? outputString(logText, "BenchmarkState"),
+    repetition: options.repetition ?? null,
     fileCount: options.fileCount ?? outputNumber(logText, "BenchmarkFileCount"),
     totalBytes: options.totalBytes ?? outputNumber(logText, "BenchmarkTotalBytes"),
     cdkDeploySeconds: parseSeconds(logText, /Deployment time: ([\d.]+)s/),
@@ -265,27 +207,104 @@ export function collectBenchmarkResult(options: CollectBenchmarkOptions): Benchm
     initDurationSeconds: report?.initDurationSeconds ?? null,
     maxMemoryMb: report?.maxMemoryMb ?? null,
     providerInvoked: report !== undefined || summaryEvidence !== undefined,
-    cleanup: options.cleanup ?? null,
-    notes: options.notes ?? noChangeNote(logText),
-    providerSummary: summaryEvidence?.summary ?? null,
+    ...(implementation === "aws"
+      ? {}
+      : {
+          parallel:
+            options.parallel === undefined
+              ? outputNumber(logText, "BenchmarkTransferMaxConcurrency")
+              : options.parallel,
+          detailedFailureDiagnostics:
+            options.detailedFailureDiagnostics === undefined
+              ? outputDetailedFailureDiagnostics(logText)
+              : options.detailedFailureDiagnostics,
+          sourceWindowBytes:
+            options.sourceWindowBytes === undefined
+              ? (outputSourceWindowBytes(logText) ?? undefined)
+              : (options.sourceWindowBytes ?? undefined),
+        }),
+    ...(implementation === "aws" ? {} : { providerSummary: summaryEvidence?.summary }),
   };
 
-  const sanitizationErrors = benchmarkEvidenceSanitizationErrors(record, [
+  const sanitizationErrors = benchmarkEvidenceSanitizationErrors(run, sample, [
     process.env.AWS_PROFILE ?? "",
     process.env.AWS_DEFAULT_PROFILE ?? "",
   ]);
   if (sanitizationErrors.length > 0) {
     throw new Error(`Benchmark record failed sanitization: ${sanitizationErrors.join("; ")}`);
   }
-  const recordErrors = benchmarkRecordErrors(record, { allowPendingCleanup: true });
-  if (recordErrors.length > 0) {
-    throw new Error(`Invalid methodology-v2 benchmark record: ${recordErrors.join("; ")}`);
+  const evidenceErrors = benchmarkEvidenceErrors(
+    { runs: [run], samples: [sample] },
+    { allowPendingCleanup: true },
+  );
+  if (evidenceErrors.length > 0) {
+    throw new Error(`Invalid canonical benchmark record: ${evidenceErrors.join("; ")}`);
   }
 
   if (options.persist !== false) {
-    upsertBenchmarkRecord(options.outputFile, record);
+    upsertBenchmarkSample(options.outputFile, sample);
+    upsertBenchmarkRun(runsFileFor(options.outputFile), run);
   }
-  return record;
+  return { sample, run };
+}
+
+function buildRunRecordSource(
+  options: CollectBenchmarkOptions,
+  implementation: string | null,
+): BenchmarkRunRecordSource {
+  return {
+    runId: options.runId ?? null,
+    implementation: implementation ?? null,
+    snapshotDate: options.snapshotDate ?? today(),
+    region: options.region ?? null,
+    cleanup: cleanupStatusFrom(options.cleanup),
+    benchmarkConfigSha256: options.benchmarkConfigSha256 ?? null,
+    memoryMeasurementScope: options.memoryMeasurementScope ?? null,
+    nodeVersion: options.nodeVersion ?? null,
+    pnpmVersion: options.pnpmVersion ?? null,
+    executionEnvironmentSha256: options.executionEnvironmentSha256 ?? null,
+    executionEnvironmentFresh: options.executionEnvironmentFresh ?? null,
+    dependencyLockSha256: options.dependencyLockSha256 ?? null,
+    installedDependenciesSha256: options.installedDependenciesSha256 ?? null,
+    applicationBuildSha256: options.applicationBuildSha256 ?? null,
+    sourceTreeSha256: options.sourceTreeSha256 ?? null,
+    gitDirty: options.gitDirty ?? null,
+    cdkCliVersion: options.cdkCliVersion ?? null,
+    cdkCliInstalledSha256: options.cdkCliInstalledSha256 ?? null,
+    awsCdkLibVersion: options.awsCdkLibVersion ?? null,
+    awsCdkLibInstalledSha256: options.awsCdkLibInstalledSha256 ?? null,
+    constructsInstalledSha256: options.constructsInstalledSha256 ?? null,
+    ...(options.decisionRunId !== undefined ? { decisionRunId: options.decisionRunId } : {}),
+    ...(options.comparisonVariant !== undefined
+      ? { comparisonVariant: options.comparisonVariant }
+      : {}),
+    ...(implementation === "shin" || implementation === "aws"
+      ? {
+          provider: {
+            ...(implementation === "shin" ? { implementationCommit: options.commit ?? null } : {}),
+            packageVersion: options.providerPackageVersion ?? null,
+            architecture: options.providerArchitecture ?? null,
+            runtime: options.providerRuntime ?? null,
+            handler: options.providerHandler ?? null,
+            codeSha256: options.providerCodeSha256 ?? null,
+            ...(implementation === "shin"
+              ? {
+                  bootstrapSha256: options.providerBootstrapSha256 ?? null,
+                  bootstrapArchiveSha256: options.providerBootstrapArchiveSha256 ?? null,
+                  bootstrapProvenanceSha256: options.providerBootstrapProvenanceSha256 ?? null,
+                  buildDirty: options.providerBootstrapBuildDirty ?? null,
+                  cargoVersion: options.providerBootstrapCargoVersion ?? null,
+                  rustcVersion: options.providerBootstrapRustcVersion ?? null,
+                  cargoLambdaVersion: options.providerBootstrapCargoLambdaVersion ?? null,
+                  zigVersion: options.providerBootstrapZigVersion ?? null,
+                  buildToolchainSha256: options.providerBootstrapBuildToolchainSha256 ?? null,
+                  buildEnvironmentSha256: options.providerBootstrapBuildEnvironmentSha256 ?? null,
+                }
+              : {}),
+          },
+        }
+      : {}),
+  };
 }
 
 function parseArgs(args: string[]): CollectBenchmarkOptions {
@@ -302,7 +321,6 @@ function parseArgs(args: string[]): CollectBenchmarkOptions {
     cleanup: values.get("cleanup"),
     comparisonVariant: values.get("comparison-variant"),
     commit: values.get("commit"),
-    providerPackageName: values.get("provider-package-name"),
     providerPackageVersion: values.get("provider-package-version"),
     providerArchitecture: values.get("provider-architecture"),
     providerRuntime: values.get("provider-runtime"),
@@ -314,7 +332,6 @@ function parseArgs(args: string[]): CollectBenchmarkOptions {
     cdkCliVersion: values.get("cdk-cli-version"),
     cdkCliInstalledSha256: values.get("cdk-cli-installed-sha256"),
     awsCdkLibVersion: values.get("aws-cdk-lib-version"),
-    awsCdkLibIntegrity: values.get("aws-cdk-lib-integrity"),
     awsCdkLibInstalledSha256: values.get("aws-cdk-lib-installed-sha256"),
     constructsInstalledSha256: values.get("constructs-installed-sha256"),
     benchmarkConfigSha256: values.get("benchmark-config-sha256"),
@@ -328,7 +345,6 @@ function parseArgs(args: string[]): CollectBenchmarkOptions {
     implementation: values.get("implementation"),
     logFile,
     memoryMb: optionalNumber(values, "lambda-memory-mb"),
-    notes: values.get("notes"),
     outputFile,
     parallel: optionalNumber(values, "transfer-max-concurrency"),
     sourceWindowBytes: optionalNullablePositiveInteger(values.get("source-window-bytes")),
@@ -336,10 +352,8 @@ function parseArgs(args: string[]): CollectBenchmarkOptions {
     region: values.get("region"),
     repetition: optionalPositiveInteger(values, "repetition"),
     reportFile: values.get("report-file"),
-    resultCommit: values.get("result-commit"),
     snapshotDate: values.get("snapshot-date"),
     state: values.get("asset-state"),
-    subject: values.get("subject"),
     summaryFile: values.get("summary-file"),
     sourceCount: optionalNumber(values, "source-count"),
     totalBytes: optionalNumber(values, "total-bytes"),
@@ -354,9 +368,9 @@ function optionalBoolean(values: ReadonlyMap<string, string>, name: string): boo
   usage();
 }
 
-function optionalMemoryScope(value: string | undefined): "phase-local" | "cumulative" | undefined {
+function optionalMemoryScope(value: string | undefined): "phase-local" | undefined {
   if (value === undefined) return undefined;
-  if (value === "phase-local" || value === "cumulative") return value;
+  if (value === "phase-local") return value;
   usage();
 }
 
@@ -435,9 +449,7 @@ function readReportFile(path: string): ReportEvidence | undefined {
     return undefined;
   }
   if (report.initDurationSeconds === null || report.requestId === null) {
-    throw new Error(
-      `Methodology-v2 REPORT event in ${path} is missing init duration or request ID.`,
-    );
+    throw new Error(`Canonical REPORT event in ${path} is missing init duration or request ID.`);
   }
   return report;
 }
@@ -520,6 +532,17 @@ function summaryFromMessage(message: string): ProviderSummary | undefined {
 
 function isDeploymentSummary(value: unknown): value is ProviderSummary {
   if (!isRecord(value) || value.event !== "shin_deployment_summary") return false;
+  // `schemaVersion` is a constant discriminator, not a measurement, and stored
+  // summaries never carry it. Live provider output still does (V-1 removes it in
+  // the provider contract bump); only the current contract value may cross the
+  // parse boundary -- anything else is a foreign or stale summary and must fail
+  // closed rather than being silently accepted as current.
+  if (value.schemaVersion !== 6) {
+    throw new Error(
+      `Invalid provider summary: schemaVersion must be 6, got ${String(value.schemaVersion)}`,
+    );
+  }
+  delete value.schemaVersion;
   sanitizeProviderSummary(value);
   const errors = providerSummaryErrors(value);
   if (errors.length > 0) throw new Error(`Invalid provider summary: ${errors.join("; ")}`);
@@ -532,14 +555,14 @@ function assertCorrelatedTelemetry(report: ReportEvidence, summary: SummaryEvide
     summary.logStreamName === null ||
     report.logStreamName !== summary.logStreamName
   ) {
-    throw new Error("Methodology-v2 REPORT and provider summary are not from the same log stream.");
+    throw new Error("Canonical REPORT and provider summary are not from the same log stream.");
   }
   if (
     report.requestId === null ||
     summary.requestId === null ||
     report.requestId !== summary.requestId
   ) {
-    throw new Error("Methodology-v2 REPORT and provider summary request IDs do not match.");
+    throw new Error("Canonical REPORT and provider summary request IDs do not match.");
   }
   if (
     report.timestamp === null ||
@@ -547,7 +570,7 @@ function assertCorrelatedTelemetry(report: ReportEvidence, summary: SummaryEvide
     summary.timestamp > report.timestamp ||
     report.timestamp - summary.timestamp > 60_000
   ) {
-    throw new Error("Methodology-v2 REPORT and provider summary timestamps are not correlated.");
+    throw new Error("Canonical REPORT and provider summary timestamps are not correlated.");
   }
 }
 
@@ -606,12 +629,12 @@ function assertObservedOutputs(
   }
   for (const [name, expected] of checks) {
     if (expected === undefined || expected === null) {
-      throw new Error(`Methodology-v2 collection is missing planned ${name}.`);
+      throw new Error(`Canonical collection is missing planned ${name}.`);
     }
     const observed = outputString(logText, name);
     if (observed !== String(expected)) {
       throw new Error(
-        `Methodology-v2 output ${name}=${observed ?? "missing"} does not match planned ${expected}.`,
+        `Canonical output ${name}=${observed ?? "missing"} does not match planned ${expected}.`,
       );
     }
   }
@@ -663,12 +686,6 @@ function parseReportNumber(message: string, pattern: RegExp): number | null {
   }
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
-}
-
-function noChangeNote(logText: string): string | null {
-  return logText.includes("(no changes)")
-    ? "CDK reported no changes; provider was not invoked."
-    : null;
 }
 
 function roundSeconds(value: number): number {
