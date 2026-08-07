@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { assertRoundTrip, runRecordFrom, sampleRecordFrom } from "./migrate-benchmark-ledger.mjs";
+import {
+  assertRoundTrip,
+  droppedFieldProofs,
+  runRecordFrom,
+  sampleRecordFrom,
+} from "./migrate-benchmark-ledger.mjs";
 
 function oldRow(overrides = {}) {
   return {
@@ -76,6 +81,7 @@ test("round-trip assertion accepts the lossless migration output", () => {
   const awsRow = oldRow({
     sampleId: "00000000-0000-5000-a000-000000000002",
     implementation: "aws",
+    providerPackageName: "aws-cdk-lib",
     parallel: null,
     detailedFailureDiagnostics: null,
     providerImplementationCommit: null,
@@ -130,6 +136,7 @@ test("round-trip assertion accepts the lossless migration output", () => {
 test("round-trip assertion fails loudly when the AWS provider block is dropped", () => {
   const awsRow = oldRow({
     implementation: "aws",
+    providerPackageName: "aws-cdk-lib",
     parallel: null,
     detailedFailureDiagnostics: null,
     providerImplementationCommit: null,
@@ -172,6 +179,7 @@ test("round-trip assertion fails loudly when the AWS provider block is dropped",
 test("round-trip assertion fails loudly on unaccounted-for and invented fields", () => {
   const awsRow = oldRow({
     implementation: "aws",
+    providerPackageName: "aws-cdk-lib",
     parallel: null,
     detailedFailureDiagnostics: null,
     providerImplementationCommit: null,
@@ -210,4 +218,27 @@ test("round-trip assertion fails loudly on unaccounted-for and invented fields",
     nullReinvented.failures.some((failure) => failure.includes("parallel")),
     `expected a null-reinvented failure, got: ${nullReinvented.failures.join("; ")}`,
   );
+});
+
+test("dropped-field proofs pin providerPackageName per implementation", () => {
+  const awsRow = oldRow({
+    implementation: "aws",
+    providerPackageName: "aws-cdk-lib",
+  });
+  const valid = droppedFieldProofs([oldRow(), awsRow]);
+  for (const [condition, message] of valid) {
+    assert.ok(condition, message);
+  }
+
+  // Two distinct values globally still pass the old "at most two names" check;
+  // swapping the names within one implementation must fail the per-implementation
+  // proof, because the field is discarded and the swap would be lost silently.
+  const swapped = droppedFieldProofs([
+    oldRow({ providerPackageName: "aws-cdk-lib" }),
+    oldRow({ implementation: "aws", providerPackageName: "shin-bucket-deployment" }),
+  ]);
+  const nameProof = swapped.find(([, message]) => message.includes("providerPackageName"));
+  assert.ok(nameProof, "expected a providerPackageName proof");
+  assert.equal(nameProof[0], false);
+  assert.ok(nameProof[1].includes("per implementation"), nameProof[1]);
 });

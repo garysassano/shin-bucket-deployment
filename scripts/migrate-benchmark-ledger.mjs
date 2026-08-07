@@ -426,50 +426,9 @@ function main() {
 
   const roundTrip = assertRoundTrip(oldRows, runRecords, sampleRecords);
   const failures = [...roundTrip.failures];
-
   // The unaccounted-for-old-field check now lives inside assertRoundTrip, so it
   // applies to every caller and its own tests rather than only this entry point.
-
-  // Dropped fields: prove each is constant, all-null, or derivable, so nothing
-  // measured is lost.
-  const subjectsByRun = new Map();
-  for (const row of oldRows) {
-    const subject = row.providerImplementationSubject;
-    if (subject === null || subject === undefined) continue;
-    const subjects = subjectsByRun.get(row.runId) ?? new Set();
-    subjects.add(subject);
-    subjectsByRun.set(row.runId, subjects);
-  }
-  const distinctRunIds = new Set(oldRows.map((row) => row.runId));
-  const droppedChecks = [
-    [oldRows.every((row) => row.notes === null), "dropped notes: null on every row"],
-    [
-      oldRows.every((row) => row.resultDocumentationCommit === null),
-      "dropped resultDocumentationCommit: null on every row",
-    ],
-    [
-      oldRows.every((row) => row.resultSchemaVersion === 2),
-      "dropped resultSchemaVersion: constant 2",
-    ],
-    [
-      oldRows.every((row) => row.methodologyVersion === 2),
-      "dropped methodologyVersion: constant 2",
-    ],
-    [
-      new Set(oldRows.map((row) => row.providerPackageName)).size <= 2,
-      "dropped providerPackageName: constant per implementation (shin-bucket-deployment, aws-cdk-lib)",
-    ],
-    [
-      subjectsByRun.size === distinctRunIds.size &&
-        [...subjectsByRun.values()].every((subjects) => subjects.size === 1),
-      "dropped providerImplementationSubject: exactly one per run (derivable from git log)",
-    ],
-    [
-      new Set(oldRows.map((row) => row.awsCdkLibIntegrity)).size === 1,
-      "dropped awsCdkLibIntegrity: constant (pinned by dependencyLockSha256 + awsCdkLibInstalledSha256)",
-    ],
-  ];
-  for (const [condition, message] of droppedChecks) {
+  for (const [condition, message] of droppedFieldProofs(oldRows)) {
     if (condition) {
       roundTrip.summaries.push(`  ✓ ${message}`);
     } else {
@@ -514,6 +473,57 @@ function main() {
   writeFileSync(LEDGER, samplesContents);
   console.log(`wrote ${RUNS_FILE} (${runRecords.length} run records)`);
   console.log(`wrote ${LEDGER} (${sampleRecords.length} sample rows)`);
+}
+
+/**
+ * Dropped fields: prove each is constant, all-null, or derivable, so nothing
+ * measured is lost. `providerPackageName` is claimed constant *per
+ * implementation*: a global "at most two distinct values" check would let the
+ * two names swap within one implementation and still pass before being
+ * discarded, so each implementation is pinned to its own name.
+ */
+export function droppedFieldProofs(oldRows) {
+  const subjectsByRun = new Map();
+  for (const row of oldRows) {
+    const subject = row.providerImplementationSubject;
+    if (subject === null || subject === undefined) continue;
+    const subjects = subjectsByRun.get(row.runId) ?? new Set();
+    subjects.add(subject);
+    subjectsByRun.set(row.runId, subjects);
+  }
+  const distinctRunIds = new Set(oldRows.map((row) => row.runId));
+  return [
+    [oldRows.every((row) => row.notes === null), "dropped notes: null on every row"],
+    [
+      oldRows.every((row) => row.resultDocumentationCommit === null),
+      "dropped resultDocumentationCommit: null on every row",
+    ],
+    [
+      oldRows.every((row) => row.resultSchemaVersion === 2),
+      "dropped resultSchemaVersion: constant 2",
+    ],
+    [
+      oldRows.every((row) => row.methodologyVersion === 2),
+      "dropped methodologyVersion: constant 2",
+    ],
+    [
+      oldRows.every(
+        (row) =>
+          row.providerPackageName ===
+          (row.implementation === "shin" ? "shin-bucket-deployment" : "aws-cdk-lib"),
+      ),
+      "dropped providerPackageName: pinned per implementation (shin-bucket-deployment, aws-cdk-lib)",
+    ],
+    [
+      subjectsByRun.size === distinctRunIds.size &&
+        [...subjectsByRun.values()].every((subjects) => subjects.size === 1),
+      "dropped providerImplementationSubject: exactly one per run (derivable from git log)",
+    ],
+    [
+      new Set(oldRows.map((row) => row.awsCdkLibIntegrity)).size === 1,
+      "dropped awsCdkLibIntegrity: constant (pinned by dependencyLockSha256 + awsCdkLibInstalledSha256)",
+    ],
+  ];
 }
 
 if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
