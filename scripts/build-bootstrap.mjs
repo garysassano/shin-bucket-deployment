@@ -85,6 +85,36 @@ function toolIdentity(root) {
   };
 }
 
+/**
+ * The build-provenance manifest staged next to each `bootstrap.zip`. Its writer
+ * and readers are all in-repo and it is regenerated on every build, so the old
+ * `schemaVersion` marker defended nothing and was dropped (V-3). The remaining
+ * fields bind the archive to the source commit, toolchain, and digests.
+ */
+export function bootstrapProvenanceManifest({
+  architecture,
+  binaryName,
+  target,
+  source,
+  applicationBuildSha256,
+  tools,
+  bootstrapBytes,
+  archiveBytes,
+}) {
+  return {
+    architecture,
+    binaryName,
+    target,
+    sourceCommit: source.commit,
+    sourceDirty: source.dirty,
+    sourceTreeSha256: source.sourceTreeSha256,
+    applicationBuildSha256,
+    ...tools,
+    bootstrapSha256: createHash("sha256").update(bootstrapBytes).digest("hex"),
+    bootstrapArchiveSha256: createHash("sha256").update(archiveBytes).digest("hex"),
+  };
+}
+
 function buildArch(
   arch,
   sourceRoot = repoRoot,
@@ -151,19 +181,16 @@ function buildArch(
   copyFileSync(builtArchive, outFile);
   const archive = readFileSync(outFile);
   const bootstrap = output("unzip", ["-p", outFile, "bootstrap"], null, sourceRoot);
-  const provenance = {
-    schemaVersion: 1,
+  const provenance = bootstrapProvenanceManifest({
     architecture: arch,
     binaryName,
     target: config.target,
-    sourceCommit: sourceBefore.commit,
-    sourceDirty: sourceBefore.dirty,
-    sourceTreeSha256: sourceBefore.sourceTreeSha256,
+    source: sourceBefore,
     applicationBuildSha256,
-    ...toolsBefore,
-    bootstrapSha256: createHash("sha256").update(bootstrap).digest("hex"),
-    bootstrapArchiveSha256: createHash("sha256").update(archive).digest("hex"),
-  };
+    tools: toolsBefore,
+    bootstrapBytes: bootstrap,
+    archiveBytes: archive,
+  });
   writeFileSync(join(outDir, "build-provenance.json"), `${JSON.stringify(provenance, null, 2)}\n`);
   console.log(`Staged ${arch} bootstrap archive -> ${outFile}`);
 }
@@ -233,4 +260,6 @@ function main() {
   }
 }
 
-main();
+if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+  main();
+}
