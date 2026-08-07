@@ -684,6 +684,24 @@ describe("benchmark methodology", () => {
         cleanup: "partial",
       }),
     ).toBe(false);
+    // A record that passes every field check but is cleanup-incomplete must not
+    // count as canonical: the canonical helpers gate on completed runs, not just
+    // on shape validity.
+    const incomplete = canonicalRunRecord(parseBenchmarkRunOptions([]), "shin", {
+      cleanup: "partial",
+    });
+    expect(benchmarkRunRecordErrors(incomplete)).toEqual([]);
+    expect(isCanonicalBenchmarkRun(incomplete)).toBe(false);
+    const cumulative = canonicalRunRecord(parseBenchmarkRunOptions([]), "shin", {
+      config: {
+        benchmarkConfigSha256: benchmarkConfigurationSha256(parseBenchmarkRunOptions([])),
+        memoryMeasurementScope: "cumulative",
+      },
+    });
+    expect(benchmarkRunRecordErrors(cumulative).join("; ")).toContain(
+      "memoryMeasurementScope must be phase-local",
+    );
+    expect(isCanonicalBenchmarkRun(cumulative)).toBe(false);
     expect(isCanonicalBenchmarkRun(canonicalRunRecord(parseBenchmarkRunOptions([]), "shin"))).toBe(
       true,
     );
@@ -733,6 +751,15 @@ describe("benchmark methodology", () => {
       "unexpected AWS provider field bootstrap",
     );
 
+    const versionMismatch = {
+      ...canonical,
+      cdk: { ...(canonical.cdk as Record<string, unknown>), libVersion: "2.261.0" },
+    };
+    expect(benchmarkRunRecordErrors(versionMismatch).join("; ")).toContain(
+      "AWS provider package version must match cdk.libVersion",
+    );
+    expect(isCanonicalBenchmarkRun(versionMismatch)).toBe(false);
+
     for (const name of ["packageVersion", "architecture", "runtime", "handler", "codeSha256"]) {
       const missing = {
         ...canonical,
@@ -741,6 +768,39 @@ describe("benchmark methodology", () => {
       delete missing.provider[name];
       expect(benchmarkRunRecordErrors(missing)).not.toEqual([]);
     }
+  });
+
+  test("rejects invented top-level Shin provider fields", () => {
+    const options = parseBenchmarkRunOptions([]);
+    const canonical = canonicalRunRecord(options, "shin");
+    expect(isCanonicalBenchmarkRun(canonical)).toBe(true);
+
+    const invented = {
+      ...canonical,
+      provider: {
+        ...(canonical.provider as Record<string, unknown>),
+        invented: "x",
+      } as Record<string, unknown>,
+    };
+    expect(benchmarkRunRecordErrors(invented).join("; ")).toContain(
+      "unexpected Shin provider field invented",
+    );
+    expect(isCanonicalBenchmarkRun(invented)).toBe(false);
+  });
+
+  test("rejects a run record whose implementation has no samples", () => {
+    const options = parseBenchmarkRunOptions([]);
+    const records = createBenchmarkPlan(options).flatMap((sample) =>
+      options.phases.map((phase) => canonicalRecord(options, sample, phase)),
+    );
+    const shinOnly = records.filter((record) => record.implementation === "shin");
+    const runs = canonicalRuns(options);
+    expect(() => validateCompleteCanonicalRun({ runs, samples: shinOnly, options })).toThrow(
+      "run record implementation aws has no samples",
+    );
+    expect(() =>
+      selectValidatedBenchmarkRun({ runs, samples: shinOnly, runId: options.runId }),
+    ).toThrow("run record implementation aws has no samples");
   });
 
   test("selects the latest completed run instead of aggregating different runs", () => {
@@ -932,7 +992,11 @@ describe("benchmark methodology", () => {
     const dir = mkdtempSync(join(tmpdir(), "shin-benchmark-persistence-"));
     const output = join(dir, "results.jsonl");
     const runsFile = join(dir, "runs.jsonl");
-    writeFileSync(output, `${JSON.stringify({ phase: "history", profile: "old" })}\n`);
+    const history = canonicalSampleRecord({
+      runId: "00000000-0000-4000-a000-0000000000aa",
+      sampleId: "00000000-0000-5000-a000-0000000000aa",
+    });
+    writeFileSync(output, `${JSON.stringify(history)}\n`);
     const sample = canonicalSampleRecord() as BenchmarkSampleRecord;
     const run = canonicalRunRecord(
       { ...parseBenchmarkRunOptions([]), runId: sample.runId as string },
@@ -946,7 +1010,7 @@ describe("benchmark methodology", () => {
       .split("\n")
       .map((line) => JSON.parse(line) as unknown);
     expect(rows).toHaveLength(2);
-    expect(rows[0]).toMatchObject({ phase: "history" });
+    expect(rows[0]).toMatchObject({ sampleId: history.sampleId });
     expect(rows[1]).not.toHaveProperty("cleanup");
     expect(rows[1]).toMatchObject({ sampleId: sample.sampleId });
     const runRows = readFileSync(runsFile, "utf8")
@@ -957,6 +1021,31 @@ describe("benchmark methodology", () => {
     expect(runRows[0]).toMatchObject({ cleanup: "destroyed" });
     expect(completedSampleIds(output, sample.runId as string, [sample.phase as string])).toEqual(
       new Set([sample.sampleId]),
+    );
+  });
+
+  test("refuses to upsert against pre-migration flat rows", () => {
+    const dir = mkdtempSync(join(tmpdir(), "shin-benchmark-persistence-old-shape-"));
+    const output = join(dir, "results.jsonl");
+    const oldFlatRow = {
+      resultSchemaVersion: 2,
+      methodologyVersion: 2,
+      runId: "00000000-0000-4000-a000-0000000000bb",
+      sampleId: "00000000-0000-5000-a000-0000000000bb",
+      notes: null,
+    };
+    writeFileSync(output, `${JSON.stringify(oldFlatRow)}\n`);
+    expect(() =>
+      upsertBenchmarkSample(output, canonicalSampleRecord() as BenchmarkSampleRecord),
+    ).toThrow("Invalid existing row");
+    const runsFile = join(dir, "runs.jsonl");
+    writeFileSync(runsFile, `${JSON.stringify({ runId: "not-a-uuid", implementation: "shin" })}\n`);
+    const run = canonicalRunRecord(
+      { ...parseBenchmarkRunOptions([]), runId: "00000000-0000-4000-a000-0000000000bc" },
+      "shin",
+    );
+    expect(() => upsertBenchmarkRun(runsFile, run as BenchmarkRunRecord)).toThrow(
+      "Invalid existing row",
     );
   });
 
@@ -1110,6 +1199,71 @@ describe("benchmark methodology", () => {
         `${nextRecords.map((record) => JSON.stringify(record)).join("\n")}\n`,
       );
     }
+  });
+
+  test("authenticates the runs ledger against the resume manifest", () => {
+    const repositoryRoot = mkdtempSync(join(tmpdir(), "shin-benchmark-runs-digest-"));
+    const scratchRoot = join(repositoryRoot, "scratch");
+    mkdirSync(scratchRoot, { recursive: true });
+    const outputFile = join(repositoryRoot, "results.jsonl");
+    const runId = "00000000-0000-4000-a000-00000000000d";
+    const options: BenchmarkRunOptions = {
+      ...parseBenchmarkRunOptions([
+        "--config",
+        "benchmarks/configs/canonical.json",
+        "--run-id",
+        runId,
+        "--snapshot-date",
+        "2026-01-01",
+      ]),
+      outputFile,
+      scratchRoot,
+    };
+    const session = openResumeSession({
+      options,
+      sourceMetadata: sourceMetadata(),
+      repositoryRoot,
+    });
+    const records = createBenchmarkPlan(options).flatMap((sample) =>
+      options.phases.map((phase) => canonicalRecord(options, sample, phase)),
+    );
+    session.persist(
+      records as BenchmarkSampleRecord[],
+      "destroyed",
+      canonicalRuns(options) as BenchmarkRunRecord[],
+    );
+    session.close();
+
+    // A stale-but-valid runs file with altered provider provenance must be
+    // detected even though the sample ledger digest still matches.
+    const runsFile = runsFileFor(outputFile);
+    const runRows = readFileSync(runsFile, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const tampered = runRows.map((run) =>
+      run.implementation === "aws"
+        ? {
+            ...run,
+            provider: { ...(run.provider as Record<string, unknown>), packageVersion: "2.999.0" },
+          }
+        : run,
+    );
+    writeFileSync(runsFile, `${tampered.map((run) => JSON.stringify(run)).join("\n")}\n`);
+
+    expect(() =>
+      openResumeSession({ options, sourceMetadata: sourceMetadata(), repositoryRoot }),
+    ).toThrow("runs ledger changed");
+    expect(() =>
+      selectValidatedBenchmarkRun({
+        runs: readBenchmarkRunRecords(runsFile),
+        samples: readBenchmarkSampleRecords(outputFile),
+        runId,
+        configFile: "benchmarks/configs/canonical.json",
+        inputFile: outputFile,
+        scratchRoot,
+      }),
+    ).toThrow("runs ledger changed after");
   });
 
   test("reconstructs complete and preview validation from recorded run metadata", () => {

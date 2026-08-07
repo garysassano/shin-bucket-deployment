@@ -53,6 +53,8 @@ type ResumeManifest = {
   readonly initiallyDirty: boolean;
   readonly ledgerSha256: string | null;
   readonly pendingLedgerSha256?: string;
+  readonly runsLedgerSha256: string | null;
+  readonly pendingRunsLedgerSha256?: string | null;
 };
 
 export type ResumeSession = {
@@ -73,6 +75,7 @@ export function openResumeSession(args: {
   const repositoryRoot = args.repositoryRoot ?? process.cwd();
   const manifestFile = join(args.options.scratchRoot, "benchmark-run-manifest.json");
   const evidenceFile = resolve(repositoryRoot, args.options.outputFile);
+  const runsFile = runsFileFor(evidenceFile);
   const releaseLock = acquireResumeLocks([
     `ledger-${digest(evidenceFile)}`,
     `run-${digest(`${args.sourceMetadata.credentialAccountSha256}\0${args.options.region}`)}`,
@@ -110,16 +113,28 @@ export function openResumeSession(args: {
       ) {
         throw new Error("Benchmark evidence ledger changed outside the recorded resume session.");
       }
+      const currentRunsSha256 = fileDigest(runsFile);
+      if (
+        currentRunsSha256 !== manifest.runsLedgerSha256 &&
+        currentRunsSha256 !== manifest.pendingRunsLedgerSha256
+      ) {
+        throw new Error("Benchmark runs ledger changed outside the recorded resume session.");
+      }
       if (currentLedgerSha256 === manifest.pendingLedgerSha256) {
         manifest = {
           ...manifest,
           ledgerSha256: currentLedgerSha256,
+          runsLedgerSha256: currentRunsSha256,
           pendingLedgerSha256: undefined,
+          pendingRunsLedgerSha256: undefined,
         };
         writeManifest(manifestFile, manifest);
       }
     } else {
-      if (ledgerContainsRun(evidenceFile, args.options.runId)) {
+      if (
+        ledgerContainsRun(evidenceFile, args.options.runId) ||
+        ledgerContainsRun(runsFile, args.options.runId)
+      ) {
         throw new Error(
           "Benchmark rows already exist for this run-id but its resume manifest is missing.",
         );
@@ -130,6 +145,7 @@ export function openResumeSession(args: {
         evidenceFile,
         initiallyDirty: args.sourceMetadata.gitDirty,
         ledgerSha256: currentLedgerSha256,
+        runsLedgerSha256: fileDigest(runsFile),
       };
       writeManifest(manifestFile, manifest);
     }
@@ -147,18 +163,35 @@ export function openResumeSession(args: {
         if (fileDigest(evidenceFile) !== manifest.ledgerSha256) {
           throw new Error("Benchmark evidence ledger changed during the active run.");
         }
+        if (fileDigest(runsFile) !== manifest.runsLedgerSha256) {
+          throw new Error("Benchmark runs ledger changed during the active run.");
+        }
         const sampleContents = previewBenchmarkSamples(evidenceFile, records);
         const runs = buildRunRecords(args.options, identity.source, records, cleanup, providedRuns);
-        const runsFile = runsFileFor(evidenceFile);
-        const runsContents = previewBenchmarkRuns(runsFile, runs);
+        let runsContents: string | null = null;
+        let nextRunsSha256 = manifest.runsLedgerSha256;
+        if (runs.length > 0) {
+          runsContents = previewBenchmarkRuns(runsFile, runs);
+          nextRunsSha256 = digest(runsContents);
+        }
         const nextDigest = digest(sampleContents);
-        manifest = { ...manifest, pendingLedgerSha256: nextDigest };
+        manifest = {
+          ...manifest,
+          pendingLedgerSha256: nextDigest,
+          pendingRunsLedgerSha256: nextRunsSha256,
+        };
         writeManifest(manifestFile, manifest);
         writeBenchmarkLedger(evidenceFile, sampleContents);
-        if (runs.length > 0) {
+        if (runsContents !== null) {
           writeBenchmarkLedger(runsFile, runsContents);
         }
-        manifest = { ...manifest, ledgerSha256: nextDigest, pendingLedgerSha256: undefined };
+        manifest = {
+          ...manifest,
+          ledgerSha256: nextDigest,
+          runsLedgerSha256: nextRunsSha256,
+          pendingLedgerSha256: undefined,
+          pendingRunsLedgerSha256: undefined,
+        };
         writeManifest(manifestFile, manifest);
       },
       close(): void {
@@ -214,11 +247,17 @@ export function assertBenchmarkLedgerMatchesManifest(args: {
   if (resolve(manifest.evidenceFile) !== evidenceFile) {
     throw new Error("Benchmark publication evidence destination does not match its manifest.");
   }
-  if (manifest.pendingLedgerSha256 !== undefined) {
+  if (
+    manifest.pendingLedgerSha256 !== undefined ||
+    manifest.pendingRunsLedgerSha256 !== undefined
+  ) {
     throw new Error("Benchmark publication manifest contains an incomplete ledger write.");
   }
   if (fileDigest(evidenceFile) !== manifest.ledgerSha256) {
     throw new Error("Benchmark evidence ledger changed after its recorded run session.");
+  }
+  if (fileDigest(runsFileFor(evidenceFile)) !== manifest.runsLedgerSha256) {
+    throw new Error("Benchmark runs ledger changed after its recorded run session.");
   }
 }
 

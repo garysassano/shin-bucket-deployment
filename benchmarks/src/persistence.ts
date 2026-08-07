@@ -4,6 +4,7 @@ import {
   type BenchmarkRunRecord,
   type BenchmarkSampleRecord,
   benchmarkRunKey,
+  benchmarkRunRecordErrors,
   benchmarkSampleKey,
   benchmarkSampleRecordErrors,
   readBenchmarkRunRecords,
@@ -81,11 +82,21 @@ export function previewBenchmarkSamples(
         .split(/\r?\n/)
         .filter((line) => line.trim() !== "")
         .filter((line) => {
+          let record: BenchmarkSampleRecord;
           try {
-            return !replacements.has(benchmarkSampleKey(JSON.parse(line) as BenchmarkSampleRecord));
+            record = JSON.parse(line) as BenchmarkSampleRecord;
           } catch (cause) {
             throw new Error(`Invalid JSONL record in ${outputFile}.`, { cause });
           }
+          if (replacements.has(benchmarkSampleKey(record))) return false;
+          // The ledger has exactly one living shape. Retaining a row that fails
+          // it would silently mix pre-migration flat rows with the slim shape,
+          // so fail closed instead of persisting a mixed file.
+          const errors = benchmarkSampleRecordErrors(record);
+          if (errors.length > 0) {
+            throw new Error(`Invalid existing row in ${outputFile}: ${errors.join("; ")}`);
+          }
+          return true;
         })
     : [];
   const serialized = records.map((record) => JSON.stringify(record));
@@ -116,11 +127,18 @@ export function previewBenchmarkRuns(
         .split(/\r?\n/)
         .filter((line) => line.trim() !== "")
         .filter((line) => {
+          let record: BenchmarkRunRecord;
           try {
-            return !replacements.has(benchmarkRunKey(JSON.parse(line) as BenchmarkRunRecord));
+            record = JSON.parse(line) as BenchmarkRunRecord;
           } catch (cause) {
             throw new Error(`Invalid JSONL record in ${runsFile}.`, { cause });
           }
+          if (replacements.has(benchmarkRunKey(record))) return false;
+          const errors = benchmarkRunRecordErrors(record);
+          if (errors.length > 0) {
+            throw new Error(`Invalid existing row in ${runsFile}: ${errors.join("; ")}`);
+          }
+          return true;
         })
     : [];
   const serialized = records.map((record) => JSON.stringify(record));
