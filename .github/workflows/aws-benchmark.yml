@@ -159,6 +159,7 @@ jobs:
         if: ${{ inputs.mode == 'continue' }}
         run: |
           cp "$RUNNER_TEMP/benchmark-resume/results.jsonl" "$RESULTS_FILE"
+          cp "$RUNNER_TEMP/benchmark-resume/runs.jsonl" "$EVIDENCE_ROOT/runs.jsonl"
           cp "$RUNNER_TEMP/benchmark-resume/benchmark-run-manifest.json" "$SCRATCH_ROOT/benchmark-run-manifest.json"
           mkdir -p assets/bootstrap-arm64
           cp "$RUNNER_TEMP/benchmark-resume/bootstrap.zip" assets/bootstrap-arm64/bootstrap.zip
@@ -260,6 +261,7 @@ jobs:
           } >>"$GITHUB_ENV"
           mkdir -p "$report_root/snapshots"
           cp "$RESULTS_FILE" "$report_root/results.jsonl"
+          cp "$EVIDENCE_ROOT/runs.jsonl" "$report_root/runs.jsonl"
 
       - name: Render Actions summary
         run: |
@@ -308,7 +310,7 @@ jobs:
         env:
           IMPLEMENTATIONS: ${{ inputs.implementations }}
         run: |
-          expected=(report.md results.jsonl summary.md telemetry.md)
+          expected=(report.md results.jsonl runs.jsonl summary.md telemetry.md)
           if [[ "$IMPLEMENTATIONS" == "shin,aws" ]]; then
             expected+=(
               "snapshots/${SNAPSHOT_PREFIX}large-few-1024mib-32.svg"
