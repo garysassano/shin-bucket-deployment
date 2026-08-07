@@ -282,6 +282,16 @@ export function assertRoundTrip(oldRows, runRecords, sampleRecords) {
     }
     const merged = { ...run, ...newRow };
     let rowPassed = 0;
+    // Drive the check from the OLD row's own keys, not from FIELD_PATHS. A
+    // keep-list can only prove the fields it already knows about, which is how
+    // 720 AWS provider values were once dropped past a green assertion.
+    for (const field of Object.keys(oldRow)) {
+      if (!Object.hasOwn(FIELD_PATHS, field) && !DROPPED_FIELDS.has(field)) {
+        failures.push(
+          `row ${index + 1} (${oldRow.sampleId}): old field ${field} is unaccounted-for (neither retained nor dropped)`,
+        );
+      }
+    }
     for (const [field, path] of Object.entries(FIELD_PATHS)) {
       const oldValue = oldRow[field];
       const actual = path.reduce((acc, key) => (acc === undefined ? undefined : acc[key]), merged);
@@ -417,16 +427,8 @@ function main() {
   const roundTrip = assertRoundTrip(oldRows, runRecords, sampleRecords);
   const failures = [...roundTrip.failures];
 
-  // Every pre-migration field must be accounted for: retained (FIELD_PATHS) or
-  // deliberately dropped (DROPPED_FIELDS). A future old-shape field that this
-  // migration does not know about fails loudly instead of being silently lost.
-  for (const row of oldRows) {
-    for (const field of Object.keys(row)) {
-      if (!Object.hasOwn(FIELD_PATHS, field) && !DROPPED_FIELDS.has(field)) {
-        failures.push(`old field ${field} is unaccounted-for (neither retained nor dropped)`);
-      }
-    }
-  }
+  // The unaccounted-for-old-field check now lives inside assertRoundTrip, so it
+  // applies to every caller and its own tests rather than only this entry point.
 
   // Dropped fields: prove each is constant, all-null, or derivable, so nothing
   // measured is lost.

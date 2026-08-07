@@ -10,6 +10,7 @@ import {
   statSync,
 } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
+import { runsFileFor } from "./model";
 
 type PackageJson = { readonly name?: string; readonly version?: string };
 
@@ -81,9 +82,7 @@ export async function collectBenchmarkSourceMetadata(
   const constructsPackageRoot = join(repositoryRoot, "node_modules", "constructs");
   const zodPackageRoot = join(repositoryRoot, "node_modules", "zod");
   const cargoLambdaCdkPackageRoot = join(repositoryRoot, "node_modules", "cargo-lambda-cdk");
-  const evidenceRelative = evidenceOutputFile
-    ? repositoryRelativePath(repositoryRoot, evidenceOutputFile)
-    : undefined;
+  const evidenceRelativePaths = evidenceLedgerPaths(repositoryRoot, evidenceOutputFile);
   const lockfile = readFileSync(join(repositoryRoot, "pnpm-lock.yaml"), "utf8");
   const bootstrapArchive = join(repositoryRoot, "assets", "bootstrap-arm64", "bootstrap.zip");
   const bootstrapProvenance = join(
@@ -110,7 +109,7 @@ export async function collectBenchmarkSourceMetadata(
         [
           join(repositoryRoot, "scripts", "source-identity.mjs"),
           repositoryRoot,
-          ...(evidenceRelative === undefined ? [] : [evidenceRelative]),
+          ...evidenceRelativePaths,
         ],
         repositoryRoot,
       ),
@@ -259,25 +258,32 @@ function stableCredentialArn(arn: string): string {
   return arn.replace(/:sts::(\d{12}):assumed-role\/(.+)\/[^/]+$/, ":iam::$1:role/$2");
 }
 
+/// Both ledger files a run writes: the sample ledger and its sibling run ledger.
+/// A run persists to both, so both must be excluded from the source-identity
+/// checks — otherwise the first persisted sample makes the tree look dirty and
+/// the next per-sample assertion aborts the run.
+export function evidenceLedgerPaths(
+  repositoryRoot: string,
+  evidenceOutputFile: string | undefined,
+): string[] {
+  if (evidenceOutputFile === undefined) return [];
+  // `repositoryRelativePath` returns undefined for a path outside the repository,
+  // which cannot appear in `git status` and so needs no exclusion.
+  return [evidenceOutputFile, runsFileFor(evidenceOutputFile)]
+    .map((file) => repositoryRelativePath(repositoryRoot, file))
+    .filter((path): path is string => path !== undefined);
+}
+
 export function sourceStatusLines(
   porcelainStatus: string,
   repositoryRoot: string,
   evidenceOutputFile: string | undefined = undefined,
 ): string[] {
-  const ignoredPath = evidenceOutputFile
-    ? normalizePath(
-        isAbsolute(evidenceOutputFile)
-          ? relative(repositoryRoot, evidenceOutputFile)
-          : relative(repositoryRoot, resolve(repositoryRoot, evidenceOutputFile)),
-      )
-    : undefined;
+  const ignoredPaths = new Set(evidenceLedgerPaths(repositoryRoot, evidenceOutputFile));
   return porcelainStatus
     .split(/\r?\n/)
     .filter(Boolean)
-    .filter((line) => {
-      const changedPath = changedPathFromStatusLine(line);
-      return ignoredPath === undefined || changedPath !== ignoredPath;
-    });
+    .filter((line) => !ignoredPaths.has(changedPathFromStatusLine(line)));
 }
 
 export function assertBenchmarkSourceMetadataUnchanged(args: {
@@ -287,16 +293,14 @@ export function assertBenchmarkSourceMetadataUnchanged(args: {
   readonly evidenceOutputFile: string;
   readonly requireClean?: boolean;
 }): void {
-  const evidenceRelative = normalizePath(
-    isAbsolute(args.evidenceOutputFile)
-      ? relative(args.repositoryRoot, args.evidenceOutputFile)
-      : relative(args.repositoryRoot, resolve(args.repositoryRoot, args.evidenceOutputFile)),
+  const evidenceRelative = new Set(
+    evidenceLedgerPaths(args.repositoryRoot, args.evidenceOutputFile),
   );
   const expectedSourceChanges = args.expected.changedPaths.filter(
-    (line) => changedPathFromStatusLine(line) !== evidenceRelative,
+    (line) => !evidenceRelative.has(changedPathFromStatusLine(line)),
   );
   const currentSourceChanges = args.current.changedPaths.filter(
-    (line) => changedPathFromStatusLine(line) !== evidenceRelative,
+    (line) => !evidenceRelative.has(changedPathFromStatusLine(line)),
   );
   const expectedDirty = args.expected.changedPaths.length > 0;
   const currentDirty = args.current.changedPaths.length > 0;

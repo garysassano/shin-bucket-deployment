@@ -770,6 +770,37 @@ describe("benchmark methodology", () => {
     ).toEqual([]);
   });
 
+  test("does not mark a run dirty because it persisted the run ledger", () => {
+    // A run writes both ledgers. Excluding only results.jsonl made the first
+    // persisted sample look like a source change, aborting the run.
+    expect(
+      sourceStatusLines(
+        " M benchmarks/results.jsonl\n M benchmarks/runs.jsonl\n M benchmarks/src/model.ts\n",
+        process.cwd(),
+        "benchmarks/results.jsonl",
+      ),
+    ).toEqual([" M benchmarks/src/model.ts"]);
+  });
+
+  test("does not abort a clean run when only the two evidence ledgers changed", () => {
+    const repositoryRoot = "/repository";
+    const expected = { ...sourceMetadata(), gitDirty: false, changedPaths: [] };
+    const current = {
+      ...sourceMetadata(),
+      gitDirty: true,
+      changedPaths: [" M benchmarks/results.jsonl", " M benchmarks/runs.jsonl"],
+    };
+    expect(() =>
+      assertBenchmarkSourceMetadataUnchanged({
+        expected,
+        current,
+        repositoryRoot,
+        evidenceOutputFile: "benchmarks/results.jsonl",
+        requireClean: true,
+      }),
+    ).not.toThrow();
+  });
+
   test("rejects source, dependency, bootstrap, account, or dirty-state drift", () => {
     const repositoryRoot = "/repository";
     const expected = sourceMetadata();
