@@ -319,6 +319,10 @@ pub(crate) struct SourceArchive {
 pub(crate) struct DeploymentStats {
     started: OnceInstant,
     plan_millis: AtomicU64,
+    plan_catalog_millis: AtomicU64,
+    plan_directory_millis: AtomicU64,
+    plan_entries_millis: AtomicU64,
+    plan_validation_millis: AtomicU64,
     destination_list_millis: AtomicU64,
     transfer_millis: AtomicU64,
     delete_millis: AtomicU64,
@@ -452,6 +456,10 @@ pub(crate) struct DeploymentStatsSnapshot<'a> {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct PhaseMillis {
     pub(crate) plan: u64,
+    pub(crate) plan_catalog: u64,
+    pub(crate) plan_directory: u64,
+    pub(crate) plan_entries: u64,
+    pub(crate) plan_validation: u64,
     pub(crate) destination_list: u64,
     pub(crate) transfer: u64,
     pub(crate) delete: u64,
@@ -689,6 +697,26 @@ impl DeploymentStats {
 
     pub(crate) fn add_plan_millis(&self, millis: u64) {
         self.plan_millis.fetch_add(millis, Ordering::Relaxed);
+    }
+
+    pub(crate) fn add_plan_catalog_millis(&self, millis: u64) {
+        self.plan_catalog_millis
+            .fetch_add(millis, Ordering::Relaxed);
+    }
+
+    pub(crate) fn add_plan_directory_millis(&self, millis: u64) {
+        self.plan_directory_millis
+            .fetch_add(millis, Ordering::Relaxed);
+    }
+
+    pub(crate) fn add_plan_entries_millis(&self, millis: u64) {
+        self.plan_entries_millis
+            .fetch_add(millis, Ordering::Relaxed);
+    }
+
+    pub(crate) fn add_plan_validation_millis(&self, millis: u64) {
+        self.plan_validation_millis
+            .fetch_add(millis, Ordering::Relaxed);
     }
 
     pub(crate) fn add_destination_list_millis(&self, millis: u64) {
@@ -1054,6 +1082,10 @@ impl DeploymentStats {
             duration_ms: duration_ms(self.started.0.elapsed()),
             phase_ms: PhaseMillis {
                 plan: self.plan_millis.load(Ordering::Relaxed),
+                plan_catalog: self.plan_catalog_millis.load(Ordering::Relaxed),
+                plan_directory: self.plan_directory_millis.load(Ordering::Relaxed),
+                plan_entries: self.plan_entries_millis.load(Ordering::Relaxed),
+                plan_validation: self.plan_validation_millis.load(Ordering::Relaxed),
                 destination_list: self.destination_list_millis.load(Ordering::Relaxed),
                 transfer: self.transfer_millis.load(Ordering::Relaxed),
                 delete: self.delete_millis.load(Ordering::Relaxed),

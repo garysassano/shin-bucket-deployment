@@ -396,6 +396,12 @@ async fn add_archive_entries_to_manifest(
         stats,
         source_budget,
     } = context;
+    // The four plan sub-timings split source planning so network round-trips can
+    // be told apart from CPU: `planDirectory` and `planCatalog` each contain the
+    // S3 GETs (EOCD/central directory and catalog object) that make planning look
+    // CPU-heavy while actually waiting on S3; `planEntries` and `planValidation`
+    // are pure CPU. The `plan` total remains the sum of all planning work.
+    let started_directory = std::time::Instant::now();
     let prepared = prepare_zip_directory_reader(
         source.clone(),
         request.runtime.source_block_bytes,
@@ -411,9 +417,13 @@ async fn add_archive_entries_to_manifest(
     let reader = ZipFileReader::with_tokio(prepared.reader)
         .await
         .context("failed to read zip archive central directory")?;
+    stats.add_plan_directory_millis(crate::util::duration_ms(started_directory.elapsed()));
     let entries = reader.file().entries();
+    let started_validation = std::time::Instant::now();
     let source_offsets =
         validate_archive_directory(entries, source.len(), central_directory_start)?;
+    stats.add_plan_validation_millis(crate::util::duration_ms(started_validation.elapsed()));
+    let started_catalog = std::time::Instant::now();
     let catalog = if let Some(expected) = &request.source_catalogs[source_index] {
         match load_authenticated_catalog(
             source.clone(),
@@ -456,6 +466,8 @@ async fn add_archive_entries_to_manifest(
         );
         HashMap::new()
     };
+    stats.add_plan_catalog_millis(crate::util::duration_ms(started_catalog.elapsed()));
+    let started_entries = std::time::Instant::now();
     let mut seen = HashSet::new();
 
     for stored in entries {
@@ -530,6 +542,7 @@ async fn add_archive_entries_to_manifest(
         };
         insert_manifest_object(manifest, planned);
     }
+    stats.add_plan_entries_millis(crate::util::duration_ms(started_entries.elapsed()));
 
     Ok(())
 }
