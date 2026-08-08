@@ -890,6 +890,16 @@ export class ShinBucketDeployment extends Construct {
     this.cr = new CustomResource(customResourceIdentity, this.handlerFunction.node.id, {
       serviceToken: this.handlerFunction.functionArn,
       serviceTimeout: PROVIDER_TIMEOUT,
+      /**
+       * Wire names mirror the public API path of the value they carry: each
+       * camelCase path segment becomes one PascalCase key, nested as a dotted
+       * object (`destinationLifecycle.onChange.deletePreviousObjects` becomes
+       * `DestinationLifecycle.OnChange.DeletePreviousObjects`). Values that do
+       * not carry a public API property -- bound source data (`Source*`), the
+       * transport envelope (`ServiceToken`/`ServiceTimeout`), and internal
+       * identities (`DestinationOwnerId`, `OutputObjectKeys`,
+       * `DestinationBucketArn`) -- keep their flat wire names.
+       */
       properties: {
         SourceBucketNames: Lazy.uncachedList({
           produce: () => this.sources.map((source) => source.bucket.bucketName),
@@ -912,29 +922,40 @@ export class ShinBucketDeployment extends Construct {
           },
           { omitEmptyArray: true },
         ),
-        DestinationBucketName: this.destinationBucket.bucketName,
-        DestinationBucketKeyPrefix: destination.keyPrefix,
+        Destination: {
+          BucketName: this.destinationBucket.bucketName,
+          KeyPrefix: destination.keyPrefix,
+        },
         DestinationOwnerId: Lazy.uncachedString({
           produce: () => destinationOwnerId,
         }),
-        DeletePreviousObjectsOnChange: previousBucket
-          ? {
-              DestinationBucketName: previousBucket.bucketName,
-            }
-          : undefined,
-        InvalidatePreviousDistributionOnChange:
-          previousDistribution?.distributionRef.distributionId,
-        WaitForDistributionInvalidation: props.cloudfrontInvalidation?.waitForCompletion ?? true,
-        DeleteCurrentObjectsOnDelete: deleteCurrentObjectsOnDelete,
-        Extract: sourceProcessing.extract ?? true,
-        MaxUncompressedEntryBytes:
-          sourceProcessing.maxUncompressedEntryBytes ?? DEFAULT_MAX_UNCOMPRESSED_ENTRY_BYTES,
-        MaxCompressionRatio: sourceProcessing.maxCompressionRatio ?? DEFAULT_MAX_COMPRESSION_RATIO,
-        DeleteStaleObjectsOnDeployment: deleteStaleObjectsOnDeploy,
-        Exclude: sourceProcessing.exclude,
-        Include: sourceProcessing.include,
-        DistributionId: props.cloudfrontInvalidation?.distribution.distributionRef.distributionId,
-        DistributionPaths: props.cloudfrontInvalidation?.paths,
+        DestinationLifecycle: {
+          OnDeploy: {
+            DeleteStaleObjects: deleteStaleObjectsOnDeploy,
+          },
+          OnChange: {
+            DeletePreviousObjects: deletePreviousObjectsOnChange,
+            PreviousBucketName: previousBucket?.bucketName,
+            InvalidatePreviousDistribution: previousDistribution?.distributionRef.distributionId,
+          },
+          OnDelete: {
+            DeleteCurrentObjects: deleteCurrentObjectsOnDelete,
+          },
+        },
+        CloudfrontInvalidation: {
+          DistributionId: props.cloudfrontInvalidation?.distribution.distributionRef.distributionId,
+          DistributionPaths: props.cloudfrontInvalidation?.paths,
+          WaitForCompletion: props.cloudfrontInvalidation?.waitForCompletion ?? true,
+        },
+        SourceProcessing: {
+          Extract: sourceProcessing.extract ?? true,
+          MaxUncompressedEntryBytes:
+            sourceProcessing.maxUncompressedEntryBytes ?? DEFAULT_MAX_UNCOMPRESSED_ENTRY_BYTES,
+          MaxCompressionRatio:
+            sourceProcessing.maxCompressionRatio ?? DEFAULT_MAX_COMPRESSION_RATIO,
+          Exclude: sourceProcessing.exclude,
+          Include: sourceProcessing.include,
+        },
         OutputObjectKeys: Lazy.any({
           produce: () => this.requestObjectKeys,
         }),
@@ -942,18 +963,24 @@ export class ShinBucketDeployment extends Construct {
           produce: () =>
             this.requestDestinationArn ? this.destinationBucket.bucketArn : undefined,
         }),
-        MaxParallelTransfers: transfer.maxConcurrency,
-        SourceBlockBytes: advancedTuning.sourceBlockBytes,
-        SourceBlockMergeGapBytes: advancedTuning.sourceBlockMergeGapBytes,
-        SourceGetConcurrency: advancedTuning.sourceGetConcurrency,
-        SourceWindowBytes: advancedTuning.sourceWindowBytes,
-        SourceWindowMemoryBudgetMb: advancedTuning.sourceWindowMemoryBudgetMiB,
-        PutObjectMaxAttempts: destinationWriteRetryTuning.maxAttempts,
-        PutObjectRetryBaseDelayMs: destinationWriteRetryTuning.baseDelayMs,
-        PutObjectRetryMaxDelayMs: destinationWriteRetryTuning.maxDelayMs,
-        PutObjectSlowdownRetryBaseDelayMs: destinationWriteRetryTuning.slowdownBaseDelayMs,
-        PutObjectSlowdownRetryMaxDelayMs: destinationWriteRetryTuning.slowdownMaxDelayMs,
-        PutObjectRetryJitter: destinationWriteRetryTuning.jitter,
+        Transfer: {
+          MaxConcurrency: transfer.maxConcurrency,
+          AdvancedTuning: {
+            SourceBlockBytes: advancedTuning.sourceBlockBytes,
+            SourceBlockMergeGapBytes: advancedTuning.sourceBlockMergeGapBytes,
+            SourceGetConcurrency: advancedTuning.sourceGetConcurrency,
+            SourceWindowBytes: advancedTuning.sourceWindowBytes,
+            SourceWindowMemoryBudgetMiB: advancedTuning.sourceWindowMemoryBudgetMiB,
+            DestinationWriteRetry: {
+              MaxAttempts: destinationWriteRetryTuning.maxAttempts,
+              BaseDelayMs: destinationWriteRetryTuning.baseDelayMs,
+              MaxDelayMs: destinationWriteRetryTuning.maxDelayMs,
+              SlowdownBaseDelayMs: destinationWriteRetryTuning.slowdownBaseDelayMs,
+              SlowdownMaxDelayMs: destinationWriteRetryTuning.slowdownMaxDelayMs,
+              Jitter: destinationWriteRetryTuning.jitter,
+            },
+          },
+        },
       },
     });
 

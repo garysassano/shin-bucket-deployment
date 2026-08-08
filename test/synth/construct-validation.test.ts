@@ -52,8 +52,10 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     });
 
     expect(customResourceProperties(stack)).toMatchObject({
-      MaxUncompressedEntryBytes: DEFAULT_MAX_UNCOMPRESSED_ENTRY_BYTES,
-      MaxCompressionRatio: DEFAULT_MAX_COMPRESSION_RATIO,
+      SourceProcessing: {
+        MaxUncompressedEntryBytes: DEFAULT_MAX_UNCOMPRESSED_ENTRY_BYTES,
+        MaxCompressionRatio: DEFAULT_MAX_COMPRESSION_RATIO,
+      },
     });
   });
 
@@ -72,8 +74,10 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     });
 
     expect(customResourceProperties(stack)).toMatchObject({
-      MaxUncompressedEntryBytes: 5 * 1024 * 1024 * 1024,
-      MaxCompressionRatio: 10_000,
+      SourceProcessing: {
+        MaxUncompressedEntryBytes: 5 * 1024 * 1024 * 1024,
+        MaxCompressionRatio: 10_000,
+      },
     });
   });
 
@@ -180,10 +184,22 @@ describe("ShinBucketDeployment validation and option coverage", () => {
         },
       ]),
     });
-    expect(customResourceProperties(stack).DeletePreviousObjectsOnChange).toBeUndefined();
-    expect(customResourceProperties(stack).InvalidatePreviousDistributionOnChange).toBeUndefined();
-    expect(customResourceProperties(stack).DeleteCurrentObjectsOnDelete).toBe(false);
-    expect(customResourceProperties(stack).DeleteStaleObjectsOnDeployment).toBe(true);
+    expect(
+      customResourceProperties(stack).DestinationLifecycle.OnChange.DeletePreviousObjects,
+    ).toBe(false);
+    expect(
+      customResourceProperties(stack).DestinationLifecycle.OnChange.PreviousBucketName,
+    ).toBeUndefined();
+    expect(
+      customResourceProperties(stack).DestinationLifecycle.OnChange
+        .InvalidatePreviousDistribution,
+    ).toBeUndefined();
+    expect(customResourceProperties(stack).DestinationLifecycle.OnDelete.DeleteCurrentObjects).toBe(
+      false,
+    );
+    expect(customResourceProperties(stack).DestinationLifecycle.OnDeploy.DeleteStaleObjects).toBe(
+      true,
+    );
   });
 
   test("canonicalizes a slash destination prefix to root ownership", () => {
@@ -202,7 +218,7 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     });
 
     const properties = customResourceProperties(stack);
-    expect(properties.DestinationBucketKeyPrefix).toBe("/");
+    expect((properties.Destination as Record<string, unknown>).KeyPrefix).toBe("/");
     Template.fromStack(stack).hasResourceProperties("AWS::S3::Bucket", {
       Tags: Match.arrayWith([
         {
@@ -355,16 +371,17 @@ describe("ShinBucketDeployment validation and option coverage", () => {
       },
     });
 
-    const previousDestinationAuthorization = customResourceProperties(stack)
-      .DeletePreviousObjectsOnChange as {
-      DestinationBucketName: { Ref: string };
-      DestinationBucketKeyPrefix?: string;
+    const lifecycle = customResourceProperties(stack).DestinationLifecycle as {
+      OnChange: {
+        DeletePreviousObjects: boolean;
+        PreviousBucketName?: { Ref: string };
+      };
     };
-    expect(previousDestinationAuthorization).toEqual({
-      DestinationBucketName: {
-        Ref: expect.stringMatching(/^Dest/),
-      },
+    expect(lifecycle.OnChange.DeletePreviousObjects).toBe(true);
+    expect(lifecycle.OnChange.PreviousBucketName).toEqual({
+      Ref: expect.stringMatching(/^Dest/),
     });
+    const previousBucketName = lifecycle.OnChange.PreviousBucketName as { Ref: string };
 
     Template.fromStack(stack).hasResourceProperties("AWS::IAM::Policy", {
       PolicyDocument: {
@@ -376,10 +393,7 @@ describe("ShinBucketDeployment validation and option coverage", () => {
                 "",
                 Match.arrayWith([
                   Match.objectLike({
-                    "Fn::GetAtt": [
-                      previousDestinationAuthorization.DestinationBucketName.Ref,
-                      "Arn",
-                    ],
+                    "Fn::GetAtt": [previousBucketName.Ref, "Arn"],
                   }),
                   "/*",
                 ]),
@@ -389,7 +403,7 @@ describe("ShinBucketDeployment validation and option coverage", () => {
           Match.objectLike({
             Action: "s3:ListBucket",
             Resource: {
-              "Fn::GetAtt": [previousDestinationAuthorization.DestinationBucketName.Ref, "Arn"],
+              "Fn::GetAtt": [previousBucketName.Ref, "Arn"],
             },
           }),
         ]),
@@ -432,20 +446,27 @@ describe("ShinBucketDeployment validation and option coverage", () => {
       },
     });
 
-    const previousDestinationAuthorization = customResourceProperties(stack)
-      .DeletePreviousObjectsOnChange as {
-      DestinationBucketName: { Ref: string };
+    const lifecycle = customResourceProperties(stack).DestinationLifecycle as {
+      OnChange: {
+        DeletePreviousObjects: boolean;
+        PreviousBucketName?: { Ref: string };
+        InvalidatePreviousDistribution?: { Ref: string };
+      };
     };
-    expect(previousDestinationAuthorization).toEqual({
-      DestinationBucketName: {
-        Ref: expect.stringMatching(/^PreviousDest/),
-      },
+    expect(lifecycle.OnChange.DeletePreviousObjects).toBe(true);
+    expect(lifecycle.OnChange.PreviousBucketName).toEqual({
+      Ref: expect.stringMatching(/^PreviousDest/),
     });
-    expect(customResourceProperties(stack).InvalidatePreviousDistributionOnChange).toEqual({
+    expect(lifecycle.OnChange.InvalidatePreviousDistribution).toEqual({
       Ref: expect.stringMatching(/^PreviousDistribution/),
     });
-    expect(customResourceProperties(stack).DeleteCurrentObjectsOnDelete).toBe(true);
-    expect(customResourceProperties(stack).DeleteStaleObjectsOnDeployment).toBe(false);
+    expect(customResourceProperties(stack).DestinationLifecycle.OnDelete.DeleteCurrentObjects).toBe(
+      true,
+    );
+    expect(customResourceProperties(stack).DestinationLifecycle.OnDeploy.DeleteStaleObjects).toBe(
+      false,
+    );
+    const previousBucketName = lifecycle.OnChange.PreviousBucketName as { Ref: string };
 
     const template = Template.fromStack(stack);
     template.hasResourceProperties("AWS::IAM::Policy", {
@@ -458,10 +479,7 @@ describe("ShinBucketDeployment validation and option coverage", () => {
                 "",
                 Match.arrayWith([
                   Match.objectLike({
-                    "Fn::GetAtt": [
-                      previousDestinationAuthorization.DestinationBucketName.Ref,
-                      "Arn",
-                    ],
+                    "Fn::GetAtt": [previousBucketName.Ref, "Arn"],
                   }),
                   "/*",
                 ]),
@@ -471,7 +489,7 @@ describe("ShinBucketDeployment validation and option coverage", () => {
           Match.objectLike({
             Action: "s3:ListBucket",
             Resource: {
-              "Fn::GetAtt": [previousDestinationAuthorization.DestinationBucketName.Ref, "Arn"],
+              "Fn::GetAtt": [previousBucketName.Ref, "Arn"],
             },
           }),
           Match.objectLike({
@@ -953,11 +971,13 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     const template = Template.fromStack(stack);
 
     template.hasResourceProperties("AWS::CloudFormation::CustomResource", {
-      DistributionId: {
-        Ref: Match.anyValue(),
+      CloudfrontInvalidation: {
+        DistributionId: {
+          Ref: Match.anyValue(),
+        },
+        DistributionPaths: ["/site/index.html", "/site/app.js"],
+        WaitForCompletion: false,
       },
-      DistributionPaths: ["/site/index.html", "/site/app.js"],
-      WaitForDistributionInvalidation: false,
     });
 
     template.hasResourceProperties("AWS::IAM::Policy", {
@@ -1047,18 +1067,24 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     });
 
     expect(customResourceProperties(stack)).toMatchObject({
-      MaxParallelTransfers: 7,
-      SourceBlockBytes: 4 * 1024 * 1024,
-      SourceBlockMergeGapBytes: 64 * 1024,
-      SourceGetConcurrency: 3,
-      SourceWindowBytes: 32 * 1024 * 1024,
-      SourceWindowMemoryBudgetMb: 512,
-      PutObjectMaxAttempts: 4,
-      PutObjectRetryBaseDelayMs: 100,
-      PutObjectRetryMaxDelayMs: 1_000,
-      PutObjectSlowdownRetryBaseDelayMs: 2_000,
-      PutObjectSlowdownRetryMaxDelayMs: 20_000,
-      PutObjectRetryJitter: "none",
+      Transfer: {
+        MaxConcurrency: 7,
+        AdvancedTuning: {
+          SourceBlockBytes: 4 * 1024 * 1024,
+          SourceBlockMergeGapBytes: 64 * 1024,
+          SourceGetConcurrency: 3,
+          SourceWindowBytes: 32 * 1024 * 1024,
+          SourceWindowMemoryBudgetMiB: 512,
+          DestinationWriteRetry: {
+            MaxAttempts: 4,
+            BaseDelayMs: 100,
+            MaxDelayMs: 1_000,
+            SlowdownBaseDelayMs: 2_000,
+            SlowdownMaxDelayMs: 20_000,
+            Jitter: "none",
+          },
+        },
+      },
     });
   });
 
@@ -1173,16 +1199,35 @@ describe("ShinBucketDeployment validation and option coverage", () => {
       },
     });
 
-    expect(customResourceProperties(stack).MaxParallelTransfers).toEqual({
-      Ref: "MaxConcurrency",
-    });
-    expect(customResourceProperties(stack).SourceBlockBytes).toEqual({ Ref: "Block" });
-    expect(customResourceProperties(stack).MaxUncompressedEntryBytes).toEqual({
-      Ref: "MaxEntryBytes",
-    });
-    expect(customResourceProperties(stack).MaxCompressionRatio).toEqual({
-      Ref: "MaxCompressionRatio",
-    });
+    expect(
+      (
+        customResourceProperties(stack).Transfer as {
+          MaxConcurrency?: unknown;
+          AdvancedTuning: { SourceBlockBytes?: unknown };
+        }
+      ).MaxConcurrency,
+    ).toEqual({ Ref: "MaxConcurrency" });
+    expect(
+      (
+        customResourceProperties(stack).Transfer as {
+          AdvancedTuning: { SourceBlockBytes?: unknown };
+        }
+      ).AdvancedTuning.SourceBlockBytes,
+    ).toEqual({ Ref: "Block" });
+    expect(
+      (
+        customResourceProperties(stack).SourceProcessing as {
+          MaxUncompressedEntryBytes?: unknown;
+        }
+      ).MaxUncompressedEntryBytes,
+    ).toEqual({ Ref: "MaxEntryBytes" });
+    expect(
+      (
+        customResourceProperties(stack).SourceProcessing as {
+          MaxCompressionRatio?: unknown;
+        }
+      ).MaxCompressionRatio,
+    ).toEqual({ Ref: "MaxCompressionRatio" });
     Annotations.fromStack(stack).hasNoWarning(
       "/Default/Deploy",
       Match.stringLikeRegexp("transfer\\.maxConcurrency"),

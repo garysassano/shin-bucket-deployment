@@ -74,13 +74,21 @@ test("renders a Rust-backed custom resource", () => {
 
   template.hasResourceProperties("AWS::CloudFormation::CustomResource", {
     ServiceTimeout: "900",
-    DestinationBucketName: {
-      Ref: Match.anyValue(),
+    Destination: {
+      BucketName: {
+        Ref: Match.anyValue(),
+      },
     },
-    Extract: true,
-    MaxUncompressedEntryBytes: DEFAULT_MAX_UNCOMPRESSED_ENTRY_BYTES,
-    MaxCompressionRatio: DEFAULT_MAX_COMPRESSION_RATIO,
-    DeleteStaleObjectsOnDeployment: true,
+    SourceProcessing: {
+      Extract: true,
+      MaxUncompressedEntryBytes: DEFAULT_MAX_UNCOMPRESSED_ENTRY_BYTES,
+      MaxCompressionRatio: DEFAULT_MAX_COMPRESSION_RATIO,
+    },
+    DestinationLifecycle: {
+      OnDeploy: {
+        DeleteStaleObjects: true,
+      },
+    },
   });
 }, 120_000);
 
@@ -516,8 +524,10 @@ test("keeps every transfer setting request-scoped while sharing one handler", ()
   const requestSettings = Object.values(resources)
     .filter((resource) => resource.Type === "AWS::CloudFormation::CustomResource")
     .map((resource) => ({
-      maxConcurrency: resource.Properties.MaxParallelTransfers,
-      sourceBlockBytes: resource.Properties.SourceBlockBytes,
+      maxConcurrency: (resource.Properties.Transfer as { MaxConcurrency?: unknown }).MaxConcurrency,
+      sourceBlockBytes: (
+        resource.Properties.Transfer as { AdvancedTuning: { SourceBlockBytes?: unknown } }
+      ).AdvancedTuning.SourceBlockBytes,
     }))
     .sort((left, right) => Number(left.maxConcurrency) - Number(right.maxConcurrency));
   expect(requestSettings).toEqual([
@@ -747,11 +757,17 @@ test("gives each handler replacement a distinct destination owner", () => {
 
   expect(replacement.logicalId).not.toBe(initial.logicalId);
   expect(replacement.properties.DestinationOwnerId).not.toBe(initial.properties.DestinationOwnerId);
-  expect(replacement.properties.DestinationBucketName).toEqual(
-    initial.properties.DestinationBucketName,
+  expect((replacement.properties.Destination as { BucketName: unknown }).BucketName).toEqual(
+    (initial.properties.Destination as { BucketName: unknown }).BucketName,
   );
   expect(replacement.properties.ServiceToken).not.toEqual(initial.properties.ServiceToken);
-  expect(replacement.properties.DeleteCurrentObjectsOnDelete).toBe(true);
+  expect(
+    (
+      replacement.properties.DestinationLifecycle as {
+        OnDelete: { DeleteCurrentObjects: unknown };
+      }
+    ).OnDelete.DeleteCurrentObjects,
+  ).toBe(true);
 });
 
 test("keeps an isolated handler and service token stable across configuration updates", () => {
@@ -1263,8 +1279,10 @@ test("supports account-regional destination buckets", () => {
     (resource) => resource.Type === "AWS::CloudFormation::CustomResource",
   );
   expect(deploymentResource?.Properties).toMatchObject({
-    DestinationBucketName: {
-      Ref: destinationBucketLogicalId,
+    Destination: {
+      BucketName: {
+        Ref: destinationBucketLogicalId,
+      },
     },
   });
 });

@@ -181,13 +181,25 @@ export function buildCreateEvent({
     ResourceProperties: {
       SourceBucketNames: sourceBucketNames,
       SourceObjectKeys: sourceObjectKeys,
-      DestinationBucketName: destinationBucketName,
+      Destination: {
+        BucketName: destinationBucketName,
+      },
       DestinationOwnerId: destinationOwnerId,
-      MaxUncompressedEntryBytes: 1024 * 1024 * 1024,
-      MaxCompressionRatio: 100,
-      DeleteStaleObjectsOnDeployment: true,
-      Extract: true,
+      DestinationLifecycle: {
+        OnDeploy: { DeleteStaleObjects: true },
+        OnChange: { DeletePreviousObjects: false },
+        OnDelete: { DeleteCurrentObjects: false },
+      },
+      CloudfrontInvalidation: { WaitForCompletion: true },
+      SourceProcessing: {
+        Extract: true,
+        MaxUncompressedEntryBytes: 1024 * 1024 * 1024,
+        MaxCompressionRatio: 100,
+      },
       OutputObjectKeys: false,
+      Transfer: {
+        AdvancedTuning: { DestinationWriteRetry: {} },
+      },
       ServiceToken: serviceToken,
     },
   };
