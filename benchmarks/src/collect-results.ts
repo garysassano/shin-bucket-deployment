@@ -155,6 +155,8 @@ function main(): void {
   );
 }
 
+const COLD_START_PHASE = "cold-create";
+
 export function collectBenchmarkResult(options: CollectBenchmarkOptions): {
   readonly sample: BenchmarkSampleRecord;
   readonly run: BenchmarkRunRecord;
@@ -163,7 +165,12 @@ export function collectBenchmarkResult(options: CollectBenchmarkOptions): {
   const implementation = normalizeImplementation(
     options.implementation ?? outputString(logText, "BenchmarkImplementation"),
   );
-  const report = options.reportFile ? readReportFile(options.reportFile) : undefined;
+  // Only the first phase against a fresh stack is guaranteed to cold-start.
+  const report = options.reportFile
+    ? readReportFile(options.reportFile, {
+        requireInitDuration: options.phase === COLD_START_PHASE,
+      })
+    : undefined;
   const summaryEvidence = options.summaryFile ? readSummaryFile(options.summaryFile) : undefined;
   if (report === undefined) {
     throw new Error("Canonical collection requires one complete CloudWatch REPORT event.");
@@ -409,7 +416,27 @@ function usage(): never {
   process.exit(1);
 }
 
-function readReportFile(path: string): ReportEvidence | undefined {
+/**
+ * Reads the single canonical CloudWatch REPORT event for one measured phase.
+ *
+ * `requireInitDuration` is true only for the phase that must be a cold start by
+ * construction. Lambda emits `Init Duration` on a cold start and omits it when
+ * the invocation reuses a warm container, so requiring it on every phase
+ * rejects ordinary runtime behaviour: a canonical run aborted on
+ * `pruned-update`, the fourth invocation of the same function, after all of its
+ * stacks had deployed and destroyed successfully. Whether a container survives
+ * between phases is a service scheduling detail, not evidence quality.
+ *
+ * The genuine capture failures stay fatal and are caught elsewhere: an event
+ * missing duration, billed duration, or memory is discarded above, and the
+ * caller requires exactly one surviving event. `requestId` remains mandatory
+ * for every phase because a REPORT line always carries one, so its absence
+ * means the line was malformed or truncated rather than warm.
+ */
+function readReportFile(
+  path: string,
+  { requireInitDuration }: { requireInitDuration: boolean },
+): ReportEvidence | undefined {
   if (!existsSync(path)) {
     return undefined;
   }
@@ -448,8 +475,13 @@ function readReportFile(path: string): ReportEvidence | undefined {
   if (report === undefined) {
     return undefined;
   }
-  if (report.initDurationSeconds === null || report.requestId === null) {
-    throw new Error(`Canonical REPORT event in ${path} is missing init duration or request ID.`);
+  if (report.requestId === null) {
+    throw new Error(`Canonical REPORT event in ${path} is missing its request ID.`);
+  }
+  if (requireInitDuration && report.initDurationSeconds === null) {
+    throw new Error(
+      `Canonical REPORT event in ${path} is missing init duration on a cold-start phase.`,
+    );
   }
   return report;
 }

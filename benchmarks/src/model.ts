@@ -931,12 +931,22 @@ export function benchmarkSampleRecordErrors(sample: BenchmarkSampleRecord): stri
     "localWallSeconds",
     "providerDurationSeconds",
     "billedDurationSeconds",
-    "initDurationSeconds",
     "maxMemoryMb",
   ] as const) {
     if (typeof sample[name] !== "number" || !Number.isFinite(sample[name])) {
       errors.push(`${label}: missing ${name}`);
     }
+  }
+  // Lambda emits Init Duration only on a cold start, so an update phase that
+  // reused a warm container legitimately has none. The collector still requires
+  // it for the cold-start phase, where its absence would mean the measurement
+  // did not start from a cold function.
+  if (
+    sample.initDurationSeconds !== null &&
+    sample.initDurationSeconds !== undefined &&
+    (typeof sample.initDurationSeconds !== "number" || !Number.isFinite(sample.initDurationSeconds))
+  ) {
+    errors.push(`${label}: invalid initDurationSeconds`);
   }
   for (const name of [
     "repetition",

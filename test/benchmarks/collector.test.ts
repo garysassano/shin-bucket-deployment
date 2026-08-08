@@ -22,6 +22,112 @@ import {
 } from "../support/benchmark-records";
 
 describe("benchmark result collector", () => {
+  // A warm Lambda container omits Init Duration. Requiring it on every phase
+  // aborted a canonical run on pruned-update -- the fourth invocation of the
+  // same function -- after every stack had deployed and destroyed cleanly.
+  function collectWithReport(phase: string, reportMessage: string, dirTag: string) {
+    const dir = mkdtempSync(join(tmpdir(), `shin-bench-collector-${dirTag}-`));
+    const logFile = join(dir, "deploy.log");
+    const reportFile = join(dir, "report.json");
+    writeFileSync(
+      logFile,
+      [
+        "\u2728  Deployment time: 1s",
+        "Stack.BenchmarkImplementation = aws",
+        "Stack.BenchmarkAssetProfile = tiny-many",
+        "Stack.BenchmarkMemoryLimitMb = 1024",
+        "Stack.BenchmarkState = baseline",
+        "Stack.BenchmarkFileCount = 1",
+        "Stack.BenchmarkTotalBytes = 1",
+        `Stack.BenchmarkAssetManifestSha256 = ${"2".repeat(64)}`,
+        "Stack.BenchmarkSourceCount = 1",
+        "Stack.BenchmarkDetailedFailureDiagnostics = not-applicable",
+        "real 1",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(
+      reportFile,
+      JSON.stringify({
+        events: [{ timestamp: 2, logStreamName: "stream", message: reportMessage }],
+      }),
+    );
+    return () =>
+      collectBenchmarkResult({
+        implementation: "aws",
+        runId: "00000000-0000-4000-a000-000000000099",
+        sampleId: "00000000-0000-5000-a000-000000000099",
+        snapshotDate: "2026-01-01",
+        region: "eu-central-1",
+        cleanup: "benchmark cleanup pending",
+        benchmarkConfigSha256: "2".repeat(64),
+        assetManifestSha256: "2".repeat(64),
+        dependencyLockSha256: "1".repeat(64),
+        applicationBuildSha256: "2".repeat(64),
+        installedDependenciesSha256: "7".repeat(64),
+        nodeVersion: "v24.0.0",
+        pnpmVersion: "11.0.0",
+        executionEnvironmentSha256: "8".repeat(64),
+        executionEnvironmentFresh: true,
+        sourceTreeSha256: "3".repeat(64),
+        gitDirty: false,
+        cdkCliVersion: "1.0.0",
+        cdkCliInstalledSha256: "c".repeat(64),
+        awsCdkLibVersion: "2.260.0",
+        awsCdkLibInstalledSha256: "d".repeat(64),
+        constructsInstalledSha256: "e".repeat(64),
+        memoryMeasurementScope: "phase-local",
+        providerPackageVersion: "2.260.0",
+        providerArchitecture: "x86_64",
+        providerRuntime: "python3.13",
+        providerHandler: "index.handler",
+        providerCodeSha256: codeSha256("b".repeat(64)),
+        memoryMb: 1024,
+        parallel: null,
+        detailedFailureDiagnostics: null,
+        assetProfile: "tiny-many",
+        state: "baseline",
+        repetition: 1,
+        fileCount: 1,
+        totalBytes: 1,
+        sourceCount: 1,
+        phase,
+        logFile,
+        reportFile,
+        outputFile: join(dir, "results.jsonl"),
+      });
+  }
+
+  const WARM =
+    "REPORT RequestId: warm-id Duration: 1000 ms Billed Duration: 1000 ms Memory Size: 1024 MB Max Memory Used: 1 MB";
+  const COLD = `${WARM} Init Duration: 100 ms`;
+
+  test("accepts an update phase whose Lambda container stayed warm", () => {
+    const collected = collectWithReport("pruned-update", WARM, "warm")();
+
+    expect(collected.sample.initDurationSeconds).toBeNull();
+    expect(collected.sample.phase).toBe("pruned-update");
+  });
+
+  test("still rejects a cold-start phase that reports no init duration", () => {
+    expect(collectWithReport("cold-create", WARM, "coldmissing")).toThrow(
+      /missing init duration on a cold-start phase/,
+    );
+  });
+
+  test("still rejects a REPORT line with no request ID", () => {
+    const noRequestId =
+      "REPORT Duration: 1000 ms Billed Duration: 1000 ms Memory Size: 1024 MB Max Memory Used: 1 MB";
+    expect(collectWithReport("pruned-update", noRequestId, "noreqid")).toThrow(
+      /missing its request ID/,
+    );
+  });
+
+  test("accepts a cold-start phase that reports an init duration", () => {
+    const collected = collectWithReport("cold-create", COLD, "cold")();
+
+    expect(collected.sample.initDurationSeconds).toBe(0.1);
+  });
   test("collects AWS run records with the five measured provider fields", () => {
     const dir = mkdtempSync(join(tmpdir(), "shin-bench-collector-aws-"));
     const logFile = join(dir, "deploy.log");
