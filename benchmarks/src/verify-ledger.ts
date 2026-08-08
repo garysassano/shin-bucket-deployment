@@ -20,12 +20,18 @@ export function checkCommittedLedger(resultsFile: string): CommittedLedgerCheck 
   };
 }
 
-const ledger = checkCommittedLedger("benchmarks/results.jsonl");
-if (ledger.errors.length > 0) {
-  for (const error of ledger.errors) console.error(error);
-  console.error(`Committed ledger is invalid: ${ledger.errors.length} error(s).`);
-  process.exit(1);
+function main(): void {
+  const ledger = checkCommittedLedger("benchmarks/results.jsonl");
+  if (ledger.errors.length > 0) {
+    for (const error of ledger.errors) console.error(error);
+    console.error(`Committed ledger is invalid: ${ledger.errors.length} error(s).`);
+    process.exit(1);
+  }
+  console.log(
+    `Committed ledger valid: ${ledger.runCount} run records, ${ledger.sampleCount} samples.`,
+  );
 }
-console.log(
-  `Committed ledger valid: ${ledger.runCount} run records, ${ledger.sampleCount} samples.`,
-);
+
+if (require.main === module) {
+  main();
+}
