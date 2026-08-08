@@ -175,7 +175,7 @@ describe("ShinBucketDeployment validation and option coverage", () => {
 
     const properties = customResourceProperties(stack);
     const destinationOwnerId = properties.DestinationOwnerId;
-    expect(destinationOwnerId).toEqual(expect.stringMatching(/^[a-f0-9]{8}$/));
+    expect(destinationOwnerId).toEqual(expect.stringMatching(/^[a-f0-9]{16}$/));
     Template.fromStack(stack).hasResourceProperties("AWS::S3::Bucket", {
       Tags: Match.arrayWith([
         {
@@ -184,22 +184,20 @@ describe("ShinBucketDeployment validation and option coverage", () => {
         },
       ]),
     });
-    expect(
-      customResourceProperties(stack).DestinationLifecycle.OnChange.DeletePreviousObjects,
-    ).toBe(false);
-    expect(
-      customResourceProperties(stack).DestinationLifecycle.OnChange.PreviousBucketName,
-    ).toBeUndefined();
-    expect(
-      customResourceProperties(stack).DestinationLifecycle.OnChange
-        .InvalidatePreviousDistribution,
-    ).toBeUndefined();
-    expect(customResourceProperties(stack).DestinationLifecycle.OnDelete.DeleteCurrentObjects).toBe(
-      false,
-    );
-    expect(customResourceProperties(stack).DestinationLifecycle.OnDeploy.DeleteStaleObjects).toBe(
-      true,
-    );
+    const lifecycle = customResourceProperties(stack).DestinationLifecycle as {
+      OnChange: {
+        DeletePreviousObjects: boolean;
+        PreviousBucketName?: unknown;
+        InvalidatePreviousDistribution?: unknown;
+      };
+      OnDelete: { DeleteCurrentObjects: boolean };
+      OnDeploy: { DeleteStaleObjects: boolean };
+    };
+    expect(lifecycle.OnChange.DeletePreviousObjects).toBe(false);
+    expect(lifecycle.OnChange.PreviousBucketName).toBeUndefined();
+    expect(lifecycle.OnChange.InvalidatePreviousDistribution).toBeUndefined();
+    expect(lifecycle.OnDelete.DeleteCurrentObjects).toBe(false);
+    expect(lifecycle.OnDeploy.DeleteStaleObjects).toBe(true);
   });
 
   test("canonicalizes a slash destination prefix to root ownership", () => {
@@ -229,10 +227,10 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     });
   });
 
-  test("accepts a 102-character destination prefix", () => {
+  test("accepts a 94-character destination prefix", () => {
     const stack = new Stack();
     const destinationBucket = new Bucket(stack, "Dest");
-    const prefix = "a".repeat(102);
+    const prefix = "a".repeat(94);
 
     new ShinBucketDeployment(stack, "Deploy", {
       sources: [Source.data("index.html", "ok")],
@@ -256,7 +254,7 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     });
   });
 
-  test("rejects a destination prefix longer than 102 characters with a specific code", () => {
+  test("rejects a destination prefix longer than 94 characters with a specific code", () => {
     const stack = new Stack();
     const destinationBucket = new Bucket(stack, "Dest");
 
@@ -265,7 +263,7 @@ describe("ShinBucketDeployment validation and option coverage", () => {
         sources: [Source.data("index.html", "ok")],
         destination: {
           bucket: destinationBucket,
-          keyPrefix: "a".repeat(103),
+          keyPrefix: "a".repeat(95),
         },
         providerLambda: {
           localBuild: testLocalProviderBuild(),
@@ -274,7 +272,7 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     }).toThrowError(
       expect.objectContaining({
         code: "ShinBucketDeploymentDestinationKeyPrefixTooLong",
-        message: "destination.keyPrefix must be <=102 characters.",
+        message: "destination.keyPrefix must be <=94 characters.",
       }) as ValidationError,
     );
   });
@@ -460,12 +458,12 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     expect(lifecycle.OnChange.InvalidatePreviousDistribution).toEqual({
       Ref: expect.stringMatching(/^PreviousDistribution/),
     });
-    expect(customResourceProperties(stack).DestinationLifecycle.OnDelete.DeleteCurrentObjects).toBe(
-      true,
-    );
-    expect(customResourceProperties(stack).DestinationLifecycle.OnDeploy.DeleteStaleObjects).toBe(
-      false,
-    );
+    const renderedLifecycle = customResourceProperties(stack).DestinationLifecycle as {
+      OnDelete: { DeleteCurrentObjects: boolean };
+      OnDeploy: { DeleteStaleObjects: boolean };
+    };
+    expect(renderedLifecycle.OnDelete.DeleteCurrentObjects).toBe(true);
+    expect(renderedLifecycle.OnDeploy.DeleteStaleObjects).toBe(false);
     const previousBucketName = lifecycle.OnChange.PreviousBucketName as { Ref: string };
 
     const template = Template.fromStack(stack);
@@ -935,7 +933,7 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     const customResourceScope = deployment.node.findChild("CustomResource");
     const customResource = customResourceScope.node.children[0];
     if (!customResource) throw new Error("Shin custom resource not found");
-    const ownershipTagKey = `aws-cdk:cr-owned:${customResource.node.addr.slice(-8)}`;
+    const ownershipTagKey = `aws-cdk:cr-owned:${customResource.node.addr.slice(-16)}`;
     const bucketResource = destinationBucket.node.defaultChild as CfnBucket;
     bucketResource.tagsRaw = [{ key: ownershipTagKey, value: "duplicate" }];
 

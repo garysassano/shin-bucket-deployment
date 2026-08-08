@@ -4,6 +4,14 @@ This file holds release-note text for `ShinBucketDeployment` changes that break 
 
 ## Unreleased
 
+### The destination ownership-tag suffix doubles from 32 to 64 bits
+
+The ownership tag suffix derived from the custom resource's tree address is now 16 hex characters instead of 8, raising the birthday bound from ~92,000 to ~4.3 billion deployments per prefix. Every deployment therefore receives a new ownership identity on upgrade: the previous 32-bit ownership tag key (`aws-cdk:cr-owned:<prefix>:<8 hex>`) is replaced by the new 64-bit key on the destination bucket, and objects previously attributed to the old identity are no longer attributed to the deployment's current owner.
+
+To keep the complete tag key within the S3 128-character tag-key limit, the accepted `destination.keyPrefix` length drops from 102 to 94 characters. A stack using a prefix longer than 94 characters now fails synthesis with `ShinBucketDeploymentDestinationKeyPrefixTooLong`; shorten the prefix or split the deployment.
+
+Affected: every stack, on the update that follows the upgrade (the tag change is a template change, not a resource replacement — deployed objects are untouched). Stacks with a `destination.keyPrefix` over 94 characters must shorten the prefix before upgrading.
+
 ### Custom-resource wire property names now mirror the public API paths
 
 The custom-resource property names the construct sends to the provider were renamed to mirror the public API property paths (`destination.keyPrefix` now travels as `Destination.KeyPrefix`, `destinationLifecycle.onChange.deletePreviousObjects` as `DestinationLifecycle.OnChange.DeletePreviousObjects`, `transfer.maxConcurrency` as `Transfer.MaxConcurrency`, and so on). This is a clean pre-`1.0` break: the provider's strict decoder (`deny_unknown_fields`) rejects any payload carrying the old names, and no alias or fallback reader exists.

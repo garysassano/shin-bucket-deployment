@@ -335,7 +335,7 @@ export interface ShinBucketDeploymentDestination {
   /**
    * S3 key prefix under which objects are deployed.
    *
-   * This must be a concrete string no longer than 102 characters. `"/"` and
+   * This must be a concrete string no longer than 94 characters. `"/"` and
    * an omitted value both select the bucket root. Because Shin embeds this
    * prefix in its S3 ownership tag, it may contain only Unicode letters,
    * numbers, whitespace, or `_ . : / = + - @`.
@@ -992,16 +992,15 @@ export class ShinBucketDeployment extends Construct {
       this.cr.node.addDependency(dependable);
     }
 
-    // 32-bit ownership suffix derived from the custom resource's tree address.
+    // 64-bit ownership suffix derived from the custom resource's tree address.
     // S3 ownership tags are per-bucket and limited in number, so the suffix is
-    // deliberately short; under the birthday bound, ~92,000 deployments sharing
-    // one prefix would make a suffix collision plausible (p≈0.5). A collision
-    // merges co-tenant ownership, which only affects stale-object deletion
-    // scope, and the provider's runtime owner probes keep behavior confined to
-    // the deployment's namespace. Lengthen the suffix on a future
-    // provider-contract bump rather than here, where it would change every
-    // deployment's ownership tag.
-    const destinationOwnerId = this.cr.node.addr.slice(-8);
+    // 16 hex characters; under the birthday bound, ~4.3 billion deployments
+    // sharing one prefix would make a suffix collision plausible (p≈0.5). A
+    // collision merges co-tenant ownership, which only affects stale-object
+    // deletion scope, and the provider's runtime owner probes keep behavior
+    // confined to the deployment's namespace. The prefix limit (94 characters)
+    // is what keeps the complete tag key within the S3 128-character key limit.
+    const destinationOwnerId = this.cr.node.addr.slice(-16);
     const ownerPrefix = destinationOwnerPrefix(destination.keyPrefix);
     const tagKey = `${CUSTOM_RESOURCE_OWNER_TAG}${ownerPrefix ? `:${ownerPrefix}` : ""}:${destinationOwnerId}`;
 
