@@ -30,6 +30,7 @@ import { fileURLToPath } from "node:url";
 import {
   buildEnvironmentSha256,
   collectBuildToolchainIdentity,
+  collectProviderBuildInputIdentity,
   collectSourceIdentity,
   directorySha256,
 } from "./source-identity.mjs";
@@ -96,6 +97,7 @@ export function bootstrapProvenanceManifest({
   binaryName,
   target,
   source,
+  providerInput,
   applicationBuildSha256,
   tools,
   bootstrapBytes,
@@ -108,6 +110,8 @@ export function bootstrapProvenanceManifest({
     sourceCommit: source.commit,
     sourceDirty: source.dirty,
     sourceTreeSha256: source.sourceTreeSha256,
+    providerInputSha256: providerInput.providerInputSha256,
+    providerInputDirty: providerInput.providerInputDirty,
     applicationBuildSha256,
     ...tools,
     bootstrapSha256: createHash("sha256").update(bootstrapBytes).digest("hex"),
@@ -129,6 +133,7 @@ function buildArch(
   }
 
   const sourceBefore = collectSourceIdentity(sourceRoot, excludedPaths);
+  const providerInputBefore = collectProviderBuildInputIdentity(sourceRoot);
   const toolsBefore = toolIdentity(sourceRoot);
   const manifestPath = join(sourceRoot, "rust", "Cargo.toml");
 
@@ -166,9 +171,13 @@ function buildArch(
   }
 
   const sourceAfter = collectSourceIdentity(sourceRoot, excludedPaths);
+  const providerInputAfter = collectProviderBuildInputIdentity(sourceRoot);
   const toolsAfter = toolIdentity(sourceRoot);
   if (JSON.stringify(sourceAfter) !== JSON.stringify(sourceBefore)) {
     throw new Error("Source identity changed while building the provider bootstrap.");
+  }
+  if (JSON.stringify(providerInputAfter) !== JSON.stringify(providerInputBefore)) {
+    throw new Error("Provider build inputs changed while building the bootstrap.");
   }
   if (JSON.stringify(toolsAfter) !== JSON.stringify(toolsBefore)) {
     throw new Error("Provider build toolchain changed while building the bootstrap.");
@@ -186,6 +195,7 @@ function buildArch(
     binaryName,
     target: config.target,
     source: sourceBefore,
+    providerInput: providerInputBefore,
     applicationBuildSha256,
     tools: toolsBefore,
     bootstrapBytes: bootstrap,

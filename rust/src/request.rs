@@ -828,6 +828,12 @@ where
         where
             E: serde::de::Error,
         {
+            // Digits only: `str::parse` would also take a leading `+`, but the
+            // wire contract's decimal-string form is exactly `[0-9]+` (the
+            // schema's pattern), so a signed string must be rejected here.
+            if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+                return Err(E::invalid_value(serde::de::Unexpected::Str(value), &self));
+            }
             value
                 .parse::<u32>()
                 .map_err(|_| E::invalid_value(serde::de::Unexpected::Str(value), &self))
@@ -956,6 +962,12 @@ where
             let trimmed = value.trim();
             if trimmed.is_empty() {
                 return Ok(None);
+            }
+            // Digits only, matching the schema's decimal-string pattern: the
+            // optional helpers must not accept a leading `+` the schema
+            // rejects (the required `u64ish` visitor enforces the same rule).
+            if !trimmed.bytes().all(|byte| byte.is_ascii_digit()) {
+                return Err(E::invalid_value(serde::de::Unexpected::Str(value), &self));
             }
             trimmed
                 .parse::<u64>()

@@ -57,7 +57,7 @@ const SOURCE_BUCKET = "shin-smoke-source";
 const DESTINATION_BUCKET = "shin-smoke-destination";
 const SOURCE_OBJECT_KEY = "site.zip";
 const DESTINATION_OWNER_ID = "smoke0abc";
-const SERVICE_TOKEN = "arn:aws:lambda:us-east-1:000000000000:function:shin-provider-smoke";
+export const SERVICE_TOKEN = "arn:aws:lambda:us-east-1:000000000000:function:shin-provider-smoke";
 // `useast99`/`us-east-99` satisfies the provider's CloudFormation callback
 // host validation (bucket prefix, s3, region shape) while the region itself
 // does not exist, so any accidental direct connection fails at DNS.
@@ -158,10 +158,17 @@ export function buildSourceZip(entries) {
  *
  * `ResourceProperties` mirrors what the construct synthesizes for a simple
  * site. The provider decodes the envelope strictly (`deny_unknown_fields`),
- * so only fields the provider declares may appear. To keep this hand-built
- * payload from drifting from what the construct actually emits, it is checked
- * against the checked-in wire tree (scripts/synth-payload-shape.mjs) on every
- * build: any key outside the tree, or any missing required path, throws.
+ * so only fields the provider declares may appear. `ServiceToken` and
+ * `ServiceTimeout` stay nested here on purpose, and both must be present:
+ * CloudFormation delivers the reserved custom-resource properties inside
+ * `ResourceProperties` (commit c530bf7 records the production failure when
+ * the strict decoder rejected a real event over `ServiceTimeout`), so a
+ * faithful fixture carries both — dropping either would let the smoke run
+ * pass while every real CDK deployment failed. `assertPayloadPaths` pins
+ * both keys, and the fixture is checked against the runtime ResourceProperties
+ * schema (scripts/synth-payload-shape.mjs -> contract/wire-contract.mjs) on
+ * every build: any key outside the schema, any missing required path, or any
+ * wrong-typed value throws.
  */
 export function buildCreateEvent({
   sourceBucketNames = [SOURCE_BUCKET],
@@ -170,6 +177,7 @@ export function buildCreateEvent({
   destinationOwnerId = DESTINATION_OWNER_ID,
   responseUrl = CALLBACK_RESPONSE_URL,
   serviceToken = SERVICE_TOKEN,
+  serviceTimeout = "900",
   requestId = "00000000-0000-4000-8000-000000000000",
   stackId = "arn:aws:cloudformation:us-east-1:000000000000:stack/shin-provider-smoke/00000000-0000-4000-8000-000000000000",
   logicalResourceId = "ShinProviderSmoke",
@@ -205,6 +213,7 @@ export function buildCreateEvent({
         AdvancedTuning: { DestinationWriteRetry: {} },
       },
       ServiceToken: serviceToken,
+      ServiceTimeout: serviceTimeout,
     },
   };
   assertPayloadWithinSynthShape(event.ResourceProperties);

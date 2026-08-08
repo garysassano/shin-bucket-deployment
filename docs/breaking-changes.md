@@ -4,6 +4,18 @@ This file holds release-note text for `ShinBucketDeployment` changes that break 
 
 ## Unreleased
 
+### `SourceMarkersConfig` entries are now strict
+
+Each `SourceMarkersConfig` entry is now decoded with the same strictness as every other provider input: a key the provider does not declare fails the request instead of being silently ignored. The only declared key is `jsonEscape` (the public `markersConfig.jsonEscape` property); anything else — a misspelled key, a key from an older or newer version, a typo'd container name — is now a hard failure.
+
+Previously, an unknown key in a markers config entry was dropped and the deployment proceeded, so a stack carrying one deployed successfully and there was no signal that the key was not doing anything. After this change the request fails on Create, Update, and Delete alike. The Delete case is the one that strands a stack: CloudFormation sends a Delete carrying the same `ResourceProperties` when the resource is removed from a template, the strict decoder rejects it, and the stack is left in `DELETE_FAILED` with the custom resource as the sole blocking resource.
+
+Affected: any stack whose `markersConfig` (or equivalent hand-authored `SourceMarkersConfig`) carries a key other than `jsonEscape`. No deployment work has happened by the time the failure occurs — the rejection happens while decoding the request, before any destination listing, deletion, or object transfer — so destination objects are untouched throughout, exactly as with the wire-rename rejection above.
+
+Recovery: remove the unknown key from the configuration and redeploy. For a stack already stuck by an attempted upgrade, the recovery sequences are the same as for the custom-resource wire rename — [`UPDATE_ROLLBACK_FAILED`](#recovering-a-stack-stuck-in-update_rollback_failed) is recovered by skipping the custom resource during `continue-update-rollback`, and [`DELETE_FAILED`](#recovering-a-stack-stuck-in-delete_failed) by deleting the stack with the custom resource retained. Both sequences were verified on real stuck stacks and are safe because the custom resource owns no physical infrastructure.
+
+There is no compatibility path, and none will be added: permissive decoding of marker configs would contradict the strictness of every sibling provider input, and the pre-`1.0` policy makes this a clean break.
+
 ### The destination ownership-tag suffix doubles from 32 to 64 bits
 
 The ownership tag suffix derived from the custom resource's tree address is now 16 hex characters instead of 8, raising the birthday bound (the collision point at p≈0.5) from ~77,000 to ~5.06 billion deployments per prefix (1.1774 · sqrt(2^bits); at 2^32 ≈ 4.30 billion deployments the collision probability is ~39%, not 50%). Every deployment therefore receives a new ownership identity on upgrade: the previous 32-bit ownership tag key (`aws-cdk:cr-owned:<prefix>:<8 hex>`) is replaced by the new 64-bit key on the destination bucket, and objects previously attributed to the old identity are no longer attributed to the deployment's current owner.

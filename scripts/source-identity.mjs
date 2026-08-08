@@ -1,6 +1,13 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { lstatSync, readFileSync, readdirSync, readlinkSync, realpathSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  readFileSync,
+  readdirSync,
+  readlinkSync,
+  realpathSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, isAbsolute, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -123,6 +130,147 @@ export function collectSourceIdentity(repositoryRoot, excludedPaths = []) {
     dirty: diff.length > 0 || trackedContentDirty || untracked.length > 0,
     sourceTreeSha256: hash.digest("hex"),
   };
+}
+
+// The files that determine the provider binary, and nothing else. The
+// freshness gate compares the staged bootstrap against these; the full-tree
+// `sourceTreeSha256` stays in the provenance for evidence attribution, but an
+// unrelated dirty file (a README edit, uncommitted benchmark rows) must not
+// invalidate a byte-identical provider archive.
+const PROVIDER_INPUT_ROOT_FILES = [
+  "mise.toml",
+  "rust-toolchain.toml",
+  "rust/Cargo.toml",
+  "rust/Cargo.lock",
+  "rust/build.rs",
+  "rust/.cargo/config.toml",
+];
+const PROVIDER_INPUT_SOURCE_DIR = "rust/src";
+const PROVIDER_INPUT_PATHSPECS = [PROVIDER_INPUT_SOURCE_DIR, ...PROVIDER_INPUT_ROOT_FILES];
+
+/**
+ * The provider-build-input identity: a digest over the working-tree contents
+ * that determine the provider binary (rust sources, manifests, lockfile, and
+ * the toolchain pins in `mise.toml`/`rust-toolchain.toml`), plus whether any
+ * of those inputs differ from HEAD.
+ *
+ * `rust/target/` is deliberately absent: it holds build output, not input.
+ * Untracked source files are included because they change what cargo would
+ * compile; stray files outside `rust/src/` are not, so a scratch file cannot
+ * make a byte-identical archive look stale.
+ */
+export function collectProviderBuildInputIdentity(repositoryRoot) {
+  const root = resolve(repositoryRoot);
+  const hash = createHash("sha256");
+  hash.update("shin-provider-input-v1\0");
+  for (const relativePath of PROVIDER_INPUT_ROOT_FILES) {
+    hashProviderBuildInputFile(hash, root, relativePath);
+  }
+  const sourceRoot = join(root, PROVIDER_INPUT_SOURCE_DIR);
+  if (existsSync(sourceRoot)) {
+    hashProviderBuildInputTree(hash, sourceRoot, PROVIDER_INPUT_SOURCE_DIR);
+  } else {
+    hash.update(`missing-dir\0${PROVIDER_INPUT_SOURCE_DIR}\0`);
+  }
+  return {
+    providerInputSha256: hash.digest("hex"),
+    providerInputDirty: providerBuildInputsDirty(root),
+  };
+}
+
+function hashProviderBuildInputFile(hash, root, relativePath) {
+  const path = join(root, relativePath);
+  hashProviderBuildInputPath(hash, path, relativePath);
+}
+
+function hashProviderBuildInputPath(hash, path, relativePath) {
+  let stat;
+  try {
+    stat = lstatSync(path);
+  } catch (error) {
+    if (!isMissingPathError(error)) throw error;
+    hash.update(`absent\0${relativePath}\0`);
+    return;
+  }
+  if (!stat.isFile() && !stat.isSymbolicLink()) {
+    throw new Error(`Unsupported provider build input entry: ${path}`);
+  }
+  hash.update(`file\0${relativePath}\0${sourceEntryMode(stat)}\0`);
+  hash.update(sourceEntryContents(path, stat));
+  hash.update("\0");
+}
+
+function hashProviderBuildInputTree(hash, directory, relativeDirectory) {
+  for (const entry of readdirSync(directory, { withFileTypes: true }).toSorted((left, right) =>
+    left.name.localeCompare(right.name),
+  )) {
+    const path = join(directory, entry.name);
+    const relativePath = normalizePath(join(relativeDirectory, entry.name));
+    // Build output, never input: cargo writes the compiled binary tree here,
+    // and a build must not invalidate the digest it is recorded against.
+    if (entry.isDirectory() && entry.name === "target") {
+      hash.update(`excluded-dir\0${relativePath}\0`);
+      continue;
+    }
+    if (entry.isDirectory()) {
+      hash.update(`directory\0${relativePath}\0`);
+      hashProviderBuildInputTree(hash, path, relativePath);
+    } else if (entry.isFile()) {
+      hashProviderBuildInputPath(hash, path, relativePath);
+    } else if (entry.isSymbolicLink()) {
+      hash.update(`symlink\0${relativePath}\0${readlinkSync(path)}\0`);
+    } else {
+      throw new Error(`Unsupported provider build input entry: ${path}`);
+    }
+  }
+}
+
+function providerBuildInputsDirty(root) {
+  const diff = command(
+    "git",
+    ["diff", "--binary", "--no-ext-diff", "HEAD", "--", ...PROVIDER_INPUT_PATHSPECS],
+    root,
+  );
+  if (diff.length > 0) {
+    return true;
+  }
+  const tracked = parseTrackedEntries(
+    command("git", ["ls-files", "--stage", "-z", "--", ...PROVIDER_INPUT_PATHSPECS], root),
+  );
+  const untracked = command(
+    "git",
+    ["ls-files", "--others", "--exclude-standard", "-z", "--", ...PROVIDER_INPUT_PATHSPECS],
+    root,
+  )
+    .toString("utf8")
+    .split("\0")
+    .filter(Boolean);
+  if (untracked.length > 0) {
+    return true;
+  }
+  const objectFormat = command("git", ["rev-parse", "--show-object-format"], root)
+    .toString("utf8")
+    .trim();
+  for (const entry of tracked) {
+    if (entry.stage !== 0) {
+      throw new Error(`Unsupported unmerged provider build input: ${entry.path}`);
+    }
+    const path = join(root, entry.path);
+    let stat;
+    try {
+      stat = lstatSync(path);
+    } catch (error) {
+      if (!isMissingPathError(error)) throw error;
+      return true;
+    }
+    if (sourceEntryMode(stat) !== entry.mode) {
+      return true;
+    }
+    if (gitObjectId(sourceEntryContents(path, stat), objectFormat) !== entry.objectId) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function collectBuildToolchainIdentity(root = process.cwd()) {

@@ -4,7 +4,11 @@ import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { buildEnvironmentSha256, collectSourceIdentity } from "./source-identity.mjs";
+import {
+  buildEnvironmentSha256,
+  collectProviderBuildInputIdentity,
+  collectSourceIdentity,
+} from "./source-identity.mjs";
 
 test("source identity binds tracked contents, untracked contents, modes, and exclusions", () => {
   const repository = mkdtempSync(join(tmpdir(), "shin-source-identity-"));
@@ -71,4 +75,64 @@ test("build environment identity includes external tool and configuration locati
     assert.notEqual(buildEnvironmentSha256({ [name]: "/alternate" }), clean);
   }
   assert.equal(buildEnvironmentSha256({ UNRELATED: "value" }), clean);
+});
+
+test("provider input identity follows only the files that determine the binary", () => {
+  const repository = mkdtempSync(join(tmpdir(), "shin-provider-input-"));
+  execFileSync("git", ["init", "--quiet"], { cwd: repository });
+  execFileSync("git", ["config", "user.name", "Provider Input Test"], { cwd: repository });
+  execFileSync("git", ["config", "user.email", "provider-input@example.invalid"], {
+    cwd: repository,
+  });
+  execFileSync("mkdir", ["-p", "rust/src", "rust/target", "assets"], { cwd: repository });
+  writeFileSync(join(repository, ".gitignore"), "target\n");
+  writeFileSync(join(repository, "mise.toml"), 'rust = "1.97.1"\n');
+  writeFileSync(join(repository, "rust", "Cargo.toml"), "[package]\n");
+  writeFileSync(join(repository, "rust", "Cargo.lock"), "lock\n");
+  writeFileSync(join(repository, "rust", "src", "lib.rs"), "// provider\n");
+  writeFileSync(join(repository, "rust", "target", "bootstrap"), "build output\n");
+  writeFileSync(join(repository, "README.md"), "consumer docs\n");
+  execFileSync("git", ["add", "."], { cwd: repository });
+  execFileSync("git", ["commit", "--quiet", "-m", "initial"], { cwd: repository });
+
+  const clean = collectProviderBuildInputIdentity(repository);
+  assert.equal(clean.providerInputDirty, false);
+
+  // An unrelated tracked file (README) must not change the provider digest.
+  writeFileSync(join(repository, "README.md"), "edited docs\n");
+  const afterDocs = collectProviderBuildInputIdentity(repository);
+  assert.equal(afterDocs.providerInputSha256, clean.providerInputSha256);
+  assert.equal(afterDocs.providerInputDirty, false);
+  execFileSync("git", ["checkout", "--", "README.md"], { cwd: repository });
+
+  // A rust source change must change the digest and mark the inputs dirty.
+  writeFileSync(join(repository, "rust", "src", "lib.rs"), "// provider v2\n");
+  const afterSource = collectProviderBuildInputIdentity(repository);
+  assert.notEqual(afterSource.providerInputSha256, clean.providerInputSha256);
+  assert.equal(afterSource.providerInputDirty, true);
+  execFileSync("git", ["checkout", "--", "rust/src/lib.rs"], { cwd: repository });
+
+  // An untracked rust source is a provider input; an untracked stray file is not.
+  writeFileSync(join(repository, "rust", "src", "new.rs"), "// untracked module\n");
+  const afterUntrackedSource = collectProviderBuildInputIdentity(repository);
+  assert.notEqual(afterUntrackedSource.providerInputSha256, clean.providerInputSha256);
+  assert.equal(afterUntrackedSource.providerInputDirty, true);
+  execFileSync("rm", ["rust/src/new.rs"], { cwd: repository });
+
+  writeFileSync(join(repository, "scratch.txt"), "stray\n");
+  const afterStray = collectProviderBuildInputIdentity(repository);
+  assert.equal(afterStray.providerInputSha256, clean.providerInputSha256);
+  assert.equal(afterStray.providerInputDirty, false);
+  execFileSync("rm", ["scratch.txt"], { cwd: repository });
+
+  // Build output under rust/target must not be a provider input.
+  writeFileSync(join(repository, "rust", "target", "bootstrap"), "changed build output\n");
+  const afterTarget = collectProviderBuildInputIdentity(repository);
+  assert.equal(afterTarget.providerInputSha256, clean.providerInputSha256);
+
+  // The toolchain pin is a provider input.
+  writeFileSync(join(repository, "mise.toml"), 'rust = "1.98.0"\n');
+  const afterToolchain = collectProviderBuildInputIdentity(repository);
+  assert.notEqual(afterToolchain.providerInputSha256, clean.providerInputSha256);
+  assert.equal(afterToolchain.providerInputDirty, true);
 });

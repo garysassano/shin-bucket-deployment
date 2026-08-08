@@ -91,6 +91,20 @@ Do not include benchmark configs in correctness verification unless the task is 
 > `pnpm verify` does not rebuild that archive — only `pnpm prebuild:bootstrap` does — and a stale archive is selected silently, with no freshness warning.
 > Deploying after a `rust/` change without rebuilding therefore runs the previous provider binary: on the PR-B run every stack failed with `unknown field CloudfrontInvalidation, expected one of …`, which looked like a provider bug when it was actually a build that predated the new wire schema.
 > Run `pnpm prebuild:bootstrap` (it stages both arm64 and x86_64 archives) after any `rust/` change, before the first `pnpm verify deploy` of a session.
+>
+> Since F-7, `pnpm verify deploy` refuses to start when a staged archive's
+> `build-provenance.json` does not match the current provider build recipe —
+> the provider-build inputs (rust sources, manifests, lockfile, toolchain
+> pins), the resolved build toolchain, or the build environment (RUSTFLAGS,
+> `CARGO_HOME`, ...) — or when the provenance file is missing, so a stale
+> archive can no longer be deployed silently. The error names the
+> architecture, the digest that drifted, and the fix. For a deliberately
+> stale deployment, set `SHIN_ALLOW_STALE_BOOTSTRAP=1`; the message names the
+> same variable. The gate only runs for `deploy` actions — `synth` and
+> `destroy` are unaffected, and a deploy scenario that compiles the provider
+> from source (`providerLambda.localBuild`) must declare
+> `providerArchitectures: []` in the scenario catalog, otherwise the gate
+> checks the prebuilt arm64 archive for it.
 
 AWS end-to-end verification is opt-in because it creates billable AWS resources and requests. Never run it automatically for every push or pull request. Run local gates first, then choose the smallest AWS scope that can validate the changed boundary.
 

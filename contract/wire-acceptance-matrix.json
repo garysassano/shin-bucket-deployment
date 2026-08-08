@@ -1,0 +1,1553 @@
+{
+  "schemaVersion": 2,
+  "comment": "Value-language agreement between contract/wire-contract.mjs (Zod, the runtime ResourceProperties schema) and the Rust decoder (rust/src/request.rs). Each case sets `value` at `path` (object keys, `[0]` for the first array element) in an otherwise-valid payload; both sides must accept or reject identically. The intent is authored here, and both the Zod schema and the Rust decoder are implementations that must satisfy it: test/synth/wire-value-acceptance.test.ts runs it against the schema, rust/src/wire_contract.rs against the decoder. The corpus is guarded: every case has a stable unique `id`, `caseCount` must equal the number of cases, `schemaVersion` is pinned by both sides, and both test suites derive the schema's leaf and union-branch coverage and fail when any leaf or branch is left without a case, so the matrix cannot shrink or drift quietly.",
+  "caseCount": 145,
+  "cases": [
+    {
+      "id": "SourceProcessing-Extract--true",
+      "path": [
+        "SourceProcessing",
+        "Extract"
+      ],
+      "value": true,
+      "accept": true,
+      "note": "boolish: boolean"
+    },
+    {
+      "id": "SourceProcessing-Extract--false",
+      "path": [
+        "SourceProcessing",
+        "Extract"
+      ],
+      "value": false,
+      "accept": true,
+      "note": "boolish: boolean"
+    },
+    {
+      "id": "SourceProcessing-Extract--true-1",
+      "path": [
+        "SourceProcessing",
+        "Extract"
+      ],
+      "value": "true",
+      "accept": true,
+      "note": "boolish: lowercase string"
+    },
+    {
+      "id": "SourceProcessing-Extract--TRUE",
+      "path": [
+        "SourceProcessing",
+        "Extract"
+      ],
+      "value": "TRUE",
+      "accept": true,
+      "note": "boolish: uppercase string"
+    },
+    {
+      "id": "SourceProcessing-Extract--tRuE",
+      "path": [
+        "SourceProcessing",
+        "Extract"
+      ],
+      "value": "tRuE",
+      "accept": true,
+      "note": "boolish: any case (deserialize_boolish lowercases)"
+    },
+    {
+      "id": "SourceProcessing-Extract--true-2",
+      "path": [
+        "SourceProcessing",
+        "Extract"
+      ],
+      "value": " true",
+      "accept": false,
+      "note": "boolish: no surrounding whitespace"
+    },
+    {
+      "id": "SourceProcessing-Extract--",
+      "path": [
+        "SourceProcessing",
+        "Extract"
+      ],
+      "value": "",
+      "accept": false,
+      "note": "boolish: empty string"
+    },
+    {
+      "id": "SourceProcessing-Extract--1",
+      "path": [
+        "SourceProcessing",
+        "Extract"
+      ],
+      "value": "1",
+      "accept": false,
+      "note": "boolish: no numeric strings"
+    },
+    {
+      "id": "SourceProcessing-Extract--1-1",
+      "path": [
+        "SourceProcessing",
+        "Extract"
+      ],
+      "value": 1,
+      "accept": false,
+      "note": "boolish: no numbers"
+    },
+    {
+      "id": "SourceProcessing-Extract--null",
+      "path": [
+        "SourceProcessing",
+        "Extract"
+      ],
+      "value": null,
+      "accept": false,
+      "note": "optional-only leaf rejects null"
+    },
+    {
+      "id": "OutputObjectKeys--FALSE",
+      "path": [
+        "OutputObjectKeys"
+      ],
+      "value": "FALSE",
+      "accept": true,
+      "note": "boolish: any case"
+    },
+    {
+      "id": "DestinationLifecycle-OnChange-DeletePreviousObjects--null",
+      "path": [
+        "DestinationLifecycle",
+        "OnChange",
+        "DeletePreviousObjects"
+      ],
+      "value": null,
+      "accept": false,
+      "note": "boolish: present null rejected"
+    },
+    {
+      "id": "SourceProcessing-MaxUncompressedEntryBytes--1024",
+      "path": [
+        "SourceProcessing",
+        "MaxUncompressedEntryBytes"
+      ],
+      "value": 1024,
+      "accept": true,
+      "note": "required u64: number"
+    },
+    {
+      "id": "SourceProcessing-MaxUncompressedEntryBytes--1024-1",
+      "path": [
+        "SourceProcessing",
+        "MaxUncompressedEntryBytes"
+      ],
+      "value": "1024",
+      "accept": true,
+      "note": "required u64: decimal string"
+    },
+    {
+      "id": "SourceProcessing-MaxUncompressedEntryBytes--0",
+      "path": [
+        "SourceProcessing",
+        "MaxUncompressedEntryBytes"
+      ],
+      "value": 0,
+      "accept": true,
+      "note": "required u64: zero is a valid wire value (parse validates ranges later)"
+    },
+    {
+      "id": "SourceProcessing-MaxUncompressedEntryBytes--0-1",
+      "path": [
+        "SourceProcessing",
+        "MaxUncompressedEntryBytes"
+      ],
+      "value": "0",
+      "accept": true,
+      "note": "required u64: decimal zero"
+    },
+    {
+      "id": "SourceProcessing-MaxUncompressedEntryBytes--1",
+      "path": [
+        "SourceProcessing",
+        "MaxUncompressedEntryBytes"
+      ],
+      "value": -1,
+      "accept": false,
+      "note": "required u64: negative number"
+    },
+    {
+      "id": "SourceProcessing-MaxUncompressedEntryBytes--1-1",
+      "path": [
+        "SourceProcessing",
+        "MaxUncompressedEntryBytes"
+      ],
+      "value": "-1",
+      "accept": false,
+      "note": "required u64: negative string"
+    },
+    {
+      "id": "SourceProcessing-MaxUncompressedEntryBytes--1-5",
+      "path": [
+        "SourceProcessing",
+        "MaxUncompressedEntryBytes"
+      ],
+      "value": 1.5,
+      "accept": false,
+      "note": "required u64: non-integer number"
+    },
+    {
+      "id": "SourceProcessing-MaxUncompressedEntryBytes--1-5-1",
+      "path": [
+        "SourceProcessing",
+        "MaxUncompressedEntryBytes"
+      ],
+      "value": "1.5",
+      "accept": false,
+      "note": "required u64: non-decimal string"
+    },
+    {
+      "id": "SourceProcessing-MaxUncompressedEntryBytes--",
+      "path": [
+        "SourceProcessing",
+        "MaxUncompressedEntryBytes"
+      ],
+      "value": "",
+      "accept": false,
+      "note": "required u64: empty string"
+    },
+    {
+      "id": "SourceProcessing-MaxUncompressedEntryBytes---1",
+      "path": [
+        "SourceProcessing",
+        "MaxUncompressedEntryBytes"
+      ],
+      "value": " ",
+      "accept": false,
+      "note": "required u64: whitespace is not trimmed"
+    },
+    {
+      "id": "SourceProcessing-MaxUncompressedEntryBytes--1024-2",
+      "path": [
+        "SourceProcessing",
+        "MaxUncompressedEntryBytes"
+      ],
+      "value": " 1024 ",
+      "accept": false,
+      "note": "required u64: whitespace is not trimmed"
+    },
+    {
+      "id": "SourceProcessing-MaxUncompressedEntryBytes--1-2",
+      "path": [
+        "SourceProcessing",
+        "MaxUncompressedEntryBytes"
+      ],
+      "value": "+1",
+      "accept": false,
+      "note": "required u64: no leading plus (str::parse would accept it)"
+    },
+    {
+      "id": "SourceProcessing-MaxUncompressedEntryBytes--18446744073709551615",
+      "path": [
+        "SourceProcessing",
+        "MaxUncompressedEntryBytes"
+      ],
+      "value": "18446744073709551615",
+      "accept": true,
+      "note": "required u64: u64 max as a string"
+    },
+    {
+      "id": "SourceProcessing-MaxUncompressedEntryBytes--18446744073709551616",
+      "path": [
+        "SourceProcessing",
+        "MaxUncompressedEntryBytes"
+      ],
+      "value": "18446744073709551616",
+      "accept": false,
+      "note": "required u64: overflow beyond u64"
+    },
+    {
+      "id": "SourceProcessing-MaxUncompressedEntryBytes--9007199254740991",
+      "path": [
+        "SourceProcessing",
+        "MaxUncompressedEntryBytes"
+      ],
+      "value": 9007199254740991,
+      "accept": true,
+      "note": "number branch capped at MAX_SAFE_INTEGER"
+    },
+    {
+      "id": "SourceProcessing-MaxUncompressedEntryBytes--null",
+      "path": [
+        "SourceProcessing",
+        "MaxUncompressedEntryBytes"
+      ],
+      "value": null,
+      "accept": false,
+      "note": "required u64: null rejected"
+    },
+    {
+      "id": "Transfer-MaxConcurrency--42",
+      "path": [
+        "Transfer",
+        "MaxConcurrency"
+      ],
+      "value": 42,
+      "accept": true,
+      "note": "optional usize: number"
+    },
+    {
+      "id": "Transfer-MaxConcurrency--42-1",
+      "path": [
+        "Transfer",
+        "MaxConcurrency"
+      ],
+      "value": "42",
+      "accept": true,
+      "note": "optional usize: decimal string"
+    },
+    {
+      "id": "Transfer-MaxConcurrency--42-2",
+      "path": [
+        "Transfer",
+        "MaxConcurrency"
+      ],
+      "value": " 42 ",
+      "accept": true,
+      "note": "optional usize: trimmed before parsing"
+    },
+    {
+      "id": "Transfer-MaxConcurrency--",
+      "path": [
+        "Transfer",
+        "MaxConcurrency"
+      ],
+      "value": "",
+      "accept": true,
+      "note": "optional usize: empty string means absent"
+    },
+    {
+      "id": "Transfer-MaxConcurrency---1",
+      "path": [
+        "Transfer",
+        "MaxConcurrency"
+      ],
+      "value": " ",
+      "accept": true,
+      "note": "optional usize: whitespace-only means absent"
+    },
+    {
+      "id": "Transfer-MaxConcurrency--null",
+      "path": [
+        "Transfer",
+        "MaxConcurrency"
+      ],
+      "value": null,
+      "accept": true,
+      "note": "optional usize: null means absent"
+    },
+    {
+      "id": "Transfer-MaxConcurrency--42-3",
+      "path": [
+        "Transfer",
+        "MaxConcurrency"
+      ],
+      "value": "+42",
+      "accept": false,
+      "note": "optional usize: no leading plus (str::parse would accept it)"
+    },
+    {
+      "id": "Transfer-MaxConcurrency--1",
+      "path": [
+        "Transfer",
+        "MaxConcurrency"
+      ],
+      "value": "-1",
+      "accept": false,
+      "note": "optional usize: negative string"
+    },
+    {
+      "id": "Transfer-MaxConcurrency--1-5",
+      "path": [
+        "Transfer",
+        "MaxConcurrency"
+      ],
+      "value": 1.5,
+      "accept": false,
+      "note": "optional usize: non-integer number"
+    },
+    {
+      "id": "Transfer-MaxConcurrency--1-5-1",
+      "path": [
+        "Transfer",
+        "MaxConcurrency"
+      ],
+      "value": "1.5",
+      "accept": false,
+      "note": "optional usize: non-decimal string"
+    },
+    {
+      "id": "Transfer-MaxConcurrency--18446744073709551615",
+      "path": [
+        "Transfer",
+        "MaxConcurrency"
+      ],
+      "value": "18446744073709551615",
+      "accept": true,
+      "note": "optional usize: u64 max"
+    },
+    {
+      "id": "Transfer-MaxConcurrency--18446744073709551616",
+      "path": [
+        "Transfer",
+        "MaxConcurrency"
+      ],
+      "value": "18446744073709551616",
+      "accept": false,
+      "note": "optional usize: overflow beyond u64"
+    },
+    {
+      "id": "Transfer-AdvancedTuning-SourceWindowBytes--0",
+      "path": [
+        "Transfer",
+        "AdvancedTuning",
+        "SourceWindowBytes"
+      ],
+      "value": " 0 ",
+      "accept": true,
+      "note": "optional u64: trimmed zero"
+    },
+    {
+      "id": "SourceCatalogs-0-Version--1",
+      "path": [
+        "SourceCatalogs",
+        "[0]",
+        "Version"
+      ],
+      "value": 1,
+      "accept": true,
+      "note": "catalog version: number"
+    },
+    {
+      "id": "SourceCatalogs-0-Version--1-1",
+      "path": [
+        "SourceCatalogs",
+        "[0]",
+        "Version"
+      ],
+      "value": "1",
+      "accept": true,
+      "note": "catalog version: decimal string"
+    },
+    {
+      "id": "SourceCatalogs-0-Version--0",
+      "path": [
+        "SourceCatalogs",
+        "[0]",
+        "Version"
+      ],
+      "value": 0,
+      "accept": true,
+      "note": "catalog version: zero"
+    },
+    {
+      "id": "SourceCatalogs-0-Version--4294967295",
+      "path": [
+        "SourceCatalogs",
+        "[0]",
+        "Version"
+      ],
+      "value": 4294967295,
+      "accept": true,
+      "note": "catalog version: u32 max"
+    },
+    {
+      "id": "SourceCatalogs-0-Version--4294967295-1",
+      "path": [
+        "SourceCatalogs",
+        "[0]",
+        "Version"
+      ],
+      "value": "4294967295",
+      "accept": true,
+      "note": "catalog version: u32 max as a string"
+    },
+    {
+      "id": "SourceCatalogs-0-Version--4294967296",
+      "path": [
+        "SourceCatalogs",
+        "[0]",
+        "Version"
+      ],
+      "value": 4294967296,
+      "accept": false,
+      "note": "catalog version: exceeds u32"
+    },
+    {
+      "id": "SourceCatalogs-0-Version--4294967296-1",
+      "path": [
+        "SourceCatalogs",
+        "[0]",
+        "Version"
+      ],
+      "value": "4294967296",
+      "accept": false,
+      "note": "catalog version: exceeds u32 as a string"
+    },
+    {
+      "id": "SourceCatalogs-0-Version--1-2",
+      "path": [
+        "SourceCatalogs",
+        "[0]",
+        "Version"
+      ],
+      "value": "+1",
+      "accept": false,
+      "note": "catalog version: no leading plus (str::parse would accept it)"
+    },
+    {
+      "id": "SourceCatalogs-0-Version--0001",
+      "path": [
+        "SourceCatalogs",
+        "[0]",
+        "Version"
+      ],
+      "value": "0001",
+      "accept": true,
+      "note": "catalog version: leading zeros parse"
+    },
+    {
+      "id": "SourceCatalogs-0-Version--1-3",
+      "path": [
+        "SourceCatalogs",
+        "[0]",
+        "Version"
+      ],
+      "value": -1,
+      "accept": false,
+      "note": "catalog version: negative"
+    },
+    {
+      "id": "SourceCatalogs-0-Version--null",
+      "path": [
+        "SourceCatalogs",
+        "[0]",
+        "Version"
+      ],
+      "value": null,
+      "accept": false,
+      "note": "catalog version: present null rejected (deserialize_present_u32ish)"
+    },
+    {
+      "id": "SourceCatalogs-0-Sha256--abc",
+      "path": [
+        "SourceCatalogs",
+        "[0]",
+        "Sha256"
+      ],
+      "value": "abc",
+      "accept": true,
+      "note": "sha256: any string at decode time (format validated at parse time)"
+    },
+    {
+      "id": "SourceCatalogs-0-Sha256--123",
+      "path": [
+        "SourceCatalogs",
+        "[0]",
+        "Sha256"
+      ],
+      "value": 123,
+      "accept": false,
+      "note": "sha256: numbers rejected"
+    },
+    {
+      "id": "SourceCatalogs-0-Sha256--null",
+      "path": [
+        "SourceCatalogs",
+        "[0]",
+        "Sha256"
+      ],
+      "value": null,
+      "accept": false,
+      "note": "sha256: present null rejected"
+    },
+    {
+      "id": "SourceMarkers-0-runtime--value",
+      "path": [
+        "SourceMarkers",
+        "[0]",
+        "runtime"
+      ],
+      "value": "value",
+      "accept": true,
+      "note": "marker record value: string"
+    },
+    {
+      "id": "SourceMarkers-0-runtime--123",
+      "path": [
+        "SourceMarkers",
+        "[0]",
+        "runtime"
+      ],
+      "value": 123,
+      "accept": false,
+      "note": "marker record value: number rejected"
+    },
+    {
+      "id": "SourceMarkers-0-runtime--true",
+      "path": [
+        "SourceMarkers",
+        "[0]",
+        "runtime"
+      ],
+      "value": true,
+      "accept": false,
+      "note": "marker record value: boolean rejected"
+    },
+    {
+      "id": "SourceMarkers-0-runtime--null",
+      "path": [
+        "SourceMarkers",
+        "[0]",
+        "runtime"
+      ],
+      "value": null,
+      "accept": false,
+      "note": "marker record value: null rejected"
+    },
+    {
+      "id": "Destination-KeyPrefix--site",
+      "path": [
+        "Destination",
+        "KeyPrefix"
+      ],
+      "value": "site/",
+      "accept": true,
+      "note": "nullish string: value"
+    },
+    {
+      "id": "Destination-KeyPrefix--null",
+      "path": [
+        "Destination",
+        "KeyPrefix"
+      ],
+      "value": null,
+      "accept": true,
+      "note": "nullish string: null"
+    },
+    {
+      "id": "Destination-KeyPrefix--42",
+      "path": [
+        "Destination",
+        "KeyPrefix"
+      ],
+      "value": 42,
+      "accept": false,
+      "note": "nullish string: number rejected"
+    },
+    {
+      "id": "DestinationOwnerId--42",
+      "path": [
+        "DestinationOwnerId"
+      ],
+      "value": 42,
+      "accept": false,
+      "note": "required string: number rejected"
+    },
+    {
+      "id": "SourceBucketNames--assets-1",
+      "path": [
+        "SourceBucketNames"
+      ],
+      "value": [
+        "assets",
+        1
+      ],
+      "accept": false,
+      "note": "string array: non-string element rejected"
+    },
+    {
+      "id": "SourceProcessing-Exclude--map",
+      "path": [
+        "SourceProcessing",
+        "Exclude"
+      ],
+      "value": [
+        "*.map"
+      ],
+      "accept": true,
+      "note": "string array: values"
+    },
+    {
+      "id": "SourceProcessing-Exclude--1",
+      "path": [
+        "SourceProcessing",
+        "Exclude"
+      ],
+      "value": [
+        1
+      ],
+      "accept": false,
+      "note": "string array: non-string element rejected"
+    },
+    {
+      "id": "CloudfrontInvalidation-Paths--",
+      "path": [
+        "CloudfrontInvalidation",
+        "Paths"
+      ],
+      "value": [
+        "/*"
+      ],
+      "accept": true,
+      "note": "nullish string array: values"
+    },
+    {
+      "id": "CloudfrontInvalidation-Paths---1",
+      "path": [
+        "CloudfrontInvalidation",
+        "Paths"
+      ],
+      "value": "/*",
+      "accept": false,
+      "note": "nullish string array: string rejected"
+    },
+    {
+      "id": "CloudfrontInvalidation-Paths--null",
+      "path": [
+        "CloudfrontInvalidation",
+        "Paths"
+      ],
+      "value": null,
+      "accept": true,
+      "note": "nullish string array: null"
+    },
+    {
+      "id": "Transfer-AdvancedTuning-DestinationWriteRetry-Jitter--full",
+      "path": [
+        "Transfer",
+        "AdvancedTuning",
+        "DestinationWriteRetry",
+        "Jitter"
+      ],
+      "value": "full",
+      "accept": true,
+      "note": "enum: first variant"
+    },
+    {
+      "id": "Transfer-AdvancedTuning-DestinationWriteRetry-Jitter--none",
+      "path": [
+        "Transfer",
+        "AdvancedTuning",
+        "DestinationWriteRetry",
+        "Jitter"
+      ],
+      "value": "none",
+      "accept": true,
+      "note": "enum: second variant"
+    },
+    {
+      "id": "Transfer-AdvancedTuning-DestinationWriteRetry-Jitter--FULL",
+      "path": [
+        "Transfer",
+        "AdvancedTuning",
+        "DestinationWriteRetry",
+        "Jitter"
+      ],
+      "value": "FULL",
+      "accept": false,
+      "note": "enum: case-sensitive"
+    },
+    {
+      "id": "Transfer-AdvancedTuning-DestinationWriteRetry-Jitter--1",
+      "path": [
+        "Transfer",
+        "AdvancedTuning",
+        "DestinationWriteRetry",
+        "Jitter"
+      ],
+      "value": 1,
+      "accept": false,
+      "note": "enum: number rejected"
+    },
+    {
+      "id": "Transfer-AdvancedTuning-DestinationWriteRetry-Jitter--null",
+      "path": [
+        "Transfer",
+        "AdvancedTuning",
+        "DestinationWriteRetry",
+        "Jitter"
+      ],
+      "value": null,
+      "accept": true,
+      "note": "enum: null means absent"
+    },
+    {
+      "id": "DeploymentNonce--abc",
+      "path": [
+        "DeploymentNonce"
+      ],
+      "value": "abc",
+      "accept": true,
+      "note": "nonce: string"
+    },
+    {
+      "id": "DeploymentNonce--123",
+      "path": [
+        "DeploymentNonce"
+      ],
+      "value": 123,
+      "accept": false,
+      "note": "nonce: number rejected"
+    },
+    {
+      "id": "DeploymentNonce--null",
+      "path": [
+        "DeploymentNonce"
+      ],
+      "value": null,
+      "accept": true,
+      "note": "nonce: null"
+    },
+    {
+      "id": "SourceBucketNames-0--assets-2",
+      "path": [
+        "SourceBucketNames",
+        "[0]"
+      ],
+      "value": "assets-2",
+      "accept": true,
+      "note": "string array: element value"
+    },
+    {
+      "id": "SourceObjectKeys--site-zip",
+      "path": [
+        "SourceObjectKeys"
+      ],
+      "value": [
+        "site.zip"
+      ],
+      "accept": true,
+      "note": "string array: values"
+    },
+    {
+      "id": "SourceObjectKeys-0--site-zip",
+      "path": [
+        "SourceObjectKeys",
+        "[0]"
+      ],
+      "value": "site.zip",
+      "accept": true,
+      "note": "string array: element value"
+    },
+    {
+      "id": "SourceCatalogs--Version-1",
+      "path": [
+        "SourceCatalogs"
+      ],
+      "value": [
+        {
+          "Version": 1
+        }
+      ],
+      "accept": true,
+      "note": "catalog array: values"
+    },
+    {
+      "id": "SourceCatalogs--null",
+      "path": [
+        "SourceCatalogs"
+      ],
+      "value": null,
+      "accept": true,
+      "note": "catalog array: nullish"
+    },
+    {
+      "id": "SourceMarkers--runtime-value",
+      "path": [
+        "SourceMarkers"
+      ],
+      "value": [
+        {
+          "runtime": "value"
+        }
+      ],
+      "accept": true,
+      "note": "marker array: values"
+    },
+    {
+      "id": "SourceMarkersConfig--jsonEscape-true",
+      "path": [
+        "SourceMarkersConfig"
+      ],
+      "value": [
+        {
+          "jsonEscape": true
+        }
+      ],
+      "accept": true,
+      "note": "markers-config array: values"
+    },
+    {
+      "id": "SourceMarkersConfig-0-jsonEscape--true",
+      "path": [
+        "SourceMarkersConfig",
+        "[0]",
+        "jsonEscape"
+      ],
+      "value": true,
+      "accept": true,
+      "note": "markers config: boolean"
+    },
+    {
+      "id": "SourceMarkersConfig-0-jsonEscape--true-1",
+      "path": [
+        "SourceMarkersConfig",
+        "[0]",
+        "jsonEscape"
+      ],
+      "value": "true",
+      "accept": true,
+      "note": "markers config: boolish string"
+    },
+    {
+      "id": "SourceMarkersConfig-0-jsonEscape--null",
+      "path": [
+        "SourceMarkersConfig",
+        "[0]",
+        "jsonEscape"
+      ],
+      "value": null,
+      "accept": false,
+      "note": "markers config: present null rejected"
+    },
+    {
+      "id": "Destination-BucketName--bucket-2",
+      "path": [
+        "Destination",
+        "BucketName"
+      ],
+      "value": "bucket-2",
+      "accept": true,
+      "note": "required string: value"
+    },
+    {
+      "id": "DestinationOwnerId--owner-123",
+      "path": [
+        "DestinationOwnerId"
+      ],
+      "value": "owner-123",
+      "accept": true,
+      "note": "required string: value"
+    },
+    {
+      "id": "SourceProcessing-MaxCompressionRatio--50",
+      "path": [
+        "SourceProcessing",
+        "MaxCompressionRatio"
+      ],
+      "value": 50,
+      "accept": true,
+      "note": "required u64: number"
+    },
+    {
+      "id": "SourceProcessing-MaxCompressionRatio--50-1",
+      "path": [
+        "SourceProcessing",
+        "MaxCompressionRatio"
+      ],
+      "value": "50",
+      "accept": true,
+      "note": "required u64: decimal string"
+    },
+    {
+      "id": "SourceProcessing-Exclude-0--min-js",
+      "path": [
+        "SourceProcessing",
+        "Exclude",
+        "[0]"
+      ],
+      "value": "*.min.js",
+      "accept": true,
+      "note": "string array: element value"
+    },
+    {
+      "id": "SourceProcessing-Include--map",
+      "path": [
+        "SourceProcessing",
+        "Include"
+      ],
+      "value": [
+        "*.map"
+      ],
+      "accept": true,
+      "note": "string array: values"
+    },
+    {
+      "id": "SourceProcessing-Include-0--map",
+      "path": [
+        "SourceProcessing",
+        "Include",
+        "[0]"
+      ],
+      "value": "*.map",
+      "accept": true,
+      "note": "string array: element value"
+    },
+    {
+      "id": "DestinationLifecycle-OnDeploy-DeleteStaleObjects--true",
+      "path": [
+        "DestinationLifecycle",
+        "OnDeploy",
+        "DeleteStaleObjects"
+      ],
+      "value": true,
+      "accept": true,
+      "note": "boolish: boolean"
+    },
+    {
+      "id": "DestinationLifecycle-OnDeploy-DeleteStaleObjects--false",
+      "path": [
+        "DestinationLifecycle",
+        "OnDeploy",
+        "DeleteStaleObjects"
+      ],
+      "value": "false",
+      "accept": true,
+      "note": "boolish: lowercase string"
+    },
+    {
+      "id": "DestinationLifecycle-OnChange-DeletePreviousObjects--false",
+      "path": [
+        "DestinationLifecycle",
+        "OnChange",
+        "DeletePreviousObjects"
+      ],
+      "value": false,
+      "accept": true,
+      "note": "boolish: boolean"
+    },
+    {
+      "id": "DestinationLifecycle-OnChange-DeletePreviousObjects--true",
+      "path": [
+        "DestinationLifecycle",
+        "OnChange",
+        "DeletePreviousObjects"
+      ],
+      "value": "true",
+      "accept": true,
+      "note": "boolish: lowercase string"
+    },
+    {
+      "id": "DestinationLifecycle-OnChange-PreviousBucketName--previous-bucket",
+      "path": [
+        "DestinationLifecycle",
+        "OnChange",
+        "PreviousBucketName"
+      ],
+      "value": "previous-bucket",
+      "accept": true,
+      "note": "nullish string: value"
+    },
+    {
+      "id": "DestinationLifecycle-OnChange-PreviousBucketName--null",
+      "path": [
+        "DestinationLifecycle",
+        "OnChange",
+        "PreviousBucketName"
+      ],
+      "value": null,
+      "accept": true,
+      "note": "nullish string: null"
+    },
+    {
+      "id": "DestinationLifecycle-OnChange-InvalidatePreviousDistribution--D123",
+      "path": [
+        "DestinationLifecycle",
+        "OnChange",
+        "InvalidatePreviousDistribution"
+      ],
+      "value": "D123",
+      "accept": true,
+      "note": "nullish string: value"
+    },
+    {
+      "id": "DestinationLifecycle-OnChange-InvalidatePreviousDistribution--null",
+      "path": [
+        "DestinationLifecycle",
+        "OnChange",
+        "InvalidatePreviousDistribution"
+      ],
+      "value": null,
+      "accept": true,
+      "note": "nullish string: null"
+    },
+    {
+      "id": "DestinationLifecycle-OnDelete-DeleteCurrentObjects--true",
+      "path": [
+        "DestinationLifecycle",
+        "OnDelete",
+        "DeleteCurrentObjects"
+      ],
+      "value": true,
+      "accept": true,
+      "note": "boolish: boolean"
+    },
+    {
+      "id": "DestinationLifecycle-OnDelete-DeleteCurrentObjects--false",
+      "path": [
+        "DestinationLifecycle",
+        "OnDelete",
+        "DeleteCurrentObjects"
+      ],
+      "value": "false",
+      "accept": true,
+      "note": "boolish: lowercase string"
+    },
+    {
+      "id": "CloudfrontInvalidation-DistributionId--D123",
+      "path": [
+        "CloudfrontInvalidation",
+        "DistributionId"
+      ],
+      "value": "D123",
+      "accept": true,
+      "note": "nullish string: value"
+    },
+    {
+      "id": "CloudfrontInvalidation-DistributionId--null",
+      "path": [
+        "CloudfrontInvalidation",
+        "DistributionId"
+      ],
+      "value": null,
+      "accept": true,
+      "note": "nullish string: null"
+    },
+    {
+      "id": "CloudfrontInvalidation-Paths-0--",
+      "path": [
+        "CloudfrontInvalidation",
+        "Paths",
+        "[0]"
+      ],
+      "value": "/*",
+      "accept": true,
+      "note": "nullish string array: element value"
+    },
+    {
+      "id": "CloudfrontInvalidation-WaitForCompletion--true",
+      "path": [
+        "CloudfrontInvalidation",
+        "WaitForCompletion"
+      ],
+      "value": true,
+      "accept": true,
+      "note": "boolish: boolean"
+    },
+    {
+      "id": "CloudfrontInvalidation-WaitForCompletion--false",
+      "path": [
+        "CloudfrontInvalidation",
+        "WaitForCompletion"
+      ],
+      "value": "false",
+      "accept": true,
+      "note": "boolish: lowercase string"
+    },
+    {
+      "id": "Transfer-AdvancedTuning-SourceBlockBytes--4096",
+      "path": [
+        "Transfer",
+        "AdvancedTuning",
+        "SourceBlockBytes"
+      ],
+      "value": 4096,
+      "accept": true,
+      "note": "optional u64: number"
+    },
+    {
+      "id": "Transfer-AdvancedTuning-SourceBlockBytes--4096-1",
+      "path": [
+        "Transfer",
+        "AdvancedTuning",
+        "SourceBlockBytes"
+      ],
+      "value": "4096",
+      "accept": true,
+      "note": "optional u64: decimal string"
+    },
+    {
+      "id": "Transfer-AdvancedTuning-SourceBlockBytes--null",
+      "path": [
+        "Transfer",
+        "AdvancedTuning",
+        "SourceBlockBytes"
+      ],
+      "value": null,
+      "accept": true,
+      "note": "optional u64: null means absent"
+    },
+    {
+      "id": "Transfer-AdvancedTuning-SourceBlockMergeGapBytes--1024",
+      "path": [
+        "Transfer",
+        "AdvancedTuning",
+        "SourceBlockMergeGapBytes"
+      ],
+      "value": 1024,
+      "accept": true,
+      "note": "optional u64: number"
+    },
+    {
+      "id": "Transfer-AdvancedTuning-SourceBlockMergeGapBytes--1024-1",
+      "path": [
+        "Transfer",
+        "AdvancedTuning",
+        "SourceBlockMergeGapBytes"
+      ],
+      "value": "1024",
+      "accept": true,
+      "note": "optional u64: decimal string"
+    },
+    {
+      "id": "Transfer-AdvancedTuning-SourceBlockMergeGapBytes--null",
+      "path": [
+        "Transfer",
+        "AdvancedTuning",
+        "SourceBlockMergeGapBytes"
+      ],
+      "value": null,
+      "accept": true,
+      "note": "optional u64: null means absent"
+    },
+    {
+      "id": "Transfer-AdvancedTuning-SourceGetConcurrency--8",
+      "path": [
+        "Transfer",
+        "AdvancedTuning",
+        "SourceGetConcurrency"
+      ],
+      "value": 8,
+      "accept": true,
+      "note": "optional u64: number"
+    },
+    {
+      "id": "Transfer-AdvancedTuning-SourceGetConcurrency--8-1",
+      "path": [
+        "Transfer",
+        "AdvancedTuning",
+        "SourceGetConcurrency"
+      ],
+      "value": "8",
+      "accept": true,
+      "note": "optional u64: decimal string"
+    },
+    {
+      "id": "Transfer-AdvancedTuning-SourceGetConcurrency--null",
+      "path": [
+        "Transfer",
+        "AdvancedTuning",
+        "SourceGetConcurrency"
+      ],
+      "value": null,
+      "accept": true,
+      "note": "optional u64: null means absent"
+    },
+    {
+      "id": "Transfer-AdvancedTuning-SourceWindowBytes--1048576",
+      "path": [
+        "Transfer",
+        "AdvancedTuning",
+        "SourceWindowBytes"
+      ],
+      "value": 1048576,
+      "accept": true,
+      "note": "optional u64: number"
+    },
+    {
+      "id": "Transfer-AdvancedTuning-SourceWindowBytes--null",
+      "path": [
+        "Transfer",
+        "AdvancedTuning",
+        "SourceWindowBytes"
+      ],
+      "value": null,
+      "accept": true,
+      "note": "optional u64: null means absent"
+    },
+    {
+      "id": "Transfer-AdvancedTuning-SourceWindowMemoryBudgetMiB--512",
+      "path": [
+        "Transfer",
+        "AdvancedTuning",
+        "SourceWindowMemoryBudgetMiB"
+      ],
+      "value": 512,
+      "accept": true,
+      "note": "optional u64: number"
+    },
+    {
+      "id": "Transfer-AdvancedTuning-SourceWindowMemoryBudgetMiB--512-1",
+      "path": [
+        "Transfer",
+        "AdvancedTuning",
+        "SourceWindowMemoryBudgetMiB"
+      ],
+      "value": "512",
+      "accept": true,
+      "note": "optional u64: decimal string"
+    },
+    {
+      "id": "Transfer-AdvancedTuning-SourceWindowMemoryBudgetMiB--null",
+      "path": [
+        "Transfer",
+        "AdvancedTuning",
+        "SourceWindowMemoryBudgetMiB"
+      ],
+      "value": null,
+      "accept": true,
+      "note": "optional u64: null means absent"
+    },
+    {
+      "id": "Transfer-AdvancedTuning-DestinationWriteRetry-MaxAttempts--3",
+      "path": [
+        "Transfer",
+        "AdvancedTuning",
+        "DestinationWriteRetry",
+        "MaxAttempts"
+      ],
+      "value": 3,
+      "accept": true,
+      "note": "optional u64: number"
+    },
+    {
+      "id": "Transfer-AdvancedTuning-DestinationWriteRetry-MaxAttempts--3-1",
+      "path": [
+        "Transfer",
+        "AdvancedTuning",
+        "DestinationWriteRetry",
+        "MaxAttempts"
+      ],
+      "value": "3",
+      "accept": true,
+      "note": "optional u64: decimal string"
+    },
+    {
+      "id": "Transfer-AdvancedTuning-DestinationWriteRetry-MaxAttempts--null",
+      "path": [
+        "Transfer",
+        "AdvancedTuning",
+        "DestinationWriteRetry",
+        "MaxAttempts"
+      ],
+      "value": null,
+      "accept": true,
+      "note": "optional u64: null means absent"
+    },
+    {
+      "id": "Transfer-AdvancedTuning-DestinationWriteRetry-BaseDelayMs--100",
+      "path": [
+        "Transfer",
+        "AdvancedTuning",
+        "DestinationWriteRetry",
+        "BaseDelayMs"
+      ],
+      "value": 100,
+      "accept": true,
+      "note": "optional u64: number"
+    },
+    {
+      "id": "Transfer-AdvancedTuning-DestinationWriteRetry-BaseDelayMs--100-1",
+      "path": [
+        "Transfer",
+        "AdvancedTuning",
+        "DestinationWriteRetry",
+        "BaseDelayMs"
+      ],
+      "value": "100",
+      "accept": true,
+      "note": "optional u64: decimal string"
+    },
+    {
+      "id": "Transfer-AdvancedTuning-DestinationWriteRetry-BaseDelayMs--null",
+      "path": [
+        "Transfer",
+        "AdvancedTuning",
+        "DestinationWriteRetry",
+        "BaseDelayMs"
+      ],
+      "value": null,
+      "accept": true,
+      "note": "optional u64: null means absent"
+    },
+    {
+      "id": "Transfer-AdvancedTuning-DestinationWriteRetry-MaxDelayMs--1000",
+      "path": [
+        "Transfer",
+        "AdvancedTuning",
+        "DestinationWriteRetry",
+        "MaxDelayMs"
+      ],
+      "value": 1000,
+      "accept": true,
+      "note": "optional u64: number"
+    },
+    {
+      "id": "Transfer-AdvancedTuning-DestinationWriteRetry-MaxDelayMs--1000-1",
+      "path": [
+        "Transfer",
+        "AdvancedTuning",
+        "DestinationWriteRetry",
+        "MaxDelayMs"
+      ],
+      "value": "1000",
+      "accept": true,
+      "note": "optional u64: decimal string"
+    },
+    {
+      "id": "Transfer-AdvancedTuning-DestinationWriteRetry-MaxDelayMs--null",
+      "path": [
+        "Transfer",
+        "AdvancedTuning",
+        "DestinationWriteRetry",
+        "MaxDelayMs"
+      ],
+      "value": null,
+      "accept": true,
+      "note": "optional u64: null means absent"
+    },
+    {
+      "id": "Transfer-AdvancedTuning-DestinationWriteRetry-SlowdownBaseDelayMs--200",
+      "path": [
+        "Transfer",
+        "AdvancedTuning",
+        "DestinationWriteRetry",
+        "SlowdownBaseDelayMs"
+      ],
+      "value": 200,
+      "accept": true,
+      "note": "optional u64: number"
+    },
+    {
+      "id": "Transfer-AdvancedTuning-DestinationWriteRetry-SlowdownBaseDelayMs--200-1",
+      "path": [
+        "Transfer",
+        "AdvancedTuning",
+        "DestinationWriteRetry",
+        "SlowdownBaseDelayMs"
+      ],
+      "value": "200",
+      "accept": true,
+      "note": "optional u64: decimal string"
+    },
+    {
+      "id": "Transfer-AdvancedTuning-DestinationWriteRetry-SlowdownBaseDelayMs--null",
+      "path": [
+        "Transfer",
+        "AdvancedTuning",
+        "DestinationWriteRetry",
+        "SlowdownBaseDelayMs"
+      ],
+      "value": null,
+      "accept": true,
+      "note": "optional u64: null means absent"
+    },
+    {
+      "id": "Transfer-AdvancedTuning-DestinationWriteRetry-SlowdownMaxDelayMs--2000",
+      "path": [
+        "Transfer",
+        "AdvancedTuning",
+        "DestinationWriteRetry",
+        "SlowdownMaxDelayMs"
+      ],
+      "value": 2000,
+      "accept": true,
+      "note": "optional u64: number"
+    },
+    {
+      "id": "Transfer-AdvancedTuning-DestinationWriteRetry-SlowdownMaxDelayMs--2000-1",
+      "path": [
+        "Transfer",
+        "AdvancedTuning",
+        "DestinationWriteRetry",
+        "SlowdownMaxDelayMs"
+      ],
+      "value": "2000",
+      "accept": true,
+      "note": "optional u64: decimal string"
+    },
+    {
+      "id": "Transfer-AdvancedTuning-DestinationWriteRetry-SlowdownMaxDelayMs--null",
+      "path": [
+        "Transfer",
+        "AdvancedTuning",
+        "DestinationWriteRetry",
+        "SlowdownMaxDelayMs"
+      ],
+      "value": null,
+      "accept": true,
+      "note": "optional u64: null means absent"
+    },
+    {
+      "id": "OutputObjectKeys--false",
+      "path": [
+        "OutputObjectKeys"
+      ],
+      "value": false,
+      "accept": true,
+      "note": "boolish: boolean"
+    },
+    {
+      "id": "DestinationBucketArn--arn-aws-s3-destination",
+      "path": [
+        "DestinationBucketArn"
+      ],
+      "value": "arn:aws:s3:::destination",
+      "accept": true,
+      "note": "nullish string: value"
+    },
+    {
+      "id": "DestinationBucketArn--null",
+      "path": [
+        "DestinationBucketArn"
+      ],
+      "value": null,
+      "accept": true,
+      "note": "nullish string: null"
+    },
+    {
+      "id": "ServiceToken--arn-aws-lambda-us-east-1-000000000000-function-handler",
+      "path": [
+        "ServiceToken"
+      ],
+      "value": "arn:aws:lambda:us-east-1:000000000000:function:handler",
+      "accept": true,
+      "note": "envelope: any JSON value"
+    },
+    {
+      "id": "ServiceToken--null",
+      "path": [
+        "ServiceToken"
+      ],
+      "value": null,
+      "accept": true,
+      "note": "envelope: null"
+    },
+    {
+      "id": "ServiceTimeout--900",
+      "path": [
+        "ServiceTimeout"
+      ],
+      "value": "900",
+      "accept": true,
+      "note": "envelope: string"
+    },
+    {
+      "id": "ServiceTimeout--null",
+      "path": [
+        "ServiceTimeout"
+      ],
+      "value": null,
+      "accept": true,
+      "note": "envelope: null"
+    }
+  ]
+}

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { crc32 } from "node:zlib";
 import {
+  SERVICE_TOKEN,
   SMOKE_ENTRIES,
   buildCreateEvent,
   buildSourceZip,
@@ -68,6 +69,13 @@ test("buildCreateEvent uses the strict provider contract", () => {
   assert.equal(event.ResourceProperties.Destination.BucketName, "shin-smoke-destination");
   assert.equal(event.ResourceProperties.SourceBucketNames.length, 1);
   assert.equal(event.ResourceProperties.SourceObjectKeys.length, 1);
+  // Both reserved envelope keys must ride inside ResourceProperties: the
+  // production failure that motivated the envelope (c530bf7) was the strict
+  // decoder rejecting a real event over ServiceTimeout, so a fixture that
+  // carries ServiceToken but not ServiceTimeout would pass smoke and fail
+  // every real CDK deployment.
+  assert.equal(event.ResourceProperties.ServiceToken, SERVICE_TOKEN);
+  assert.equal(event.ResourceProperties.ServiceTimeout, "900");
 
   const declared = [
     "CloudfrontInvalidation",
@@ -75,6 +83,7 @@ test("buildCreateEvent uses the strict provider contract", () => {
     "DestinationLifecycle",
     "DestinationOwnerId",
     "OutputObjectKeys",
+    "ServiceTimeout",
     "ServiceToken",
     "SourceBucketNames",
     "SourceObjectKeys",
