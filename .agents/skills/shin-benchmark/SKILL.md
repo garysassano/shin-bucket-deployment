@@ -67,12 +67,13 @@ Committed benchmark records may include:
 > - `pnpm benchmark:run-assets` builds its own arm64 artifact: before the first deploy of a session it runs `scripts/build-bootstrap.mjs --benchmark --evidence-output <ledger> arm64` (`benchmarkProviderBuildArgs` in `benchmarks/src/run-assets-comparison.ts`), which requires a clean source tree, builds from a detached worktree at the current commit, verifies the local application build matches it, and stages `assets/bootstrap-arm64/bootstrap.zip` over any stale archive. Resumed sessions do not rebuild; they reuse the staged archive, so resume only with the same source and bootstrap.
 >
 > Since F-7, `pnpm benchmark deploy` refuses to start when a staged archive's
-> `build-provenance.json` does not match the current source tree (or when the
-> provenance file is missing), so the manual path is gated exactly like
-> verification. The `benchmark:run-assets` path already refuses through its own
-> full provenance assertion (`assertBootstrapBuildProvenance`). For a
-> deliberately stale deployment, set `SHIN_ALLOW_STALE_BOOTSTRAP=1`; the refusal
-> message names the same variable.
+> `build-provenance.json` does not match the current provider build recipe —
+> the provider-build inputs, the resolved build toolchain, or the build
+> environment — or when the provenance file is missing, so the manual path is
+> gated exactly like verification. The `benchmark:run-assets` path already
+> refuses through its own full provenance assertion
+> (`assertBootstrapBuildProvenance`). For a deliberately stale deployment, set
+> `SHIN_ALLOW_STALE_BOOTSTRAP=1`; the refusal message names the same variable.
 
 Benchmark mode runs only the selected benchmark scenario and expands the requested config matrix:
 

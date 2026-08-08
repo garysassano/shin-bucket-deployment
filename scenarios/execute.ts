@@ -64,10 +64,12 @@ export async function executeScenarioPlan(
     // A deploy that uses a prebuilt provider archive built from different
     // provider inputs or a different build recipe would ship a stale binary
     // silently, so refuse before any process starts. The gate covers exactly
-    // the architectures the plan's deploy runs can select (see
-    // planDeployedProviderArchitectures below); a run that compiles from
-    // source, or a benchmark run that deploys upstream AwsBucketDeployment,
-    // selects none and is not gated.
+    // the union of `providerArchitectures` the plan's deploy runs declare
+    // (see planDeployedProviderArchitectures below): a run whose catalog
+    // entry declares `[]` — compiles from source or deploys no Shin provider
+    // — contributes nothing, and a benchmark run that deploys upstream
+    // AwsBucketDeployment is skipped. A run that omits the field defaults to
+    // the prebuilt arm64 archive and is gated.
     try {
       const assertDeployableBootstrap =
         options.assertDeployableBootstrap ?? (await loadBootstrapFreshnessGate(repositoryRoot));

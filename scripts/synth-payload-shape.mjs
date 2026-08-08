@@ -12,9 +12,11 @@
 //   schema-driven: every emitted key must be declared by the contract, every
 //   key the decoder requires must be emitted, nesting/array arity must match,
 //   and any *literal* leaf or record value must match its schema type. Token
-//   leaves are recognized by their CloudFormation intrinsic shape and are not
-//   type-checked, because only the deployed request carries their resolved
-//   values.
+//   leaves are recognized by their CloudFormation intrinsic shape, their own
+//   payload is validated against the template syntax that intrinsic accepts
+//   (`{ Ref: 123 }` and `{ "Fn::Join": "not-an-array" }` fail), and the leaf
+//   value itself is not type-checked, because only the deployed request
+//   carries its resolved value.
 // - `assertPayloadWithinSynthShape` runs in `smoke-provider.mjs`: the
 //   hand-built smoke payload carries plain values, so it is validated against
 //   the runtime ResourceProperties schema in full, including value shapes.

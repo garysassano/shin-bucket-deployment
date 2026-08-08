@@ -62,7 +62,9 @@
 //   case (CloudFormation stringifies scalars on some paths);
 // - `deserialize_u64ish`/`deserialize_usizeish`/`deserialize_present_u32ish`
 //   accept unsigned integers and decimal strings; the optional variants trim
-//   surrounding whitespace and treat a whitespace-only value as absent;
+//   surrounding whitespace and treat a whitespace-only value as absent, and a
+//   decimal string is exactly `[0-9]+` with any number of leading zeros — no
+//   sign (`str::parse` alone would take a leading `+`; both sides reject it);
 // - the integer bounds below mirror the Rust parsers exactly: numbers are
 //   capped at MAX_SAFE_INTEGER (a larger JSON number cannot be represented
 //   exactly in JavaScript; use the decimal-string form instead), and decimal
