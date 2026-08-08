@@ -144,10 +144,6 @@ const PROVIDER_SUMMARY_SCALARS = {
 const PROVIDER_SUMMARY_SECTIONS = {
   phaseMs: {
     plan: "number",
-    planCatalog: "number",
-    planDirectory: "number",
-    planEntries: "number",
-    planValidation: "number",
     destinationList: "number",
     transfer: "number",
     delete: "number",

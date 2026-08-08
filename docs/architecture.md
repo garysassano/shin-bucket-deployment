@@ -599,18 +599,6 @@ Each label-count map contains at most 32 entries and reserves capacity for the `
 
 Direct-copy deployments emit a separate `destination CopyObject diagnostics` structured record with the original retry fields. `wireAttempts` counts provider-owned copy attempts with SDK retries disabled; the retry, throttling, and wait fields have the same meanings as above. Correlated failure fields apply only to extracted `PutObject` attempts, so the summary's `copyObject` section carries the seven basic counters and omits the four PutObject-only failure breakdowns rather than reporting them as empty. Read `copyObject` for copy retry and throttle pressure and `putObject` for extracted uploads. `counts.copiedObjects` and `bytes.copied` are the logical-success totals.
 
-Source planning sub-phase timings (`phaseMs.plan` split):
-
-| Field                    | Meaning                                                                                                                                   | Use when debugging                                                   |
-| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| `phaseMs.plan`           | Total time across all source planning: request length checks, budget setup, filter compilation, planning, and preflight.                  | Compare the whole planning phase with the sum of its sub-timings.    |
-| `phaseMs.planCatalog`    | Catalog load and parse per archive: the authenticated-catalog `GetObject`/decompress/SHA-256/parse, or the absent-binding trust decision. | Separate catalog S3 round-trips from CPU when planning looks slow.   |
-| `phaseMs.planDirectory`  | EOCD fetch and central-directory fetch and parse per archive (`prepare_zip_directory_reader` plus `ZipFileReader` construction).          | Attribute planning wall time to directory GETs versus per-entry CPU. |
-| `phaseMs.planEntries`    | The per-entry manifest loop per archive: path normalization, filters, expansion checks, span derivation, manifest inserts.                | Measure the CPU cost of the per-entry loop directly.                 |
-| `phaseMs.planValidation` | Directory and preflight validation: `validate_archive_directory` plus `validate_deployment_preflight`.                                    | Isolate validation CPU from fetch and entry work.                    |
-
-The split exists so network fetches inside planning (directory GETs, catalog GETs) can be told apart from CPU cost: those round-trips are what make planning look CPU-heavy while actually being waits. The four sub-timings accumulate per archive; the `plan` total is the phase-wide clock and is not required to equal their sum exactly.
-
 CloudFormation callback diagnostics field reference:
 
 | Field                | Meaning                                                                                 | Use when debugging                                                  |

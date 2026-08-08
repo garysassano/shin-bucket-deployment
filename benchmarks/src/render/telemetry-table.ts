@@ -72,10 +72,6 @@ const RUNTIME_COLUMNS: Array<Column<TelemetryRow>> = [
 const PHASE_COLUMNS: Array<Column<TelemetryRow>> = [
   { header: "Phase", value: phase },
   { header: "Plan ms", value: (row) => nested(row, "phaseMs", "plan") },
-  { header: "Plan catalog ms", value: (row) => nested(row, "phaseMs", "planCatalog") },
-  { header: "Plan directory ms", value: (row) => nested(row, "phaseMs", "planDirectory") },
-  { header: "Plan entries ms", value: (row) => nested(row, "phaseMs", "planEntries") },
-  { header: "Plan validation ms", value: (row) => nested(row, "phaseMs", "planValidation") },
   { header: "Destination list ms", value: (row) => nested(row, "phaseMs", "destinationList") },
   { header: "Transfer ms", value: (row) => nested(row, "phaseMs", "transfer") },
   { header: "Delete ms", value: (row) => nested(row, "phaseMs", "delete") },

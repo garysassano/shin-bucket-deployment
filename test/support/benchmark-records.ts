@@ -181,10 +181,6 @@ export function providerSummary(memoryMb: number, parallel: number, create: bool
     durationMs: 1,
     phaseMs: zeroFields([
       "plan",
-      "planCatalog",
-      "planDirectory",
-      "planEntries",
-      "planValidation",
       "destinationList",
       "transfer",
       "delete",
