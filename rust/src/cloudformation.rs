@@ -1274,17 +1274,66 @@ mod tests {
 
     #[test]
     fn delete_requires_the_current_request_schema() {
+        // The Delete path must decode through the same strict decoder as every
+        // other request type: a complete Delete envelope carrying the
+        // pre-rename flat wire names (the previous template's shape) must be
+        // rejected by the envelope decoder, never parsed into a current-schema
+        // request. This pins the operator-visible behavior: a Delete delivered
+        // from a template that still has the old names strands the stack in
+        // DELETE_FAILED, which the breaking-changes recovery documents.
+        let legacy_delete = decode_request_envelope(json!({
+            "RequestType": "Delete",
+            "RequestId": "request-delete-schema",
+            "ResponseURL": "https://example.com/response",
+            "StackId": "stack-123",
+            "ResourceType": RESOURCE_TYPE,
+            "LogicalResourceId": "Deploy",
+            "PhysicalResourceId": "physical-id",
+            "ResourceProperties": legacy_wire_properties(
+                "destination",
+                "",
+                "delete-schema-owner"
+            )
+        }))
+        .expect("legacy Delete resource properties still form an envelope");
+        let error = decode_deployment_request(&legacy_delete)
+            .err()
+            .expect("Delete must not relax the strict current request schema");
+        assert!(
+            error
+                .to_string()
+                .contains("failed to deserialize ResourceProperties"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            format!("{error:#}").contains("DestinationBucketName"),
+            "unexpected error: {error}"
+        );
+
+        // A Delete that decodes cleanly still runs the same cross-field
+        // validation as every other request type (the parse inside
+        // process_request): one catalog descriptor for two declared sources
+        // must fail the same way it fails Create and Update.
         let mut delete_properties =
             deployment_request_properties("destination", "", "delete-schema-owner");
         // One catalog descriptor for two declared sources: a Delete envelope has
         // to fail this the same way every other request type does.
         delete_properties["SourceCatalogs"] =
             json!([{ "Version": 1, "Sha256": "00" }, { "Version": 1, "Sha256": "11" }]);
-        let error = parse_request_with_memory(
-            serde_json::from_value(delete_properties).expect("delete properties decode"),
-            "1024",
-        )
-        .expect_err("Delete must not relax the current request schema");
+        let delete = decode_request_envelope(json!({
+            "RequestType": "Delete",
+            "RequestId": "request-delete-schema-2",
+            "ResponseURL": "https://example.com/response",
+            "StackId": "stack-123",
+            "ResourceType": RESOURCE_TYPE,
+            "LogicalResourceId": "Deploy",
+            "PhysicalResourceId": "physical-id",
+            "ResourceProperties": delete_properties,
+        }))
+        .expect("Delete resource properties still form an envelope");
+        let decoded = decode_deployment_request(&delete).expect("current-schema Delete decodes");
+        let error = parse_request_with_memory(decoded.resource_properties, "1024")
+            .expect_err("Delete must not relax the current request schema");
 
         assert!(
             error
