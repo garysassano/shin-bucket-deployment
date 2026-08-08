@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::future::pending;
-use std::io::Write;
+use std::io::{self, Write};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -11,6 +11,7 @@ use aws_sdk_s3::primitives::SdkBody;
 use aws_smithy_http_client::test_util::{ReplayEvent, StaticReplayClient};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use bytes::Bytes;
 use futures_util::task::AtomicWaker;
 use http::{Request, Response};
 use http_body::{Body as _, Frame, SizeHint};
@@ -536,59 +537,133 @@ async fn direct_stream_frames_preserve_body_boundaries() {
     }
 }
 
+/// Non-periodic body content for the marker forwarding tests.
+///
+/// A constant fill makes byte equality nearly vacuous: it detects a length
+/// change and nothing else, so reversing or duplicating frames compares equal.
+/// A modular counter is better but still periodic, so any displacement by a
+/// multiple of its stride is also invisible. xorshift64 has period 2^64-1, so
+/// no displacement within a test body can alias. The high byte is taken
+/// deliberately: the low bits of this generator family have short periods, the
+/// exact defect that left the `large-archive` fixture compressing 256:1 while
+/// appearing to test a large transfer.
+fn marker_forward_body(size: usize) -> Vec<u8> {
+    let mut state = 0x2545_f491_4f6c_dd1d_u64;
+    (0..size)
+        .map(|_| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state >> 56) as u8
+        })
+        .collect()
+}
+
+async fn forward_marker_body(contents: &[u8]) -> (Vec<Bytes>, Option<Bytes>) {
+    let frame_bytes = crate::s3::ZIP_ENTRY_BODY_CHUNK_BYTES;
+    let (mut output_reader, mut output_writer) =
+        tokio::io::duplex(contents.len() + frame_bytes + 1);
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(16);
+
+    output_writer.write_all(contents).await.expect("pipe write");
+    drop(output_writer);
+
+    let held = forward_replaced_body_chunks(&mut output_reader, &sender)
+        .await
+        .expect("marker forward must not fail");
+    drop(sender);
+
+    let mut sent = Vec::new();
+    while let Ok(frame) = receiver.try_recv() {
+        match frame.expect("valid body frame") {
+            BodyFrame::Data(bytes) => sent.push(bytes),
+            _ => panic!("forward path must send only Data frames"),
+        }
+    }
+    (sent, held)
+}
+
 #[tokio::test]
 async fn marker_forward_frames_preserve_body_boundaries() {
     let frame_bytes = crate::s3::ZIP_ENTRY_BODY_CHUNK_BYTES;
-    let tail_bytes = 17;
-    let size = frame_bytes * 3 + tail_bytes;
-    // Position-dependent content, not a constant fill: byte equality over a
-    // uniform buffer cannot tell a correct stream from one whose bytes were
-    // reordered or duplicated, only one whose length changed. The stride is
-    // coprime with the power-of-two frame size so the pattern never realigns
-    // on a frame boundary.
-    let contents: Vec<u8> = (0..size).map(|index| (index % 251) as u8).collect();
-    let (mut output_reader, mut output_writer) = tokio::io::duplex(size + frame_bytes);
-    let (sender, mut receiver) = tokio::sync::mpsc::channel(4);
+    // Every boundary the frame arithmetic can get wrong: empty, sub-frame,
+    // one byte short of a frame, an exact single frame, one byte past it, an
+    // exact multiple, and a multi-frame body with a partial tail.
+    for size in [
+        0,
+        1,
+        frame_bytes - 1,
+        frame_bytes,
+        frame_bytes + 1,
+        frame_bytes * 2,
+        frame_bytes * 3 + 17,
+    ] {
+        let contents = marker_forward_body(size);
+        let (sent, held) = forward_marker_body(&contents).await;
+
+        // Every chunk but the last is sent; the last is always withheld so
+        // validation can still fail before S3 sees a complete body.
+        let expected_sent = size.div_ceil(frame_bytes).saturating_sub(1);
+        assert_eq!(
+            sent.len(),
+            expected_sent,
+            "sent frame count for size {size}"
+        );
+        for bytes in &sent {
+            assert_eq!(bytes.len(), frame_bytes, "sent frames are whole chunks");
+        }
+
+        let mut actual = Vec::with_capacity(size);
+        for bytes in &sent {
+            actual.extend_from_slice(bytes);
+        }
+        match held {
+            Some(bytes) => {
+                assert_eq!(
+                    bytes.len(),
+                    size - expected_sent * frame_bytes,
+                    "held frame length for size {size}"
+                );
+                actual.extend_from_slice(&bytes);
+            }
+            None => assert_eq!(size, 0, "only an empty body withholds nothing"),
+        }
+
+        assert_eq!(
+            actual, contents,
+            "frames plus the held frame must equal the input byte for byte at size {size}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn marker_forward_reports_broken_pipe_from_the_trailing_partial_frame() {
+    // A body of frame + tail reaches the trailing-partial send site without
+    // ever completing a second frame, so this is the only input that exercises
+    // that branch's cancellation in isolation: the first frame is withheld
+    // rather than sent, and the send happens only when the tail is handed off.
+    let frame_bytes = crate::s3::ZIP_ENTRY_BODY_CHUNK_BYTES;
+    let contents = marker_forward_body(frame_bytes + 17);
+    let (mut output_reader, mut output_writer) =
+        tokio::io::duplex(contents.len() + frame_bytes + 1);
+    let (sender, receiver) = tokio::sync::mpsc::channel(1);
 
     output_writer
         .write_all(&contents)
         .await
         .expect("pipe write");
     drop(output_writer);
+    drop(receiver);
 
-    let held = forward_replaced_body_chunks(&mut output_reader, &sender)
+    let error = forward_replaced_body_chunks(&mut output_reader, &sender)
         .await
-        .expect("marker forward must not fail");
+        .expect_err("a dropped receiver must fail the forwarding side");
 
-    let mut actual = Vec::with_capacity(size);
-    let mut sent_frames = 0;
-    while let Ok(frame) = receiver.try_recv() {
-        match frame.expect("valid body frame") {
-            BodyFrame::Data(bytes) => {
-                assert_eq!(
-                    bytes.len(),
-                    frame_bytes,
-                    "sent frames must be exactly one chunk each"
-                );
-                actual.extend_from_slice(&bytes);
-                sent_frames += 1;
-            }
-            _ => panic!("forward path must send only Data frames"),
-        }
-    }
-    assert_eq!(
-        sent_frames, 3,
-        "three full frames must be sent while one is withheld"
-    );
-
-    let held = held.expect("a final partial frame must be held back");
-    assert_eq!(held.len(), tail_bytes);
-    actual.extend_from_slice(&held);
-
-    assert_eq!(
-        actual, contents,
-        "concatenated frames plus the held frame must equal the input byte for byte"
-    );
+    let io_error = error
+        .downcast_ref::<io::Error>()
+        .expect("marker forwarding must fail with an io::Error");
+    assert_eq!(io_error.kind(), io::ErrorKind::BrokenPipe);
+    assert_eq!(io_error.to_string(), "marker body receiver closed");
 }
 
 #[tokio::test]
