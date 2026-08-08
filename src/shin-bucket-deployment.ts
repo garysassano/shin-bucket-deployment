@@ -552,10 +552,14 @@ export interface ShinBucketDeploymentCloudFrontInvalidation {
   /**
    * Distribution paths to invalidate.
    *
-   * A concrete list must contain at least one path and at most 3,000 paths, of
-   * which at most 15 may be wildcard paths (a path whose final character is
-   * `*`). Every concrete path must start with `/`, contain at most 4,000
-   * Unicode characters, and contain no control characters.
+   * A concrete list must contain at least one path, at most 3,000 non-wildcard
+   * paths, and at most 15 wildcard paths (a path whose final character is
+   * `*`). CloudFront documents these as separate quotas: 3,000 files per
+   * invalidation request excluding wildcard invalidations, and 15 active
+   * wildcard invalidations per distribution; the 15-wildcard cap per request is
+   * the synthesis-time proxy for the latter, which is runtime service state.
+   * Every concrete path must start with `/`, contain at most 4,000 Unicode
+   * characters, and contain no control characters.
    *
    * Paths must not contain `~`, in either its literal or percent-encoded form.
    * CloudFront does not support that character for invalidations, so such a path

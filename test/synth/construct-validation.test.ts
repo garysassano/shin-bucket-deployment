@@ -1520,7 +1520,7 @@ describe("ShinBucketDeployment validation and option coverage", () => {
           paths: tooManyPaths,
         },
       });
-    }).toThrow(/at most 3000 paths/);
+    }).toThrow(/at most 3000 non-wildcard paths/);
 
     const tooManyWildcards = Array.from({ length: 16 }, (_, index) => `/wild-${index}/*`);
     expect(() => {
@@ -1550,6 +1550,23 @@ describe("ShinBucketDeployment validation and option coverage", () => {
           paths: [
             ...Array.from({ length: 15 }, (_, index) => `/wild-${index}/*`),
             ...Array.from({ length: 2985 }, (_, index) => `/path-${index}`),
+          ],
+        },
+      });
+    }).not.toThrow();
+
+    // CloudFront's 3,000-file quota excludes wildcard invalidations, so the
+    // documented maximum of each dimension can coexist in one request.
+    expect(() => {
+      new ShinBucketDeployment(stack, "DeployMixed", {
+        sources: [Source.data("index.html", "ok")],
+        destination: { bucket: destinationBucket },
+        providerLambda: { localBuild: testLocalProviderBuild() },
+        cloudfrontInvalidation: {
+          distribution: distributionRef("E1EXAMPLE"),
+          paths: [
+            ...Array.from({ length: 3000 }, (_, index) => `/path-${index}`),
+            "/wild/*",
           ],
         },
       });

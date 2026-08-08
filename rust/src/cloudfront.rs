@@ -12,11 +12,17 @@ const INVALIDATION_POLL_INTERVAL: Duration = Duration::from_secs(20);
 /// settle into one synchronized 20-second GetInvalidation cadence.
 const INVALIDATION_POLL_JITTER: Duration = Duration::from_secs(5);
 const MAX_INVALIDATION_PATH_CHARACTERS: usize = 4_000;
-/// CloudFront's documented per-invalidation-batch path limit. See
-/// .plans/plan-consolidated.md T-5; the construct enforces the same bound at synthesis.
+/// CloudFront's documented per-request file quota: "File invalidation: maximum
+/// number of files allowed in active invalidation requests, excluding wildcard
+/// invalidations" (3,000). A wildcard path (one whose final character is `*`)
+/// does not count toward it. See .plans/plan-consolidated.md T-5; the construct
+/// enforces the same bound at synthesis.
 const MAX_INVALIDATION_PATHS: usize = 3_000;
-/// CloudFront's documented per-invalidation-batch wildcard-path limit. A wildcard path
-/// is one whose final character is `*`.
+/// CloudFront's documented quota of 15 active wildcard invalidations per
+/// distribution is runtime service state, so a request may carry at most this
+/// many wildcard paths: any single request we issue can never alone exceed the
+/// distribution's active-wildcard quota. A wildcard path is one whose final
+/// character is `*`.
 const MAX_WILDCARD_INVALIDATION_PATHS: usize = 15;
 
 /// An invalidation created by [`create_invalidation`], ready to be awaited by
@@ -166,11 +172,11 @@ pub(crate) fn validate_invalidation_paths(paths: &[String]) -> Result<i32> {
         !paths.is_empty(),
         "CloudFront invalidation requires at least one path"
     );
-    ensure!(
-        paths.len() <= MAX_INVALIDATION_PATHS,
-        "CloudFront invalidation exceeds the maximum of {MAX_INVALIDATION_PATHS} paths"
-    );
     let wildcard_path_count = paths.iter().filter(|path| path.ends_with('*')).count();
+    ensure!(
+        paths.len() - wildcard_path_count <= MAX_INVALIDATION_PATHS,
+        "CloudFront invalidation exceeds the maximum of {MAX_INVALIDATION_PATHS} non-wildcard paths"
+    );
     ensure!(
         wildcard_path_count <= MAX_WILDCARD_INVALIDATION_PATHS,
         "CloudFront invalidation exceeds the maximum of {MAX_WILDCARD_INVALIDATION_PATHS} wildcard paths"
@@ -305,6 +311,22 @@ mod tests {
         // `*` anywhere but the final character is a literal, not a wildcard path.
         let literal_stars = vec!["/a*b".to_string(); MAX_WILDCARD_INVALIDATION_PATHS + 1];
         assert!(validate_invalidation_paths(&literal_stars).is_ok());
+    }
+
+    #[test]
+    fn invalidation_paths_keep_wildcard_paths_out_of_the_file_quota() {
+        // CloudFront's 3,000-file quota excludes wildcard invalidations, so the
+        // documented maximum of each dimension can coexist in one request.
+        let mut mixed = vec!["/a".to_string(); MAX_INVALIDATION_PATHS];
+        mixed.extend(vec!["/*".to_string(); MAX_WILDCARD_INVALIDATION_PATHS]);
+        assert_eq!(
+            validate_invalidation_paths(&mixed).expect("valid mixed request"),
+            (MAX_INVALIDATION_PATHS + MAX_WILDCARD_INVALIDATION_PATHS) as i32
+        );
+
+        let mut too_many = vec!["/a".to_string(); MAX_INVALIDATION_PATHS + 1];
+        too_many.extend(vec!["/*".to_string(); MAX_WILDCARD_INVALIDATION_PATHS]);
+        assert!(validate_invalidation_paths(&too_many).is_err());
     }
 
     #[test]

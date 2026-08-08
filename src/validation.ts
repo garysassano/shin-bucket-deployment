@@ -35,9 +35,14 @@ const MAX_DESTINATION_KEY_PREFIX_LENGTH = 128 - 16 - 1 - 16 - 1;
 // CloudFront's documented maximum invalidation path length:
 // https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/invalidation-specifying-objects.html
 const MAX_CLOUDFRONT_INVALIDATION_PATH_CHARACTERS = 4_000;
-// CloudFront's per-invalidation-request limits: at most 3,000 files, of which
-// at most 15 may be active wildcard invalidations (a path whose final character
-// is `*`):
+// CloudFront documents the file and wildcard quotas as separate dimensions:
+// "File invalidation: maximum number of files allowed in active invalidation
+// requests, excluding wildcard invalidations" (3,000) and "File invalidation:
+// maximum number of active wildcard invalidations allowed" (15). The 3,000 is a
+// per-request file count that does not include wildcard paths (a path whose
+// final character is `*`); the 15 is a per-distribution limit on active
+// wildcard invalidations, which is runtime service state, so the 15-wildcard
+// cap per request here is the synthesis-time proxy for that quota:
 // https://docs.aws.amazon.com/general/latest/gr/cf_region.html
 const MAX_CLOUDFRONT_INVALIDATION_PATHS = 3_000;
 const MAX_CLOUDFRONT_WILDCARD_INVALIDATION_PATHS = 15;
@@ -647,16 +652,16 @@ function validateCloudFrontPaths(scope: Construct, paths: unknown): void {
       scope,
     );
   }
-  if (paths.length > MAX_CLOUDFRONT_INVALIDATION_PATHS) {
-    throw new ValidationError(
-      "ShinBucketDeploymentCloudFrontPathsLimit",
-      `cloudfrontInvalidation.paths must contain at most ${MAX_CLOUDFRONT_INVALIDATION_PATHS} paths; ${paths.length} were provided.`,
-      scope,
-    );
-  }
   const wildcardPathCount = paths.filter(
     (path) => !Token.isUnresolved(path) && typeof path === "string" && path.endsWith("*"),
   ).length;
+  if (paths.length - wildcardPathCount > MAX_CLOUDFRONT_INVALIDATION_PATHS) {
+    throw new ValidationError(
+      "ShinBucketDeploymentCloudFrontPathsLimit",
+      `cloudfrontInvalidation.paths must contain at most ${MAX_CLOUDFRONT_INVALIDATION_PATHS} non-wildcard paths (paths not ending in "*"); ${paths.length - wildcardPathCount} were provided.`,
+      scope,
+    );
+  }
   if (wildcardPathCount > MAX_CLOUDFRONT_WILDCARD_INVALIDATION_PATHS) {
     throw new ValidationError(
       "ShinBucketDeploymentCloudFrontWildcardPathsLimit",
