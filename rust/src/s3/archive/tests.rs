@@ -15,7 +15,7 @@ use futures_util::task::AtomicWaker;
 use http::{Request, Response};
 use http_body::{Body as _, Frame, SizeHint};
 use proptest::prelude::*;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Semaphore;
 use tokio::time::Instant;
 use zip::write::{SimpleFileOptions, ZipWriter};
@@ -29,9 +29,10 @@ use super::budget::{SourceBudgetWaitGuard, SourceByteBudget};
 use super::diagnostics::SourceDiagnostics;
 use super::directory::prepare_zip_directory_reader;
 use super::entry::{
-    BodyFrame, LOCAL_FILE_HEADER_LEN, MarkerBodyContext, UploadBodyState, marker_zip_entry_body,
-    open_entry_data_reader, plan_marker_zip_entry, send_marker_zip_entry_chunks,
-    send_zip_entry_chunks, zip_entry_body, zip_entry_reader,
+    BodyFrame, LOCAL_FILE_HEADER_LEN, MarkerBodyContext, UploadBodyState,
+    forward_replaced_body_chunks, marker_zip_entry_body, open_entry_data_reader,
+    plan_marker_zip_entry, send_marker_zip_entry_chunks, send_zip_entry_chunks, zip_entry_body,
+    zip_entry_reader,
 };
 use super::{
     SourceClient, head_source, range_get_request_error, source_get_retry_cap_millis,
@@ -533,6 +534,56 @@ async fn direct_stream_frames_preserve_body_boundaries() {
         }
         assert_eq!(actual_frames, expected_frames, "entry size {size}");
     }
+}
+
+#[tokio::test]
+async fn marker_forward_frames_preserve_body_boundaries() {
+    let frame_bytes = crate::s3::ZIP_ENTRY_BODY_CHUNK_BYTES;
+    let tail_bytes = 17;
+    let size = frame_bytes * 3 + tail_bytes;
+    let contents = vec![b'x'; size];
+    let (mut output_reader, mut output_writer) = tokio::io::duplex(size + frame_bytes);
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(4);
+
+    output_writer
+        .write_all(&contents)
+        .await
+        .expect("pipe write");
+    drop(output_writer);
+
+    let held = forward_replaced_body_chunks(&mut output_reader, &sender)
+        .await
+        .expect("marker forward must not fail");
+
+    let mut actual = Vec::with_capacity(size);
+    let mut sent_frames = 0;
+    while let Ok(frame) = receiver.try_recv() {
+        match frame.expect("valid body frame") {
+            BodyFrame::Data(bytes) => {
+                assert_eq!(
+                    bytes.len(),
+                    frame_bytes,
+                    "sent frames must be exactly one chunk each"
+                );
+                actual.extend_from_slice(&bytes);
+                sent_frames += 1;
+            }
+            _ => panic!("forward path must send only Data frames"),
+        }
+    }
+    assert_eq!(
+        sent_frames, 3,
+        "three full frames must be sent while one is withheld"
+    );
+
+    let held = held.expect("a final partial frame must be held back");
+    assert_eq!(held.len(), tail_bytes);
+    actual.extend_from_slice(&held);
+
+    assert_eq!(
+        actual, contents,
+        "concatenated frames plus the held frame must equal the input byte for byte"
+    );
 }
 
 #[tokio::test]
