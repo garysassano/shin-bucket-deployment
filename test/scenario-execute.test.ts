@@ -647,6 +647,15 @@ describe("scenario executor", () => {
       },
       {
         repositoryRoot: root,
+        // The fixture provenance records a zeroed recipe; supply the current
+        // recipe through the runner's identity seam so the real gate refuses
+        // hermetically. Deriving it would spawn cargo/rustc/cargo-lambda/zig/
+        // rustup, and this Node-level gate must not require a Rust toolchain.
+        bootstrapFreshnessIdentity: {
+          providerInputSha256: "0".repeat(64),
+          buildToolchainSha256: "1".repeat(64),
+          buildEnvironmentSha256: "0".repeat(64),
+        },
         pathExists: () => true,
         startProcess: () => ({ completion: Promise.resolve(0), terminate() {} }),
         log: (message) => logs.push(message),

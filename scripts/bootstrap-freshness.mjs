@@ -36,6 +36,12 @@
 // Escape hatch: set STALE_BOOTSTRAP_ESCAPE_HATCH to a truthy value to deploy
 // the staged archives as-is. The error messages name the variable so a
 // maintainer who deliberately wants the stale archive is not stuck.
+//
+// Test seam: `currentIdentity` lets a caller supply the current recipe
+// digests instead of re-deriving them. Only the Node-level tests pass it —
+// the deploy path always re-derives from the repository and the real
+// toolchain — so `pnpm test` can exercise this real gate without a Rust
+// toolchain on PATH.
 
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
@@ -69,11 +75,19 @@ const DIGEST_SHORT_LENGTH = 12;
  * is refused: "no architectures" is a caller bug (the runner skips the gate
  * entirely when a plan genuinely needs no prebuilt archive), and silently
  * gating nothing would let a stale archive deploy.
+ *
+ * `currentIdentity` is an optional override of the current build recipe.
+ * Production callers never pass it, so the gate always re-derives the recipe
+ * from the repository and the real toolchain. The Node-level test suite uses
+ * it to drive this real gate hermetically: deriving the toolchain digest
+ * spawns cargo/rustc/cargo-lambda/zig/rustup, and `pnpm test` must run
+ * without a Rust toolchain.
  */
 export function assertStagedBootstrapFreshness({
   repositoryRoot,
   architectures,
   env = process.env,
+  currentIdentity,
 } = {}) {
   if (escapeHatchEnabled(env)) {
     return;
@@ -106,20 +120,33 @@ export function assertStagedBootstrapFreshness({
     return;
   }
 
-  let currentIdentity;
-  try {
-    currentIdentity = {
-      providerInputSha256: collectProviderBuildInputIdentity(repositoryRoot).providerInputSha256,
-      buildToolchainSha256: collectBuildToolchainIdentity(repositoryRoot).buildToolchainSha256,
-      buildEnvironmentSha256: buildEnvironmentSha256(env),
-    };
-  } catch (error) {
-    throw new Error(
-      `Unable to verify the staged provider bootstrap against the current ` +
-        `source and build recipe: ` +
-        `${error instanceof Error ? error.message : String(error)}. ` +
-        `Refusing to deploy an unverifiable archive.`,
-    );
+  if (currentIdentity === undefined) {
+    try {
+      currentIdentity = {
+        providerInputSha256: collectProviderBuildInputIdentity(repositoryRoot).providerInputSha256,
+        buildToolchainSha256: collectBuildToolchainIdentity(repositoryRoot).buildToolchainSha256,
+        buildEnvironmentSha256: buildEnvironmentSha256(env),
+      };
+    } catch (error) {
+      throw new Error(
+        `Unable to verify the staged provider bootstrap against the current ` +
+          `source and build recipe: ` +
+          `${error instanceof Error ? error.message : String(error)}. ` +
+          `Refusing to deploy an unverifiable archive.`,
+      );
+    }
+  } else {
+    for (const digestName of [
+      "providerInputSha256",
+      "buildToolchainSha256",
+      "buildEnvironmentSha256",
+    ]) {
+      if (typeof currentIdentity[digestName] !== "string" || currentIdentity[digestName] === "") {
+        throw new TypeError(
+          `currentIdentity.${digestName} must be a non-empty SHA-256 digest string.`,
+        );
+      }
+    }
   }
 
   for (const { architecture, directory } of archiveDirs) {

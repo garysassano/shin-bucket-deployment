@@ -25,6 +25,10 @@ export type ExecutionOptions = {
     repositoryRoot: string,
     architectures: readonly string[],
   ) => void;
+  // Test seam: the gate re-derives the current build recipe itself; an
+  // explicit identity lets Node-level tests drive the real gate without a
+  // Rust toolchain on PATH. Production callers never pass it.
+  readonly bootstrapFreshnessIdentity?: BootstrapFreshness.CurrentIdentity;
   readonly startProcess?: StartProcess;
   readonly resolveAwsPrincipalArn?: () => string;
   readonly pathExists?: (path: string) => boolean;
@@ -72,7 +76,8 @@ export async function executeScenarioPlan(
     // the prebuilt arm64 archive and is gated.
     try {
       const assertDeployableBootstrap =
-        options.assertDeployableBootstrap ?? (await loadBootstrapFreshnessGate(repositoryRoot));
+        options.assertDeployableBootstrap ??
+        (await loadBootstrapFreshnessGate(repositoryRoot, options.bootstrapFreshnessIdentity));
       assertDeployableBootstrap(repositoryRoot, deployedProviderArchitectures);
     } catch (error) {
       log(error instanceof Error ? error.message : String(error));
@@ -282,12 +287,17 @@ function isShinProviderDeployRun(run: ScenarioRun): boolean {
  */
 async function loadBootstrapFreshnessGate(
   repositoryRoot: string,
+  currentIdentity?: BootstrapFreshness.CurrentIdentity,
 ): Promise<(repositoryRoot: string, architectures: readonly string[]) => void> {
   const module = (await import(
     pathToFileURL(join(repositoryRoot, "scripts", "bootstrap-freshness.mjs")).href
   )) as typeof BootstrapFreshness;
   return (root: string, architectures: readonly string[]) =>
-    module.assertStagedBootstrapFreshness({ repositoryRoot: root, architectures });
+    module.assertStagedBootstrapFreshness({
+      repositoryRoot: root,
+      architectures,
+      currentIdentity,
+    });
 }
 
 function currentAwsPrincipalArn(): string {

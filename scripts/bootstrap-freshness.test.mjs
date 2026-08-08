@@ -10,16 +10,19 @@ import {
   STALE_BOOTSTRAP_ESCAPE_HATCH,
   assertStagedBootstrapFreshness,
 } from "./bootstrap-freshness.mjs";
-import {
-  buildEnvironmentSha256,
-  collectBuildToolchainIdentity,
-  collectProviderBuildInputIdentity,
-} from "./source-identity.mjs";
+import { buildEnvironmentSha256, collectProviderBuildInputIdentity } from "./source-identity.mjs";
 
 const ZIP_LOCAL_FILE_HEADER = 0x04034b50;
 const ZIP_CENTRAL_DIRECTORY_HEADER = 0x02014b50;
 const ZIP_END_OF_CENTRAL_DIRECTORY = 0x06054b50;
 const ELF_MACHINE_BY_ARCH = { arm64: 183, x86_64: 62 };
+
+// A fixed digest standing in for the current build toolchain. The real
+// derivation spawns cargo/rustc/cargo-lambda/zig/rustup, and this Node-level
+// suite must run without a Rust toolchain; the derivation itself is exercised
+// by the real build (`pnpm prebuild:bootstrap`) and deploy (`pnpm verify`)
+// paths, not by `pnpm test`.
+const FIXTURE_BUILD_TOOLCHAIN_SHA256 = "b".repeat(64);
 
 /** Minimal ELF header the package gate's archive reader accepts. */
 function elfBytes(machine) {
@@ -99,15 +102,18 @@ function makeRepo(t) {
 }
 
 /**
- * The current build recipe of the fixture: the three digests the gate compares
- * against the provenance. The toolchain identity is derived from the real
- * environment (cargo/rustc/cargo-lambda/zig), matching what a maintainer-run
- * deploy would compare.
+ * The current build recipe of the fixture, supplied to the gate through the
+ * `currentIdentity` seam. The provider-input and build-environment digests
+ * are derived exactly as the real recipe derives them (git and the bounded
+ * build-flag variable list); the build-toolchain digest is the fixed constant
+ * above. The gate's comparison logic is the real code — only the toolchain
+ * derivation is stubbed, and only here: the deploy path never supplies the
+ * seam and always re-derives.
  */
 function currentIdentity(root) {
   return {
     providerInputSha256: collectProviderBuildInputIdentity(root).providerInputSha256,
-    buildToolchainSha256: collectBuildToolchainIdentity(root).buildToolchainSha256,
+    buildToolchainSha256: FIXTURE_BUILD_TOOLCHAIN_SHA256,
     buildEnvironmentSha256: buildEnvironmentSha256(),
   };
 }
@@ -174,7 +180,12 @@ test("passes when the staged archive was built from the current provider inputs"
   const root = makeRepo(t);
   stageArchive(root, "arm64", {});
 
-  assert.doesNotThrow(() => assertStagedBootstrapFreshness({ repositoryRoot: root }));
+  assert.doesNotThrow(() =>
+    assertStagedBootstrapFreshness({
+      repositoryRoot: root,
+      currentIdentity: currentIdentity(root),
+    }),
+  );
 });
 
 test("passes when only some architectures are staged and they are all fresh", (t) => {
@@ -185,7 +196,12 @@ test("passes when only some architectures are staged and they are all fresh", (t
   mkdirSync(join(root, "assets", "bootstrap-x86_64"), { recursive: true });
   writeFileSync(join(root, "assets", "bootstrap-x86_64", "README.txt"), "no archive");
 
-  assert.doesNotThrow(() => assertStagedBootstrapFreshness({ repositoryRoot: root }));
+  assert.doesNotThrow(() =>
+    assertStagedBootstrapFreshness({
+      repositoryRoot: root,
+      currentIdentity: currentIdentity(root),
+    }),
+  );
 });
 
 test("passes when no archive is staged at all", (t) => {
@@ -198,7 +214,12 @@ test("refuses a provider-input mismatch and names the architecture, both digests
   const recorded = "0".repeat(64);
   stageArchive(root, "arm64", { providerInputSha256: recorded });
 
-  const error = captureError(() => assertStagedBootstrapFreshness({ repositoryRoot: root }));
+  const error = captureError(() =>
+    assertStagedBootstrapFreshness({
+      repositoryRoot: root,
+      currentIdentity: currentIdentity(root),
+    }),
+  );
   assert.match(error.message, /Refusing to deploy a stale prebuilt provider bootstrap \(arm64\)/);
   assert.match(error.message, /provider inputs hashing to 000000000000/);
   assert.match(
@@ -216,7 +237,12 @@ test("refuses when any staged architecture is stale, not only the first", (t) =>
   stageArchive(root, "arm64", {});
   stageArchive(root, "x86_64", { providerInputSha256: "1".repeat(64) });
 
-  const error = captureError(() => assertStagedBootstrapFreshness({ repositoryRoot: root }));
+  const error = captureError(() =>
+    assertStagedBootstrapFreshness({
+      repositoryRoot: root,
+      currentIdentity: currentIdentity(root),
+    }),
+  );
   assert.match(error.message, /\(x86_64\)/);
   assert.match(error.message, /111111111111/);
 });
@@ -228,13 +254,29 @@ test("checks only the architectures the caller selects", (t) => {
 
   // Only x86_64 is fresh, and only x86_64 is selected, so the deploy is fine.
   assert.doesNotThrow(() =>
-    assertStagedBootstrapFreshness({ repositoryRoot: root, architectures: ["x86_64"] }),
+    assertStagedBootstrapFreshness({
+      repositoryRoot: root,
+      architectures: ["x86_64"],
+      currentIdentity: currentIdentity(root),
+    }),
   );
   assert.throws(
-    () => assertStagedBootstrapFreshness({ repositoryRoot: root, architectures: ["arm64"] }),
+    () =>
+      assertStagedBootstrapFreshness({
+        repositoryRoot: root,
+        architectures: ["arm64"],
+        currentIdentity: currentIdentity(root),
+      }),
     /\(arm64\)/,
   );
-  assert.throws(() => assertStagedBootstrapFreshness({ repositoryRoot: root }), /\(arm64\)/);
+  assert.throws(
+    () =>
+      assertStagedBootstrapFreshness({
+        repositoryRoot: root,
+        currentIdentity: currentIdentity(root),
+      }),
+    /\(arm64\)/,
+  );
 });
 
 test("refuses a staged archive whose build provenance is missing", (t) => {
@@ -245,7 +287,12 @@ test("refuses a staged archive whose build provenance is missing", (t) => {
     providerArchiveZip(ELF_MACHINE_BY_ARCH.arm64),
   );
 
-  const error = captureError(() => assertStagedBootstrapFreshness({ repositoryRoot: root }));
+  const error = captureError(() =>
+    assertStagedBootstrapFreshness({
+      repositoryRoot: root,
+      currentIdentity: currentIdentity(root),
+    }),
+  );
   assert.match(error.message, /build-provenance\.json is missing/);
   assert.match(error.message, /pnpm prebuild:bootstrap/);
 });
@@ -258,7 +305,12 @@ test("refuses an archive whose provenance predates provider-input digests", (t) 
   delete manifest.providerInputSha256;
   writeFileSync(join(directory, "build-provenance.json"), `${JSON.stringify(manifest, null, 2)}\n`);
 
-  const error = captureError(() => assertStagedBootstrapFreshness({ repositoryRoot: root }));
+  const error = captureError(() =>
+    assertStagedBootstrapFreshness({
+      repositoryRoot: root,
+      currentIdentity: currentIdentity(root),
+    }),
+  );
   assert.match(error.message, /does not record a providerInputSha256/);
 });
 
@@ -274,7 +326,12 @@ test("refuses a replaced archive even when the provenance records matching sourc
   const swapped = providerArchiveZip(ELF_MACHINE_BY_ARCH.arm64, differentBootstrap);
   writeFileSync(join(root, "assets", "bootstrap-arm64", "bootstrap.zip"), swapped);
 
-  const error = captureError(() => assertStagedBootstrapFreshness({ repositoryRoot: root }));
+  const error = captureError(() =>
+    assertStagedBootstrapFreshness({
+      repositoryRoot: root,
+      currentIdentity: currentIdentity(root),
+    }),
+  );
   assert.match(error.message, /does not match the bootstrapArchiveSha256 recorded/);
 });
 
@@ -282,7 +339,12 @@ test("passes a digest-matching archive built from a dirty tree", (t) => {
   const root = makeRepo(t);
   stageArchive(root, "arm64", { dirty: true });
 
-  assert.doesNotThrow(() => assertStagedBootstrapFreshness({ repositoryRoot: root }));
+  assert.doesNotThrow(() =>
+    assertStagedBootstrapFreshness({
+      repositoryRoot: root,
+      currentIdentity: currentIdentity(root),
+    }),
+  );
 });
 
 test("refuses when the current source tree cannot be verified", (t) => {
@@ -340,6 +402,7 @@ test("the escape hatch is not enabled by empty, zero, or false values", (t) => {
         assertStagedBootstrapFreshness({
           repositoryRoot: root,
           env: { [STALE_BOOTSTRAP_ESCAPE_HATCH]: value },
+          currentIdentity: currentIdentity(root),
         }),
       /Refusing to deploy a stale prebuilt provider bootstrap/,
       `value ${JSON.stringify(value)} must not enable the escape hatch`,
@@ -354,7 +417,16 @@ test("refuses an archive built with a different build environment", (t) => {
   const error = captureError(() =>
     assertStagedBootstrapFreshness({
       repositoryRoot: root,
-      env: { ...process.env, RUSTFLAGS: "-C opt-level=0" },
+      // The archive recorded the current environment digest; the current
+      // recipe now carries RUSTFLAGS, so the build-environment digest differs
+      // and the archive is refused.
+      currentIdentity: {
+        ...currentIdentity(root),
+        buildEnvironmentSha256: buildEnvironmentSha256({
+          ...process.env,
+          RUSTFLAGS: "-C opt-level=0",
+        }),
+      },
     }),
   );
   assert.match(error.message, /build environment hashing to /);
@@ -366,7 +438,12 @@ test("refuses an archive whose recorded build toolchain differs from the current
   const root = makeRepo(t);
   stageArchive(root, "arm64", { buildToolchainSha256: "0".repeat(64) });
 
-  const error = captureError(() => assertStagedBootstrapFreshness({ repositoryRoot: root }));
+  const error = captureError(() =>
+    assertStagedBootstrapFreshness({
+      repositoryRoot: root,
+      currentIdentity: currentIdentity(root),
+    }),
+  );
   assert.match(error.message, /build toolchain hashing to 000000000000/);
   assert.match(error.message, /current build toolchain hash to /);
 });
@@ -380,7 +457,12 @@ test("refuses an archive whose provenance predates build-recipe digests", (t) =>
   delete manifest.buildEnvironmentSha256;
   writeFileSync(join(directory, "build-provenance.json"), `${JSON.stringify(manifest, null, 2)}\n`);
 
-  const error = captureError(() => assertStagedBootstrapFreshness({ repositoryRoot: root }));
+  const error = captureError(() =>
+    assertStagedBootstrapFreshness({
+      repositoryRoot: root,
+      currentIdentity: currentIdentity(root),
+    }),
+  );
   assert.match(error.message, /does not record a buildToolchainSha256/);
 });
 
