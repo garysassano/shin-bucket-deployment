@@ -1564,10 +1564,7 @@ describe("ShinBucketDeployment validation and option coverage", () => {
         providerLambda: { localBuild: testLocalProviderBuild() },
         cloudfrontInvalidation: {
           distribution: distributionRef("E1EXAMPLE"),
-          paths: [
-            ...Array.from({ length: 3000 }, (_, index) => `/path-${index}`),
-            "/wild/*",
-          ],
+          paths: [...Array.from({ length: 3000 }, (_, index) => `/path-${index}`), "/wild/*"],
         },
       });
     }).not.toThrow();

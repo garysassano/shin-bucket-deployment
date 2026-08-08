@@ -16,34 +16,34 @@ Affected: every stack, on the update that follows the upgrade (the tag change is
 
 The custom-resource property names the construct sends to the provider were renamed to mirror the public API property paths: each camelCase path segment becomes one PascalCase key, nested as a dotted object (`destinationLifecycle.onChange.deletePreviousObjects` travels as `DestinationLifecycle.OnChange.DeletePreviousObjects`), and the leaf property name is PascalCased under its container (`cloudfrontInvalidation.paths` becomes `CloudfrontInvalidation.Paths`; `distributionId` keeps its qualifier because it is part of the leaf name). Values without a public property — bound `Source*` data, the transport envelope (`ServiceToken`/`ServiceTimeout`), and internal identities (`DestinationOwnerId`, `OutputObjectKeys`, `DestinationBucketArn`) — keep their flat wire names. This is a clean pre-`1.0` break: the provider's strict decoder (`deny_unknown_fields`) rejects any payload carrying the old names, and no alias or fallback reader exists. The complete old-to-new mapping, for an operator diffing a template:
 
-| Old wire key | New wire key |
-| --- | --- |
-| `DestinationBucketName` | `Destination.BucketName` |
-| `DestinationBucketKeyPrefix` | `Destination.KeyPrefix` |
-| `DeletePreviousObjectsOnChange` | `DestinationLifecycle.OnChange.DeletePreviousObjects`; the old object's nested `DestinationBucketName` moves to `DestinationLifecycle.OnChange.PreviousBucketName` |
-| `InvalidatePreviousDistributionOnChange` | `DestinationLifecycle.OnChange.InvalidatePreviousDistribution` |
-| `WaitForDistributionInvalidation` | `CloudfrontInvalidation.WaitForCompletion` |
-| `DeleteCurrentObjectsOnDelete` | `DestinationLifecycle.OnDelete.DeleteCurrentObjects` |
-| `DeleteStaleObjectsOnDeployment` | `DestinationLifecycle.OnDeploy.DeleteStaleObjects` |
-| `Extract` | `SourceProcessing.Extract` |
-| `MaxUncompressedEntryBytes` | `SourceProcessing.MaxUncompressedEntryBytes` |
-| `MaxCompressionRatio` | `SourceProcessing.MaxCompressionRatio` |
-| `Exclude` | `SourceProcessing.Exclude` |
-| `Include` | `SourceProcessing.Include` |
-| `DistributionId` | `CloudfrontInvalidation.DistributionId` |
-| `DistributionPaths` | `CloudfrontInvalidation.Paths` |
-| `MaxParallelTransfers` | `Transfer.MaxConcurrency` |
-| `SourceBlockBytes` | `Transfer.AdvancedTuning.SourceBlockBytes` |
-| `SourceBlockMergeGapBytes` | `Transfer.AdvancedTuning.SourceBlockMergeGapBytes` |
-| `SourceGetConcurrency` | `Transfer.AdvancedTuning.SourceGetConcurrency` |
-| `SourceWindowBytes` | `Transfer.AdvancedTuning.SourceWindowBytes` |
-| `SourceWindowMemoryBudgetMb` | `Transfer.AdvancedTuning.SourceWindowMemoryBudgetMiB` (the value was always MiB; the rename fixes the unit mismatch in the name) |
-| `PutObjectMaxAttempts` | `Transfer.AdvancedTuning.DestinationWriteRetry.MaxAttempts` |
-| `PutObjectRetryBaseDelayMs` | `Transfer.AdvancedTuning.DestinationWriteRetry.BaseDelayMs` |
-| `PutObjectRetryMaxDelayMs` | `Transfer.AdvancedTuning.DestinationWriteRetry.MaxDelayMs` |
-| `PutObjectSlowdownRetryBaseDelayMs` | `Transfer.AdvancedTuning.DestinationWriteRetry.SlowdownBaseDelayMs` |
-| `PutObjectSlowdownRetryMaxDelayMs` | `Transfer.AdvancedTuning.DestinationWriteRetry.SlowdownMaxDelayMs` |
-| `PutObjectRetryJitter` | `Transfer.AdvancedTuning.DestinationWriteRetry.Jitter` |
+| Old wire key                             | New wire key                                                                                                                                                       |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `DestinationBucketName`                  | `Destination.BucketName`                                                                                                                                           |
+| `DestinationBucketKeyPrefix`             | `Destination.KeyPrefix`                                                                                                                                            |
+| `DeletePreviousObjectsOnChange`          | `DestinationLifecycle.OnChange.DeletePreviousObjects`; the old object's nested `DestinationBucketName` moves to `DestinationLifecycle.OnChange.PreviousBucketName` |
+| `InvalidatePreviousDistributionOnChange` | `DestinationLifecycle.OnChange.InvalidatePreviousDistribution`                                                                                                     |
+| `WaitForDistributionInvalidation`        | `CloudfrontInvalidation.WaitForCompletion`                                                                                                                         |
+| `DeleteCurrentObjectsOnDelete`           | `DestinationLifecycle.OnDelete.DeleteCurrentObjects`                                                                                                               |
+| `DeleteStaleObjectsOnDeployment`         | `DestinationLifecycle.OnDeploy.DeleteStaleObjects`                                                                                                                 |
+| `Extract`                                | `SourceProcessing.Extract`                                                                                                                                         |
+| `MaxUncompressedEntryBytes`              | `SourceProcessing.MaxUncompressedEntryBytes`                                                                                                                       |
+| `MaxCompressionRatio`                    | `SourceProcessing.MaxCompressionRatio`                                                                                                                             |
+| `Exclude`                                | `SourceProcessing.Exclude`                                                                                                                                         |
+| `Include`                                | `SourceProcessing.Include`                                                                                                                                         |
+| `DistributionId`                         | `CloudfrontInvalidation.DistributionId`                                                                                                                            |
+| `DistributionPaths`                      | `CloudfrontInvalidation.Paths`                                                                                                                                     |
+| `MaxParallelTransfers`                   | `Transfer.MaxConcurrency`                                                                                                                                          |
+| `SourceBlockBytes`                       | `Transfer.AdvancedTuning.SourceBlockBytes`                                                                                                                         |
+| `SourceBlockMergeGapBytes`               | `Transfer.AdvancedTuning.SourceBlockMergeGapBytes`                                                                                                                 |
+| `SourceGetConcurrency`                   | `Transfer.AdvancedTuning.SourceGetConcurrency`                                                                                                                     |
+| `SourceWindowBytes`                      | `Transfer.AdvancedTuning.SourceWindowBytes`                                                                                                                        |
+| `SourceWindowMemoryBudgetMb`             | `Transfer.AdvancedTuning.SourceWindowMemoryBudgetMiB` (the value was always MiB; the rename fixes the unit mismatch in the name)                                   |
+| `PutObjectMaxAttempts`                   | `Transfer.AdvancedTuning.DestinationWriteRetry.MaxAttempts`                                                                                                        |
+| `PutObjectRetryBaseDelayMs`              | `Transfer.AdvancedTuning.DestinationWriteRetry.BaseDelayMs`                                                                                                        |
+| `PutObjectRetryMaxDelayMs`               | `Transfer.AdvancedTuning.DestinationWriteRetry.MaxDelayMs`                                                                                                         |
+| `PutObjectSlowdownRetryBaseDelayMs`      | `Transfer.AdvancedTuning.DestinationWriteRetry.SlowdownBaseDelayMs`                                                                                                |
+| `PutObjectSlowdownRetryMaxDelayMs`       | `Transfer.AdvancedTuning.DestinationWriteRetry.SlowdownMaxDelayMs`                                                                                                 |
+| `PutObjectRetryJitter`                   | `Transfer.AdvancedTuning.DestinationWriteRetry.Jitter`                                                                                                             |
 
 Affected: every stack upgrades, because the first Update after the upgrade delivers the _previous_ template's property names in `OldResourceProperties`, which the provider now rejects. The Update fails before any deployment, destination listing, or deletion work happens. In particular, a stack using `destinationLifecycle.onChange.deletePreviousObjects` fails its first Update after upgrading.
 
