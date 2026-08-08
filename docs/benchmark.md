@@ -112,6 +112,10 @@ Do not infer S3 throttling from source block waits alone. Source S3 pressure req
 
 Do not commit `.benchmark-runs/` or other raw AWS output. Commit only sanitized result rows, Markdown/SVG render outputs, configs, source, and tests.
 
+## Ledger state: `phaseMs` plan sub-timings
+
+The `phaseMs` contract now requires `planCatalog`, `planDirectory`, `planEntries`, and `planValidation` alongside `plan`. The committed `benchmarks/results.jsonl` predates those required members, so every committed shin sample reports four shape errors under `benchmarkSampleRecordErrors` and the ledger is not readable as current evidence until it is repopulated. That invalidation is expected and accepted: the fields are required by the pre-`1.0` contract, they are never synthesized for old rows, and no compatibility reader will be added. The next AWS measurement session writes the new-format rows and replaces the ledger.
+
 ## Destination-cleanup follow-up: planning-overhead attribution
 
 The P-4/P-6/R-1 destination-cleanup decision run (`95f84950`, five repetitions at

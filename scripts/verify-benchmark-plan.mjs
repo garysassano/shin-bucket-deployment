@@ -151,6 +151,10 @@ function providerSummary(memoryMb, parallel, create) {
     durationMs: 1000,
     phaseMs: zeroFields([
       "plan",
+      "planCatalog",
+      "planDirectory",
+      "planEntries",
+      "planValidation",
       "destinationList",
       "transfer",
       "delete",

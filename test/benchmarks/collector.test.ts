@@ -540,6 +540,10 @@ function summaryBaseFixture() {
     durationMs: 60000,
     phaseMs: zeros([
       "plan",
+      "planCatalog",
+      "planDirectory",
+      "planEntries",
+      "planValidation",
       "destinationList",
       "transfer",
       "delete",

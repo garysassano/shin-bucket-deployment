@@ -158,7 +158,13 @@ pub(crate) async fn deploy(
     )
     .await
     .context("S3 deployment planning exceeded the deployment work deadline")??;
+    // planValidation (phase-level half): the deployment preflight over the
+    // whole manifest. The per-archive halves (directory validation and
+    // catalog-to-ZIP validation) are charged in `s3/planner.rs`; see the
+    // accounting rules at the `PhaseMillis` definition site in `types.rs`.
+    let started_validation = std::time::Instant::now();
     planner::validate_deployment_preflight(request, &deployment_manifest)?;
+    stats.add_plan_validation_micros(crate::util::duration_micros(started_validation.elapsed()));
     let zip_plans = request.extract.then(|| {
         planner::collect_zip_entry_plans(&deployment_manifest, &request.dest_bucket_prefix)
     });
