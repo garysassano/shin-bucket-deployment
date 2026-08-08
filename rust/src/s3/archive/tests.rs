@@ -541,7 +541,12 @@ async fn marker_forward_frames_preserve_body_boundaries() {
     let frame_bytes = crate::s3::ZIP_ENTRY_BODY_CHUNK_BYTES;
     let tail_bytes = 17;
     let size = frame_bytes * 3 + tail_bytes;
-    let contents = vec![b'x'; size];
+    // Position-dependent content, not a constant fill: byte equality over a
+    // uniform buffer cannot tell a correct stream from one whose bytes were
+    // reordered or duplicated, only one whose length changed. The stride is
+    // coprime with the power-of-two frame size so the pattern never realigns
+    // on a frame boundary.
+    let contents: Vec<u8> = (0..size).map(|index| (index % 251) as u8).collect();
     let (mut output_reader, mut output_writer) = tokio::io::duplex(size + frame_bytes);
     let (sender, mut receiver) = tokio::sync::mpsc::channel(4);
 
