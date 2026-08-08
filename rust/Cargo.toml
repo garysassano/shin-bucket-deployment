@@ -9,6 +9,34 @@ publish = false
 name = "shin-bucket-deployment-handler"
 path = "src/main.rs"
 
+# The provider ships as a Lambda `bootstrap` binary, so the library target exists only
+# to give dev-only consumers (the criterion bench) a linkable crate. It is deliberately
+# not a runtime artifact: the bin never depends on it, and its unit tests are disabled
+# so `cargo test` keeps running the bin's copy of the same modules once.
+[lib]
+name = "shin_bucket_deployment_handler"
+path = "src/lib.rs"
+test = false
+
+# The criterion bench defines its own `main` via `criterion_main!`; with the default
+# test harness cargo would list it as a test target and never run the benchmarks.
+[[bench]]
+name = "plan_entries"
+path = "benches/plan_entries.rs"
+harness = false
+
+# Off-by-default surface for the `plan-entries` criterion bench
+# (`pnpm rust:bench`). The bench is a separate crate and cannot see `pub(crate)` /
+# `pub(super)` items, and Rust forbids re-exporting those from a `pub` module, so
+# `src/s3/bench_internals.rs` exposes a small opaque harness (new dev-only types that
+# call the existing planning functions) without widening any provider visibility. It
+# never affects the published package: `publish = false` applies to the whole crate,
+# the feature is off by default, and `cargo bench` is a developer command only (it is
+# not part of `pnpm check`).
+[features]
+default = []
+bench-internals = []
+
 [dependencies]
 aho-corasick = "1.1.4"
 anyhow = "1"
@@ -70,6 +98,7 @@ urlencoding = "2"
 
 [dev-dependencies]
 aws-smithy-http-client = { version = "1", features = ["test-util"] }
+criterion = "0.5"
 http = "1"
 proptest = "1.11.0"
 tokio = { version = "1", features = ["test-util"] }
