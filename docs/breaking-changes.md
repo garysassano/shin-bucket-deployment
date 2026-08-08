@@ -18,7 +18,25 @@ The custom-resource property names the construct sends to the provider were rena
 
 Affected: every stack upgrades, because the first Update after the upgrade delivers the _previous_ template's property names in `OldResourceProperties`, which the provider now rejects. The Update fails before any deployment, destination listing, or deletion work happens. In particular, a stack using `destinationLifecycle.onChange.deletePreviousObjects` fails its first Update after upgrading.
 
-The operator should recreate the deployment instead of updating it: give the `ShinBucketDeployment` construct a new id (or recreate the stack) so CloudFormation issues a fresh Create with the new property names, then remove the failed old resource. Do not rely on an in-place removal: a Delete request delivered from a template that still carries the old names is rejected the same way, and a stuck Update rollback cannot be continued until the resource leaves the old contract. Destination objects are not modified by the failed Update. There is no compatibility path, and none will be added: the loud rejection is deliberate so an old payload can never be partially parsed into a wrong previous-namespace deletion decision.
+The rejection is loud on every request type: the Update rejects the old names, and so does the Delete that CloudFormation sends when a resource carrying them is removed from a template. A stack that already attempted the upgrade is therefore stuck in `UPDATE_ROLLBACK_FAILED` (failed Update) or `DELETE_FAILED` (failed teardown), with the custom resource as the sole blocking resource. Destination objects are untouched throughout: the failed Update performs no deployment work, and neither recovery sequence below performs any.
+
+#### Recovering a stack stuck in `UPDATE_ROLLBACK_FAILED`
+
+Skip the custom resource during the rollback:
+
+    aws cloudformation continue-update-rollback --stack-name <stack> --resources-to-skip <CustomResourceLogicalId>
+
+The AWS CLI reference for `continue-update-rollback` says the command "continues rolling back a stack from `UPDATE_ROLLBACK_FAILED` to `UPDATE_ROLLBACK_COMPLETE` state", and its `--resources-to-skip` option is "a list of the logical IDs of the resources that CloudFormation skips during the continue update rollback operation. You can specify only resources that are in the `UPDATE_FAILED` state because a rollback failed" — exactly the custom resource's state after the failed rollback. Skipping it is safe because it owns no physical infrastructure: its physical resource ID is a synthetic string, so there is no real resource whose state diverges. CloudFormation sets the skipped resource to `UPDATE_COMPLETE` and returns the stack to `UPDATE_ROLLBACK_COMPLETE`; deploy the upgraded template from there, and the custom resource's next Update carries the new property names and succeeds. The reference also warns that a skipped resource's state is inconsistent with the template until the next update, so do not run other stack updates in between.
+
+#### Recovering a stack stuck in `DELETE_FAILED`
+
+    aws cloudformation delete-stack --stack-name <stack> --retain-resources <CustomResourceLogicalId>
+
+Per the AWS CLI reference for `delete-stack`, `--retain-resources` is "for stacks in the `DELETE_FAILED` state, a list of resource logical IDs that are associated with the resources you want to retain. During deletion, CloudFormation deletes the stack but doesn't delete the retained resources." CloudFormation deletes every real resource (buckets, roles, functions) and retains only the custom resource, which owns no physical infrastructure, so nothing is left behind. This exact sequence was exercised on real stuck stacks: four stacks stranded by the decoder rejection were deleted this way, and zero stacks and zero orphaned resources remained.
+
+What is NOT a recovery: changing the construct id alone does not remove the old resource — CloudFormation sends `Delete` to the old logical resource carrying the previous template's property names, which the decoder rejects exactly as it rejects the Update, stranding the stack in `DELETE_FAILED` — and re-running the failed Update without deploying code that emits the new names fails again for the same reason.
+
+There is no compatibility path, and none will be added: the loud rejection is deliberate so an old payload can never be partially parsed into a wrong previous-namespace deletion decision.
 
 ### Destination prefix normalization changes the destination physical resource ID
 
