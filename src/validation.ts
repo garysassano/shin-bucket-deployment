@@ -712,10 +712,18 @@ function validateDestinationKeyPrefix(scope: Construct, prefix: unknown): void {
   if (typeof prefix !== "string") {
     throw invalidValue(scope, "destination.keyPrefix", "a string");
   }
+  // S3 measures tag-key length in UTF-16 code units, not Unicode code points.
+  // The S3 user guide states that object tags are "internally represented in
+  // UTF-16" and that "characters consume either 1 or 2 character positions"
+  // within the 128-position key limit. JavaScript's `String.prototype.length`
+  // counts exactly those UTF-16 code units, so it is the matching count: a
+  // prefix of astral-plane characters (two code units each) is correctly
+  // rejected here, because the resulting tag key would exceed S3's limit at
+  // deploy time.
   if (prefix.length > MAX_DESTINATION_KEY_PREFIX_LENGTH) {
     throw new ValidationError(
       "ShinBucketDeploymentDestinationKeyPrefixTooLong",
-      `destination.keyPrefix must be <=${MAX_DESTINATION_KEY_PREFIX_LENGTH} characters.`,
+      `destination.keyPrefix must be <=${MAX_DESTINATION_KEY_PREFIX_LENGTH} characters (S3 counts tag-key characters in UTF-16 code units).`,
       scope,
     );
   }

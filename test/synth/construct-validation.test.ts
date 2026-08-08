@@ -272,9 +272,57 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     }).toThrowError(
       expect.objectContaining({
         code: "ShinBucketDeploymentDestinationKeyPrefixTooLong",
-        message: "destination.keyPrefix must be <=94 characters.",
+        message:
+          "destination.keyPrefix must be <=94 characters (S3 counts tag-key characters in UTF-16 code units).",
       }) as ValidationError,
     );
+  });
+
+  test("rejects an astral-plane prefix over 94 UTF-16 code units even when under 94 code points", () => {
+    const stack = new Stack();
+    const destinationBucket = new Bucket(stack, "Dest");
+
+    // S3 represents object tags internally in UTF-16, where characters consume
+    // either 1 or 2 character positions, so the 94-position prefix limit is
+    // counted in code units: 94 astral-plane characters report length 188 and
+    // must be rejected even though they are only 94 Unicode code points.
+    expect(() => {
+      new ShinBucketDeployment(stack, "Deploy", {
+        sources: [Source.data("index.html", "ok")],
+        destination: {
+          bucket: destinationBucket,
+          keyPrefix: "\u{10400}".repeat(94),
+        },
+        providerLambda: {
+          localBuild: testLocalProviderBuild(),
+        },
+      });
+    }).toThrowError(
+      expect.objectContaining({
+        code: "ShinBucketDeploymentDestinationKeyPrefixTooLong",
+      }) as ValidationError,
+    );
+  });
+
+  test("accepts an astral-plane prefix of 94 UTF-16 code units", () => {
+    const stack = new Stack();
+    const destinationBucket = new Bucket(stack, "Dest");
+
+    const prefix = "\u{10400}".repeat(47);
+    expect(prefix.length).toBe(94);
+
+    new ShinBucketDeployment(stack, "Deploy", {
+      sources: [Source.data("index.html", "ok")],
+      destination: {
+        bucket: destinationBucket,
+        keyPrefix: prefix,
+      },
+      providerLambda: {
+        localBuild: testLocalProviderBuild(),
+      },
+    });
+
+    expect(() => stack.synth()).not.toThrow();
   });
 
   test.each([
