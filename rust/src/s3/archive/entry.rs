@@ -20,10 +20,7 @@ use crate::replace::{MarkerReplacements, ReplacementOptions, ReplacementResult};
 use crate::types::DeploymentStats;
 
 use super::super::planner::ZipEntryPlan;
-use super::super::{
-    S3_SINGLE_PUT_LIMIT, ZIP_ENTRY_BODY_CHUNK_BYTES, ZIP_ENTRY_BODY_PIPE_CHUNKS,
-    ZIP_ENTRY_READ_CHUNK_BYTES,
-};
+use super::super::{S3_SINGLE_PUT_LIMIT, ZIP_ENTRY_BODY_CHUNK_BYTES, ZIP_ENTRY_BODY_PIPE_CHUNKS};
 use super::block_store::{EntryAttemptClaim, SourceAttemptSnapshot, SourceBlockStore};
 use crate::util::{
     MAX_DIAGNOSTIC_VALUE_BYTES, finalize_digest, lock_telemetry, sanitize_diagnostic,
@@ -987,50 +984,47 @@ async fn send_marker_zip_entry_chunks_inner(
     Ok(())
 }
 
-async fn forward_replaced_body_chunks(
+pub(super) async fn forward_replaced_body_chunks(
     reader: &mut tokio::io::DuplexStream,
     sender: &mpsc::Sender<std::result::Result<BodyFrame, BodyError>>,
 ) -> std::result::Result<Option<Bytes>, BodyError> {
     // Keep one complete frame back so source CRC/size/catalog validation and
     // planning-pass identity checks can fail before S3 receives a complete body.
-    let mut read_buffer = vec![0_u8; ZIP_ENTRY_READ_CHUNK_BYTES];
-    let mut frame = Vec::with_capacity(ZIP_ENTRY_BODY_CHUNK_BYTES);
+    let mut frame = BytesMut::with_capacity(ZIP_ENTRY_BODY_CHUNK_BYTES);
     let mut held_frame = None;
 
     loop {
-        let read = reader
-            .read(&mut read_buffer)
+        let frame_remaining = ZIP_ENTRY_BODY_CHUNK_BYTES - frame.len();
+        let bytes_read = reader
+            .read_buf(&mut (&mut frame).limit(frame_remaining))
             .await
             .map_err(boxed_body_error)?;
-        if read == 0 {
+        if bytes_read == 0 {
             break;
         }
-        let mut remaining = &read_buffer[..read];
-        while !remaining.is_empty() {
-            let available = ZIP_ENTRY_BODY_CHUNK_BYTES - frame.len();
-            let take = available.min(remaining.len());
-            frame.extend_from_slice(&remaining[..take]);
-            remaining = &remaining[take..];
-            if frame.len() == ZIP_ENTRY_BODY_CHUNK_BYTES {
-                let next = Bytes::copy_from_slice(&frame);
-                frame.clear();
-                if let Some(previous) = held_frame.replace(next)
-                    && sender.send(Ok(BodyFrame::Data(previous))).await.is_err()
-                {
-                    // Fail this side of try_join so a producer blocked on the
-                    // replacement pipe is cancelled when its body is dropped.
-                    return Err(boxed_body_error(io::Error::new(
-                        io::ErrorKind::BrokenPipe,
-                        "marker body receiver closed",
-                    )));
-                }
+
+        if frame.len() == ZIP_ENTRY_BODY_CHUNK_BYTES {
+            let completed = std::mem::replace(
+                &mut frame,
+                BytesMut::with_capacity(ZIP_ENTRY_BODY_CHUNK_BYTES),
+            )
+            .freeze();
+            if let Some(previous) = held_frame.replace(completed)
+                && sender.send(Ok(BodyFrame::Data(previous))).await.is_err()
+            {
+                // Fail this side of try_join so a producer blocked on the
+                // replacement pipe is cancelled when its body is dropped.
+                return Err(boxed_body_error(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "marker body receiver closed",
+                )));
             }
         }
     }
 
     if !frame.is_empty() {
-        let next = Bytes::copy_from_slice(&frame);
-        if let Some(previous) = held_frame.replace(next)
+        let completed = frame.freeze();
+        if let Some(previous) = held_frame.replace(completed)
             && sender.send(Ok(BodyFrame::Data(previous))).await.is_err()
         {
             return Err(boxed_body_error(io::Error::new(
