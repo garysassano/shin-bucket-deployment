@@ -171,6 +171,7 @@ pub(crate) struct RawCloudfrontInvalidation {
     #[serde(default)]
     pub(crate) distribution_id: Option<String>,
     #[serde(default)]
+    #[serde(rename = "Paths")]
     pub(crate) distribution_paths: Option<Vec<String>>,
     #[serde(
         default = "default_true",
@@ -1641,8 +1642,7 @@ mod tests {
     #[test]
     fn serde_rejects_non_string_distribution_paths() {
         let mut props = minimal_request();
-        props["CloudfrontInvalidation"]["DistributionPaths"] =
-            json!(["/index.html", {"bad": true}]);
+        props["CloudfrontInvalidation"]["Paths"] = json!(["/index.html", {"bad": true}]);
 
         assert!(serde_json::from_value::<RawDeploymentRequest>(props).is_err());
     }

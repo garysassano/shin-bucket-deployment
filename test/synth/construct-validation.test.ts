@@ -322,7 +322,9 @@ describe("ShinBucketDeployment validation and option coverage", () => {
       },
     });
 
-    expect(() => stack.synth()).not.toThrow();
+    // Construction succeeded; validation runs in the constructor, so reaching
+    // the synthesized template is the acceptance check.
+    Template.fromStack(stack);
   });
 
   test.each([
@@ -1021,7 +1023,7 @@ describe("ShinBucketDeployment validation and option coverage", () => {
         DistributionId: {
           Ref: Match.anyValue(),
         },
-        DistributionPaths: ["/site/index.html", "/site/app.js"],
+        Paths: ["/site/index.html", "/site/app.js"],
         WaitForCompletion: false,
       },
     });

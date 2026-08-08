@@ -894,7 +894,14 @@ export class ShinBucketDeployment extends Construct {
        * Wire names mirror the public API path of the value they carry: each
        * camelCase path segment becomes one PascalCase key, nested as a dotted
        * object (`destinationLifecycle.onChange.deletePreviousObjects` becomes
-       * `DestinationLifecycle.OnChange.DeletePreviousObjects`). Values that do
+       * `DestinationLifecycle.OnChange.DeletePreviousObjects`). The leaf
+       * property name is PascalCased under its container, so
+       * `cloudfrontInvalidation.waitForCompletion` becomes
+       * `CloudfrontInvalidation.WaitForCompletion` and
+       * `cloudfrontInvalidation.paths` becomes `CloudfrontInvalidation.Paths`;
+       * `CloudfrontInvalidation.DistributionId` keeps the `Distribution`
+       * qualifier because it is part of the leaf property name
+       * (`distributionId`), not the dropped container prefix. Values that do
        * not carry a public API property -- bound source data (`Source*`), the
        * transport envelope (`ServiceToken`/`ServiceTimeout`), and internal
        * identities (`DestinationOwnerId`, `OutputObjectKeys`,
@@ -944,7 +951,7 @@ export class ShinBucketDeployment extends Construct {
         },
         CloudfrontInvalidation: {
           DistributionId: props.cloudfrontInvalidation?.distribution.distributionRef.distributionId,
-          DistributionPaths: props.cloudfrontInvalidation?.paths,
+          Paths: props.cloudfrontInvalidation?.paths,
           WaitForCompletion: props.cloudfrontInvalidation?.waitForCompletion ?? true,
         },
         SourceProcessing: {
