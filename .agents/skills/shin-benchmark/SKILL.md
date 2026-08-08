@@ -57,11 +57,14 @@ Committed benchmark records may include:
 
 ## Benchmark Runner
 
-> **Any change under `rust/` requires `pnpm prebuild:bootstrap` before collecting benchmark evidence.**
+> **Any change under `rust/` requires a current provider archive staged before collecting benchmark evidence.**
 >
-> Benchmark deploys use the same construct path as verification: the construct prefers the prebuilt `assets/bootstrap-<arch>/bootstrap.zip` and only compiles when no archive exists (`src/provider.ts`), and the benchmark runner does not rebuild it.
-> A stale archive is selected silently, so rows would measure the previous provider binary while recording the new commit's `provider.bootstrap` digests and `provider.implementationCommit` — evidence that misdescribes what ran.
-> Run `pnpm prebuild:bootstrap` (it stages both arm64 and x86_64 archives) after any `rust/` change, before the first benchmark deploy of a session.
+> Benchmark deploys use the same construct path as verification: the construct prefers a prebuilt `assets/bootstrap-<arch>/bootstrap.zip` and only compiles when no archive exists (`src/provider.ts`). A stale archive is selected silently, so rows would measure the previous provider binary while recording the new commit's `provider.bootstrap` digests and `provider.implementationCommit` — evidence that misdescribes what ran.
+>
+> Who stages the archive differs by entry point:
+>
+> - `pnpm benchmark deploy assets` (the manual benchmark path) never rebuilds: run `pnpm prebuild:bootstrap` (it stages both arm64 and x86_64 archives) after any `rust/` change, before the first benchmark deploy of a session.
+> - `pnpm benchmark:run-assets` builds its own arm64 artifact: before the first deploy of a session it runs `scripts/build-bootstrap.mjs --benchmark --evidence-output <ledger> arm64` (`benchmarkProviderBuildArgs` in `benchmarks/src/run-assets-comparison.ts`), which requires a clean source tree, builds from a detached worktree at the current commit, verifies the local application build matches it, and stages `assets/bootstrap-arm64/bootstrap.zip` over any stale archive. Resumed sessions do not rebuild; they reuse the staged archive, so resume only with the same source and bootstrap.
 
 Benchmark mode runs only the selected benchmark scenario and expands the requested config matrix:
 
