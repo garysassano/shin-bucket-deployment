@@ -75,14 +75,86 @@ const CFN_INTRINSIC_KEYS = new Set([
 ]);
 const UNRESOLVED_TOKEN_PATTERN = /^\$\{Token\[/;
 
+const ANY_VALUE = () => true;
+const STRING_VALUE = (value) => typeof value === "string";
+const NUMBER_VALUE = (value) => typeof value === "number";
+
+function isPlainRecord(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function arrayOf(minLength, maxLength, elementCheck) {
+  return (value) =>
+    Array.isArray(value) &&
+    value.length >= minLength &&
+    value.length <= maxLength &&
+    value.every((element, index) => elementCheck(element, index));
+}
+
+function oneOf(...checks) {
+  return (value) => checks.some((check) => check(value));
+}
+
+/**
+ * The payload shape each CloudFormation intrinsic carries, per the template
+ * syntax of AWS::CloudFormation. Slots that may hold a nested intrinsic or a
+ * literal of any JSON type use `ANY_VALUE`; the shapes are still strict
+ * enough that `{ Ref: 123 }` or `{ "Fn::Join": "not-an-array" }` cannot pass
+ * as a token and skip leaf validation. Every key in `CFN_INTRINSIC_KEYS` must
+ * have an entry here — `isCfnToken` throws on a missing entry, so the
+ * vocabulary cannot grow without a reviewed shape.
+ */
+const CFN_INTRINSIC_SHAPES = {
+  Ref: STRING_VALUE,
+  Condition: STRING_VALUE,
+  "Fn::And": arrayOf(2, 10, ANY_VALUE),
+  "Fn::Or": arrayOf(2, 10, ANY_VALUE),
+  "Fn::Not": arrayOf(1, 1, ANY_VALUE),
+  "Fn::Equals": arrayOf(2, 2, ANY_VALUE),
+  "Fn::Base64": ANY_VALUE,
+  "Fn::Cidr": arrayOf(3, 3, (value, index) => (index === 0 ? STRING_VALUE(value) : NUMBER_VALUE(value))),
+  "Fn::Contains": arrayOf(2, 2, ANY_VALUE),
+  "Fn::EachMemberEquals": arrayOf(2, 2, ANY_VALUE),
+  "Fn::EachMemberIn": arrayOf(2, 2, ANY_VALUE),
+  "Fn::FindInMap": arrayOf(3, 4, (value, index) => (index < 3 ? STRING_VALUE(value) : ANY_VALUE(value))),
+  "Fn::GetAtt": oneOf(STRING_VALUE, arrayOf(2, 2, STRING_VALUE)),
+  "Fn::GetAZs": STRING_VALUE,
+  "Fn::If": arrayOf(3, 3, (value, index) => (index === 0 ? STRING_VALUE(value) : ANY_VALUE(value))),
+  "Fn::ImportValue": ANY_VALUE,
+  "Fn::Join": arrayOf(2, 2, (value, index) => (index === 0 ? STRING_VALUE(value) : Array.isArray(value))),
+  "Fn::Length": oneOf(STRING_VALUE, Array.isArray),
+  "Fn::RefAll": STRING_VALUE,
+  "Fn::Select": arrayOf(2, 2, (value, index) => (index === 0 ? oneOf(STRING_VALUE, NUMBER_VALUE)(value) : Array.isArray(value))),
+  "Fn::Split": arrayOf(2, 2, (value, index) => (index === 0 ? STRING_VALUE(value) : ANY_VALUE(value))),
+  "Fn::Sub": oneOf(STRING_VALUE, arrayOf(2, 2, (value, index) => (index === 0 ? STRING_VALUE(value) : isPlainRecord(value)))),
+  "Fn::ToJsonString": ANY_VALUE,
+  "Fn::Transform": isPlainRecord,
+  "Fn::ValueOf": arrayOf(3, 3, STRING_VALUE),
+  "Fn::ValueOfAll": arrayOf(2, 2, STRING_VALUE),
+};
+
+/**
+ * Thrown when a one-key object uses a CloudFormation intrinsic key with a
+ * payload shape template syntax does not allow. Union branches must rethrow
+ * it rather than trying the next branch: the value is a token-shaped object,
+ * so no literal branch can accept it, and the descriptive message must reach
+ * the caller.
+ */
+export class CfnIntrinsicShapeError extends Error {}
+
 /**
  * True when `value` is a CloudFormation token rendered into template syntax:
  * a one-key object holding a single intrinsic, or an unresolved
  * `${Token[...]}` string. Tokens may appear anywhere the construct emits a
  * resolved value, so the structural walk accepts them at every leaf and
- * inside records without type-checking them.
+ * inside records without type-checking them — but the intrinsic's own
+ * payload shape is validated first. A one-key object whose key is in the
+ * intrinsic vocabulary but whose payload is malformed throws instead of
+ * skipping leaf validation, so a construct bug like `{ Ref: 123 }` or
+ * `{ "Fn::Join": "not-an-array" }` cannot ride the token hole past the
+ * schema.
  */
-export function isCfnToken(value) {
+export function isCfnToken(value, label = "a wire leaf") {
   if (typeof value === "string") {
     return UNRESOLVED_TOKEN_PATTERN.test(value);
   }
@@ -90,7 +162,26 @@ export function isCfnToken(value) {
     return false;
   }
   const keys = Object.keys(value);
-  return keys.length === 1 && CFN_INTRINSIC_KEYS.has(keys[0]);
+  if (keys.length !== 1 || !CFN_INTRINSIC_KEYS.has(keys[0])) {
+    return false;
+  }
+  const key = keys[0];
+  const shape = CFN_INTRINSIC_SHAPES[key];
+  if (shape === undefined) {
+    throw new CfnIntrinsicShapeError(
+      `Unvalidated CloudFormation intrinsic ${key} at ${label}: the synth ` +
+        `guard's intrinsic shape table has no entry for it. Add the template ` +
+        `form it accepts before the construct may emit it.`,
+    );
+  }
+  if (!shape(value[key])) {
+    throw new CfnIntrinsicShapeError(
+      `Malformed CloudFormation intrinsic ${key} at ${label}: ` +
+        `${JSON.stringify(value)} is not one of the shapes ${key} accepts in ` +
+        `template syntax, so it cannot skip the wire-contract type check.`,
+    );
+  }
+  return true;
 }
 
 function describeIssues(error) {
@@ -157,7 +248,10 @@ function walkStructure(value, schema, path, where) {
       try {
         walkStructure(value, option, path, where);
         return;
-      } catch {
+      } catch (error) {
+        if (error instanceof CfnIntrinsicShapeError) {
+          throw error;
+        }
         // Try the next union branch.
       }
     }
@@ -181,7 +275,7 @@ function walkStructure(value, schema, path, where) {
   // value language. A construct emitting a number where a string belongs is
   // exactly the drift the Rust decoder would otherwise catch only at deploy
   // time.
-  if (isCfnToken(value)) {
+  if (isCfnToken(value, `${where} ${label}`)) {
     return;
   }
   // Validate against the original schema, not the unwrapped one: the optional/

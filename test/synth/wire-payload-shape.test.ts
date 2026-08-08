@@ -197,6 +197,73 @@ test("the synth guard accepts CloudFormation token leaves", () => {
   ).not.toThrow();
 });
 
+test("the synth guard rejects malformed intrinsics instead of skipping leaf validation", () => {
+  const stack = new Stack();
+  const destinationBucket = new Bucket(stack, "Dest");
+  new ShinBucketDeployment(stack, "Deploy", {
+    sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
+    destination: { bucket: destinationBucket },
+    providerLambda: { localBuild: testLocalProviderBuild() },
+  });
+  const properties = propertiesOf(stack);
+  const destination = properties.Destination as Record<string, unknown>;
+  const sourceProcessing = properties.SourceProcessing as Record<string, unknown>;
+
+  // `{ Ref: 123 }` and `{ "Fn::Join": "not-an-array" }` are not token shapes
+  // template syntax allows; they must fail loudly, not ride the token hole
+  // past the wire-contract leaf check.
+  expect(() =>
+    assertPayloadTree({
+      ...properties,
+      Destination: { ...destination, BucketName: { Ref: 123 } },
+    }),
+  ).toThrow(/Malformed CloudFormation intrinsic Ref/);
+  expect(() =>
+    assertPayloadTree({
+      ...properties,
+      SourceProcessing: {
+        ...sourceProcessing,
+        MaxUncompressedEntryBytes: { "Fn::Join": "not-an-array" },
+      },
+    }),
+  ).toThrow(/Malformed CloudFormation intrinsic Fn::Join/);
+  expect(() =>
+    assertPayloadTree({
+      ...properties,
+      Destination: {
+        ...destination,
+        BucketName: { "Fn::GetAtt": "JustOneSegment" },
+      },
+    }),
+  ).not.toThrow();
+});
+
+test("the synth guard accepts every intrinsic form the construct can emit", () => {
+  const stack = new Stack();
+  const destinationBucket = new Bucket(stack, "Dest");
+  new ShinBucketDeployment(stack, "Deploy", {
+    sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
+    destination: { bucket: destinationBucket },
+    providerLambda: { localBuild: testLocalProviderBuild() },
+  });
+  const properties = propertiesOf(stack);
+  const sourceProcessing = properties.SourceProcessing as Record<string, unknown>;
+
+  expect(() =>
+    assertPayloadTree({
+      ...properties,
+      SourceProcessing: {
+        ...sourceProcessing,
+        MaxUncompressedEntryBytes: { "Fn::Join": ["", ["1", "0", "2", "4"]] },
+        MaxCompressionRatio: { Ref: "Ratio" },
+      },
+      SourceMarkers: [
+        { runtime: { "Fn::Sub": ["prefix-${suffix}", { suffix: { Ref: "S" } }] } },
+      ],
+    }),
+  ).not.toThrow();
+});
+
 test("the template schema requires the reserved envelope keys the construct always renders", () => {
   const stack = new Stack();
   const destinationBucket = new Bucket(stack, "Dest");
