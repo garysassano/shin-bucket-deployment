@@ -15,10 +15,7 @@ function writeLedger(dir: string, runs: unknown[], samples: unknown[]): string {
 }
 
 describe("committed benchmark ledger gate", () => {
-  const options = parseBenchmarkRunOptions([
-    "--run-id",
-    "00000000-0000-4000-a000-000000000001",
-  ]);
+  const options = parseBenchmarkRunOptions(["--run-id", "00000000-0000-4000-a000-000000000001"]);
 
   test("accepts a valid fixture ledger and reports its counts", () => {
     const dir = mkdtempSync(join(tmpdir(), "shin-bench-verify-ledger-valid-"));
