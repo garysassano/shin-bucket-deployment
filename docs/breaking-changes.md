@@ -6,7 +6,7 @@ This file holds release-note text for `ShinBucketDeployment` changes that break 
 
 ### The destination ownership-tag suffix doubles from 32 to 64 bits
 
-The ownership tag suffix derived from the custom resource's tree address is now 16 hex characters instead of 8, raising the birthday bound from ~92,000 to ~4.3 billion deployments per prefix. Every deployment therefore receives a new ownership identity on upgrade: the previous 32-bit ownership tag key (`aws-cdk:cr-owned:<prefix>:<8 hex>`) is replaced by the new 64-bit key on the destination bucket, and objects previously attributed to the old identity are no longer attributed to the deployment's current owner.
+The ownership tag suffix derived from the custom resource's tree address is now 16 hex characters instead of 8, raising the birthday bound (the collision point at p≈0.5) from ~77,000 to ~5.06 billion deployments per prefix (1.1774 · sqrt(2^bits); at 2^32 ≈ 4.30 billion deployments the collision probability is ~39%, not 50%). Every deployment therefore receives a new ownership identity on upgrade: the previous 32-bit ownership tag key (`aws-cdk:cr-owned:<prefix>:<8 hex>`) is replaced by the new 64-bit key on the destination bucket, and objects previously attributed to the old identity are no longer attributed to the deployment's current owner.
 
 To keep the complete tag key within the S3 128-character tag-key limit, the accepted `destination.keyPrefix` length drops from 102 to 94 characters. A stack using a prefix longer than 94 characters now fails synthesis with `ShinBucketDeploymentDestinationKeyPrefixTooLong`; shorten the prefix or split the deployment.
 

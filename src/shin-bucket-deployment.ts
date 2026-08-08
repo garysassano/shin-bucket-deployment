@@ -994,8 +994,9 @@ export class ShinBucketDeployment extends Construct {
 
     // 64-bit ownership suffix derived from the custom resource's tree address.
     // S3 ownership tags are per-bucket and limited in number, so the suffix is
-    // 16 hex characters; under the birthday bound, ~4.3 billion deployments
-    // sharing one prefix would make a suffix collision plausible (p≈0.5). A
+    // 16 hex characters; under the birthday bound, 2^32 (~4.30 billion)
+    // deployments sharing one prefix collide with probability ~39.4%, and the
+    // p≈0.5 point is ~5.06 billion deployments (1.1774 · sqrt(2^64)). A
     // collision merges co-tenant ownership, which only affects stale-object
     // deletion scope, and the provider's runtime owner probes keep behavior
     // confined to the deployment's namespace. The prefix limit (94 characters)
