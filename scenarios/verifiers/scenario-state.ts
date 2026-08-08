@@ -15,7 +15,10 @@ const FIXTURE_INDEX = `<!doctype html>
 `;
 const FIXTURE_APP = "console.log('fixture');\n";
 const LARGE_OBJECT_BYTES = 24 * 1024 * 1024;
-const LARGE_OBJECT_SHA256 = "6d7551af71d07d02c91d2824824b0a111a2546c9fd66467c426a745a56f9f866";
+// Snapshot of the bytes deterministicBytes(24 MiB) in
+// scenarios/apps/scale/large-archive-app.ts produces today; re-derive whenever
+// that generator changes.
+const LARGE_OBJECT_SHA256 = "78eabf6d4049d2e5b9e72c1ecef2469e0b72262be137e234779ad46655fa378a";
 const INFO_ZIP_BYTES = 196;
 const INFO_ZIP_SHA256 = "dea0ccf95b561cc7f336e7fb60f8903c97e9d455a085e00483b08384ed61cb81";
 const CLOUD_FRONT_ATTEMPTS = 30;
