@@ -31,6 +31,8 @@ mod tests {
 
     const WIRE_SCHEMA_PATH: &str =
         concat!(env!("CARGO_MANIFEST_DIR"), "/../contract/wire-schema.json");
+    const WIRE_ACCEPTANCE_MATRIX_PATH: &str =
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../contract/wire-acceptance-matrix.json");
 
     /// The optional nested tuning paths no verification scenario configures;
     /// they must be exercised explicitly so a rename on either side cannot
@@ -239,6 +241,25 @@ mod tests {
         serde_json::from_value::<RawDeploymentRequest>(payload.clone())
     }
 
+    /// Sets the value at `path` (object keys, `"[0]"` for the first array
+    /// element) inside the schema-derived payload.
+    fn set_at_path(payload: &mut Value, path: &[&str], value: Value) {
+        let mut node = payload;
+        for segment in path {
+            let next = if *segment == "[0]" {
+                node.as_array_mut()
+                    .and_then(|array| array.get_mut(0))
+                    .unwrap_or_else(|| panic!("matrix path {} missing", path.join(".")))
+            } else {
+                node.as_object_mut()
+                    .and_then(|map| map.get_mut(*segment))
+                    .unwrap_or_else(|| panic!("matrix path {} missing", path.join(".")))
+            };
+            node = next;
+        }
+        *node = value;
+    }
+
     fn path_present(payload: &Value, path: &[&str]) -> bool {
         let mut node = payload;
         for segment in path {
@@ -356,5 +377,62 @@ mod tests {
                 .as_object()
                 .expect("AdvancedTuning properties");
         assert!(advanced_tuning.contains_key("SourceWindowMemoryBudgetMiB"));
+    }
+
+    #[test]
+    fn decoder_value_acceptance_matches_the_schema_matrix() {
+        let text = std::fs::read_to_string(WIRE_ACCEPTANCE_MATRIX_PATH).unwrap_or_else(|error| {
+            panic!(
+                "cannot read the wire acceptance matrix at {WIRE_ACCEPTANCE_MATRIX_PATH}: {error}"
+            )
+        });
+        let matrix: Value = serde_json::from_str(&text)
+            .unwrap_or_else(|error| panic!("wire acceptance matrix is not valid JSON: {error}"));
+        let cases = matrix["cases"]
+            .as_array()
+            .unwrap_or_else(|| panic!("wire acceptance matrix has no cases array"));
+        let schema = load_schema();
+        let mut baseline = build_payload(&schema);
+        // `SourceMarkers` items are unconstrained records, so the schema-derived
+        // payload cannot know a key to navigate to; seed the representative key
+        // the matrix uses. This mirrors the TypeScript baseline payload.
+        if let Some(markers) = baseline.get_mut("SourceMarkers").and_then(Value::as_array_mut) {
+            if let Some(first) = markers.get_mut(0).and_then(Value::as_object_mut) {
+                first
+                    .entry("runtime".to_string())
+                    .or_insert_with(|| Value::String("value".into()));
+            }
+        }
+
+        for (index, entry) in cases.iter().enumerate() {
+            let path = entry["path"]
+                .as_array()
+                .unwrap_or_else(|| panic!("matrix case {index} has no path"))
+                .iter()
+                .map(|segment| {
+                    segment
+                        .as_str()
+                        .unwrap_or_else(|| panic!("matrix case {index} has a non-string path"))
+                })
+                .collect::<Vec<_>>();
+            let expected = entry["accept"]
+                .as_bool()
+                .unwrap_or_else(|| panic!("matrix case {index} has no accept flag"));
+            let value = entry
+                .get("value")
+                .unwrap_or_else(|| panic!("matrix case {index} has no value"))
+                .clone();
+
+            let mut payload = baseline.clone();
+            set_at_path(&mut payload, &path, value);
+            let value_label = entry["value"].to_string();
+            let accepted = decode(&payload).is_ok();
+            assert_eq!(
+                accepted, expected,
+                "matrix case {index} ({} = {value_label}): the decoder's acceptance does not \
+                 match the schema's; the value language drifted",
+                path.join(".")
+            );
+        }
     }
 }

@@ -58,25 +58,89 @@
 //   `deserialize_present*` / `deserialize_optional_*` reject a present `null`
 //   for the optional-shape helpers only where noted. `Vec` fields with a
 //   default reject `null`.
-// - `deserialize_boolish` accepts booleans and true/false strings;
-//   `deserialize_u64ish`/`deserialize_usizeish`/`deserialize_present_u32ish`
-//   accept unsigned integers and decimal strings.
+// - `deserialize_boolish` accepts booleans and true/false strings in any
+//   case (CloudFormation stringifies scalars on some paths);
+// - `deserialize_u64ish`/`deserialize_usizeish`/`deserialize_present_u32ish`
+//   accept unsigned integers and decimal strings; the optional variants trim
+//   surrounding whitespace and treat a whitespace-only value as absent;
+// - the integer bounds below mirror the Rust parsers exactly: numbers are
+//   capped at MAX_SAFE_INTEGER (a larger JSON number cannot be represented
+//   exactly in JavaScript; use the decimal-string form instead), and decimal
+//   strings are capped at the Rust integer width they feed (u64 or u32).
+//
+// The value language on both sides is pinned by the acceptance matrix in
+// `contract/wire-acceptance-matrix.json`: every case sets one value at one
+// wire path, and the Zod schema and the Rust decoder must agree on whether the
+// payload is accepted. Where a divergence was found, the schema was tightened
+// or widened to the *intended* rule instead of changing Rust.
 
 import { z } from "zod";
 
-/** Wire form of `deserialize_boolish`: boolean or a true/false string. */
+const U64_MAX = 18_446_744_073_709_551_615n;
+const U32_MAX = 4_294_967_295;
+const JS_INTEGER_MAX = Number.MAX_SAFE_INTEGER;
+
+/**
+ * Wire form of `deserialize_boolish`: boolean or a true/false string in any
+ * case (`deserialize_boolish` lowercases before matching). No surrounding
+ * whitespace is accepted, mirroring the Rust visitor.
+ */
 const boolish = z.union([
   z.boolean(),
-  z.string().regex(/^(?:true|false|True|False|TRUE|FALSE)$/),
+  z.string().regex(/^(?:[tT][rR][uU][eE]|[fF][aA][lL][sS][eE])$/),
 ]);
 
-/** Wire form of the `*_u64ish`/`*_usizeish` helpers: unsigned int or decimal string. */
-const unsigned = z.union([z.number().int().min(0), z.string().regex(/^\d+$/)]);
+/**
+ * Wire form of the required `deserialize_u64ish` helper: an exact integer or
+ * a decimal string within u64 range. The string branch deliberately rejects
+ * surrounding whitespace and the empty string, matching the required helper's
+ * strict visitor; the optional helpers use `unsignedOptional` instead.
+ */
+const unsigned = z.union([
+  z.number().int().min(0).max(JS_INTEGER_MAX),
+  z
+    .string()
+    .regex(/^\d+$/)
+    // zod v4 runs refinements on the raw input before the base checks, so the
+    // refine must be total: only decimal strings reach the BigInt bound.
+    .refine((value) => typeof value === "string" && /^\d+$/.test(value) && BigInt(value) <= U64_MAX),
+]);
 
-/** Wire form of `deserialize_present_u32ish` (SourceCatalogs entry version). */
+/**
+ * Wire form of the optional `deserialize_optional_usizeish`/`..._u64ish`
+ * helpers: an exact integer, a decimal string within u64 range, or a
+ * whitespace-only string meaning absent (the optional visitor trims and maps
+ * an empty result to `None`). Surrounding whitespace around digits is
+ * accepted and trimmed, mirroring the visitor.
+ */
+const unsignedOptional = z.union([
+  z.number().int().min(0).max(JS_INTEGER_MAX),
+  z
+    .string()
+    .regex(/^\s*(?:\d+)?\s*$/)
+    .refine((value) => {
+      if (typeof value !== "string") {
+        return false;
+      }
+      const trimmed = value.trim();
+      return trimmed === "" || (/^\d+$/.test(trimmed) && BigInt(trimmed) <= U64_MAX);
+    }),
+]);
+
+/**
+ * Wire form of `deserialize_present_u32ish` (SourceCatalogs entry version):
+ * an exact integer or a decimal string within u32 range. No trimming, like
+ * the Rust visitor.
+ */
 const catalogVersion = z.union([
-  z.number().int().min(0).max(4_294_967_295),
-  z.string().regex(/^\d+$/),
+  z.number().int().min(0).max(U32_MAX),
+  z
+    .string()
+    .regex(/^\d+$/)
+    .refine(
+      (value) =>
+        typeof value === "string" && /^\d+$/.test(value) && BigInt(value) <= BigInt(U32_MAX),
+    ),
 ]);
 
 const sourceCatalogSchema = z.strictObject({
@@ -120,27 +184,27 @@ const cloudfrontInvalidationSchema = z.strictObject({
 });
 
 const destinationWriteRetrySchema = z.strictObject({
-  MaxAttempts: unsigned.nullish(),
-  BaseDelayMs: unsigned.nullish(),
-  MaxDelayMs: unsigned.nullish(),
-  SlowdownBaseDelayMs: unsigned.nullish(),
-  SlowdownMaxDelayMs: unsigned.nullish(),
+  MaxAttempts: unsignedOptional.nullish(),
+  BaseDelayMs: unsignedOptional.nullish(),
+  MaxDelayMs: unsignedOptional.nullish(),
+  SlowdownBaseDelayMs: unsignedOptional.nullish(),
+  SlowdownMaxDelayMs: unsignedOptional.nullish(),
   Jitter: z.enum(["full", "none"]).nullish(),
 });
 
 const advancedTuningSchema = z.strictObject({
-  SourceBlockBytes: unsigned.nullish(),
-  SourceBlockMergeGapBytes: unsigned.nullish(),
-  SourceGetConcurrency: unsigned.nullish(),
-  SourceWindowBytes: unsigned.nullish(),
+  SourceBlockBytes: unsignedOptional.nullish(),
+  SourceBlockMergeGapBytes: unsignedOptional.nullish(),
+  SourceGetConcurrency: unsignedOptional.nullish(),
+  SourceWindowBytes: unsignedOptional.nullish(),
   // Explicit `#[serde(rename = "SourceWindowMemoryBudgetMiB")]` on the Rust
   // side; PascalCase would render `SourceWindowMemoryBudgetMib`.
-  SourceWindowMemoryBudgetMiB: unsigned.nullish(),
+  SourceWindowMemoryBudgetMiB: unsignedOptional.nullish(),
   DestinationWriteRetry: destinationWriteRetrySchema,
 });
 
 const transferSchema = z.strictObject({
-  MaxConcurrency: unsigned.nullish(),
+  MaxConcurrency: unsignedOptional.nullish(),
   AdvancedTuning: advancedTuningSchema,
 });
 
