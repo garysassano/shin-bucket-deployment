@@ -212,7 +212,6 @@ struct WriteDiagnosticsSnapshot {
 #[serde(rename_all = "camelCase")]
 struct PutObjectAttemptFailureEvent<'a> {
     event: &'static str,
-    schema_version: u8,
     failure: &'a PutObjectFailureStateStats,
 }
 
@@ -1631,7 +1630,6 @@ fn serialize_put_attempt_failure(
 ) -> serde_json::Result<String> {
     serde_json::to_string(&PutObjectAttemptFailureEvent {
         event: "shin_put_object_attempt_failure",
-        schema_version: 1,
         failure,
     })
 }
@@ -2619,7 +2617,6 @@ mod tests {
         let event = serialize_put_attempt_failure(failure).expect("serializable failure event");
         let parsed: serde_json::Value = serde_json::from_str(&event).expect("failure event JSON");
         assert_eq!(parsed["event"], "shin_put_object_attempt_failure");
-        assert_eq!(parsed["schemaVersion"], 1);
         assert_eq!(parsed["failure"]["sdkErrorKind"], "ServiceError");
         for forbidden in [
             "file.txt",

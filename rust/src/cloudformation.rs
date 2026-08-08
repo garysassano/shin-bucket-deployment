@@ -906,7 +906,7 @@ mod tests {
     }
 
     #[test]
-    fn deployment_summary_uses_diagnostics_schema_v6() {
+    fn deployment_summary_matches_the_diagnostics_contract() {
         let request = deployment_request_with_paths(vec!["/*".to_string()]);
         let stats = crate::types::DeploymentStats::new(true);
         stats.add_marker_planning_pass();
@@ -935,8 +935,6 @@ mod tests {
         });
         let summary = serde_json::to_value(stats.snapshot("Create", "success", &request))
             .expect("serializable summary");
-
-        assert_eq!(summary["schemaVersion"], 6);
 
         // Copy diagnostics aggregate into their own section and stay independent of
         // the PutObject counters, which remain zero for an `extract:false` deployment.
@@ -1146,7 +1144,6 @@ mod tests {
 
         let summary = serde_json::to_value(stats.snapshot("Create", "failed", &request))
             .expect("serializable summary");
-        assert_eq!(summary["schemaVersion"], 6);
         assert_eq!(summary["detailedFailureDiagnosticsEnabled"], false);
         assert_eq!(summary["putObject"]["failedAttempts"], 1);
         assert_eq!(summary["putObject"]["failuresBySdkErrorKind"], json!({}));

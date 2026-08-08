@@ -532,17 +532,11 @@ function summaryFromMessage(message: string): ProviderSummary | undefined {
 
 function isDeploymentSummary(value: unknown): value is ProviderSummary {
   if (!isRecord(value) || value.event !== "shin_deployment_summary") return false;
-  // `schemaVersion` is a constant discriminator, not a measurement, and stored
-  // summaries never carry it. Live provider output still does (V-1 removes it in
-  // the provider contract bump); only the current contract value may cross the
-  // parse boundary -- anything else is a foreign or stale summary and must fail
-  // closed rather than being silently accepted as current.
-  if (value.schemaVersion !== 6) {
-    throw new Error(
-      `Invalid provider summary: schemaVersion must be 6, got ${String(value.schemaVersion)}`,
-    );
-  }
-  delete value.schemaVersion;
+  // The event discriminator plus the strict field-shape validation below is the
+  // whole contract gate. There is no version marker to strip: `sanitizeProviderSummary`
+  // rejects unknown top-level members, so a summary that still carries the removed
+  // `schemaVersion` marker (a stale-contract payload) fails closed here instead of
+  // being laundered into current evidence.
   sanitizeProviderSummary(value);
   const errors = providerSummaryErrors(value);
   if (errors.length > 0) throw new Error(`Invalid provider summary: ${errors.join("; ")}`);
