@@ -401,12 +401,11 @@ mod tests {
         if let Some(markers) = baseline
             .get_mut("SourceMarkers")
             .and_then(Value::as_array_mut)
+            && let Some(first) = markers.get_mut(0).and_then(Value::as_object_mut)
         {
-            if let Some(first) = markers.get_mut(0).and_then(Value::as_object_mut) {
-                first
-                    .entry("runtime".to_string())
-                    .or_insert_with(|| Value::String("value".into()));
-            }
+            first
+                .entry("runtime".to_string())
+                .or_insert_with(|| Value::String("value".into()));
         }
 
         for (index, entry) in cases.iter().enumerate() {
