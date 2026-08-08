@@ -31,8 +31,10 @@ mod tests {
 
     const WIRE_SCHEMA_PATH: &str =
         concat!(env!("CARGO_MANIFEST_DIR"), "/../contract/wire-schema.json");
-    const WIRE_ACCEPTANCE_MATRIX_PATH: &str =
-        concat!(env!("CARGO_MANIFEST_DIR"), "/../contract/wire-acceptance-matrix.json");
+    const WIRE_ACCEPTANCE_MATRIX_PATH: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../contract/wire-acceptance-matrix.json"
+    );
 
     /// The optional nested tuning paths no verification scenario configures;
     /// they must be exercised explicitly so a rename on either side cannot
@@ -396,7 +398,10 @@ mod tests {
         // `SourceMarkers` items are unconstrained records, so the schema-derived
         // payload cannot know a key to navigate to; seed the representative key
         // the matrix uses. This mirrors the TypeScript baseline payload.
-        if let Some(markers) = baseline.get_mut("SourceMarkers").and_then(Value::as_array_mut) {
+        if let Some(markers) = baseline
+            .get_mut("SourceMarkers")
+            .and_then(Value::as_array_mut)
+        {
             if let Some(first) = markers.get_mut(0).and_then(Value::as_object_mut) {
                 first
                     .entry("runtime".to_string())
@@ -428,7 +433,8 @@ mod tests {
             let value_label = entry["value"].to_string();
             let accepted = decode(&payload).is_ok();
             assert_eq!(
-                accepted, expected,
+                accepted,
+                expected,
                 "matrix case {index} ({} = {value_label}): the decoder's acceptance does not \
                  match the schema's; the value language drifted",
                 path.join(".")
@@ -477,8 +483,9 @@ mod tests {
             ("Update OldResourceProperties", current.clone()),
             ("Delete ResourceProperties", current.clone()),
         ] {
-            decode(&fixture)
-                .unwrap_or_else(|error| panic!("{label} must decode under the current contract: {error}"));
+            decode(&fixture).unwrap_or_else(|error| {
+                panic!("{label} must decode under the current contract: {error}")
+            });
         }
     }
 
