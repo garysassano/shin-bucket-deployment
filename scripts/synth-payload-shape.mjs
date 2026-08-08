@@ -30,8 +30,16 @@ import { templatePropertiesSchema, wireContractSchema } from "../contract/wire-c
 
 // Paths the provider's strict decoder requires that every end-to-end payload
 // must exercise; keeps the smoke payload from silently dropping a
-// load-bearing key.
-export const REQUIRED_PAYLOAD_PATHS = [["Transfer", "AdvancedTuning", "DestinationWriteRetry"]];
+// load-bearing key. The reserved custom-resource envelope keys are included
+// because CloudFormation delivers them inside `ResourceProperties` (commit
+// c530bf7 records the production failure when the decoder rejected a real
+// event over `ServiceTimeout`): dropping either from the fixture would make
+// the smoke run pass while every real CDK deployment failed.
+export const REQUIRED_PAYLOAD_PATHS = [
+  ["Transfer", "AdvancedTuning", "DestinationWriteRetry"],
+  ["ServiceToken"],
+  ["ServiceTimeout"],
+];
 
 // CloudFormation intrinsic function keys: a one-key object carrying one of
 // these is a CDK token rendered into template syntax, not a literal value.
