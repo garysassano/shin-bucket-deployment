@@ -41,6 +41,8 @@ import {
 import { destinationOwnerPrefix, validateDeploymentProps } from "./validation";
 
 const CUSTOM_RESOURCE_OWNER_TAG = "aws-cdk:cr-owned";
+// S3 caps each bucket's tag set at 50 user-defined tags:
+// https://docs.aws.amazon.com/AmazonS3/latest/userguide/tagging.html
 const MAX_S3_BUCKET_TAGS = 50;
 
 export interface ShinBucketDeploymentBundlingCommandHooks {

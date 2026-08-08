@@ -26,6 +26,8 @@ const ISOLATED_HANDLER_ID = "ShinBucketDeploymentHandler";
 const fileSha256Cache = new Map<string, string>();
 let packageVersionCache: string | undefined;
 
+// Lambda's documented invocation ceiling, 900 seconds:
+// https://docs.aws.amazon.com/lambda/latest/dg/gettingstarted-limits.html
 export const PROVIDER_TIMEOUT = Duration.minutes(15);
 
 interface HandlerOptions {
