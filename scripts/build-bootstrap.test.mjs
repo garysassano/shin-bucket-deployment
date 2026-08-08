@@ -13,6 +13,10 @@ test("emits the build provenance manifest without the schemaVersion marker", () 
       dirty: false,
       sourceTreeSha256: "a".repeat(64),
     },
+    providerInput: {
+      providerInputSha256: "e".repeat(64),
+      providerInputDirty: false,
+    },
     applicationBuildSha256: "b".repeat(64),
     tools: {
       cargoVersion: "cargo 1.0.0",
@@ -32,6 +36,8 @@ test("emits the build provenance manifest without the schemaVersion marker", () 
   );
   assert.equal(manifest.architecture, "arm64");
   assert.equal(manifest.sourceCommit, "9".repeat(40));
+  assert.equal(manifest.providerInputSha256, "e".repeat(64));
+  assert.equal(manifest.providerInputDirty, false);
   assert.equal(
     manifest.bootstrapSha256,
     createHash("sha256").update("provider-binary").digest("hex"),

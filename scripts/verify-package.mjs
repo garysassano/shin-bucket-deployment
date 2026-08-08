@@ -193,7 +193,15 @@ function findEndOfCentralDirectory(archive) {
   throw new Error("Bootstrap archive is missing its ZIP end-of-central-directory record.");
 }
 
-function readBootstrapEntry(archivePath, arch) {
+/**
+ * Extracts the `bootstrap` entry bytes from a staged provider archive.
+ *
+ * This is the single ZIP-parsing implementation for provider archives: the
+ * freshness gate (`bootstrap-freshness.mjs`) imports it to verify the staged
+ * archive's bytes against its build provenance, so the deploy-time check and
+ * the package gate cannot disagree about what the archive contains.
+ */
+export function readBootstrapEntry(archivePath, arch) {
   const archive = readFileSync(archivePath);
   const eocdOffset = findEndOfCentralDirectory(archive);
   assert(archive.readUInt16LE(eocdOffset + 4) === 0, `${arch} archive is split across disks.`);
@@ -290,7 +298,7 @@ function readBootstrapEntry(archivePath, arch) {
   return bootstrap;
 }
 
-function sha256File(path) {
+export function sha256File(path) {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
@@ -309,6 +317,10 @@ export function verifyBootstrapProvenance(archivePath, provenancePath, arch) {
   assert(
     SHA256_PATTERN.test(provenance.sourceTreeSha256),
     `${arch} provenance has an invalid source-tree digest.`,
+  );
+  assert(
+    SHA256_PATTERN.test(provenance.providerInputSha256),
+    `${arch} provenance has an invalid provider-build-input digest.`,
   );
   assert(
     SHA256_PATTERN.test(provenance.buildToolchainSha256),
