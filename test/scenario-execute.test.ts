@@ -1,3 +1,15 @@
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { crc32 } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   type RunningProcess,
@@ -577,6 +589,115 @@ describe("scenario executor", () => {
     expect(gateCalls).toEqual([]);
   });
 
+  it("forwards the plan's architecture selection to the real freshness gate", async () => {
+    const root = freshnessFixture();
+    const logs: string[] = [];
+    const commands: string[] = [];
+    const status = await executeScenarioPlan(
+      {
+        concurrency: 1,
+        groups: [
+          {
+            runs: [
+              {
+                ...verifiedRun("arm64-only"),
+                definition: {
+                  ...verifiedRun("arm64-only").definition,
+                  providerArchitectures: ["arm64"],
+                },
+              },
+            ],
+          },
+        ],
+      },
+      {
+        repositoryRoot: root,
+        pathExists: () => true,
+        startProcess: (_run, command) => {
+          commands.push(command);
+          return { completion: Promise.resolve(0), terminate() {} };
+        },
+        log: (message) => logs.push(message),
+      },
+    );
+
+    // The fixture stages only a stale x86_64 archive. The real adapter must
+    // hand the plan's ["arm64"] selection to the gate, which then checks
+    // nothing; if the adapter dropped the selection (the pre-fix bug), the
+    // gate would inspect every staged archive, find the stale x86_64 one,
+    // and refuse the deploy.
+    expect(status).toBe(0);
+    expect(commands.length).toBeGreaterThan(0);
+    expect(logs.join("\n")).not.toContain("Refusing to deploy a stale prebuilt");
+  });
+
+  it("the real freshness gate refuses a stale archive for a selected architecture", async () => {
+    const root = freshnessFixture();
+    const logs: string[] = [];
+    const status = await executeScenarioPlan(
+      {
+        concurrency: 1,
+        groups: [
+          {
+            runs: [
+              {
+                ...verifiedRun("stale"),
+                definition: {
+                  ...verifiedRun("stale").definition,
+                  providerArchitectures: ["x86_64"],
+                },
+              },
+            ],
+          },
+        ],
+      },
+      {
+        repositoryRoot: root,
+        pathExists: () => true,
+        startProcess: () => ({ completion: Promise.resolve(0), terminate() {} }),
+        log: (message) => logs.push(message),
+      },
+    );
+
+    expect(status).toBe(1);
+    expect(logs.join("\n")).toContain(
+      "Refusing to deploy a stale prebuilt provider bootstrap (x86_64)",
+    );
+    expect(logs.join("\n")).toContain("Run `pnpm prebuild:bootstrap`");
+  });
+
+  it("logs a visible notice when every deploy run declares no prebuilt architecture", async () => {
+    const root = freshnessFixture();
+    const logs: string[] = [];
+    const status = await executeScenarioPlan(
+      {
+        concurrency: 1,
+        groups: [
+          {
+            runs: [
+              {
+                ...verifiedRun("local"),
+                definition: {
+                  ...verifiedRun("local").definition,
+                  providerArchitectures: [],
+                },
+              },
+            ],
+          },
+        ],
+      },
+      {
+        repositoryRoot: root,
+        pathExists: () => true,
+        startProcess: () => ({ completion: Promise.resolve(0), terminate() {} }),
+        log: (message) => logs.push(message),
+      },
+    );
+
+    expect(status).toBe(0);
+    expect(logs.join("\n")).toContain("No prebuilt provider architecture is gated");
+  });
+
   it("does not run the bootstrap freshness gate for destroy actions", async () => {
     const gateCalls: string[] = [];
 
@@ -654,4 +775,99 @@ function deferredProcess(name: string, terminated: string[]): RunningProcess {
       resolveCompletion?.(143);
     },
   };
+}
+
+const fixtureRoots: string[] = [];
+afterEach(() => {
+  for (const root of fixtureRoots.splice(0)) {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+/**
+ * A repository fixture for the real freshness-gate path: a one-commit git
+ * repo that carries copies of the exact scripts the runner's adapter imports
+ * at runtime, plus a stale x86_64 archive (every recorded digest is garbage).
+ * The gate refuses that archive whenever x86_64 is selected, and ignores it
+ * whenever another architecture is.
+ */
+function freshnessFixture(): string {
+  const root = mkdtempSync(join(tmpdir(), "shin-execute-gate-"));
+  fixtureRoots.push(root);
+  execFileSync("git", ["-c", "init.defaultBranch=main", "init", "-q"], { cwd: root });
+  execFileSync("git", ["config", "user.email", "gate@test"], { cwd: root });
+  execFileSync("git", ["config", "user.name", "Gate Test"], { cwd: root });
+  writeFileSync(join(root, ".gitignore"), "assets\n");
+  mkdirSync(join(root, "rust"), { recursive: true });
+  writeFileSync(join(root, "rust", "lib.rs"), "// fixture\n");
+  writeFileSync(join(root, "mise.toml"), '[tools]\nrust = "1.0.0"\n');
+  execFileSync("git", ["add", "."], { cwd: root });
+  execFileSync("git", ["commit", "-q", "-m", "fixture"], { cwd: root });
+
+  mkdirSync(join(root, "scripts"), { recursive: true });
+  for (const script of ["bootstrap-freshness.mjs", "source-identity.mjs", "verify-package.mjs"]) {
+    copyFileSync(join(__dirname, "..", "scripts", script), join(root, "scripts", script));
+  }
+
+  stageStaleArchive(root, "x86_64");
+  return root;
+}
+
+function stageStaleArchive(root: string, arch: string): void {
+  const directory = join(root, "assets", `bootstrap-${arch}`);
+  mkdirSync(directory, { recursive: true });
+  const machine = arch === "arm64" ? 183 : 62;
+  const elf = Buffer.alloc(64);
+  elf[0] = 0x7f;
+  elf.write("ELF", 1, "latin1");
+  elf[4] = 2;
+  elf[5] = 1;
+  elf.writeUInt16LE(machine, 18);
+  const crc = crc32(elf);
+  const name = Buffer.from("bootstrap");
+  const local = Buffer.alloc(30);
+  local.writeUInt32LE(0x04034b50, 0);
+  local.writeUInt16LE(20, 4);
+  local.writeUInt32LE(crc, 14);
+  local.writeUInt32LE(elf.length, 18);
+  local.writeUInt32LE(elf.length, 22);
+  local.writeUInt16LE(name.length, 26);
+  const central = Buffer.alloc(46);
+  central.writeUInt32LE(0x02014b50, 0);
+  central.writeUInt16LE((3 << 8) | 20, 4);
+  central.writeUInt32LE(crc, 16);
+  central.writeUInt32LE(elf.length, 20);
+  central.writeUInt32LE(elf.length, 24);
+  central.writeUInt16LE(name.length, 28);
+  central.writeUInt32LE((0o100755 << 16) >>> 0, 38);
+  const centralDirectory = Buffer.concat([central, name]);
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(1, 8);
+  eocd.writeUInt16LE(1, 10);
+  eocd.writeUInt32LE(centralDirectory.length, 12);
+  eocd.writeUInt32LE(local.length + name.length + elf.length, 16);
+  const zip = Buffer.concat([local, name, elf, centralDirectory, eocd]);
+  writeFileSync(join(directory, "bootstrap.zip"), zip);
+  const sha256 = (value: Buffer) => createHash("sha256").update(value).digest("hex");
+  writeFileSync(
+    join(directory, "build-provenance.json"),
+    `${JSON.stringify(
+      {
+        architecture: arch,
+        binaryName: "shin-bucket-deployment-handler",
+        sourceCommit: "0".repeat(40),
+        sourceDirty: false,
+        sourceTreeSha256: "0".repeat(64),
+        providerInputSha256: "0".repeat(64),
+        buildToolchainSha256: "0".repeat(64),
+        buildEnvironmentSha256: "0".repeat(64),
+        providerInputDirty: false,
+        bootstrapSha256: sha256(elf),
+        bootstrapArchiveSha256: sha256(zip),
+      },
+      null,
+      2,
+    )}\n`,
+  );
 }

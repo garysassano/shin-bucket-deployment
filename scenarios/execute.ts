@@ -62,11 +62,12 @@ export async function executeScenarioPlan(
   const deployedProviderArchitectures = planDeployedProviderArchitectures(plan);
   if (deployedProviderArchitectures.length > 0) {
     // A deploy that uses a prebuilt provider archive built from different
-    // provider inputs would ship a stale binary silently, so refuse before
-    // any process starts. The gate covers exactly the architectures the plan's
-    // deploy runs can select (see deployProviderArchitectures below); a run
-    // that compiles from source, or a benchmark run that deploys upstream
-    // AwsBucketDeployment, selects none and is not gated.
+    // provider inputs or a different build recipe would ship a stale binary
+    // silently, so refuse before any process starts. The gate covers exactly
+    // the architectures the plan's deploy runs can select (see
+    // planDeployedProviderArchitectures below); a run that compiles from
+    // source, or a benchmark run that deploys upstream AwsBucketDeployment,
+    // selects none and is not gated.
     try {
       const assertDeployableBootstrap =
         options.assertDeployableBootstrap ?? (await loadBootstrapFreshnessGate(repositoryRoot));
@@ -75,6 +76,18 @@ export async function executeScenarioPlan(
       log(error instanceof Error ? error.message : String(error));
       return 1;
     }
+  } else if (plan.groups.some((group) => group.runs.some(isShinProviderDeployRun))) {
+    // Every deploy run declared `providerArchitectures: []`, so the plan
+    // asserts no prebuilt archive is needed (compile-from-source or no Shin
+    // provider). Say so instead of skipping the gate silently: if any of
+    // those runs actually ships a prebuilt archive, the catalog entry is the
+    // mistake and it is now visible in the run output.
+    log(
+      "No prebuilt provider architecture is gated: every deploy run declares " +
+        "providerArchitectures: [] (compiles from source or deploys no Shin " +
+        "provider). If any run ships a prebuilt archive, declare its " +
+        "architectures in the scenario catalog.",
+    );
   }
 
   const onExternalAbort = (): void => {
@@ -235,10 +248,7 @@ function planDeployedProviderArchitectures(plan: ScenarioPlan): string[] {
   const architectures = new Set<string>();
   for (const group of plan.groups) {
     for (const run of group.runs) {
-      if (run.action !== "deploy") {
-        continue;
-      }
-      if (run.mode === "benchmark" && run.env.SHIN_BENCH_IMPLEMENTATION === "aws") {
+      if (!isShinProviderDeployRun(run)) {
         continue;
       }
       for (const architecture of run.definition.providerArchitectures ?? ["arm64"]) {
@@ -250,6 +260,18 @@ function planDeployedProviderArchitectures(plan: ScenarioPlan): string[] {
 }
 
 /**
+ * Whether the run deploys the Shin provider and can therefore select a
+ * prebuilt archive. Benchmark runs that deploy upstream `AwsBucketDeployment`
+ * need no Shin archive and are never gated.
+ */
+function isShinProviderDeployRun(run: ScenarioRun): boolean {
+  return (
+    run.action === "deploy" &&
+    !(run.mode === "benchmark" && run.env.SHIN_BENCH_IMPLEMENTATION === "aws")
+  );
+}
+
+/**
  * Loads the deploy-time bootstrap freshness gate from the repository's
  * `scripts/` directory. The path is resolved at runtime from the repository
  * root because the compiled runner lives two directory levels down
@@ -258,11 +280,12 @@ function planDeployedProviderArchitectures(plan: ScenarioPlan): string[] {
  */
 async function loadBootstrapFreshnessGate(
   repositoryRoot: string,
-): Promise<(repositoryRoot: string) => void> {
+): Promise<(repositoryRoot: string, architectures: readonly string[]) => void> {
   const module = (await import(
     pathToFileURL(join(repositoryRoot, "scripts", "bootstrap-freshness.mjs")).href
   )) as typeof BootstrapFreshness;
-  return (root: string) => module.assertStagedBootstrapFreshness({ repositoryRoot: root });
+  return (root: string, architectures: readonly string[]) =>
+    module.assertStagedBootstrapFreshness({ repositoryRoot: root, architectures });
 }
 
 function currentAwsPrincipalArn(): string {
