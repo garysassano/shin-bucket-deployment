@@ -74,6 +74,7 @@
     "toml:check": "taplo fmt --check mise.toml rust/Cargo.toml rust/deny.toml",
     "npm:audit": "pnpm audit --audit-level high",
     "verify:package": "node scripts/verify-package.mjs",
+    "verify:ledger": "node dist/benchmarks/src/verify-ledger.js",
     "verify:wire-contract": "node scripts/generate-wire-schema.mjs --check",
     "verify:synth": "pnpm verify synth",
     "verify:typescript-contract": "node scripts/verify-typescript-refactor.mjs",
@@ -91,7 +92,7 @@
     "benchmark:oidc:deploy": "pnpm build && cdk deploy --app 'node dist/benchmarks/infra/gha-oidc-app.js' shin-bucket-deployment-gha-oidc",
     "benchmark:oidc:destroy": "pnpm build && cdk destroy --app 'node dist/benchmarks/infra/gha-oidc-app.js' shin-bucket-deployment-gha-oidc",
     "benchmark:synth": "pnpm build && node scripts/verify-benchmark-plan.mjs && SHIN_BENCH_EXECUTION_ENVIRONMENT_TOKEN=no-aws-synth SHIN_BENCH_INVOCATION_TOKEN=no-aws-synth-invocation node dist/scenarios/runner.js benchmark synth assets --asset-profiles tiny-many --implementations shin,aws --transfer-max-concurrency 32 --lambda-memory-mb 1024 && node scripts/verify-benchmark-synth.mjs",
-    "check": "pnpm build && pnpm build:package && pnpm typecheck && pnpm lint && pnpm check:md && pnpm test && pnpm rust:fmt:check && pnpm rust:clippy && pnpm rust:test && pnpm npm:audit && pnpm rust:audit && pnpm rust:deny && pnpm workflow:lint && pnpm toml:check && pnpm verify:package && pnpm verify:wire-contract && pnpm verify:synth && pnpm benchmark:synth",
+    "check": "pnpm build && pnpm build:package && pnpm typecheck && pnpm lint && pnpm check:md && pnpm test && pnpm rust:fmt:check && pnpm rust:clippy && pnpm rust:test && pnpm npm:audit && pnpm rust:audit && pnpm rust:deny && pnpm workflow:lint && pnpm toml:check && pnpm verify:package && pnpm verify:wire-contract && pnpm verify:synth && pnpm benchmark:synth && pnpm verify:ledger",
     "check:md": "prettier --check \"**/*.md\"",
     "format:md": "prettier --write \"**/*.md\"",
     "prepack": "pnpm build:package"
