@@ -109,10 +109,8 @@ export function assertStagedBootstrapFreshness({
   let currentIdentity;
   try {
     currentIdentity = {
-      providerInputSha256: collectProviderBuildInputIdentity(repositoryRoot)
-        .providerInputSha256,
-      buildToolchainSha256: collectBuildToolchainIdentity(repositoryRoot)
-        .buildToolchainSha256,
+      providerInputSha256: collectProviderBuildInputIdentity(repositoryRoot).providerInputSha256,
+      buildToolchainSha256: collectBuildToolchainIdentity(repositoryRoot).buildToolchainSha256,
       buildEnvironmentSha256: buildEnvironmentSha256(env),
     };
   } catch (error) {

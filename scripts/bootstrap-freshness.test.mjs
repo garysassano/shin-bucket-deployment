@@ -149,10 +149,8 @@ function stageArchive(
         sourceDirty: dirty,
         sourceTreeSha256: "0".repeat(64),
         providerInputSha256: providerInputSha256 ?? identity.providerInputSha256,
-        buildToolchainSha256:
-          buildToolchainSha256 ?? identity.buildToolchainSha256,
-        buildEnvironmentSha256:
-          buildEnvironmentSha256 ?? identity.buildEnvironmentSha256,
+        buildToolchainSha256: buildToolchainSha256 ?? identity.buildToolchainSha256,
+        buildEnvironmentSha256: buildEnvironmentSha256 ?? identity.buildEnvironmentSha256,
         providerInputDirty: dirty,
         bootstrapSha256: sha256(bootstrap),
         bootstrapArchiveSha256: sha256(zip),

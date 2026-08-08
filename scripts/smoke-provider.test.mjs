@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { crc32 } from "node:zlib";
 import {
-  SMOKE_ENTRIES,
   SERVICE_TOKEN,
+  SMOKE_ENTRIES,
   buildCreateEvent,
   buildSourceZip,
   expectedDestinationKeys,

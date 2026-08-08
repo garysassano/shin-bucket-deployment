@@ -96,10 +96,7 @@ describe("wire-contract value acceptance matrix", () => {
     const expected = expectedLeafCoverage(wireContractSchema);
     for (const { path, kinds } of expected) {
       const matching = matrix.cases.filter((entry) => caseMatchesLeaf(entry.path, path));
-      expect(
-        matching.length,
-        `leaf ${path.join(".")} has no matrix case`,
-      ).toBeGreaterThan(0);
+      expect(matching.length, `leaf ${path.join(".")} has no matrix case`).toBeGreaterThan(0);
       for (const kind of kinds) {
         const covered =
           kind === "unknown"
@@ -129,10 +126,9 @@ describe("wire-contract value acceptance matrix", () => {
       const payload = baselinePayload();
       setAtPath(payload, entry.path, entry.value);
       const result = wireContractSchema.safeParse(payload);
-      expect(
-        result.success,
-        `case ${index} (${entry.id}) at ${entry.path.join(".")}`,
-      ).toBe(entry.accept);
+      expect(result.success, `case ${index} (${entry.id}) at ${entry.path.join(".")}`).toBe(
+        entry.accept,
+      );
     }
   });
 
@@ -159,9 +155,7 @@ describe("wire-contract value acceptance matrix", () => {
     ).toBe(false);
     // Decimal strings are digits only: a leading plus must be rejected.
     expect(accepted(withValue(["Transfer", "MaxConcurrency"], "+42"))).toBe(false);
-    expect(
-      accepted(withValue(["SourceCatalogs", "[0]", "Version"], "+1")),
-    ).toBe(false);
+    expect(accepted(withValue(["SourceCatalogs", "[0]", "Version"], "+1"))).toBe(false);
     // The reserved envelope keys are transport: any value and null pass.
     expect(accepted(withValue(["ServiceTimeout"], "900"))).toBe(true);
     expect(accepted(withValue(["ServiceToken"], 123))).toBe(true);
@@ -178,20 +172,24 @@ describe("wire-contract value acceptance matrix", () => {
  */
 function expectedLeafCoverage(schema: z.ZodTypeAny): ReadonlyArray<{
   readonly path: readonly string[];
-  readonly kinds: readonly string[];
+  readonly kinds: ReadonlySet<string>;
 }> {
   const leaves: Array<{ path: string[]; kinds: Set<string> }> = [];
   const visit = (schema: z.ZodTypeAny, path: string[], nullable: boolean): void => {
-    const unwrapped = unwrap(schema);
+    // The classic API's `shape`/`options` entries are typed as the core
+    // `$ZodType`, which is structurally distinct from the classic `ZodType`;
+    // the `instanceof` checks below are value-level and work either way.
+    const unwrapped = unwrap(schema as z.ZodTypeAny);
     if (unwrapped instanceof z.ZodObject) {
       for (const [key, child] of Object.entries(unwrapped.shape)) {
-        visit(child, [...path, key], child.isNullable());
+        visit(child as z.ZodTypeAny, [...path, key], (child as z.ZodTypeAny).isNullable());
       }
       return;
     }
     if (unwrapped instanceof z.ZodArray) {
       leaves.push({ path: [...path], kinds: new Set(nullable ? ["array", "null"] : ["array"]) });
-      visit(unwrapped.element, [...path, "[0]"], unwrapped.element.isNullable());
+      const element = unwrapped.element as z.ZodTypeAny;
+      visit(element, [...path, "[0]"], element.isNullable());
       return;
     }
     if (unwrapped instanceof z.ZodRecord) {
@@ -213,21 +211,22 @@ function expectedLeafCoverage(schema: z.ZodTypeAny): ReadonlyArray<{
 }
 
 function leafKinds(schema: z.ZodTypeAny): Set<string> {
-  if (schema instanceof z.ZodString) return new Set(["string"]);
-  if (schema instanceof z.ZodNumber) return new Set(["number"]);
-  if (schema instanceof z.ZodBoolean) return new Set(["boolean"]);
-  if (schema instanceof z.ZodUnknown) return new Set(["unknown"]);
-  if (schema instanceof z.ZodEnum) {
-    return new Set(schema.options.map((value) => `enum:${value}`));
+  const node = schema as z.ZodTypeAny;
+  if (node instanceof z.ZodString) return new Set(["string"]);
+  if (node instanceof z.ZodNumber) return new Set(["number"]);
+  if (node instanceof z.ZodBoolean) return new Set(["boolean"]);
+  if (node instanceof z.ZodUnknown) return new Set(["unknown"]);
+  if (node instanceof z.ZodEnum) {
+    return new Set(node.options.map((value) => `enum:${value}`));
   }
-  if (schema instanceof z.ZodUnion) {
-    return new Set(schema.options.flatMap((option) => [...leafKinds(option)]));
+  if (node instanceof z.ZodUnion) {
+    return new Set(node.options.flatMap((option) => [...leafKinds(option as z.ZodTypeAny)]));
   }
-  throw new Error(`unsupported wire-contract leaf schema ${schema.constructor.name}`);
+  throw new Error(`unsupported wire-contract leaf schema ${node.constructor.name}`);
 }
 
 function unwrap(schema: z.ZodTypeAny): z.ZodTypeAny {
-  let current = schema;
+  let current = schema as z.ZodTypeAny;
   while (current.isOptional() || current.isNullable()) {
     const inner = (current as z.ZodOptional<z.ZodTypeAny> | z.ZodNullable<z.ZodTypeAny>)._def
       .innerType;

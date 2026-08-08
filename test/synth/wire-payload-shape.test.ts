@@ -257,9 +257,8 @@ test("the synth guard accepts every intrinsic form the construct can emit", () =
         MaxUncompressedEntryBytes: { "Fn::Join": ["", ["1", "0", "2", "4"]] },
         MaxCompressionRatio: { Ref: "Ratio" },
       },
-      SourceMarkers: [
-        { runtime: { "Fn::Sub": ["prefix-${suffix}", { suffix: { Ref: "S" } }] } },
-      ],
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: Fn::Sub placeholder syntax is intentional.
+      SourceMarkers: [{ runtime: { "Fn::Sub": ["prefix-${suffix}", { suffix: { Ref: "S" } }] } }],
     }),
   ).not.toThrow();
 });
