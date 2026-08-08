@@ -53,7 +53,6 @@ type ProviderRuntimeMetadata = {
 };
 
 export type PreservedStackManifest = {
-  readonly schemaVersion: 1;
   readonly status: "preservation-intent" | "preserved-after-failure";
   readonly stackName: string;
   readonly region: string;
@@ -251,7 +250,6 @@ async function runBenchmarkStack(args: {
     await verifyStackDeleted(stackName, options.region);
   }
   const preservationManifest = {
-    schemaVersion: 1,
     stackName,
     region: options.region,
     runId: options.runId,
@@ -548,7 +546,6 @@ export function readPreservationManifest(path: string): PreservedStackManifest {
   }
   const manifest = parsed as Partial<PreservedStackManifest> & Record<string, unknown>;
   const expectedFields = new Set([
-    "schemaVersion",
     "status",
     "stackName",
     "region",
@@ -563,7 +560,6 @@ export function readPreservationManifest(path: string): PreservedStackManifest {
   if (
     Object.keys(manifest).some((field) => !expectedFields.has(field)) ||
     Object.keys(manifest).length !== expectedFields.size ||
-    manifest.schemaVersion !== 1 ||
     !(manifest.status === "preservation-intent" || manifest.status === "preserved-after-failure") ||
     !nonEmptyManifestString(manifest.stackName) ||
     !nonEmptyManifestString(manifest.region) ||
