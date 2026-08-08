@@ -25,7 +25,7 @@
 mod tests {
     use std::collections::BTreeSet;
 
-    use serde_json::{Map, Value};
+    use serde_json::{Map, Value, json};
 
     use crate::request::RawDeploymentRequest;
 
@@ -432,6 +432,77 @@ mod tests {
                 "matrix case {index} ({} = {value_label}): the decoder's acceptance does not \
                  match the schema's; the value language drifted",
                 path.join(".")
+            );
+        }
+    }
+
+    /// The pre-rename wire shape (the full old-to-new mapping is in
+    /// docs/breaking-changes.md): flat PascalCase names instead of the current
+    /// nested contract. Kept here to pin the clean-break behavior at the
+    /// schema-agreement level: an `OldResourceProperties` payload using these
+    /// names must be rejected loudly, never partially parsed into a wrong
+    /// previous-namespace decision.
+    fn previous_contract_properties() -> Value {
+        json!({
+            "SourceBucketNames": ["source"],
+            "SourceObjectKeys": ["asset.zip"],
+            "DestinationBucketName": "dest-bucket",
+            "DestinationBucketKeyPrefix": "site",
+            "DestinationOwnerId": "owner-123",
+            "DeleteStaleObjectsOnDeployment": true,
+            "DeleteCurrentObjectsOnDelete": false,
+            "WaitForDistributionInvalidation": true,
+            "MaxUncompressedEntryBytes": 1073741824,
+            "MaxCompressionRatio": 100,
+            "MaxParallelTransfers": 8,
+        })
+    }
+
+    #[test]
+    fn schema_derived_fixtures_cover_every_request_type_payload() {
+        // Create/Update/Delete all carry the current ResourceProperties, and an
+        // Update additionally replays the previous template's properties as
+        // OldResourceProperties. After the wire rename those have the same
+        // shape, so the current contract is the fixture for all four payloads.
+        // The envelope-level counterparts of these fixtures live in
+        // cloudformation.rs (decode_deployment_request), which exercises the
+        // real CloudFormation request types end to end; here the fixtures are
+        // schema-derived so a contract change that only breaks one lifecycle
+        // path fails the agreement test first.
+        let schema = load_schema();
+        let current = build_payload(&schema);
+        for (label, fixture) in [
+            ("Create ResourceProperties", current.clone()),
+            ("Update ResourceProperties", current.clone()),
+            ("Update OldResourceProperties", current.clone()),
+            ("Delete ResourceProperties", current.clone()),
+        ] {
+            decode(&fixture)
+                .unwrap_or_else(|error| panic!("{label} must decode under the current contract: {error}"));
+        }
+    }
+
+    #[test]
+    fn previous_contract_payloads_are_rejected_in_every_request_type() {
+        // The Update-old path is where a contract change strands stacks: the
+        // first Update after upgrading replays the previous template's
+        // properties, and a decoder that partially accepted them could turn an
+        // old prefix into a wrong deletion decision. Pin the rejection here for
+        // all four request-type payloads at once.
+        let legacy = previous_contract_properties();
+        for (label, fixture) in [
+            ("Create ResourceProperties", legacy.clone()),
+            ("Update ResourceProperties", legacy.clone()),
+            ("Update OldResourceProperties", legacy.clone()),
+            ("Delete ResourceProperties", legacy.clone()),
+        ] {
+            let error = decode(&fixture)
+                .err()
+                .unwrap_or_else(|| panic!("{label} must reject the pre-rename wire names"));
+            let chain = format!("{error:#}");
+            assert!(
+                chain.contains("DestinationBucketName"),
+                "{label} rejection must name the first unknown legacy key: {chain}"
             );
         }
     }
