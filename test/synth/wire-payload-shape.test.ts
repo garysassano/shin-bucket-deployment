@@ -128,6 +128,103 @@ test("the wire contract rejects payloads missing required keys", () => {
   ).toThrow(/Destination/);
 });
 
+test("the synth guard rejects wrong-typed literal leaves", () => {
+  const stack = new Stack();
+  const destinationBucket = new Bucket(stack, "Dest");
+  new ShinBucketDeployment(stack, "Deploy", {
+    sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
+    destination: { bucket: destinationBucket },
+    providerLambda: { localBuild: testLocalProviderBuild() },
+  });
+  const properties = propertiesOf(stack);
+  const destination = properties.Destination as Record<string, unknown>;
+  const sourceProcessing = properties.SourceProcessing as Record<string, unknown>;
+
+  // A construct bug emitting a number where a string belongs must fail at
+  // synthesis, not at deploy time in the Rust decoder.
+  expect(() =>
+    assertPayloadTree({ ...properties, Destination: { ...destination, BucketName: 123 } }),
+  ).toThrow(/Destination\.BucketName/);
+  expect(() => assertPayloadTree({ ...properties, DestinationOwnerId: false })).toThrow(
+    /DestinationOwnerId/,
+  );
+  expect(() =>
+    assertPayloadTree({
+      ...properties,
+      SourceMarkers: [{ runtime: 42 }],
+    }),
+  ).toThrow(/SourceMarkers/);
+  expect(() =>
+    assertPayloadTree({
+      ...properties,
+      SourceMarkers: [{ runtime: 42 }],
+    }),
+  ).toThrow(/runtime/);
+  // null is not a valid value for an optional-only leaf...
+  expect(() =>
+    assertPayloadTree({
+      ...properties,
+      SourceProcessing: { ...sourceProcessing, Extract: null },
+    }),
+  ).toThrow(/SourceProcessing\.Extract/);
+});
+
+test("the synth guard accepts CloudFormation token leaves", () => {
+  const stack = new Stack();
+  const destinationBucket = new Bucket(stack, "Dest");
+  new ShinBucketDeployment(stack, "Deploy", {
+    sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
+    destination: { bucket: destinationBucket },
+    providerLambda: { localBuild: testLocalProviderBuild() },
+  });
+  const properties = propertiesOf(stack);
+  const destination = properties.Destination as Record<string, unknown>;
+  const sourceProcessing = properties.SourceProcessing as Record<string, unknown>;
+
+  // The construct emits bucket names and ARNs as tokens; they must not be
+  // type-checked as literals.
+  expect(destination.BucketName).toMatchObject({ Ref: expect.any(String) });
+  expect(() =>
+    assertPayloadTree({
+      ...properties,
+      DestinationBucketArn: { "Fn::GetAtt": ["Dest", "Arn"] },
+      SourceMarkers: [{ runtime: { Ref: "Marker" } }],
+      SourceProcessing: {
+        ...sourceProcessing,
+        MaxUncompressedEntryBytes: { Ref: "Bytes" },
+      },
+    }),
+  ).not.toThrow();
+});
+
+test("the template schema requires the reserved envelope keys the construct always renders", () => {
+  const stack = new Stack();
+  const destinationBucket = new Bucket(stack, "Dest");
+  new ShinBucketDeployment(stack, "Deploy", {
+    sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
+    destination: { bucket: destinationBucket },
+    providerLambda: { localBuild: testLocalProviderBuild() },
+  });
+  const properties = propertiesOf(stack);
+  expect(properties.ServiceToken).toBeDefined();
+  expect(properties.ServiceTimeout).toBeDefined();
+
+  // The runtime schema (what the provider decodes) tolerates their absence...
+  const plainPayload = {
+    SourceBucketNames: ["assets"],
+    SourceObjectKeys: ["site.zip"],
+    Destination: { BucketName: "destination" },
+    SourceProcessing: { MaxUncompressedEntryBytes: 1024, MaxCompressionRatio: 100 },
+    DestinationLifecycle: { OnDeploy: {}, OnChange: {}, OnDelete: {} },
+    CloudfrontInvalidation: {},
+    Transfer: { AdvancedTuning: { DestinationWriteRetry: {} } },
+    DestinationOwnerId: "owner",
+  };
+  expect(() => assertPayloadWithinSynthShape(plainPayload)).not.toThrow();
+  // ...but the template schema (what the construct emits) requires them.
+  expect(() => assertPayloadTree(plainPayload)).toThrow(/ServiceToken/);
+});
+
 function propertiesOf(stack: Stack): Record<string, unknown> {
   const template = Template.fromStack(stack).toJSON() as {
     Resources: Record<string, { Type?: string; Properties?: Record<string, unknown> }>;

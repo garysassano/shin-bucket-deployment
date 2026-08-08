@@ -7,18 +7,46 @@
 // in three directions, none of which can drift from it silently:
 //
 // - `scripts/synth-payload-shape.mjs` validates the properties the construct
-//   synthesizes against this schema, so a key the construct emits that the
-//   decoder does not declare fails locally at synthesis time.
+//   synthesizes against `templatePropertiesSchema`, so a key the construct
+//   emits that the decoder does not declare fails locally at synthesis time.
 // - `scripts/generate-wire-schema.mjs` renders the JSON Schema artifact
-//   `contract/wire-schema.json` from this schema and checks it in; the
-//   `verify:wire-contract` gate regenerates it and fails when it drifts.
-// - `rust/src/wire_contract.rs` loads the committed artifact and asserts the
-//   strict `RawDeploymentRequest` decoder agrees with it in both directions:
-//   every declared property path is accepted, anything else is rejected, and
-//   requiredness matches. A rename on either side alone fails that test.
+//   `contract/wire-schema.json` from `wireContractSchema` (the runtime
+//   ResourceProperties schema) and checks it in; the `verify:wire-contract`
+//   gate regenerates it and fails when it drifts.
+// - `rust/src/wire_contract.rs` loads the committed artifact — which is bound
+//   to the runtime ResourceProperties schema, the decoder's own contract — and
+//   asserts the strict `RawDeploymentRequest` decoder agrees with it in both
+//   directions: every declared property path is accepted, anything else is
+//   rejected, requiredness matches, and the value-acceptance matrix in
+//   `contract/wire-acceptance-matrix.json` holds on both sides. A rename on
+//   either side alone fails that test.
 //
 // This module deliberately lives outside `src/`: the published package has
 // zero runtime dependencies, and nothing under `src/` may import it (or zod).
+//
+// Two schemas are exported because two contracts are in play, and they are not
+// the same object:
+//
+// - `wireContractSchema` is the **runtime ResourceProperties** schema: the
+//   properties CloudFormation delivers to the provider. It is what the Rust
+//   decoder binds to (through the committed artifact). Its value language
+//   mirrors the Rust deserializers exactly (see the acceptance matrix).
+// - `templatePropertiesSchema` is the **template properties** schema: what
+//   the synthesized `AWS::CloudFormation::CustomResource` carries. It is what
+//   the synth assertion binds to. It differs from the runtime schema only on
+//   the envelope keys: `ServiceToken` and `ServiceTimeout` are reserved
+//   custom-resource properties (documented on
+//   AWS::CloudFormation::CustomResource, separate from the deployment inputs)
+//   that CDK's `CustomResource` renders unconditionally, so the template
+//   schema requires them while the runtime schema treats them as optional
+//   transport the provider parses and drops.
+//
+//   CloudFormation empirically delivers both reserved keys *inside*
+//   `ResourceProperties` (commit c530bf7 records the production failure where
+//   the strict decoder rejected a real event with "unknown field
+//   `ServiceTimeout`"), so the runtime schema and the smoke fixture declare
+//   them too: with `deny_unknown_fields`, the provider would reject every real
+//   request otherwise.
 //
 // The schema mirrors `rust/src/request.rs`:
 // - `rename_all = "PascalCase"` maps each snake_case field to its wire name;
@@ -117,10 +145,16 @@ const transferSchema = z.strictObject({
 });
 
 /**
- * The complete `RawDeploymentRequest` wire contract, including the
- * CloudFormation custom-resource envelope (`ServiceToken`, `ServiceTimeout`)
- * that arrives inside `ResourceProperties`, the opaque `DeploymentNonce`
- * redeploy trigger, and every optional nested tuning field.
+ * The runtime `ResourceProperties` contract: the complete
+ * `RawDeploymentRequest` wire contract, including the CloudFormation
+ * custom-resource envelope (`ServiceToken`, `ServiceTimeout`) that arrives
+ * inside `ResourceProperties` (see the module doc), the opaque
+ * `DeploymentNonce` redeploy trigger, and every optional nested tuning field.
+ *
+ * This is the schema the Rust decoder binds to: `generate-wire-schema.mjs`
+ * renders the committed artifact from it, and the acceptance matrix in
+ * `contract/wire-acceptance-matrix.json` pins its value language against the
+ * decoder.
  */
 export const wireContractSchema = z.strictObject({
   SourceBucketNames: z.array(z.string()),
@@ -150,4 +184,17 @@ export const wireContractSchema = z.strictObject({
   ServiceToken: z.unknown().nullish(),
   ServiceTimeout: z.unknown().nullish(),
   DeploymentNonce: z.string().nullish(),
+});
+
+/**
+ * The template-properties contract: what the construct synthesizes for the
+ * `AWS::CloudFormation::CustomResource`. This is `wireContractSchema` plus the
+ * reserved custom-resource envelope keys, which CDK's `CustomResource` renders
+ * unconditionally (`serviceToken` and `serviceTimeout`), so they are required
+ * here. The synth assertion (`assertPayloadTree`) binds to this schema; the
+ * provider and the smoke fixture bind to `wireContractSchema`.
+ */
+export const templatePropertiesSchema = wireContractSchema.extend({
+  ServiceToken: z.unknown(),
+  ServiceTimeout: z.unknown(),
 });

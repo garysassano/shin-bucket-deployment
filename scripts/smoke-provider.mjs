@@ -158,10 +158,16 @@ export function buildSourceZip(entries) {
  *
  * `ResourceProperties` mirrors what the construct synthesizes for a simple
  * site. The provider decodes the envelope strictly (`deny_unknown_fields`),
- * so only fields the provider declares may appear. To keep this hand-built
- * payload from drifting from what the construct actually emits, it is checked
- * against the checked-in wire tree (scripts/synth-payload-shape.mjs) on every
- * build: any key outside the tree, or any missing required path, throws.
+ * so only fields the provider declares may appear. `ServiceToken` and
+ * `ServiceTimeout` stay nested here on purpose: CloudFormation delivers the
+ * reserved custom-resource properties inside `ResourceProperties` (commit
+ * c530bf7 records the production failure when the strict decoder rejected a
+ * real event), so a faithful fixture carries them. To keep this hand-built
+ * payload from drifting from the wire contract, it is checked against the
+ * runtime ResourceProperties schema
+ * (scripts/synth-payload-shape.mjs -> contract/wire-contract.mjs) on every
+ * build: any key outside the schema, any missing required path, or any
+ * wrong-typed value throws.
  */
 export function buildCreateEvent({
   sourceBucketNames = [SOURCE_BUCKET],
