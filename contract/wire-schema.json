@@ -1,0 +1,604 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "SourceBucketNames": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "SourceObjectKeys": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "SourceCatalogs": {
+      "anyOf": [
+        {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "Version": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 4294967295
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^\\d+$"
+                  }
+                ]
+              },
+              "Sha256": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "SourceMarkers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "propertyNames": {
+          "type": "string"
+        },
+        "additionalProperties": {
+          "type": "string"
+        }
+      }
+    },
+    "SourceMarkersConfig": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "jsonEscape": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "string",
+                "pattern": "^(?:true|false|True|False|TRUE|FALSE)$"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "Destination": {
+      "type": "object",
+      "properties": {
+        "BucketName": {
+          "type": "string"
+        },
+        "KeyPrefix": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "BucketName"
+      ],
+      "additionalProperties": false
+    },
+    "SourceProcessing": {
+      "type": "object",
+      "properties": {
+        "Extract": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "string",
+              "pattern": "^(?:true|false|True|False|TRUE|FALSE)$"
+            }
+          ]
+        },
+        "MaxUncompressedEntryBytes": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "string",
+              "pattern": "^\\d+$"
+            }
+          ]
+        },
+        "MaxCompressionRatio": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "string",
+              "pattern": "^\\d+$"
+            }
+          ]
+        },
+        "Exclude": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "Include": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "MaxUncompressedEntryBytes",
+        "MaxCompressionRatio"
+      ],
+      "additionalProperties": false
+    },
+    "DestinationLifecycle": {
+      "type": "object",
+      "properties": {
+        "OnDeploy": {
+          "type": "object",
+          "properties": {
+            "DeleteStaleObjects": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^(?:true|false|True|False|TRUE|FALSE)$"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        "OnChange": {
+          "type": "object",
+          "properties": {
+            "DeletePreviousObjects": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^(?:true|false|True|False|TRUE|FALSE)$"
+                }
+              ]
+            },
+            "PreviousBucketName": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "InvalidatePreviousDistribution": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        "OnDelete": {
+          "type": "object",
+          "properties": {
+            "DeleteCurrentObjects": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^(?:true|false|True|False|TRUE|FALSE)$"
+                }
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "OnDeploy",
+        "OnChange",
+        "OnDelete"
+      ],
+      "additionalProperties": false
+    },
+    "CloudfrontInvalidation": {
+      "type": "object",
+      "properties": {
+        "DistributionId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "Paths": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "WaitForCompletion": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "string",
+              "pattern": "^(?:true|false|True|False|TRUE|FALSE)$"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Transfer": {
+      "type": "object",
+      "properties": {
+        "MaxConcurrency": {
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                {
+                  "type": "string",
+                  "pattern": "^\\d+$"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "AdvancedTuning": {
+          "type": "object",
+          "properties": {
+            "SourceBlockBytes": {
+              "anyOf": [
+                {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    {
+                      "type": "string",
+                      "pattern": "^\\d+$"
+                    }
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "SourceBlockMergeGapBytes": {
+              "anyOf": [
+                {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    {
+                      "type": "string",
+                      "pattern": "^\\d+$"
+                    }
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "SourceGetConcurrency": {
+              "anyOf": [
+                {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    {
+                      "type": "string",
+                      "pattern": "^\\d+$"
+                    }
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "SourceWindowBytes": {
+              "anyOf": [
+                {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    {
+                      "type": "string",
+                      "pattern": "^\\d+$"
+                    }
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "SourceWindowMemoryBudgetMiB": {
+              "anyOf": [
+                {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    {
+                      "type": "string",
+                      "pattern": "^\\d+$"
+                    }
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "DestinationWriteRetry": {
+              "type": "object",
+              "properties": {
+                "MaxAttempts": {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        {
+                          "type": "string",
+                          "pattern": "^\\d+$"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "BaseDelayMs": {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        {
+                          "type": "string",
+                          "pattern": "^\\d+$"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "MaxDelayMs": {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        {
+                          "type": "string",
+                          "pattern": "^\\d+$"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "SlowdownBaseDelayMs": {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        {
+                          "type": "string",
+                          "pattern": "^\\d+$"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "SlowdownMaxDelayMs": {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 9007199254740991
+                        },
+                        {
+                          "type": "string",
+                          "pattern": "^\\d+$"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "Jitter": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "enum": [
+                        "full",
+                        "none"
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "DestinationWriteRetry"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "AdvancedTuning"
+      ],
+      "additionalProperties": false
+    },
+    "OutputObjectKeys": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "string",
+          "pattern": "^(?:true|false|True|False|TRUE|FALSE)$"
+        }
+      ]
+    },
+    "DestinationBucketArn": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "DestinationOwnerId": {
+      "type": "string"
+    },
+    "ServiceToken": {
+      "anyOf": [
+        {},
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "ServiceTimeout": {
+      "anyOf": [
+        {},
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "DeploymentNonce": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "SourceBucketNames",
+    "SourceObjectKeys",
+    "Destination",
+    "SourceProcessing",
+    "DestinationLifecycle",
+    "CloudfrontInvalidation",
+    "Transfer",
+    "DestinationOwnerId"
+  ],
+  "additionalProperties": false
+}

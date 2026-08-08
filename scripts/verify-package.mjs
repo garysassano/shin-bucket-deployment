@@ -53,6 +53,7 @@ const requiredFiles = [
 ];
 const forbiddenTarballPrefixes = [
   "package/benchmarks/",
+  "package/contract/",
   "package/docs/",
   "package/lib/trusted-source-catalog",
   "package/rust/",
@@ -373,6 +374,15 @@ function verifyTarball(tarball, workDir) {
     "Packed package metadata does not point at the current repository.",
   );
   assert(packedPackageJson.engines.node === ">=22.0.0", "Packed package has wrong Node engine.");
+  assert(
+    !("dependencies" in packedPackageJson),
+    "Packed package must have zero runtime dependencies; zod and other dev-only packages must not leak.",
+  );
+  const peerDependencyNames = Object.keys(packedPackageJson.peerDependencies ?? {});
+  assert(
+    !peerDependencyNames.includes("zod"),
+    "zod must not leak into the published package peerDependencies.",
+  );
 }
 
 function verifyStagedProviderArchive(consumerDir, assemblyDir) {

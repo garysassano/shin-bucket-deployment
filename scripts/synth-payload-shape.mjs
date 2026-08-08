@@ -1,147 +1,139 @@
-// Checked-in source of truth for the custom-resource wire key tree a DEFAULT
-// `ShinBucketDeployment` emits (one `Source.asset`, a destination bucket, and
-// no other options). Two directions are guarded against drift:
+// Validation of synthesized custom-resource properties and hand-built smoke
+// payloads against the single wire-contract schema.
 //
-// - `assertPayloadTree` (exact) runs in the synth test: the synthesized
-//   `ResourceProperties` must match this tree key-for-key at every level, so
-//   renaming a key on either side fails locally.
-// - `assertPayloadWithinSynthShape` (subset) runs in `smoke-provider.mjs`:
-//   the hand-built smoke payload must not emit keys outside this tree, so a
-//   rename that reaches the construct but not the smoke script fails there.
+// The contract is authored once in `contract/wire-contract.mjs`; this module
+// only applies it, it does not re-declare the key tree. Two directions are
+// guarded against drift:
 //
-// Node conventions (a leaf is `null`; objects are nested nodes):
+// - `assertPayloadTree` runs in the synth test against the synthesized
+//   `ResourceProperties`. Synthesis leaves CloudFormation tokens (Ref objects
+//   and friends) at leaf values, so this check is a schema-driven structural
+//   walk: every emitted key must be declared by the contract, every key the
+//   decoder requires must be emitted, and nesting/array arity must match.
+//   Value shapes are checked by `assertPayloadWithinSynthShape` and by the
+//   Rust decoder test, which run against real (resolved) payloads.
+// - `assertPayloadWithinSynthShape` runs in `smoke-provider.mjs`: the
+//   hand-built smoke payload carries plain values, so it is validated against
+//   the schema in full, including value shapes.
 //
-//   null  -> a scalar or array value; children are not inspected
-//   {}    -> the node must be present with no children (e.g. the load-bearing
-//            `Transfer.AdvancedTuning.DestinationWriteRetry`, which the Rust
-//            decoder requires and the construct emits as an empty object)
-//   []    -> the node must be present as an empty array
-//   [{...}] -> the node must be a non-empty array whose items match the entry
-//            shape
-//   {...} -> the node's children must match the given keys exactly
-//
-// Captured by synthesizing a default deployment with `Source.asset`, which
-// embeds one catalog entry; a `Source.data`-only deployment omits
-// `SourceCatalogs` entirely.
-export const EXPECTED_DEFAULT_PAYLOAD_TREE = {
-  ServiceToken: null,
-  ServiceTimeout: null,
-  SourceBucketNames: null,
-  SourceObjectKeys: null,
-  SourceCatalogs: [{ Version: null, Sha256: null }],
-  Destination: {
-    BucketName: null,
-  },
-  DestinationOwnerId: null,
-  DestinationLifecycle: {
-    OnDeploy: { DeleteStaleObjects: null },
-    OnChange: { DeletePreviousObjects: null },
-    OnDelete: { DeleteCurrentObjects: null },
-  },
-  CloudfrontInvalidation: { WaitForCompletion: null },
-  SourceProcessing: {
-    Extract: null,
-    MaxUncompressedEntryBytes: null,
-    MaxCompressionRatio: null,
-  },
-  OutputObjectKeys: null,
-  Transfer: {
-    AdvancedTuning: {
-      DestinationWriteRetry: {},
-    },
-  },
-};
+// The Rust decoder is bound to the same contract by
+// `rust/src/wire_contract.rs`, which loads the committed JSON Schema artifact
+// (`contract/wire-schema.json`, rendered from the schema by
+// `scripts/generate-wire-schema.mjs`) and asserts the decoder agrees with it
+// in both directions. Renaming a key on either side alone therefore fails.
+
+import { z } from "zod";
+import { wireContractSchema } from "../contract/wire-contract.mjs";
 
 // Paths the provider's strict decoder requires that every end-to-end payload
 // must exercise; keeps the smoke payload from silently dropping a
 // load-bearing key.
 export const REQUIRED_PAYLOAD_PATHS = [["Transfer", "AdvancedTuning", "DestinationWriteRetry"]];
 
-function assertObject(value, where) {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`${where}: expected an object`);
-  }
+function describeIssues(error) {
+  return error.issues
+    .map((issue) => {
+      const path = issue.path.length > 0 ? issue.path.join(".") : "(root)";
+      return `${path}: ${issue.message}`;
+    })
+    .join("\n");
 }
 
 /**
- * Asserts that `value` matches `tree` exactly: the same keys at every level,
- * with the same array arity and item shapes. Leaf values are not inspected.
+ * Asserts that `value` conforms to the wire contract's structure: every key
+ * it carries is declared by the provider's decoder and every key the decoder
+ * requires is present, at every nesting level. Leaf values are not inspected
+ * because synthesis renders CloudFormation tokens there; the same schema
+ * validates real values elsewhere.
  */
-export function assertPayloadTree(value, tree, path = []) {
-  assertObject(value, path.join(".") || "(root)");
-  for (const key of Object.keys(tree)) {
-    if (!(key in value)) {
-      throw new Error(`${path.join(".") || "(root)"}: missing emitted key ${key}`);
+export function assertPayloadTree(value, schema = wireContractSchema) {
+  walkStructure(value, schema, [], "Synthesized custom-resource properties");
+}
+
+function walkStructure(value, schema, path, where) {
+  const label = path.length > 0 ? path.join(".") : "(root)";
+  const unwrapped = unwrap(schema);
+  if (unwrapped instanceof z.ZodObject) {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error(`${where} ${label}: expected an object`);
     }
-  }
-  for (const key of Object.keys(value)) {
-    if (!(key in tree)) {
-      throw new Error(`${path.join(".") || "(root)"}: unexpected emitted key ${key}`);
-    }
-  }
-  for (const key of Object.keys(tree)) {
-    const expected = tree[key];
-    const actual = value[key];
-    const where = [...path, key].join(".");
-    if (expected === null) continue;
-    if (Array.isArray(expected)) {
-      if (!Array.isArray(actual)) {
-        throw new Error(`${where}: expected an array`);
+    const shape = unwrapped.shape;
+    for (const key of Object.keys(value)) {
+      if (!(key in shape)) {
+        throw new Error(
+          `${where} ${label}: undeclared wire key ${key} (not in contract/wire-contract.mjs)`,
+        );
       }
-      if (expected.length === 0) {
-        if (actual.length !== 0) {
-          throw new Error(`${where}: expected an empty array`);
-        }
-      } else {
-        if (actual.length === 0) {
-          throw new Error(`${where}: expected a non-empty array`);
-        }
-        for (const [index, item] of actual.entries()) {
-          assertPayloadTree(item, expected[0], [...path, key, `[${index}]`]);
-        }
-      }
-      continue;
+      walkStructure(value[key], shape[key], [...path, key], where);
     }
-    assertObject(actual, where);
-    assertPayloadTree(actual, expected, [...path, key]);
+    for (const key of Object.keys(shape)) {
+      if (!shape[key].isOptional() && !(key in value)) {
+        throw new Error(`${where} ${label}: missing wire key ${key} required by the decoder`);
+      }
+    }
+    return;
   }
+  if (unwrapped instanceof z.ZodArray) {
+    if (!Array.isArray(value)) {
+      throw new Error(`${where} ${label}: expected an array`);
+    }
+    for (const [index, item] of value.entries()) {
+      walkStructure(item, unwrapped.element, [...path, `[${index}]`], where);
+    }
+    return;
+  }
+  if (unwrapped instanceof z.ZodUnion) {
+    // Any branch that matches the value's structure is acceptable; pick the
+    // first branch whose shape the value could have (null for nullable
+    // branches, otherwise the first non-null branch).
+    if (value === null) {
+      return;
+    }
+    for (const option of unwrapped.options) {
+      try {
+        walkStructure(value, option, path, where);
+        return;
+      } catch {
+        // Try the next union branch.
+      }
+    }
+    throw new Error(`${where} ${label}: matches no wire-contract union branch`);
+  }
+  if (unwrapped instanceof z.ZodRecord) {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error(`${where} ${label}: expected an object`);
+    }
+    return;
+  }
+  if (unwrapped instanceof z.ZodEnum || unwrapped instanceof z.ZodUnknown) {
+    return;
+  }
+  // Leaf (string, number, boolean, null): token objects and plain values are
+  // both acceptable here; value shapes are validated against resolved
+  // payloads by the schema's own checks and the Rust decoder test.
+}
+
+function unwrap(schema) {
+  let current = schema;
+  while ((current.isOptional() || current.isNullable()) && current._def.innerType !== undefined) {
+    current = current._def.innerType;
+  }
+  return current;
 }
 
 /**
- * Asserts that every key in `payload` exists at the same path in `tree`
- * (subset direction, used by the smoke provider, whose payload deliberately
- * omits optional keys).
+ * Asserts that `payload` is a valid instance of the wire contract (subset
+ * direction, used by the smoke provider, whose payload deliberately omits
+ * optional keys): every key is declared, required keys are present, and value
+ * shapes match.
  */
-export function assertPayloadWithinSynthShape(
-  payload,
-  tree = EXPECTED_DEFAULT_PAYLOAD_TREE,
-  path = [],
-) {
-  assertObject(payload, path.join(".") || "(root)");
-  for (const key of Object.keys(payload)) {
-    const where = [...path, key].join(".");
-    if (!(key in tree)) {
-      throw new Error(
-        `${where} is not emitted by the construct's default wire tree ` +
-          "(scripts/synth-payload-shape.mjs); rename it there or drop it from the payload",
-      );
-    }
-    const expected = tree[key];
-    const actual = payload[key];
-    if (expected === null) continue;
-    if (Array.isArray(expected)) {
-      if (!Array.isArray(actual)) {
-        throw new Error(`${where}: expected an array`);
-      }
-      if (expected.length > 0) {
-        for (const [index, item] of actual.entries()) {
-          assertPayloadWithinSynthShape(item, expected[0], [...path, key, `[${index}]`]);
-        }
-      }
-      continue;
-    }
-    assertObject(actual, where);
-    assertPayloadWithinSynthShape(actual, expected, [...path, key]);
+export function assertPayloadWithinSynthShape(payload) {
+  const result = wireContractSchema.safeParse(payload);
+  if (!result.success) {
+    throw new Error(
+      `Smoke payload does not conform to the wire contract ` +
+        `(contract/wire-contract.mjs):\n${describeIssues(result.error)}`,
+    );
   }
 }
 

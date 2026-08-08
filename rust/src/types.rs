@@ -84,6 +84,7 @@ mod detailed_failure_diagnostics_tests {
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub(crate) struct MarkerConfig {
     #[serde(default, deserialize_with = "crate::util::deserialize_boolish")]
     pub(crate) json_escape: bool,

@@ -8,6 +8,7 @@ mod request;
 mod s3;
 mod types;
 mod util;
+mod wire_contract;
 
 use std::sync::Arc;
 use std::time::Duration;
