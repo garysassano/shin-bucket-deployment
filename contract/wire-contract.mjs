@@ -80,6 +80,26 @@ const U64_MAX = 18_446_744_073_709_551_615n;
 const U32_MAX = 4_294_967_295;
 const JS_INTEGER_MAX = Number.MAX_SAFE_INTEGER;
 
+// Decimal strings the Rust `parse` helpers accept, expressed exactly: digits
+// only (no sign — `parse` would take a leading `+`, the schema does not), any
+// number of leading zeros, and a value within the integer width bound. The
+// bound lives in the pattern rather than a BigInt refine because the JSON
+// Schema artifact can carry patterns but not refinements, and the artifact is
+// the value language the Rust decoder binds to: without the bound there, the
+// committed artifact would accept "18446744073709551616" while both
+// implementations reject it.
+const U64_DECIMAL_SOURCE =
+  `0*(?:\\d{1,19}|1[0-7]\\d{18}|18[0-3]\\d{17}|184[0-3]\\d{16}|1844[0-5]\\d{15}|` +
+  `18446[0-6]\\d{14}|184467[0-3]\\d{13}|1844674[0-3]\\d{12}|184467440[0-6]\\d{10}|` +
+  `1844674407[0-2]\\d{9}|18446744073[0-6]\\d{8}|1844674407370[0-8]\\d{6}|` +
+  `18446744073709[0-4]\\d{5}|184467440737095[0-4]\\d{4}|1844674407370955[0]\\d{3}|` +
+  `18446744073709551[0-5]\\d{2}|184467440737095516[0]\\d|1844674407370955161[0-4]|` +
+  `18446744073709551615)`;
+const U32_DECIMAL_SOURCE =
+  `0*(?:\\d{1,9}|[1-3]\\d{9}|4[0-1]\\d{8}|42[0-8]\\d{7}|429[0-3]\\d{6}|` +
+  `4294[0-8]\\d{5}|42949[0-5]\\d{4}|429496[0-6]\\d{3}|4294967[0-1]\\d{2}|` +
+  `42949672[0-8]\\d|429496729[0-5])`;
+
 /**
  * Wire form of `deserialize_boolish`: boolean or a true/false string in any
  * case (`deserialize_boolish` lowercases before matching). No surrounding
@@ -98,12 +118,7 @@ const boolish = z.union([
  */
 const unsigned = z.union([
   z.number().int().min(0).max(JS_INTEGER_MAX),
-  z
-    .string()
-    .regex(/^\d+$/)
-    // zod v4 runs refinements on the raw input before the base checks, so the
-    // refine must be total: only decimal strings reach the BigInt bound.
-    .refine((value) => typeof value === "string" && /^\d+$/.test(value) && BigInt(value) <= U64_MAX),
+  z.string().regex(new RegExp(`^(?:${U64_DECIMAL_SOURCE})$`)),
 ]);
 
 /**
@@ -115,16 +130,7 @@ const unsigned = z.union([
  */
 const unsignedOptional = z.union([
   z.number().int().min(0).max(JS_INTEGER_MAX),
-  z
-    .string()
-    .regex(/^\s*(?:\d+)?\s*$/)
-    .refine((value) => {
-      if (typeof value !== "string") {
-        return false;
-      }
-      const trimmed = value.trim();
-      return trimmed === "" || (/^\d+$/.test(trimmed) && BigInt(trimmed) <= U64_MAX);
-    }),
+  z.string().regex(new RegExp(`^\\s*(?:${U64_DECIMAL_SOURCE})?\\s*$`)),
 ]);
 
 /**
@@ -134,13 +140,7 @@ const unsignedOptional = z.union([
  */
 const catalogVersion = z.union([
   z.number().int().min(0).max(U32_MAX),
-  z
-    .string()
-    .regex(/^\d+$/)
-    .refine(
-      (value) =>
-        typeof value === "string" && /^\d+$/.test(value) && BigInt(value) <= BigInt(U32_MAX),
-    ),
+  z.string().regex(new RegExp(`^(?:${U32_DECIMAL_SOURCE})$`)),
 ]);
 
 const sourceCatalogSchema = z.strictObject({
