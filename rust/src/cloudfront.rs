@@ -15,8 +15,8 @@ const MAX_INVALIDATION_PATH_CHARACTERS: usize = 4_000;
 /// CloudFront's documented per-request file quota: "File invalidation: maximum
 /// number of files allowed in active invalidation requests, excluding wildcard
 /// invalidations" (3,000). A wildcard path (one whose final character is `*`)
-/// does not count toward it. See .plans/plan-consolidated.md T-5; the construct
-/// enforces the same bound at synthesis.
+/// does not count toward it. The construct enforces the same bound at
+/// synthesis.
 const MAX_INVALIDATION_PATHS: usize = 3_000;
 /// CloudFront's documented quota of 15 active wildcard invalidations per
 /// distribution is runtime service state, so a request may carry at most this

@@ -37,9 +37,8 @@ export function grantDestinationPermissions(
   // `s3:GetObject` is load-bearing and must not be removed: the provider's
   // copy-identity reconciliation probes `HeadObject` against the destination
   // (extract:false copies and marker entries), and S3 authorizes `HeadObject`
-  // via `s3:GetObject`. See finding N-1 in .plans/plan-consolidated.md; a plan
-  // that proposed trimming this grant was refuted because deployments would
-  // fail with AccessDenied.
+  // via `s3:GetObject`, so trimming this grant would fail deployments with
+  // AccessDenied.
   destinationGrants.actionsOnObjectKeys(
     handler,
     destinationObjectKeyPattern,
