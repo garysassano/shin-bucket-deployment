@@ -6,8 +6,8 @@
 // than the current `rust/` source is selected silently. This gate refuses to
 // start a deployment that would ship such an archive.
 //
-// Freshness is decided two ways, and both reuse the exact implementations that
-// staged the archive:
+// Freshness is decided by comparing the recorded build recipe with the current
+// one, reusing the exact implementations that staged the archive:
 //
 // - the provider-build-input digest (`collectProviderBuildInputIdentity` from
 //   `source-identity.mjs`) covers the files that determine the binary (rust
@@ -16,6 +16,13 @@
 //   uncommitted benchmark row does not change it, so a byte-identical archive
 //   stays deployable from a dirty tree; changing rust/ does change it, so the
 //   archive is refused until `pnpm prebuild:bootstrap` reruns.
+// - the build-toolchain digest (`collectBuildToolchainIdentity`) covers the
+//   resolved compiler/tool identities and cargo configuration, and the
+//   build-environment digest (`buildEnvironmentSha256`) covers the bounded
+//   build-flag variable list (RUSTFLAGS, CARGO_PROFILE_*, CARGO_HOME, ...).
+//   Both are recorded in the provenance by `build-bootstrap.mjs` and re-derived
+//   here, so an archive built with different flags, a different CARGO_HOME, or
+//   a different toolchain resolution is refused instead of deployed silently.
 // - the archive bytes themselves are verified against the provenance's
 //   `bootstrapArchiveSha256`/`bootstrapSha256` via the same ZIP reader
 //   `verify-package.mjs` uses, so a swapped or hand-edited archive cannot pass
@@ -33,7 +40,11 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { collectProviderBuildInputIdentity } from "./source-identity.mjs";
+import {
+  buildEnvironmentSha256,
+  collectBuildToolchainIdentity,
+  collectProviderBuildInputIdentity,
+} from "./source-identity.mjs";
 import { readBootstrapEntry, sha256File } from "./verify-package.mjs";
 
 export const STALE_BOOTSTRAP_ESCAPE_HATCH = "SHIN_ALLOW_STALE_BOOTSTRAP";
@@ -45,16 +56,19 @@ const DIGEST_SHORT_LENGTH = 12;
 
 /**
  * Refuses to deploy when any staged prebuilt provider archive is not fresh:
- * either its provider build inputs differ from the current ones, or its bytes
- * do not match the digest recorded in its build provenance. Throws with a fix
- * instruction otherwise.
+ * its provider build inputs, build toolchain, or build environment differ
+ * from the current ones, or its bytes do not match the digest recorded in its
+ * build provenance. Throws with a fix instruction otherwise.
  *
  * Only archives that actually exist are checked: when no archive is staged the
  * construct compiles from source and there is nothing to gate. Directories that
  * are not `bootstrap-<arch>` are ignored. When `architectures` is given, only
  * staged archives for those architectures are checked — the caller (the
  * scenario runner) knows which architectures its deploy runs can select and
- * must not gate an architecture no run deploys.
+ * must not gate an architecture no run deploys. An explicitly empty selection
+ * is refused: "no architectures" is a caller bug (the runner skips the gate
+ * entirely when a plan genuinely needs no prebuilt archive), and silently
+ * gating nothing would let a stale archive deploy.
  */
 export function assertStagedBootstrapFreshness({
   repositoryRoot,
@@ -63,6 +77,14 @@ export function assertStagedBootstrapFreshness({
 } = {}) {
   if (escapeHatchEnabled(env)) {
     return;
+  }
+  if (architectures !== undefined && architectures.length === 0) {
+    throw new Error(
+      `Refusing to verify bootstrap freshness for zero architectures. ` +
+        `Pass no architectures to check every staged archive, or pass the ` +
+        `architectures a deploy can select; an explicit empty selection would ` +
+        `silently gate nothing.`,
+    );
   }
   const assetsRoot = join(repositoryRoot, "assets");
   if (!existsSync(assetsRoot)) {
@@ -84,13 +106,20 @@ export function assertStagedBootstrapFreshness({
     return;
   }
 
-  let currentDigest;
+  let currentIdentity;
   try {
-    currentDigest = collectProviderBuildInputIdentity(repositoryRoot).providerInputSha256;
+    currentIdentity = {
+      providerInputSha256: collectProviderBuildInputIdentity(repositoryRoot)
+        .providerInputSha256,
+      buildToolchainSha256: collectBuildToolchainIdentity(repositoryRoot)
+        .buildToolchainSha256,
+      buildEnvironmentSha256: buildEnvironmentSha256(env),
+    };
   } catch (error) {
     throw new Error(
-      `Unable to verify the staged provider bootstrap against the current source ` +
-        `tree: ${error instanceof Error ? error.message : String(error)}. ` +
+      `Unable to verify the staged provider bootstrap against the current ` +
+        `source and build recipe: ` +
+        `${error instanceof Error ? error.message : String(error)}. ` +
         `Refusing to deploy an unverifiable archive.`,
     );
   }
@@ -121,23 +150,29 @@ export function assertStagedBootstrapFreshness({
           `a sourceTreeSha256, so the archive's source cannot be verified.`,
       );
     }
-    if (typeof provenance.providerInputSha256 !== "string") {
-      throw staleBootstrapError(
-        architecture,
-        `assets/bootstrap-${architecture}/build-provenance.json does not record ` +
-          `a providerInputSha256. The archive was staged before provider-build-input ` +
-          `digests existed, so its freshness cannot be verified.`,
-      );
-    }
-    if (provenance.providerInputSha256 !== currentDigest) {
-      throw staleBootstrapError(
-        architecture,
-        `assets/bootstrap-${architecture}/bootstrap.zip was built from provider ` +
-          `inputs hashing to ${shortDigest(provenance.providerInputSha256)} (recorded in ` +
-          `build-provenance.json), but the current provider inputs hash to ` +
-          `${shortDigest(currentDigest)}. The archive would be deployed silently ` +
-          `instead of the current rust/ source.`,
-      );
+    for (const [digestName, label] of [
+      ["providerInputSha256", "provider inputs"],
+      ["buildToolchainSha256", "build toolchain"],
+      ["buildEnvironmentSha256", "build environment"],
+    ]) {
+      if (typeof provenance[digestName] !== "string") {
+        throw staleBootstrapError(
+          architecture,
+          `assets/bootstrap-${architecture}/build-provenance.json does not record ` +
+            `a ${digestName}. The archive was staged before ${label} digests ` +
+            `existed, so its freshness cannot be verified.`,
+        );
+      }
+      if (provenance[digestName] !== currentIdentity[digestName]) {
+        throw staleBootstrapError(
+          architecture,
+          `assets/bootstrap-${architecture}/bootstrap.zip was built from ${label} ` +
+            `hashing to ${shortDigest(provenance[digestName])} (recorded in ` +
+            `build-provenance.json), but the current ${label} hash to ` +
+            `${shortDigest(currentIdentity[digestName])}. The archive would be ` +
+            `deployed silently instead of a provider built from the current ${label}.`,
+        );
+      }
     }
     let archiveDigests;
     try {

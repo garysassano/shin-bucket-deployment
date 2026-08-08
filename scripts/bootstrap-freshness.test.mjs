@@ -10,7 +10,11 @@ import {
   STALE_BOOTSTRAP_ESCAPE_HATCH,
   assertStagedBootstrapFreshness,
 } from "./bootstrap-freshness.mjs";
-import { collectProviderBuildInputIdentity } from "./source-identity.mjs";
+import {
+  buildEnvironmentSha256,
+  collectBuildToolchainIdentity,
+  collectProviderBuildInputIdentity,
+} from "./source-identity.mjs";
 
 const ZIP_LOCAL_FILE_HEADER = 0x04034b50;
 const ZIP_CENTRAL_DIRECTORY_HEADER = 0x02014b50;
@@ -94,7 +98,31 @@ function makeRepo(t) {
   return root;
 }
 
-function stageArchive(root, arch, { providerInputSha256, archive = undefined, dirty = false }) {
+/**
+ * The current build recipe of the fixture: the three digests the gate compares
+ * against the provenance. The toolchain identity is derived from the real
+ * environment (cargo/rustc/cargo-lambda/zig), matching what a maintainer-run
+ * deploy would compare.
+ */
+function currentIdentity(root) {
+  return {
+    providerInputSha256: collectProviderBuildInputIdentity(root).providerInputSha256,
+    buildToolchainSha256: collectBuildToolchainIdentity(root).buildToolchainSha256,
+    buildEnvironmentSha256: buildEnvironmentSha256(),
+  };
+}
+
+function stageArchive(
+  root,
+  arch,
+  {
+    providerInputSha256,
+    buildToolchainSha256,
+    buildEnvironmentSha256,
+    archive = undefined,
+    dirty = false,
+  },
+) {
   const directory = join(root, "assets", `bootstrap-${arch}`);
   mkdirSync(directory, { recursive: true });
   const zip = archive ?? providerArchiveZip(ELF_MACHINE_BY_ARCH[arch]);
@@ -105,6 +133,12 @@ function stageArchive(root, arch, { providerInputSha256, archive = undefined, di
     30 + "bootstrap".length,
     30 + "bootstrap".length + 64,
   );
+  const identity =
+    providerInputSha256 === undefined ||
+    buildToolchainSha256 === undefined ||
+    buildEnvironmentSha256 === undefined
+      ? currentIdentity(root)
+      : undefined;
   writeFileSync(
     join(directory, "build-provenance.json"),
     `${JSON.stringify(
@@ -114,7 +148,11 @@ function stageArchive(root, arch, { providerInputSha256, archive = undefined, di
         sourceCommit: "0".repeat(40),
         sourceDirty: dirty,
         sourceTreeSha256: "0".repeat(64),
-        providerInputSha256,
+        providerInputSha256: providerInputSha256 ?? identity.providerInputSha256,
+        buildToolchainSha256:
+          buildToolchainSha256 ?? identity.buildToolchainSha256,
+        buildEnvironmentSha256:
+          buildEnvironmentSha256 ?? identity.buildEnvironmentSha256,
         providerInputDirty: dirty,
         bootstrapSha256: sha256(bootstrap),
         bootstrapArchiveSha256: sha256(zip),
@@ -123,10 +161,6 @@ function stageArchive(root, arch, { providerInputSha256, archive = undefined, di
       2,
     )}\n`,
   );
-}
-
-function currentDigest(root) {
-  return collectProviderBuildInputIdentity(root).providerInputSha256;
 }
 
 function captureError(fn) {
@@ -140,14 +174,14 @@ function captureError(fn) {
 
 test("passes when the staged archive was built from the current provider inputs", (t) => {
   const root = makeRepo(t);
-  stageArchive(root, "arm64", { providerInputSha256: currentDigest(root) });
+  stageArchive(root, "arm64", {});
 
   assert.doesNotThrow(() => assertStagedBootstrapFreshness({ repositoryRoot: root }));
 });
 
 test("passes when only some architectures are staged and they are all fresh", (t) => {
   const root = makeRepo(t);
-  stageArchive(root, "arm64", { providerInputSha256: currentDigest(root) });
+  stageArchive(root, "arm64", {});
   // An architecture directory without an archive means the construct compiles
   // for that architecture and must not be gated.
   mkdirSync(join(root, "assets", "bootstrap-x86_64"), { recursive: true });
@@ -171,7 +205,9 @@ test("refuses a provider-input mismatch and names the architecture, both digests
   assert.match(error.message, /provider inputs hashing to 000000000000/);
   assert.match(
     error.message,
-    new RegExp(`current provider inputs hash to ${currentDigest(root).slice(0, 12)}`),
+    new RegExp(
+      `current provider inputs hash to ${currentIdentity(root).providerInputSha256.slice(0, 12)}`,
+    ),
   );
   assert.match(error.message, /pnpm prebuild:bootstrap/);
   assert.match(error.message, new RegExp(`${STALE_BOOTSTRAP_ESCAPE_HATCH}=1`));
@@ -179,7 +215,7 @@ test("refuses a provider-input mismatch and names the architecture, both digests
 
 test("refuses when any staged architecture is stale, not only the first", (t) => {
   const root = makeRepo(t);
-  stageArchive(root, "arm64", { providerInputSha256: currentDigest(root) });
+  stageArchive(root, "arm64", {});
   stageArchive(root, "x86_64", { providerInputSha256: "1".repeat(64) });
 
   const error = captureError(() => assertStagedBootstrapFreshness({ repositoryRoot: root }));
@@ -190,7 +226,7 @@ test("refuses when any staged architecture is stale, not only the first", (t) =>
 test("checks only the architectures the caller selects", (t) => {
   const root = makeRepo(t);
   stageArchive(root, "arm64", { providerInputSha256: "0".repeat(64) });
-  stageArchive(root, "x86_64", { providerInputSha256: currentDigest(root) });
+  stageArchive(root, "x86_64", {});
 
   // Only x86_64 is fresh, and only x86_64 is selected, so the deploy is fine.
   assert.doesNotThrow(() =>
@@ -230,7 +266,7 @@ test("refuses an archive whose provenance predates provider-input digests", (t) 
 
 test("refuses a replaced archive even when the provenance records matching source digests", (t) => {
   const root = makeRepo(t);
-  const digest = currentDigest(root);
+  const digest = currentIdentity(root).providerInputSha256;
   // Stage a fresh archive, then swap its bytes while leaving the provenance
   // file intact: the recorded provider-input digest still matches, so only
   // the archive-byte check can catch the replacement.
@@ -246,8 +282,7 @@ test("refuses a replaced archive even when the provenance records matching sourc
 
 test("passes a digest-matching archive built from a dirty tree", (t) => {
   const root = makeRepo(t);
-  const digest = currentDigest(root);
-  stageArchive(root, "arm64", { providerInputSha256: digest, dirty: true });
+  stageArchive(root, "arm64", { dirty: true });
 
   assert.doesNotThrow(() => assertStagedBootstrapFreshness({ repositoryRoot: root }));
 });
@@ -255,7 +290,14 @@ test("passes a digest-matching archive built from a dirty tree", (t) => {
 test("refuses when the current source tree cannot be verified", (t) => {
   const root = mkdtempSync(join(tmpdir(), "shin-freshness-nogit-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  stageArchive(root, "arm64", { providerInputSha256: "0".repeat(64) });
+  // The fixture is not a git repository, so no current identity can be
+  // computed; record explicit garbage for every digest so staging itself
+  // does not need the identity.
+  stageArchive(root, "arm64", {
+    providerInputSha256: "0".repeat(64),
+    buildToolchainSha256: "0".repeat(64),
+    buildEnvironmentSha256: "0".repeat(64),
+  });
 
   const error = captureError(() => assertStagedBootstrapFreshness({ repositoryRoot: root }));
   assert.match(error.message, /Unable to verify the staged provider bootstrap/);
@@ -305,6 +347,54 @@ test("the escape hatch is not enabled by empty, zero, or false values", (t) => {
       `value ${JSON.stringify(value)} must not enable the escape hatch`,
     );
   }
+});
+
+test("refuses an archive built with a different build environment", (t) => {
+  const root = makeRepo(t);
+  stageArchive(root, "arm64", {});
+
+  const error = captureError(() =>
+    assertStagedBootstrapFreshness({
+      repositoryRoot: root,
+      env: { ...process.env, RUSTFLAGS: "-C opt-level=0" },
+    }),
+  );
+  assert.match(error.message, /build environment hashing to /);
+  assert.match(error.message, /current build environment hash to /);
+  assert.match(error.message, /pnpm prebuild:bootstrap/);
+});
+
+test("refuses an archive whose recorded build toolchain differs from the current one", (t) => {
+  const root = makeRepo(t);
+  stageArchive(root, "arm64", { buildToolchainSha256: "0".repeat(64) });
+
+  const error = captureError(() => assertStagedBootstrapFreshness({ repositoryRoot: root }));
+  assert.match(error.message, /build toolchain hashing to 000000000000/);
+  assert.match(error.message, /current build toolchain hash to /);
+});
+
+test("refuses an archive whose provenance predates build-recipe digests", (t) => {
+  const root = makeRepo(t);
+  stageArchive(root, "arm64", {});
+  const directory = join(root, "assets", "bootstrap-arm64");
+  const manifest = JSON.parse(readFileSync(join(directory, "build-provenance.json"), "utf8"));
+  delete manifest.buildToolchainSha256;
+  delete manifest.buildEnvironmentSha256;
+  writeFileSync(join(directory, "build-provenance.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+
+  const error = captureError(() => assertStagedBootstrapFreshness({ repositoryRoot: root }));
+  assert.match(error.message, /does not record a buildToolchainSha256/);
+});
+
+test("refuses an explicitly empty architecture selection instead of gating nothing", (t) => {
+  const root = makeRepo(t);
+  stageArchive(root, "arm64", {});
+
+  const error = captureError(() =>
+    assertStagedBootstrapFreshness({ repositoryRoot: root, architectures: [] }),
+  );
+  assert.match(error.message, /zero architectures/);
+  assert.match(error.message, /silently gate nothing/);
 });
 
 test("non-bootstrap directories under assets are ignored", (t) => {
