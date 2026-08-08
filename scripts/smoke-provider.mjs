@@ -42,6 +42,7 @@ import {
   PutObjectCommand,
   S3Client,
 } from "@aws-sdk/client-s3";
+import { assertPayloadPaths, assertPayloadWithinSynthShape } from "./synth-payload-shape.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(__dirname, "..");
@@ -157,7 +158,10 @@ export function buildSourceZip(entries) {
  *
  * `ResourceProperties` mirrors what the construct synthesizes for a simple
  * site. The provider decodes the envelope strictly (`deny_unknown_fields`),
- * so only fields the provider declares may appear.
+ * so only fields the provider declares may appear. To keep this hand-built
+ * payload from drifting from what the construct actually emits, it is checked
+ * against the checked-in wire tree (scripts/synth-payload-shape.mjs) on every
+ * build: any key outside the tree, or any missing required path, throws.
  */
 export function buildCreateEvent({
   sourceBucketNames = [SOURCE_BUCKET],
@@ -170,7 +174,7 @@ export function buildCreateEvent({
   stackId = "arn:aws:cloudformation:us-east-1:000000000000:stack/shin-provider-smoke/00000000-0000-4000-8000-000000000000",
   logicalResourceId = "ShinProviderSmoke",
 } = {}) {
-  return {
+  const event = {
     RequestType: "Create",
     ServiceToken: serviceToken,
     ResponseURL: responseUrl,
@@ -203,6 +207,9 @@ export function buildCreateEvent({
       ServiceToken: serviceToken,
     },
   };
+  assertPayloadWithinSynthShape(event.ResourceProperties);
+  assertPayloadPaths(event.ResourceProperties);
+  return event;
 }
 
 /** The destination keys a successful deployment of `entries` must contain. */
