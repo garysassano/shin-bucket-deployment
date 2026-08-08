@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -88,7 +88,7 @@ function makeRepo(t) {
   writeFileSync(join(root, ".gitignore"), "assets\n");
   mkdirSync(join(root, "rust"), { recursive: true });
   writeFileSync(join(root, "rust", "lib.rs"), "// fixture\n");
-  writeFileSync(join(root, "mise.toml"), "[tools]\nrust = \"1.0.0\"\n");
+  writeFileSync(join(root, "mise.toml"), '[tools]\nrust = "1.0.0"\n');
   run("git", ["add", "."], root);
   run("git", ["commit", "-q", "-m", "fixture"], root);
   return root;
@@ -200,10 +200,7 @@ test("checks only the architectures the caller selects", (t) => {
     () => assertStagedBootstrapFreshness({ repositoryRoot: root, architectures: ["arm64"] }),
     /\(arm64\)/,
   );
-  assert.throws(
-    () => assertStagedBootstrapFreshness({ repositoryRoot: root }),
-    /\(arm64\)/,
-  );
+  assert.throws(() => assertStagedBootstrapFreshness({ repositoryRoot: root }), /\(arm64\)/);
 });
 
 test("refuses a staged archive whose build provenance is missing", (t) => {
@@ -223,14 +220,9 @@ test("refuses an archive whose provenance predates provider-input digests", (t) 
   const root = makeRepo(t);
   stageArchive(root, "arm64", { providerInputSha256: "0".repeat(64) });
   const directory = join(root, "assets", "bootstrap-arm64");
-  const manifest = JSON.parse(
-    readFileSync(join(directory, "build-provenance.json"), "utf8"),
-  );
+  const manifest = JSON.parse(readFileSync(join(directory, "build-provenance.json"), "utf8"));
   delete manifest.providerInputSha256;
-  writeFileSync(
-    join(directory, "build-provenance.json"),
-    `${JSON.stringify(manifest, null, 2)}\n`,
-  );
+  writeFileSync(join(directory, "build-provenance.json"), `${JSON.stringify(manifest, null, 2)}\n`);
 
   const error = captureError(() => assertStagedBootstrapFreshness({ repositoryRoot: root }));
   assert.match(error.message, /does not record a providerInputSha256/);

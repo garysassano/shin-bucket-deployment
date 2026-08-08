@@ -68,8 +68,7 @@ export function assertStagedBootstrapFreshness({
   if (!existsSync(assetsRoot)) {
     return;
   }
-  const selectedArchitectures =
-    architectures === undefined ? undefined : new Set(architectures);
+  const selectedArchitectures = architectures === undefined ? undefined : new Set(architectures);
   const archiveDirs = readdirSync(assetsRoot)
     .filter((entry) => entry.startsWith(ARCHIVE_DIR_PREFIX))
     .map((entry) => ({
@@ -78,7 +77,8 @@ export function assertStagedBootstrapFreshness({
     }))
     .filter((entry) => existsSync(join(entry.directory, ARCHIVE_FILE)))
     .filter(
-      (entry) => selectedArchitectures === undefined || selectedArchitectures.has(entry.architecture),
+      (entry) =>
+        selectedArchitectures === undefined || selectedArchitectures.has(entry.architecture),
     );
   if (archiveDirs.length === 0) {
     return;
@@ -155,7 +155,11 @@ export function assertStagedBootstrapFreshness({
       );
     }
     for (const [digestName, recorded, actual] of [
-      ["bootstrapArchiveSha256", provenance.bootstrapArchiveSha256, archiveDigests.bootstrapArchiveSha256],
+      [
+        "bootstrapArchiveSha256",
+        provenance.bootstrapArchiveSha256,
+        archiveDigests.bootstrapArchiveSha256,
+      ],
       ["bootstrapSha256", provenance.bootstrapSha256, archiveDigests.bootstrapSha256],
     ]) {
       if (recorded !== actual) {

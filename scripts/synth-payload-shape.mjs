@@ -198,10 +198,7 @@ function walkStructure(value, schema, path, where) {
  * a required unknown-typed key (the envelope's `ServiceToken`) as optional.
  */
 function isFieldOptional(schema) {
-  return (
-    schema instanceof z.ZodOptional ||
-    schema instanceof z.ZodDefault
-  );
+  return schema instanceof z.ZodOptional || schema instanceof z.ZodDefault;
 }
 
 function unwrap(schema) {

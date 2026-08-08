@@ -39,7 +39,11 @@ function baselinePayload(): Record<string, unknown> {
   };
 }
 
-function setAtPath(payload: Record<string, unknown>, path: readonly string[], value: unknown): void {
+function setAtPath(
+  payload: Record<string, unknown>,
+  path: readonly string[],
+  value: unknown,
+): void {
   let node: unknown = payload;
   for (let index = 0; index < path.length - 1; index++) {
     const segment = path[index]!;

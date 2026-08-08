@@ -29,8 +29,8 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   buildEnvironmentSha256,
-  collectProviderBuildInputIdentity,
   collectBuildToolchainIdentity,
+  collectProviderBuildInputIdentity,
   collectSourceIdentity,
   directorySha256,
 } from "./source-identity.mjs";

@@ -515,9 +515,15 @@ describe("scenario executor", () => {
             runs: [
               {
                 ...verifiedRun("arm64-only"),
-                definition: { ...verifiedRun("arm64-only").definition, providerArchitectures: ["arm64", "x86_64"] },
+                definition: {
+                  ...verifiedRun("arm64-only").definition,
+                  providerArchitectures: ["arm64", "x86_64"],
+                },
               },
-              { ...verifiedRun("local"), definition: { ...verifiedRun("local").definition, providerArchitectures: [] } },
+              {
+                ...verifiedRun("local"),
+                definition: { ...verifiedRun("local").definition, providerArchitectures: [] },
+              },
             ],
           },
         ],

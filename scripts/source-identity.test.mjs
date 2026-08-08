@@ -86,7 +86,7 @@ test("provider input identity follows only the files that determine the binary",
   });
   execFileSync("mkdir", ["-p", "rust/src", "rust/target", "assets"], { cwd: repository });
   writeFileSync(join(repository, ".gitignore"), "target\n");
-  writeFileSync(join(repository, "mise.toml"), "rust = \"1.97.1\"\n");
+  writeFileSync(join(repository, "mise.toml"), 'rust = "1.97.1"\n');
   writeFileSync(join(repository, "rust", "Cargo.toml"), "[package]\n");
   writeFileSync(join(repository, "rust", "Cargo.lock"), "lock\n");
   writeFileSync(join(repository, "rust", "src", "lib.rs"), "// provider\n");
@@ -131,7 +131,7 @@ test("provider input identity follows only the files that determine the binary",
   assert.equal(afterTarget.providerInputSha256, clean.providerInputSha256);
 
   // The toolchain pin is a provider input.
-  writeFileSync(join(repository, "mise.toml"), "rust = \"1.98.0\"\n");
+  writeFileSync(join(repository, "mise.toml"), 'rust = "1.98.0"\n');
   const afterToolchain = collectProviderBuildInputIdentity(repository);
   assert.notEqual(afterToolchain.providerInputSha256, clean.providerInputSha256);
   assert.equal(afterToolchain.providerInputDirty, true);

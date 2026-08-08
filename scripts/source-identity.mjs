@@ -1,6 +1,13 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, readFileSync, readdirSync, readlinkSync, realpathSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  readFileSync,
+  readdirSync,
+  readlinkSync,
+  realpathSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, isAbsolute, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -139,10 +146,7 @@ const PROVIDER_INPUT_ROOT_FILES = [
   "rust/.cargo/config.toml",
 ];
 const PROVIDER_INPUT_SOURCE_DIR = "rust/src";
-const PROVIDER_INPUT_PATHSPECS = [
-  PROVIDER_INPUT_SOURCE_DIR,
-  ...PROVIDER_INPUT_ROOT_FILES,
-];
+const PROVIDER_INPUT_PATHSPECS = [PROVIDER_INPUT_SOURCE_DIR, ...PROVIDER_INPUT_ROOT_FILES];
 
 /**
  * The provider-build-input identity: a digest over the working-tree contents
