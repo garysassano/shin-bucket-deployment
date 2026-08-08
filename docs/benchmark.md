@@ -10,41 +10,41 @@ Provider-summary schema-5 result rows, their generated reports, and their chart 
 
 ## Latest CI benchmark
 
-The latest complete canonical five-repetition run was collected by GitHub Actions on 2026-08-06 from source commit `3d33549`. It contains five sequential repetitions of all canonical profiles across all four phases. The sanitized run UUID is `e654d1fe-261d-4700-95af-0a7518520e5a`; raw AWS output remains outside git.
+The latest complete canonical five-repetition run was collected by GitHub Actions on 2026-08-08 from source commit `a9b04c2`. It contains five sequential repetitions of all canonical profiles across all four phases. The sanitized run UUID is `3a1fe594-bc8b-4cf5-af4b-7baca96cb8d5`; raw AWS output remains outside git.
 
 | Field                 | Value                                                      |
 | --------------------- | ---------------------------------------------------------- |
 | Region                | `eu-central-1`                                             |
 | Lambda configurations | 1024 MiB / 32 Shin transfers, 2048 MiB / 64 Shin transfers |
 | Sanitized rows        | 240                                                        |
-| Cleanup               | all benchmark stacks destroyed                             |
+| Cleanup               | destroyed                                                  |
 
 | Profile     | Phase              |   n | Provider s, Shin / AWS | AWS/Shin | Local wall s, Shin / AWS | Max MiB, Shin / AWS |
 | ----------- | ------------------ | --: | ---------------------: | -------: | -----------------------: | ------------------: |
-| `large-few` | `cold-create`      |   5 |           2.562 / 8.99 |   3.509x |          68.923 / 78.966 |           109 / 447 |
-| `large-few` | `cold-create`      |   5 |          1.217 / 5.058 |   4.156x |          68.861 / 68.019 |           187 / 447 |
-| `large-few` | `unchanged-update` |   5 |          0.312 / 9.238 |  29.609x |          32.827 / 41.771 |            32 / 447 |
-| `large-few` | `unchanged-update` |   5 |           0.251 / 4.98 |  19.841x |          36.361 / 36.436 |            32 / 447 |
-| `large-few` | `changed-update`   |   5 |          0.616 / 9.244 |  15.006x |          37.082 / 47.249 |            39 / 447 |
-| `large-few` | `changed-update`   |   5 |          0.537 / 5.075 |   9.451x |           36.89 / 41.948 |            39 / 447 |
-| `large-few` | `pruned-update`    |   5 |          0.694 / 8.468 |  12.202x |          37.683 / 47.362 |            39 / 417 |
-| `large-few` | `pruned-update`    |   5 |          0.578 / 4.796 |   8.298x |           37.44 / 42.087 |            39 / 417 |
-| `mixed`     | `cold-create`      |   5 |          1.382 / 9.584 |   6.935x |           69.06 / 74.189 |           103 / 281 |
-| `mixed`     | `cold-create`      |   5 |          0.828 / 5.629 |   6.798x |          74.197 / 73.773 |           116 / 282 |
-| `mixed`     | `unchanged-update` |   5 |         0.312 / 10.041 |  32.183x |          31.425 / 42.156 |            33 / 281 |
-| `mixed`     | `unchanged-update` |   5 |          0.286 / 5.702 |  19.937x |          31.349 / 36.679 |            34 / 282 |
-| `mixed`     | `changed-update`   |   5 |            0.628 / 9.7 |  15.446x |          37.242 / 48.532 |            37 / 280 |
-| `mixed`     | `changed-update`   |   5 |          0.414 / 5.623 |  13.582x |          37.521 / 41.992 |            37 / 281 |
-| `mixed`     | `pruned-update`    |   5 |          1.286 / 9.473 |   7.366x |          36.653 / 47.306 |            37 / 273 |
-| `mixed`     | `pruned-update`    |   5 |          1.192 / 5.552 |   4.658x |          36.883 / 42.337 |            37 / 274 |
-| `tiny-many` | `cold-create`      |   5 |         2.632 / 24.333 |   9.245x |          70.911 / 94.642 |            55 / 219 |
-| `tiny-many` | `cold-create`      |   5 |         1.524 / 14.325 |     9.4x |           69.346 / 80.52 |            64 / 222 |
-| `tiny-many` | `unchanged-update` |   5 |         0.515 / 25.116 |  48.769x |          31.758 / 62.939 |            35 / 212 |
-| `tiny-many` | `unchanged-update` |   5 |         0.527 / 14.419 |  27.361x |           32.94 / 47.532 |            35 / 221 |
-| `tiny-many` | `changed-update`   |   5 |         0.664 / 25.264 |  38.048x |          37.186 / 63.873 |            36 / 214 |
-| `tiny-many` | `changed-update`   |   5 |         0.648 / 14.385 |  22.199x |           37.171 / 53.15 |            36 / 221 |
-| `tiny-many` | `pruned-update`    |   5 |         1.516 / 23.925 |  15.782x |           38.02 / 63.798 |            36 / 211 |
-| `tiny-many` | `pruned-update`    |   5 |         1.361 / 13.743 |  10.098x |          37.263 / 53.201 |            35 / 218 |
+| `large-few` | `cold-create`      |   5 |          2.197 / 9.025 |   4.108x |          73.571 / 78.953 |           113 / 447 |
+| `large-few` | `cold-create`      |   5 |          1.407 / 5.273 |   3.748x |           68.686 / 73.25 |           189 / 447 |
+| `large-few` | `unchanged-update` |   5 |          0.253 / 9.639 |  38.099x |          36.068 / 46.793 |            33 / 447 |
+| `large-few` | `unchanged-update` |   5 |          0.227 / 5.274 |  23.233x |          36.145 / 41.264 |            33 / 447 |
+| `large-few` | `changed-update`   |   5 |          0.517 / 9.477 |  18.331x |          36.186 / 56.998 |            40 / 447 |
+| `large-few` | `changed-update`   |   5 |           0.515 / 5.25 |  10.194x |          37.699 / 46.789 |            40 / 447 |
+| `large-few` | `pruned-update`    |   5 |          0.608 / 8.835 |  14.531x |          41.136 / 47.751 |            39 / 417 |
+| `large-few` | `pruned-update`    |   5 |          0.616 / 4.989 |   8.099x |           36.56 / 41.789 |            39 / 417 |
+| `mixed`     | `cold-create`      |   5 |          1.306 / 9.959 |   7.626x |          73.401 / 79.448 |           102 / 281 |
+| `mixed`     | `cold-create`      |   5 |          0.897 / 5.801 |   6.467x |          73.616 / 73.386 |           114 / 282 |
+| `mixed`     | `unchanged-update` |   5 |         0.289 / 10.098 |  34.941x |          37.088 / 46.831 |            34 / 280 |
+| `mixed`     | `unchanged-update` |   5 |          0.284 / 5.935 |  20.898x |          36.729 / 41.491 |            33 / 281 |
+| `mixed`     | `changed-update`   |   5 |          0.481 / 10.25 |   21.31x |          40.487 / 47.414 |            37 / 280 |
+| `mixed`     | `changed-update`   |   5 |          0.523 / 5.889 |   11.26x |          36.177 / 41.426 |            37 / 282 |
+| `mixed`     | `pruned-update`    |   5 |          1.206 / 10.35 |   8.582x |          46.107 / 48.499 |            37 / 273 |
+| `mixed`     | `pruned-update`    |   5 |          1.211 / 5.568 |   4.598x |          40.332 / 41.846 |            37 / 274 |
+| `tiny-many` | `cold-create`      |   5 |         2.675 / 26.184 |   9.788x |         74.425 / 101.137 |            56 / 219 |
+| `tiny-many` | `cold-create`      |   5 |         1.635 / 15.228 |   9.314x |          73.208 / 84.824 |            70 / 222 |
+| `tiny-many` | `unchanged-update` |   5 |         0.556 / 26.201 |  47.124x |          36.148 / 63.907 |            35 / 213 |
+| `tiny-many` | `unchanged-update` |   5 |         0.487 / 15.403 |  31.628x |          36.203 / 52.557 |            35 / 221 |
+| `tiny-many` | `changed-update`   |   5 |         0.645 / 27.127 |  42.057x |          36.815 / 63.797 |            36 / 213 |
+| `tiny-many` | `changed-update`   |   5 |          0.68 / 15.305 |  22.507x |          40.742 / 53.097 |            36 / 221 |
+| `tiny-many` | `pruned-update`    |   5 |         1.473 / 26.598 |  18.057x |          37.068 / 69.948 |            36 / 208 |
+| `tiny-many` | `pruned-update`    |   5 |         1.459 / 14.689 |  10.068x |          38.032 / 53.536 |            36 / 219 |
 
 The [complete generated report](../benchmarks/ci-report.md) includes quartiles, end-to-end timings, and per-phase deltas. [Provider telemetry](../benchmarks/ci-telemetry.md) contains the sanitized Shin diagnostic tables.
 
