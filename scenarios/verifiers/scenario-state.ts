@@ -231,7 +231,7 @@ const SCENARIO_ASSERTIONS: Readonly<Record<string, ScenarioAssertion>> = {
         api,
         bucket,
         "large-archive/.generated.json",
-        '{\n  "fileCount": 2,\n  "largeFileBytes": 25165824\n}\n',
+        `{\n  "fileCount": 2,\n  "largeFileBytes": ${LARGE_OBJECT_BYTES},\n  "largeFileSha256": "${LARGE_OBJECT_SHA256}"\n}\n`,
       ),
       assertObjectBody(
         api,
