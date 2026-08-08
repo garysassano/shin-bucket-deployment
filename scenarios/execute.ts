@@ -21,7 +21,10 @@ export type StartProcess = (
 export type ExecutionOptions = {
   readonly repositoryRoot?: string;
   readonly signal?: AbortSignal;
-  readonly assertDeployableBootstrap?: (repositoryRoot: string) => void;
+  readonly assertDeployableBootstrap?: (
+    repositoryRoot: string,
+    architectures: readonly string[],
+  ) => void;
   readonly startProcess?: StartProcess;
   readonly resolveAwsPrincipalArn?: () => string;
   readonly pathExists?: (path: string) => boolean;
@@ -56,15 +59,18 @@ export async function executeScenarioPlan(
   let firstFailure = 0;
   let externalAborted = false;
 
-  if (plan.groups.some((group) => group.runs.some((run) => run.action === "deploy"))) {
-    // Deploying with a prebuilt provider archive that was not built from the
-    // current source would ship a stale binary silently. Refuse before any
-    // process starts; scenarios that compile from source (`localBuild`) or a
-    // checkout without staged archives are unaffected.
+  const deployedProviderArchitectures = planDeployedProviderArchitectures(plan);
+  if (deployedProviderArchitectures.length > 0) {
+    // A deploy that uses a prebuilt provider archive built from different
+    // provider inputs would ship a stale binary silently, so refuse before
+    // any process starts. The gate covers exactly the architectures the plan's
+    // deploy runs can select (see deployProviderArchitectures below); a run
+    // that compiles from source, or a benchmark run that deploys upstream
+    // AwsBucketDeployment, selects none and is not gated.
     try {
       const assertDeployableBootstrap =
         options.assertDeployableBootstrap ?? (await loadBootstrapFreshnessGate(repositoryRoot));
-      assertDeployableBootstrap(repositoryRoot);
+      assertDeployableBootstrap(repositoryRoot, deployedProviderArchitectures);
     } catch (error) {
       log(error instanceof Error ? error.message : String(error));
       return 1;
@@ -207,6 +213,40 @@ export async function executeScenarioPlan(
     }
   }
   return status;
+}
+
+/**
+ * The provider architectures the plan's deploy runs can ship as prebuilt
+ * archives, or `[]` when no run will.
+ *
+ * The runner builds this from what the plan knows before any app synthesizes:
+ *
+ * - a benchmark run deploys the Shin provider only when
+ *   `SHIN_BENCH_IMPLEMENTATION=shin`; the `aws` implementation uses upstream
+ *   `AwsBucketDeployment` and needs no Shin archive.
+ * - a verify run uses the construct default (the prebuilt `arm64` archive
+ *   when one is staged) unless its catalog entry declares
+ *   `providerArchitectures` — the catalog is the only place the runner can
+ *   learn that a scenario compiles from source or selects another
+ *   architecture, because the app decides `providerLambda.localBuild` and
+ *   `providerLambda.architecture` at synthesis.
+ */
+function planDeployedProviderArchitectures(plan: ScenarioPlan): string[] {
+  const architectures = new Set<string>();
+  for (const group of plan.groups) {
+    for (const run of group.runs) {
+      if (run.action !== "deploy") {
+        continue;
+      }
+      if (run.mode === "benchmark" && run.env.SHIN_BENCH_IMPLEMENTATION === "aws") {
+        continue;
+      }
+      for (const architecture of run.definition.providerArchitectures ?? ["arm64"]) {
+        architectures.add(architecture);
+      }
+    }
+  }
+  return [...architectures];
 }
 
 /**

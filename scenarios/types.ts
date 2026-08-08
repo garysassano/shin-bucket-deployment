@@ -12,6 +12,20 @@ export type ScenarioDefinition = {
   readonly postDestroyVerifier?: string;
   readonly grantVerifierRead?: boolean;
   readonly env?: Readonly<Record<string, string>>;
+  /**
+   * The provider architectures this scenario can deploy with a prebuilt
+   * archive. The runner refuses a stale staged archive for exactly these
+   * architectures before any deployment starts, so a scenario that compiles
+   * the provider from source (`providerLambda.localBuild`) or deploys no Shin
+   * provider must declare `[]`, and a scenario that selects a non-default
+   * architecture must declare that architecture here. Omitted means the
+   * construct default: the prebuilt `arm64` archive when one is staged.
+   *
+   * The scenario app itself decides `providerLambda.architecture` and
+   * `localBuild` at synthesis, which the runner cannot observe before the app
+   * runs, so this catalog field is where that knowledge lives.
+   */
+  readonly providerArchitectures?: readonly string[];
 };
 
 export type ScenarioEntry = readonly [name: string, definition: ScenarioDefinition];

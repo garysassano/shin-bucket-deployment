@@ -474,6 +474,7 @@ describe("scenario executor", () => {
   it("refuses to start any deployment when the staged bootstrap is stale", async () => {
     const commands: string[] = [];
     const logs: string[] = [];
+    const gatedArchitectures: string[][] = [];
     const expected =
       "Refusing to deploy a stale prebuilt provider bootstrap (arm64).\n" +
       "Run `pnpm prebuild:bootstrap`";
@@ -482,7 +483,8 @@ describe("scenario executor", () => {
       { concurrency: 1, groups: [{ runs: [verifiedRun("stale")] }] },
       {
         repositoryRoot: "/repo",
-        assertDeployableBootstrap: () => {
+        assertDeployableBootstrap: (_root, architectures) => {
+          gatedArchitectures.push([...architectures]);
           throw new Error(
             "Refusing to deploy a stale prebuilt provider bootstrap (arm64).\n" +
               "Run `pnpm prebuild:bootstrap` to rebuild the staged archives.",
@@ -499,7 +501,74 @@ describe("scenario executor", () => {
 
     expect(status).toBe(1);
     expect(commands).toEqual([]);
+    expect(gatedArchitectures).toEqual([["arm64"]]);
     expect(logs.join("\n")).toContain(expected);
+  });
+
+  it("gates only the provider architectures the plan can deploy", async () => {
+    const gatedArchitectures: string[][] = [];
+    const status = await executeScenarioPlan(
+      {
+        concurrency: 1,
+        groups: [
+          {
+            runs: [
+              {
+                ...verifiedRun("arm64-only"),
+                definition: { ...verifiedRun("arm64-only").definition, providerArchitectures: ["arm64", "x86_64"] },
+              },
+              { ...verifiedRun("local"), definition: { ...verifiedRun("local").definition, providerArchitectures: [] } },
+            ],
+          },
+        ],
+      },
+      {
+        repositoryRoot: "/repo",
+        assertDeployableBootstrap: (_root, architectures) => {
+          gatedArchitectures.push([...architectures]);
+        },
+        pathExists: () => true,
+        startProcess: () => ({ completion: Promise.resolve(0), terminate() {} }),
+        log: () => {},
+      },
+    );
+
+    expect(status).toBe(0);
+    // The local-build run declares no prebuilt archive; only the union of the
+    // architectures the other run can deploy is gated.
+    expect(gatedArchitectures).toEqual([["arm64", "x86_64"]]);
+  });
+
+  it("does not gate benchmark deploys that use the upstream AWS implementation", async () => {
+    const gateCalls: string[][] = [];
+    const status = await executeScenarioPlan(
+      {
+        concurrency: 1,
+        groups: [
+          {
+            runs: [
+              {
+                ...verifiedRun("aws-benchmark"),
+                mode: "benchmark",
+                env: { SHIN_BENCH_IMPLEMENTATION: "aws" },
+              },
+            ],
+          },
+        ],
+      },
+      {
+        repositoryRoot: "/repo",
+        assertDeployableBootstrap: (_root, architectures) => {
+          gateCalls.push([...architectures]);
+        },
+        pathExists: () => true,
+        startProcess: () => ({ completion: Promise.resolve(0), terminate() {} }),
+        log: () => {},
+      },
+    );
+
+    expect(status).toBe(0);
+    expect(gateCalls).toEqual([]);
   });
 
   it("does not run the bootstrap freshness gate for destroy actions", async () => {
