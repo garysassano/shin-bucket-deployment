@@ -20,18 +20,29 @@ export function checkCommittedLedger(resultsFile: string): CommittedLedgerCheck 
   };
 }
 
-function main(): void {
-  const ledger = checkCommittedLedger("benchmarks/results.jsonl");
+export const COMMITTED_LEDGER_FILE = "benchmarks/results.jsonl";
+
+/**
+ * The gate's whole behaviour, returning the process exit code instead of
+ * calling `process.exit` so a test can assert it rather than only asserting the
+ * helper it calls. Testing `checkCommittedLedger` alone left the gate itself
+ * unguarded: replacing this body with `return 0` kept every test green.
+ */
+export function runLedgerCheck(
+  resultsFile: string = COMMITTED_LEDGER_FILE,
+  out: (message: string) => void = console.log,
+  fail: (message: string) => void = console.error,
+): number {
+  const ledger = checkCommittedLedger(resultsFile);
   if (ledger.errors.length > 0) {
-    for (const error of ledger.errors) console.error(error);
-    console.error(`Committed ledger is invalid: ${ledger.errors.length} error(s).`);
-    process.exit(1);
+    for (const error of ledger.errors) fail(error);
+    fail(`Committed ledger is invalid: ${ledger.errors.length} error(s).`);
+    return 1;
   }
-  console.log(
-    `Committed ledger valid: ${ledger.runCount} run records, ${ledger.sampleCount} samples.`,
-  );
+  out(`Committed ledger valid: ${ledger.runCount} run records, ${ledger.sampleCount} samples.`);
+  return 0;
 }
 
 if (require.main === module) {
-  main();
+  process.exit(runLedgerCheck());
 }
