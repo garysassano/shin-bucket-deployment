@@ -155,6 +155,17 @@ pub(crate) fn duration_ms(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
+/// Microseconds elapsed, saturating rather than wrapping on absurd durations.
+///
+/// The `phaseMs.plan` sub-timings accumulate at this resolution and convert to
+/// whole milliseconds once, at snapshot time. Per-call millisecond truncation
+/// erased every sub-millisecond planning stage (a per-archive `planValidation`
+/// of ~0.5 ms reported a constant 0), which made the instrument coarser than
+/// the cost it exists to attribute.
+pub(crate) fn duration_micros(duration: Duration) -> u64 {
+    u64::try_from(duration.as_micros()).unwrap_or(u64::MAX)
+}
+
 /// Locks observational telemetry without turning an earlier worker panic into a
 /// second panic while reporting the original failure.
 ///

@@ -540,6 +540,10 @@ function summaryBaseFixture() {
     durationMs: 60000,
     phaseMs: zeros([
       "plan",
+      "planCatalog",
+      "planDirectory",
+      "planEntries",
+      "planValidation",
       "destinationList",
       "transfer",
       "delete",
@@ -584,6 +588,7 @@ function summaryBaseFixture() {
       plannedPassesPerUpload: 2,
       planningPasses: 0,
       uploadPasses: 0,
+      spooledUploads: 0,
     },
     catalog: zeros([
       "trustedArchives",

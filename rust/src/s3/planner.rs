@@ -396,6 +396,11 @@ async fn add_archive_entries_to_manifest(
         stats,
         source_budget,
     } = context;
+    // planDirectory: EOCD scan, central-directory fetch, and the parser
+    // construction that parses it. The S3 GETs inside this stage are the prime
+    // suspect for making planning look CPU-heavy while actually waiting on S3,
+    // which is why the fetch and its parse share one bucket.
+    let started_directory = std::time::Instant::now();
     let prepared = prepare_zip_directory_reader(
         source.clone(),
         request.runtime.source_block_bytes,
@@ -412,12 +417,21 @@ async fn add_archive_entries_to_manifest(
         .await
         .context("failed to read zip archive central directory")?;
     let entries = reader.file().entries();
+    stats.add_plan_directory_micros(crate::util::duration_micros(started_directory.elapsed()));
+    // planValidation (per-archive half): directory-level invariants. The
+    // catalog-to-ZIP half of this bucket is charged inside
+    // `load_authenticated_catalog`, and the phase-level half (deployment
+    // preflight) in `s3/mod.rs`; see the accounting rules at the `PhaseMillis`
+    // definition site in `types.rs`.
+    let started_validation = std::time::Instant::now();
     let source_offsets =
         validate_archive_directory(entries, source.len(), central_directory_start)?;
+    stats.add_plan_validation_micros(crate::util::duration_micros(started_validation.elapsed()));
     let catalog = if let Some(expected) = &request.source_catalogs[source_index] {
         match load_authenticated_catalog(
             source.clone(),
             request,
+            stats,
             entries,
             &source_offsets,
             central_directory_start,
@@ -456,6 +470,8 @@ async fn add_archive_entries_to_manifest(
         );
         HashMap::new()
     };
+    // planEntries: the per-entry manifest loop.
+    let started_entries = std::time::Instant::now();
     let mut seen = HashSet::new();
 
     for stored in entries {
@@ -530,6 +546,7 @@ async fn add_archive_entries_to_manifest(
         };
         insert_manifest_object(manifest, planned);
     }
+    stats.add_plan_entries_micros(crate::util::duration_micros(started_entries.elapsed()));
 
     Ok(())
 }
@@ -556,15 +573,28 @@ fn planned_action_source_index(action: &PlannedAction) -> usize {
     }
 }
 
+// Eight closely related planning inputs; the codebase precedent for a private
+// planner helper of this shape is an explicit allow rather than a context
+// struct (see `archive/entry.rs` and `destination.rs`).
+#[allow(clippy::too_many_arguments)]
 async fn load_authenticated_catalog(
     source: std::sync::Arc<super::archive::SourceClient>,
     request: &DeploymentRequest,
+    stats: &DeploymentStats,
     entries: &[StoredZipEntry],
     source_offsets: &[u64],
     central_directory_start: u64,
     expected_sha256: &[u8; 32],
     source_budget: std::sync::Arc<SourceByteBudget>,
 ) -> Result<HashMap<String, TrustedEntryIntegrity>> {
+    // planCatalog: locating the catalog entry, its ranged GET, decompression,
+    // CRC, SHA-256 authentication, and JSON parse — everything up to and
+    // including `authenticate_catalog_bytes`. The catalog-to-ZIP validation
+    // below is charged to `planValidation`, the documented validation bucket:
+    // fetching and authenticating the catalog object is not validating the
+    // archive against it. See the accounting rules at the `PhaseMillis`
+    // definition site in `types.rs`.
+    let started_catalog = std::time::Instant::now();
     let stored = authenticated_catalog_entry(entries)?;
 
     if stored.uncompressed_size() > EMBEDDED_CATALOG_MAX_BYTES
@@ -647,11 +677,18 @@ async fn load_authenticated_catalog(
     }
     validate_zip_entry_output(&plan, total_bytes, crc32.finalize())?;
     let catalog = authenticate_catalog_bytes(&bytes, expected_sha256)?;
+    stats.add_plan_catalog_micros(crate::util::duration_micros(started_catalog.elapsed()));
     // The raw buffer and the decoded catalog are simultaneously resident only across the
     // parse above; releasing the raw half here keeps the peak at that parse rather than
     // letting it grow again while the manifest map is built.
     drop(bytes);
+    // planValidation (catalog-to-ZIP half): cross-validating the authenticated
+    // catalog against the archive's entries.
+    let started_catalog_validation = std::time::Instant::now();
     let manifest = validate_catalog_entries(catalog, entries, request.archive_expansion);
+    stats.add_plan_validation_micros(crate::util::duration_micros(
+        started_catalog_validation.elapsed(),
+    ));
     // The surviving map is charged to the central directory's per-entry metadata
     // estimate, so the catalog reservation ends with the transient buffers.
     drop(catalog_permit);
@@ -1081,6 +1118,9 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use async_zip::base::read::seek::ZipFileReader;
+    use aws_sdk_s3::primitives::SdkBody;
+    use aws_smithy_http_client::test_util::{ReplayEvent, StaticReplayClient};
+    use http::{Request, Response};
     use sha2::{Digest, Sha256};
     use tracing_subscriber::fmt::MakeWriter;
     use tracing_subscriber::layer::SubscriberExt;
@@ -1088,13 +1128,14 @@ mod tests {
     use zip::write::{SimpleFileOptions, ZipWriter};
 
     use super::{
-        CATALOG_ALLOCATION_FACTOR, EMBEDDED_CATALOG_MAX_BYTES, EmbeddedCatalog,
-        EmbeddedCatalogEntry, S3_SINGLE_COPY_LIMIT, S3_SINGLE_PUT_LIMIT, ZipEntryPlan,
-        authenticate_catalog_bytes, authenticated_catalog_entry, catalog_budget_error,
-        catalog_memory_estimate, catalog_source_block_bytes, checked_archive_totals,
-        collect_copy_plans, collect_zip_entry_plans, ensure_unique_source_offsets,
-        insert_manifest_object, validate_archive_directory, validate_archive_expansion,
-        validate_catalog_entries, validate_deployment_preflight, validate_stored_file_entry,
+        CATALOG_ALLOCATION_FACTOR, EMBEDDED_CATALOG_MAX_BYTES, EMBEDDED_CATALOG_PATH,
+        EmbeddedCatalog, EmbeddedCatalogEntry, S3_SINGLE_COPY_LIMIT, S3_SINGLE_PUT_LIMIT,
+        ZipEntryPlan, authenticate_catalog_bytes, authenticated_catalog_entry,
+        catalog_budget_error, catalog_memory_estimate, catalog_source_block_bytes,
+        checked_archive_totals, collect_copy_plans, collect_zip_entry_plans,
+        ensure_unique_source_offsets, insert_manifest_object, validate_archive_directory,
+        validate_archive_expansion, validate_catalog_entries, validate_deployment_preflight,
+        validate_stored_file_entry,
     };
     use crate::request::compile_filters;
     use crate::s3::archive::budget::SourceByteBudget;
@@ -1102,7 +1143,7 @@ mod tests {
     use crate::types::DeploymentStats;
     use crate::types::{
         ArchiveExpansionLimits, DeploymentManifest, DeploymentRequest, PlannedAction,
-        PlannedObject, PutObjectRetryOptions, RuntimeOptions,
+        PlannedObject, PutObjectRetryOptions, RuntimeOptions, TrustedSourceCatalog,
     };
 
     #[derive(Clone, Default)]
@@ -2249,5 +2290,235 @@ mod tests {
                 .contains("duplicate ZIP local file header offset 10"),
             "unexpected error: {error}"
         );
+    }
+
+    /// Falsifiable F-4 gate: the four plan sub-timings partition a synthetic
+    /// planning run. The run is real planning code (`plan_deployment` extract
+    /// path) against an in-process S3 replay serving a generated archive, so
+    /// the assertion is about the instrumentation, not about a hand-built
+    /// accumulator.
+    #[tokio::test]
+    async fn plan_sub_timings_partition_a_synthetic_planning_run() {
+        const ENTRY_COUNT: usize = 800;
+
+        for trusted in [false, true] {
+            let catalog_json = trusted.then(|| synthetic_catalog_json(ENTRY_COUNT));
+            let zip = synthetic_planning_zip(ENTRY_COUNT, catalog_json.as_deref());
+            let sha256 = catalog_json
+                .as_deref()
+                .map(|bytes| Sha256::digest(bytes).into());
+            let mut request = copy_request();
+            request.extract = true;
+            request.source_catalogs =
+                vec![sha256.map(|digest| TrustedSourceCatalog { sha256: digest })];
+
+            let mut events = vec![replay_head_event(zip.len() as u64)];
+            events.push(replay_whole_zip_event(&zip));
+            if trusted {
+                // The catalog object is fetched through its own source block,
+                // so an authenticated run issues one extra ranged GET. The
+                // block runs from the catalog's local header offset to the
+                // central directory, not from byte zero.
+                let archive_reader = ZipFileReader::with_tokio(Cursor::new(zip.clone()))
+                    .await
+                    .unwrap();
+                let catalog_entry = archive_reader
+                    .file()
+                    .entries()
+                    .iter()
+                    .find(|entry| {
+                        super::stored_zip_file_path(entry).unwrap().as_deref()
+                            == Some(EMBEDDED_CATALOG_PATH)
+                    })
+                    .expect("the synthetic archive carries its embedded catalog");
+                let catalog_offset = catalog_entry.header_offset();
+                let central_directory_start = central_directory_start_of(&zip);
+                events.push(replay_zip_slice_event(
+                    &zip,
+                    catalog_offset,
+                    central_directory_start,
+                ));
+            }
+            let state = crate::types::test_app_state_with_replay(StaticReplayClient::new(events));
+            let stats = Arc::new(DeploymentStats::default());
+            let budget = SourceByteBudget::new(256 * 1024 * 1024, Arc::clone(&stats), false)
+                .expect("valid test source budget");
+            let filters = compile_filters(&[], &[]).expect("empty filters compile");
+
+            let (_, manifest) =
+                super::plan_deployment(&state, &request, &filters, &stats, Arc::clone(&budget))
+                    .await
+                    .expect("synthetic planning run succeeds");
+            assert_eq!(manifest.len(), ENTRY_COUNT);
+
+            let (catalog_micros, directory_micros, entries_micros, validation_micros, parts_micros) =
+                stats.plan_parts_micros_for_test();
+            assert_eq!(
+                parts_micros,
+                catalog_micros + directory_micros + entries_micros + validation_micros,
+                "the four sub-timings must partition the instrumented planning stages \
+                 (trusted={trusted})"
+            );
+            assert!(parts_micros > 0, "the run must record planning work");
+            assert!(
+                directory_micros > 0,
+                "the EOCD and central-directory fetch must be measured"
+            );
+            assert!(entries_micros > 0, "the per-entry loop must be measured");
+            assert!(
+                validation_micros > 0,
+                "directory (and, when authenticated, catalog-to-ZIP) validation \
+                 must be measured"
+            );
+            if trusted {
+                assert!(
+                    catalog_micros > 0,
+                    "the authenticated catalog fetch and parse must be measured"
+                );
+            } else {
+                assert_eq!(
+                    catalog_micros, 0,
+                    "without a catalog binding no catalog work happens"
+                );
+            }
+
+            // The snapshot conversion is a single end-of-run rounding: the sum
+            // of the millisecond fields stays within one millisecond per bucket
+            // of the microsecond identity.
+            let snapshot = stats.snapshot("Create", "success", &request);
+            let parts_ms = snapshot.phase_ms.plan_catalog
+                + snapshot.phase_ms.plan_directory
+                + snapshot.phase_ms.plan_entries
+                + snapshot.phase_ms.plan_validation;
+            assert!(parts_ms >= parts_micros / 1_000);
+            assert!(parts_ms <= (parts_micros + 2_000) / 1_000);
+        }
+    }
+
+    /// Falsifiable F-4 gate (accounting defect 3): sub-millisecond spans are no
+    /// longer truncated to zero. Per-call `duration_ms` truncation made every
+    /// sub-millisecond stage report a constant 0; microsecond accumulation with
+    /// one final rounding reports the accumulated span instead.
+    #[test]
+    fn sub_millisecond_plan_spans_round_to_nonzero_millis_at_snapshot() {
+        let stats = DeploymentStats::default();
+
+        // Three sub-millisecond validation spans. Under the old per-call
+        // truncation each reported 0 and the stage was permanently 0; the
+        // accumulated 1500 µs reports 2 ms.
+        stats.add_plan_validation_micros(600);
+        stats.add_plan_validation_micros(400);
+        stats.add_plan_validation_micros(500);
+        let request = DeploymentRequest::for_test();
+        let snapshot = stats.snapshot("Create", "success", &request);
+        assert_eq!(
+            snapshot.phase_ms.plan_validation, 2,
+            "accumulated sub-millisecond validation spans must survive to the snapshot"
+        );
+
+        // A single sub-millisecond span survives too.
+        stats.add_plan_catalog_micros(500);
+        let snapshot = stats.snapshot("Create", "success", &request);
+        assert_eq!(snapshot.phase_ms.plan_catalog, 1);
+
+        // The conversion is nearest-millisecond rounding at the end, not
+        // truncation of the accumulation: 499 µs rounds to 0, 500 µs to 1.
+        stats.add_plan_directory_micros(499);
+        stats.add_plan_entries_micros(500);
+        let snapshot = stats.snapshot("Create", "success", &request);
+        assert_eq!(snapshot.phase_ms.plan_directory, 0);
+        assert_eq!(snapshot.phase_ms.plan_entries, 1);
+
+        // The microsecond partition identity holds for synthetic spans too.
+        let (catalog, directory, entries, validation, parts) = stats.plan_parts_micros_for_test();
+        assert_eq!(parts, catalog + directory + entries + validation);
+        assert_eq!(
+            (catalog, directory, entries, validation),
+            (500, 499, 500, 1500)
+        );
+    }
+
+    fn synthetic_planning_zip(entry_count: usize, catalog_json: Option<&[u8]>) -> Vec<u8> {
+        let cursor = Cursor::new(Vec::new());
+        let mut writer = ZipWriter::new(cursor);
+        let options = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+        for index in 0..entry_count {
+            writer
+                .start_file(format!("asset-{index:03}.txt"), options)
+                .unwrap();
+            writer.write_all(b"payload").unwrap();
+        }
+        if let Some(catalog) = catalog_json {
+            writer.start_file(EMBEDDED_CATALOG_PATH, options).unwrap();
+            writer.write_all(catalog).unwrap();
+        }
+        writer.finish().unwrap().into_inner()
+    }
+
+    fn synthetic_catalog_json(entry_count: usize) -> Vec<u8> {
+        let mut json = String::from(r#"{"version":1,"entries":["#);
+        for index in 0..entry_count {
+            if index > 0 {
+                json.push(',');
+            }
+            json.push_str(&format!(
+                r#"{{"path":"asset-{index:03}.txt","size":7,"md5":"{}"}}"#,
+                "0".repeat(32)
+            ));
+        }
+        json.push_str("]}");
+        json.into_bytes()
+    }
+
+    fn replay_head_event(len: u64) -> ReplayEvent {
+        ReplayEvent::new(
+            Request::builder()
+                .method("HEAD")
+                .uri("https://s3.test/source/source.zip")
+                .body(SdkBody::empty())
+                .unwrap(),
+            Response::builder()
+                .status(200)
+                .header("content-length", len.to_string())
+                .header("etag", "\"test-etag\"")
+                .body(SdkBody::empty())
+                .unwrap(),
+        )
+    }
+
+    fn replay_whole_zip_event(zip: &[u8]) -> ReplayEvent {
+        let len = zip.len() as u64;
+        ReplayEvent::new(
+            Request::builder()
+                .uri("https://s3.test/source/source.zip")
+                .body(SdkBody::empty())
+                .unwrap(),
+            Response::builder()
+                .status(206)
+                .header("content-length", zip.len())
+                .header("content-range", format!("bytes 0-{}/{}", len - 1, len))
+                .body(SdkBody::from(zip.to_vec()))
+                .unwrap(),
+        )
+    }
+
+    fn replay_zip_slice_event(zip: &[u8], start: u64, end_exclusive: u64) -> ReplayEvent {
+        let len = zip.len() as u64;
+        let bytes = &zip[start as usize..end_exclusive as usize];
+        ReplayEvent::new(
+            Request::builder()
+                .uri("https://s3.test/source/source.zip")
+                .body(SdkBody::empty())
+                .unwrap(),
+            Response::builder()
+                .status(206)
+                .header("content-length", bytes.len())
+                .header(
+                    "content-range",
+                    format!("bytes {start}-{}/{len}", end_exclusive - 1),
+                )
+                .body(SdkBody::from(bytes.to_vec()))
+                .unwrap(),
+        )
     }
 }

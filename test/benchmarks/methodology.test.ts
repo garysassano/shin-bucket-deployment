@@ -138,7 +138,6 @@ describe("benchmark methodology", () => {
     const dir = mkdtempSync(join(tmpdir(), "shin-benchmark-preservation-"));
     const manifestFile = join(dir, "preserved-stack.json");
     const base = {
-      schemaVersion: 1 as const,
       stackName: "benchmark-stack",
       region: "eu-central-1",
       runId: "00000000-0000-4000-a000-000000000001",
@@ -172,10 +171,7 @@ describe("benchmark methodology", () => {
   test("rejects malformed preservation manifests", () => {
     const dir = mkdtempSync(join(tmpdir(), "shin-benchmark-preservation-invalid-"));
     const manifestFile = join(dir, "preserved-stack.json");
-    writeFileSync(
-      manifestFile,
-      JSON.stringify({ schemaVersion: 1, status: "unexpected", stackName: "stack" }),
-    );
+    writeFileSync(manifestFile, JSON.stringify({ status: "unexpected", stackName: "stack" }));
     expect(() => readPreservationManifest(manifestFile)).toThrow("Invalid preserved-stack");
   });
 
@@ -183,7 +179,6 @@ describe("benchmark methodology", () => {
     const dir = mkdtempSync(join(tmpdir(), "shin-benchmark-preservation-resume-"));
     const manifestFile = join(dir, "preserved-stack.json");
     writePreservationManifest(manifestFile, {
-      schemaVersion: 1,
       status: "preservation-intent",
       stackName: "benchmark-stack",
       region: "eu-central-1",

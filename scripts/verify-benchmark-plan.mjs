@@ -151,6 +151,10 @@ function providerSummary(memoryMb, parallel, create) {
     durationMs: 1000,
     phaseMs: zeroFields([
       "plan",
+      "planCatalog",
+      "planDirectory",
+      "planEntries",
+      "planValidation",
       "destinationList",
       "transfer",
       "delete",
@@ -195,6 +199,7 @@ function providerSummary(memoryMb, parallel, create) {
       plannedPassesPerUpload: 2,
       planningPasses: 0,
       uploadPasses: 0,
+      spooledUploads: 0,
     },
     catalog: zeroFields([
       "trustedArchives",

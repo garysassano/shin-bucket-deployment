@@ -181,6 +181,10 @@ export function providerSummary(memoryMb: number, parallel: number, create: bool
     durationMs: 1,
     phaseMs: zeroFields([
       "plan",
+      "planCatalog",
+      "planDirectory",
+      "planEntries",
+      "planValidation",
       "destinationList",
       "transfer",
       "delete",
@@ -225,6 +229,7 @@ export function providerSummary(memoryMb: number, parallel: number, create: bool
       plannedPassesPerUpload: 2,
       planningPasses: 0,
       uploadPasses: 0,
+      spooledUploads: 0,
     },
     catalog: zeroFields([
       "trustedArchives",

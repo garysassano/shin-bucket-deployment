@@ -82,6 +82,28 @@ mod detailed_failure_diagnostics_tests {
     }
 }
 
+#[cfg(test)]
+mod marker_spooled_upload_tests {
+    use std::sync::atomic::Ordering;
+
+    use super::DeploymentStats;
+
+    #[test]
+    fn marker_spooled_upload_counter_starts_at_zero_and_increments() {
+        let stats = DeploymentStats::default();
+
+        assert_eq!(
+            stats.marker_spooled_uploads.load(Ordering::Relaxed),
+            0,
+            "the F-3 spool fast path does not exist yet"
+        );
+
+        stats.add_marker_spooled_upload();
+
+        assert_eq!(stats.marker_spooled_uploads.load(Ordering::Relaxed), 1);
+    }
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
@@ -320,6 +342,11 @@ pub(crate) struct SourceArchive {
 pub(crate) struct DeploymentStats {
     started: OnceInstant,
     plan_millis: AtomicU64,
+    plan_catalog_micros: AtomicU64,
+    plan_directory_micros: AtomicU64,
+    plan_entries_micros: AtomicU64,
+    plan_validation_micros: AtomicU64,
+    plan_parts_micros: AtomicU64,
     destination_list_millis: AtomicU64,
     transfer_millis: AtomicU64,
     delete_millis: AtomicU64,
@@ -356,6 +383,7 @@ pub(crate) struct DeploymentStats {
     catalog_fallback_hash_attempts: AtomicU64,
     marker_planning_passes: AtomicU64,
     marker_upload_passes: AtomicU64,
+    marker_spooled_uploads: AtomicU64,
     source_planned_blocks: AtomicU64,
     source_planned_bytes: AtomicU64,
     source_fetched_blocks: AtomicU64,
@@ -424,6 +452,19 @@ struct DetailedPutObjectStats {
 
 struct OnceInstant(Instant);
 
+/// Converts an accumulated microsecond span to whole milliseconds, rounding to
+/// the nearest millisecond so a sub-millisecond span reports 1 ms instead of 0.
+///
+/// This conversion happens exactly once, at snapshot time, after the planning
+/// stages have accumulated at microsecond resolution. The rounding is part of
+/// the `phaseMs` contract: a nonzero stage never disappears into a constant 0
+/// the way per-call `duration_ms` truncation erased every sub-millisecond
+/// span, and a stage that never ran stays 0 because its counter was never
+/// incremented.
+fn micros_to_millis(micros: u64) -> u64 {
+    micros.saturating_add(500) / 1_000
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DeploymentStatsSnapshot<'a> {
@@ -449,10 +490,58 @@ pub(crate) struct DeploymentStatsSnapshot<'a> {
     pub(crate) callback: CallbackStats,
 }
 
+// Phase timing definition site. The `phaseMs.plan` split is the instrument that
+// tells CPU cost apart from S3 round-trips inside source planning, so its
+// accounting rules live here and the call sites in `s3/planner.rs` and
+// `s3/mod.rs` must keep them:
+//
+// - `planCatalog` is catalog-object work only: locating the embedded catalog
+//   entry, the ranged GET that fetches it, decompression, CRC, SHA-256
+//   authentication, and JSON parse. Cross-archive catalog validation
+//   (`validate_catalog_entries`) is charged to `planValidation`, not here:
+//   "fetch and authenticate the catalog object" and "validate the catalog
+//   against the archive" are different buckets, and `planValidation` is the
+//   documented validation bucket.
+// - `planDirectory` is the EOCD scan, central-directory fetch, and the
+//   `ZipFileReader` construction that parses it, per archive.
+// - `planEntries` is the per-entry manifest loop (path normalization, filters,
+//   expansion checks, span derivation, manifest insertion), per archive.
+// - `planValidation` is all validation: `validate_archive_directory` per
+//   archive, `validate_catalog_entries` for authenticated catalogs, and the
+//   phase-level `validate_deployment_preflight`.
+//
+// The four sub-timings accumulate per archive at microsecond resolution and are
+// converted to whole milliseconds once, at snapshot time. Per-call millisecond
+// truncation made every sub-millisecond stage report a constant 0, so the
+// instrument was coarser than the ~0.5 ms-per-entry cost it exists to
+// attribute; the snapshot conversion rounds to the nearest millisecond instead
+// (see [`micros_to_millis`]).
+//
+// What `plan` measures beyond the four parts (the residual is exactly
+// `plan - planCatalog - planDirectory - planEntries - planValidation`, all
+// four of which are present in every summary): request length checks,
+// source-budget setup, filter compilation, the per-source metadata `HeadObject`
+// in both extract and copy mode, manifest insertion in copy mode,
+// `collect_zip_entry_plans`, and the planned-entries accounting. In copy mode
+// (`Extract: false`) none of the ZIP stages run, so all four parts report 0 and
+// `plan` is those HeadObject round-trips plus the CPU-only residual; the parts
+// being zero there is the honest answer, not an omission.
+//
+// Concurrency constraint: these are wall-clock spans, and summing them only
+// means anything while source planning is sequential — it is today, one archive
+// at a time in `plan_deployment`. If planning ever becomes concurrent (P-7),
+// the spans overlap and `planCatalog + planDirectory + planEntries +
+// planValidation` stops being a partition; the accounting must then move to
+// per-archive self-time spans that degrade honestly instead of silently
+// double-counting elapsed time.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct PhaseMillis {
     pub(crate) plan: u64,
+    pub(crate) plan_catalog: u64,
+    pub(crate) plan_directory: u64,
+    pub(crate) plan_entries: u64,
+    pub(crate) plan_validation: u64,
     pub(crate) destination_list: u64,
     pub(crate) transfer: u64,
     pub(crate) delete: u64,
@@ -553,6 +642,7 @@ pub(crate) struct MarkerReplacementStats {
     pub(crate) planned_passes_per_upload: u8,
     pub(crate) planning_passes: u64,
     pub(crate) upload_passes: u64,
+    pub(crate) spooled_uploads: u64,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -690,6 +780,45 @@ impl DeploymentStats {
 
     pub(crate) fn add_plan_millis(&self, millis: u64) {
         self.plan_millis.fetch_add(millis, Ordering::Relaxed);
+    }
+
+    /// Records one source-planning stage span into its bucket and into the
+    /// shared parts total, so `plan_parts_micros` is the exclusive union of the
+    /// four buckets at microsecond resolution. The identity
+    /// `parts == catalog + directory + entries + validation` is what the
+    /// sub-timing partition tests assert; the buckets are fed by the call sites
+    /// in `s3/planner.rs` and `s3/mod.rs` described at the `PhaseMillis`
+    /// definition site.
+    fn add_plan_stage_micros(&self, bucket: &AtomicU64, micros: u64) {
+        bucket.fetch_add(micros, Ordering::Relaxed);
+        self.plan_parts_micros.fetch_add(micros, Ordering::Relaxed);
+    }
+
+    pub(crate) fn add_plan_catalog_micros(&self, micros: u64) {
+        self.add_plan_stage_micros(&self.plan_catalog_micros, micros);
+    }
+
+    pub(crate) fn add_plan_directory_micros(&self, micros: u64) {
+        self.add_plan_stage_micros(&self.plan_directory_micros, micros);
+    }
+
+    pub(crate) fn add_plan_entries_micros(&self, micros: u64) {
+        self.add_plan_stage_micros(&self.plan_entries_micros, micros);
+    }
+
+    pub(crate) fn add_plan_validation_micros(&self, micros: u64) {
+        self.add_plan_stage_micros(&self.plan_validation_micros, micros);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn plan_parts_micros_for_test(&self) -> (u64, u64, u64, u64, u64) {
+        (
+            self.plan_catalog_micros.load(Ordering::Relaxed),
+            self.plan_directory_micros.load(Ordering::Relaxed),
+            self.plan_entries_micros.load(Ordering::Relaxed),
+            self.plan_validation_micros.load(Ordering::Relaxed),
+            self.plan_parts_micros.load(Ordering::Relaxed),
+        )
     }
 
     pub(crate) fn add_destination_list_millis(&self, millis: u64) {
@@ -852,6 +981,11 @@ impl DeploymentStats {
 
     pub(crate) fn add_marker_upload_pass(&self) {
         self.marker_upload_passes.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn add_marker_spooled_upload(&self) {
+        self.marker_spooled_uploads.fetch_add(1, Ordering::Relaxed);
     }
 
     pub(crate) fn add_source_stats(
@@ -1055,6 +1189,14 @@ impl DeploymentStats {
             duration_ms: duration_ms(self.started.0.elapsed()),
             phase_ms: PhaseMillis {
                 plan: self.plan_millis.load(Ordering::Relaxed),
+                plan_catalog: micros_to_millis(self.plan_catalog_micros.load(Ordering::Relaxed)),
+                plan_directory: micros_to_millis(
+                    self.plan_directory_micros.load(Ordering::Relaxed),
+                ),
+                plan_entries: micros_to_millis(self.plan_entries_micros.load(Ordering::Relaxed)),
+                plan_validation: micros_to_millis(
+                    self.plan_validation_micros.load(Ordering::Relaxed),
+                ),
                 destination_list: self.destination_list_millis.load(Ordering::Relaxed),
                 transfer: self.transfer_millis.load(Ordering::Relaxed),
                 delete: self.delete_millis.load(Ordering::Relaxed),
@@ -1112,6 +1254,7 @@ impl DeploymentStats {
                 planned_passes_per_upload: 2,
                 planning_passes: self.marker_planning_passes.load(Ordering::Relaxed),
                 upload_passes: self.marker_upload_passes.load(Ordering::Relaxed),
+                spooled_uploads: self.marker_spooled_uploads.load(Ordering::Relaxed),
             },
             catalog: CatalogStats {
                 trusted_archives: self.catalog_trusted_archives.load(Ordering::Relaxed),

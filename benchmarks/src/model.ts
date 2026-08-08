@@ -144,6 +144,10 @@ const PROVIDER_SUMMARY_SCALARS = {
 const PROVIDER_SUMMARY_SECTIONS = {
   phaseMs: {
     plan: "number",
+    planCatalog: "number",
+    planDirectory: "number",
+    planEntries: "number",
+    planValidation: "number",
     destinationList: "number",
     transfer: "number",
     delete: "number",
@@ -188,6 +192,7 @@ const PROVIDER_SUMMARY_SECTIONS = {
     plannedPassesPerUpload: "number",
     planningPasses: "number",
     uploadPasses: "number",
+    spooledUploads: "number",
   },
   catalog: {
     trustedArchives: "number",
