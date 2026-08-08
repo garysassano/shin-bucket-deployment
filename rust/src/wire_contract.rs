@@ -393,6 +393,34 @@ mod tests {
         let cases = matrix["cases"]
             .as_array()
             .unwrap_or_else(|| panic!("wire acceptance matrix has no cases array"));
+        let schema_version = matrix["schemaVersion"]
+            .as_u64()
+            .unwrap_or_else(|| panic!("wire acceptance matrix has no schemaVersion"));
+        assert_eq!(
+            schema_version, 2,
+            "wire acceptance matrix schemaVersion drifted from the pinned value; \
+             bump it intentionally on both sides"
+        );
+        let declared_count = matrix["caseCount"]
+            .as_u64()
+            .unwrap_or_else(|| panic!("wire acceptance matrix has no caseCount"));
+        assert_eq!(
+            declared_count as usize,
+            cases.len(),
+            "wire acceptance matrix caseCount ({declared_count}) does not match the {} \
+             committed cases; a case was added or removed without pinning the count",
+            cases.len()
+        );
+        let mut ids = BTreeSet::new();
+        for entry in cases {
+            let id = entry["id"]
+                .as_str()
+                .unwrap_or_else(|| panic!("matrix case has no stable id"));
+            assert!(
+                ids.insert(id.to_string()),
+                "matrix case id {id} is duplicated; ids must be unique"
+            );
+        }
         let schema = load_schema();
         let mut baseline = build_payload(&schema);
         // `SourceMarkers` items are unconstrained records, so the schema-derived
@@ -439,6 +467,68 @@ mod tests {
                 path.join(".")
             );
         }
+    }
+
+    #[test]
+    fn value_language_boundaries_hold_independently_of_the_matrix() {
+        // The matrix is the corpus guard, but a deleted row must not be able
+        // to smuggle a wrong rule past both implementations, so a few
+        // boundaries are pinned here and on the TypeScript side without
+        // reading the matrix at all.
+        let schema = load_schema();
+        let mut baseline = build_payload(&schema);
+        if let Some(markers) = baseline
+            .get_mut("SourceMarkers")
+            .and_then(Value::as_array_mut)
+            && let Some(first) = markers.get_mut(0).and_then(Value::as_object_mut)
+        {
+            first
+                .entry("runtime".to_string())
+                .or_insert_with(|| Value::String("value".into()));
+        }
+
+        // u64 overflow boundary: max accepted, max+1 rejected.
+        let mut max = baseline.clone();
+        set_at_path(
+            &mut max,
+            &["SourceProcessing", "MaxUncompressedEntryBytes"],
+            json!("18446744073709551615"),
+        );
+        assert!(decode(&max).is_ok());
+        let mut overflow = baseline.clone();
+        set_at_path(
+            &mut overflow,
+            &["SourceProcessing", "MaxUncompressedEntryBytes"],
+            json!("18446744073709551616"),
+        );
+        assert!(decode(&overflow).is_err());
+
+        // Decimal strings are digits only: a leading plus is rejected by the
+        // decoder and the schema alike (str::parse alone would accept it).
+        let mut plus_usize = baseline.clone();
+        set_at_path(
+            &mut plus_usize,
+            &["Transfer", "MaxConcurrency"],
+            json!("+42"),
+        );
+        assert!(decode(&plus_usize).is_err());
+        let mut plus_u32 = baseline.clone();
+        set_at_path(
+            &mut plus_u32,
+            &["SourceCatalogs", "[0]", "Version"],
+            json!("+1"),
+        );
+        assert!(decode(&plus_u32).is_err());
+
+        // The reserved envelope keys are transport: any JSON value and null
+        // decode (CloudFormation delivers them inside ResourceProperties).
+        let mut envelope = baseline.clone();
+        set_at_path(&mut envelope, &["ServiceTimeout"], json!("900"));
+        set_at_path(&mut envelope, &["ServiceToken"], json!(123));
+        assert!(decode(&envelope).is_ok());
+        let mut envelope_null = baseline.clone();
+        set_at_path(&mut envelope_null, &["ServiceTimeout"], Value::Null);
+        assert!(decode(&envelope_null).is_ok());
     }
 
     /// The pre-rename wire shape (the full old-to-new mapping is in
