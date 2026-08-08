@@ -1,6 +1,8 @@
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
+import type * as BootstrapFreshness from "../scripts/bootstrap-freshness.mjs";
 import { createScenarioPlan, scenarioAppPath, scenarioCdkArgs, scenarioOutputsPath } from "./plan";
 import type { ParsedArgs, ScenarioPlan, ScenarioRun } from "./types";
 
@@ -19,6 +21,7 @@ export type StartProcess = (
 export type ExecutionOptions = {
   readonly repositoryRoot?: string;
   readonly signal?: AbortSignal;
+  readonly assertDeployableBootstrap?: (repositoryRoot: string) => void;
   readonly startProcess?: StartProcess;
   readonly resolveAwsPrincipalArn?: () => string;
   readonly pathExists?: (path: string) => boolean;
@@ -52,6 +55,21 @@ export async function executeScenarioPlan(
   let nextGroupIndex = 0;
   let firstFailure = 0;
   let externalAborted = false;
+
+  if (plan.groups.some((group) => group.runs.some((run) => run.action === "deploy"))) {
+    // Deploying with a prebuilt provider archive that was not built from the
+    // current source would ship a stale binary silently. Refuse before any
+    // process starts; scenarios that compile from source (`localBuild`) or a
+    // checkout without staged archives are unaffected.
+    try {
+      const assertDeployableBootstrap =
+        options.assertDeployableBootstrap ?? (await loadBootstrapFreshnessGate(repositoryRoot));
+      assertDeployableBootstrap(repositoryRoot);
+    } catch (error) {
+      log(error instanceof Error ? error.message : String(error));
+      return 1;
+    }
+  }
 
   const onExternalAbort = (): void => {
     externalAborted = true;
@@ -189,6 +207,22 @@ export async function executeScenarioPlan(
     }
   }
   return status;
+}
+
+/**
+ * Loads the deploy-time bootstrap freshness gate from the repository's
+ * `scripts/` directory. The path is resolved at runtime from the repository
+ * root because the compiled runner lives two directory levels down
+ * (`dist/scenarios/`), so no single static relative import can reach the
+ * module from both the source and the build output.
+ */
+async function loadBootstrapFreshnessGate(
+  repositoryRoot: string,
+): Promise<(repositoryRoot: string) => void> {
+  const module = (await import(
+    pathToFileURL(join(repositoryRoot, "scripts", "bootstrap-freshness.mjs")).href
+  )) as typeof BootstrapFreshness;
+  return (root: string) => module.assertStagedBootstrapFreshness({ repositoryRoot: root });
 }
 
 function currentAwsPrincipalArn(): string {

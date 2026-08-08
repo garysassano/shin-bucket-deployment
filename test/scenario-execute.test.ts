@@ -51,6 +51,7 @@ describe("scenario executor", () => {
 
     const status = await executeScenarioPlan(parallelPlan(), {
       repositoryRoot: "/repo",
+      assertDeployableBootstrap: () => {},
       pathExists: () => true,
       startProcess,
       log: (message) => logs.push(message),
@@ -80,6 +81,7 @@ describe("scenario executor", () => {
       },
       {
         repositoryRoot: "/repo",
+        assertDeployableBootstrap: () => {},
         pathExists: () => true,
         signal: controller.signal,
         startProcess,
@@ -112,6 +114,7 @@ describe("scenario executor", () => {
       { concurrency: 1, groups: [{ runs: [scenario] }] },
       {
         repositoryRoot: "/repo",
+        assertDeployableBootstrap: () => {},
         pathExists: () => true,
         resolveAwsPrincipalArn: () =>
           "arn:aws:sts::111122223333:assumed-role/VerifierRole/workflow-session",
@@ -162,6 +165,7 @@ describe("scenario executor", () => {
       { concurrency: 1, groups: [{ runs: [verifiedRun("directory")] }] },
       {
         repositoryRoot: "/repo",
+        assertDeployableBootstrap: () => {},
         pathExists: (path) => path !== "/repo/.verification-assets/outputs",
         ensureDirectory: (path) => events.push(`mkdir:${path}`),
         startProcess: (_run, command) => {
@@ -188,6 +192,7 @@ describe("scenario executor", () => {
       { concurrency: 1, groups: [{ runs: [initial, updated] }] },
       {
         repositoryRoot: "/repo",
+        assertDeployableBootstrap: () => {},
         pathExists: () => true,
         startProcess: (_run, command, args) => {
           if (command === "pnpm") {
@@ -221,6 +226,7 @@ describe("scenario executor", () => {
       { concurrency: 1, groups: [{ runs: [scenario] }] },
       {
         repositoryRoot: "/repo",
+        assertDeployableBootstrap: () => {},
         pathExists: () => true,
         resolveAwsPrincipalArn: () => {
           throw new Error("simulated STS failure");
@@ -246,6 +252,7 @@ describe("scenario executor", () => {
       { concurrency: 1, groups: [{ runs: [scenario] }] },
       {
         repositoryRoot: "/repo",
+        assertDeployableBootstrap: () => {},
         pathExists: () => true,
         startProcess: (_run, command) => {
           commands.push(command);
@@ -267,6 +274,7 @@ describe("scenario executor", () => {
       { concurrency: 1, groups: [{ runs: [verifiedRun("missing-verifier")] }] },
       {
         repositoryRoot: "/repo",
+        assertDeployableBootstrap: () => {},
         pathExists: (path) => !path.includes("/verifiers/"),
         startProcess: (_run, command) => {
           commands.push(command);
@@ -290,6 +298,7 @@ describe("scenario executor", () => {
       { concurrency: 1, groups: [{ runs: [verifiedRun("deploy-fails")] }] },
       {
         repositoryRoot: "/repo",
+        assertDeployableBootstrap: () => {},
         pathExists: () => true,
         startProcess: (_run, command) => {
           commands.push(command);
@@ -310,6 +319,7 @@ describe("scenario executor", () => {
       { concurrency: 1, groups: [{ runs: [cleanupRun("cleaned")] }] },
       {
         repositoryRoot: "/repo",
+        assertDeployableBootstrap: () => {},
         pathExists: () => true,
         startProcess: (_run, command, args) => {
           commands.push({ command, args });
@@ -347,6 +357,7 @@ describe("scenario executor", () => {
       { concurrency: 1, groups: [{ runs: [cleanupRun("partial")] }] },
       {
         repositoryRoot: "/repo",
+        assertDeployableBootstrap: () => {},
         pathExists: (path) => path !== "/repo/.verification-assets/outputs/partial.json",
         startProcess: (_run, command, args) => {
           if (command === "node") verifierArgs.push(args);
@@ -375,6 +386,7 @@ describe("scenario executor", () => {
       { concurrency: 1, groups: [{ runs: [cleanupRun("cleanup-fails")] }] },
       {
         repositoryRoot: "/repo",
+        assertDeployableBootstrap: () => {},
         pathExists: () => true,
         startProcess: (_run, command) => {
           commands.push(command);
@@ -395,6 +407,7 @@ describe("scenario executor", () => {
       { concurrency: 1, groups: [{ runs: [cleanupRun("destroy-fails")] }] },
       {
         repositoryRoot: "/repo",
+        assertDeployableBootstrap: () => {},
         pathExists: () => true,
         startProcess: (_run, command) => {
           commands.push(command);
@@ -418,6 +431,7 @@ describe("scenario executor", () => {
       { concurrency: 1, groups: [{ runs: [verifiedRun(action, action)] }] },
       {
         repositoryRoot: "/repo",
+        assertDeployableBootstrap: () => {},
         pathExists: () => true,
         startProcess: (_run, command) => {
           commands.push(command);
@@ -439,6 +453,7 @@ describe("scenario executor", () => {
       { concurrency: 1, groups: [{ runs: [verifiedRun("cancel-verifier")] }] },
       {
         repositoryRoot: "/repo",
+        assertDeployableBootstrap: () => {},
         pathExists: () => true,
         signal: controller.signal,
         startProcess: (_run, command) => {
@@ -454,6 +469,57 @@ describe("scenario executor", () => {
 
     expect(status).toBe(130);
     expect(terminated).toEqual(["verifier"]);
+  });
+
+  it("refuses to start any deployment when the staged bootstrap is stale", async () => {
+    const commands: string[] = [];
+    const logs: string[] = [];
+    const expected =
+      "Refusing to deploy a stale prebuilt provider bootstrap (arm64).\n" +
+      "Run `pnpm prebuild:bootstrap`";
+
+    const status = await executeScenarioPlan(
+      { concurrency: 1, groups: [{ runs: [verifiedRun("stale")] }] },
+      {
+        repositoryRoot: "/repo",
+        assertDeployableBootstrap: () => {
+          throw new Error(
+            "Refusing to deploy a stale prebuilt provider bootstrap (arm64).\n" +
+              "Run `pnpm prebuild:bootstrap` to rebuild the staged archives.",
+          );
+        },
+        pathExists: () => true,
+        startProcess: (_run, command) => {
+          commands.push(command);
+          return { completion: Promise.resolve(0), terminate() {} };
+        },
+        log: (message) => logs.push(message),
+      },
+    );
+
+    expect(status).toBe(1);
+    expect(commands).toEqual([]);
+    expect(logs.join("\n")).toContain(expected);
+  });
+
+  it("does not run the bootstrap freshness gate for destroy actions", async () => {
+    const gateCalls: string[] = [];
+
+    const status = await executeScenarioPlan(
+      { concurrency: 1, groups: [{ runs: [cleanupRun("clean")] }] },
+      {
+        repositoryRoot: "/repo",
+        assertDeployableBootstrap: (root) => gateCalls.push(root),
+        pathExists: () => true,
+        startProcess: (_run, _command) => {
+          return { completion: Promise.resolve(0), terminate() {} };
+        },
+        log: () => {},
+      },
+    );
+
+    expect(status).toBe(0);
+    expect(gateCalls).toEqual([]);
   });
 });
 
