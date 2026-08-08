@@ -199,6 +199,7 @@ function providerSummary(memoryMb, parallel, create) {
       plannedPassesPerUpload: 2,
       planningPasses: 0,
       uploadPasses: 0,
+      spooledUploads: 0,
     },
     catalog: zeroFields([
       "trustedArchives",

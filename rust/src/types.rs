@@ -82,6 +82,28 @@ mod detailed_failure_diagnostics_tests {
     }
 }
 
+#[cfg(test)]
+mod marker_spooled_upload_tests {
+    use std::sync::atomic::Ordering;
+
+    use super::DeploymentStats;
+
+    #[test]
+    fn marker_spooled_upload_counter_starts_at_zero_and_increments() {
+        let stats = DeploymentStats::default();
+
+        assert_eq!(
+            stats.marker_spooled_uploads.load(Ordering::Relaxed),
+            0,
+            "the F-3 spool fast path does not exist yet"
+        );
+
+        stats.add_marker_spooled_upload();
+
+        assert_eq!(stats.marker_spooled_uploads.load(Ordering::Relaxed), 1);
+    }
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
@@ -361,6 +383,7 @@ pub(crate) struct DeploymentStats {
     catalog_fallback_hash_attempts: AtomicU64,
     marker_planning_passes: AtomicU64,
     marker_upload_passes: AtomicU64,
+    marker_spooled_uploads: AtomicU64,
     source_planned_blocks: AtomicU64,
     source_planned_bytes: AtomicU64,
     source_fetched_blocks: AtomicU64,
@@ -619,6 +642,7 @@ pub(crate) struct MarkerReplacementStats {
     pub(crate) planned_passes_per_upload: u8,
     pub(crate) planning_passes: u64,
     pub(crate) upload_passes: u64,
+    pub(crate) spooled_uploads: u64,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -959,6 +983,11 @@ impl DeploymentStats {
         self.marker_upload_passes.fetch_add(1, Ordering::Relaxed);
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn add_marker_spooled_upload(&self) {
+        self.marker_spooled_uploads.fetch_add(1, Ordering::Relaxed);
+    }
+
     pub(crate) fn add_source_stats(
         &self,
         stats: &crate::s3::archive::diagnostics::SourceDiagnosticsSnapshot,
@@ -1225,6 +1254,7 @@ impl DeploymentStats {
                 planned_passes_per_upload: 2,
                 planning_passes: self.marker_planning_passes.load(Ordering::Relaxed),
                 upload_passes: self.marker_upload_passes.load(Ordering::Relaxed),
+                spooled_uploads: self.marker_spooled_uploads.load(Ordering::Relaxed),
             },
             catalog: CatalogStats {
                 trusted_archives: self.catalog_trusted_archives.load(Ordering::Relaxed),

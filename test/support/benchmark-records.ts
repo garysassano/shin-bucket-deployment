@@ -229,6 +229,7 @@ export function providerSummary(memoryMb: number, parallel: number, create: bool
       plannedPassesPerUpload: 2,
       planningPasses: 0,
       uploadPasses: 0,
+      spooledUploads: 0,
     },
     catalog: zeroFields([
       "trustedArchives",

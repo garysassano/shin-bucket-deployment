@@ -192,6 +192,7 @@ const PROVIDER_SUMMARY_SECTIONS = {
     plannedPassesPerUpload: "number",
     planningPasses: "number",
     uploadPasses: "number",
+    spooledUploads: "number",
   },
   catalog: {
     trustedArchives: "number",

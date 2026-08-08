@@ -465,13 +465,14 @@ Transfer scheduler diagnostics field reference:
 
 Marker replacement diagnostics field reference:
 
-| Field                    | Meaning                                                                            | Use when debugging                                                |
-| ------------------------ | ---------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
-| `strategy`               | `planning-plus-retryable-stream`.                                                  | Identify the exact-length planning and conditional upload design. |
-| `semantics`              | `leftmost-longest-non-recursive`.                                                  | Confirm deterministic simultaneous replacement behavior.          |
-| `plannedPassesPerUpload` | Nominal pass count for an object that requires upload; currently 2.                | Make the accepted source-read tradeoff explicit.                  |
-| `planningPasses`         | Marker entries read for output length, validation, and optional SSE-S3 comparison. | Compare marker work with marker entry count.                      |
-| `uploadPasses`           | Marker upload body instances actually polled, including consumed retries.          | Distinguish skipped entries from uploads and replay work.         |
+| Field                    | Meaning                                                                                                                                      | Use when debugging                                                 |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `strategy`               | `planning-plus-retryable-stream`.                                                                                                            | Identify the exact-length planning and conditional upload design.  |
+| `semantics`              | `leftmost-longest-non-recursive`.                                                                                                            | Confirm deterministic simultaneous replacement behavior.           |
+| `plannedPassesPerUpload` | Nominal pass count for an object that requires upload; currently 2.                                                                          | Make the accepted source-read tradeoff explicit.                   |
+| `planningPasses`         | Marker entries read for output length, validation, and optional SSE-S3 comparison.                                                           | Compare marker work with marker entry count.                       |
+| `uploadPasses`           | Marker upload body instances actually polled, including consumed retries.                                                                    | Distinguish skipped entries from uploads and replay work.          |
+| `spooledUploads`         | Marker entries whose planned output was retained under the spool budget and uploaded without a second source pass; 0 until that path exists. | Confirm the marker spool fast path has not started reporting work. |
 
 Source diagnostics field reference:
 
