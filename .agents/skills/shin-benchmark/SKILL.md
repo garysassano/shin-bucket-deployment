@@ -57,6 +57,12 @@ Committed benchmark records may include:
 
 ## Benchmark Runner
 
+> **Any change under `rust/` requires `pnpm prebuild:bootstrap` before collecting benchmark evidence.**
+>
+> Benchmark deploys use the same construct path as verification: the construct prefers the prebuilt `assets/bootstrap-<arch>/bootstrap.zip` and only compiles when no archive exists (`src/provider.ts`), and the benchmark runner does not rebuild it.
+> A stale archive is selected silently, so rows would measure the previous provider binary while recording the new commit's `provider.bootstrap` digests and `provider.implementationCommit` — evidence that misdescribes what ran.
+> Run `pnpm prebuild:bootstrap` (it stages both arm64 and x86_64 archives) after any `rust/` change, before the first benchmark deploy of a session.
+
 Benchmark mode runs only the selected benchmark scenario and expands the requested config matrix:
 
 ```bash
