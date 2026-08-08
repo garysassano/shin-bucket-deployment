@@ -66,7 +66,13 @@ function deterministicBytes(size: number): Buffer {
   let state = 0x12345678;
   for (let index = 0; index < output.length; index++) {
     state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
-    output[index] = state & 0xff;
+    // The HIGH byte, not `state & 0xff`. In a power-of-two-modulus LCG the low
+    // bits have short periods -- bit k repeats every 2^(k+1) values -- so the
+    // low byte repeats every 256 bytes. That made this "large" archive compress
+    // 256:1 into roughly 98 KB, so the scenario uploaded a tiny zip instead of
+    // exercising a large transfer, and the ratio tripped the source catalog's
+    // MaxCompressionRatio guard (default 100) once catalogs began enforcing it.
+    output[index] = state >>> 24;
   }
   return output;
 }
