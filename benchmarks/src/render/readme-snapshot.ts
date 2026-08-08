@@ -27,6 +27,7 @@ const CLI_OPTIONS = [
   "variant",
 ] as const;
 
+const cliArgs = process.argv.slice(2);
 const snapshotArgCache = new WeakMap<string[], Map<string, string>>();
 
 function parseVariant(argv: string[]): ChartVariant {
@@ -41,6 +42,8 @@ function parseVariant(argv: string[]): ChartVariant {
 
   throw new Error(`Unknown chart variant "${requestedVariant}". Use "default" or "aws".`);
 }
+
+const chartVariant = parseVariant(cliArgs);
 
 function parseStringArg(argv: string[], name: string): string | undefined {
   return parseSnapshotArgs(argv).get(name.slice(2));
@@ -79,10 +82,29 @@ function parseHeaderLayout(argv: string[]): HeaderLayout {
   throw new Error(`Unknown header layout "${requestedHeader}". Use "two-line" or "three-line".`);
 }
 
+const headerLayout = parseHeaderLayout(cliArgs);
+const requestedProfile = parseStringArg(cliArgs, "--asset-profile");
+const requestedMemoryMb = parseNumberArg(cliArgs, "--lambda-memory-mb");
+const requestedShinMaxConcurrency = parseNumberArg(cliArgs, "--transfer-max-concurrency");
+const requestedRunId = parseStringArg(cliArgs, "--run-id");
+const requestedConfigFile = parseStringArg(cliArgs, "--config");
+const requestedScratchRoot = parseStringArg(cliArgs, "--scratch-root");
+const requestedOutputDirectory = parseStringArg(cliArgs, "--output-directory");
+const requestedFilenamePrefix = parseStringArg(cliArgs, "--filename-prefix") ?? "";
+const requestedPreview = parseBooleanArg(cliArgs, "--preview") ?? false;
+if (!/^[a-z0-9-]*$/.test(requestedFilenamePrefix)) {
+  throw new Error("--filename-prefix may contain only lowercase letters, digits, and hyphens");
+}
+const inputFile = resolve(
+  process.cwd(),
+  parseStringArg(cliArgs, "--input-file") ?? "benchmarks/results.jsonl",
+);
+
 // ═══ LAYOUT CONSTANTS ═══
 const CANVAS_PAD_LEFT = 24;
 const CANVAS_PAD_RIGHT = 30;
 
+const HEADER_H = headerLayout === "three-line" ? 111 : 60; // header band height
 const SECTION_HDR_H = 22; // section column-header band
 const SECTION_HDR_PAD_TOP = 15; // text baseline within section header
 
@@ -104,10 +126,6 @@ const BADGE_H = 22;
 const BADGE_RX = 5;
 
 const CANVAS_W = COL_DELTA_X + BADGE_W + CANVAS_PAD_RIGHT;
-
-function headerHeight(headerLayout: HeaderLayout): number {
-  return headerLayout === "three-line" ? 111 : 60; // header band height
-}
 
 // ═══ TYPOGRAPHY CONSTANTS ═══
 const FONT_SIZE_TITLE = 18;
@@ -138,7 +156,7 @@ interface Row {
 
 type BenchmarkRecord = BenchmarkRunSample;
 
-export interface BenchmarkData {
+interface BenchmarkData {
   assets: string;
   awsIdentity: string;
   duration: Row[];
@@ -151,12 +169,6 @@ export interface BenchmarkData {
   memoryMb: number;
   parallel: number;
 }
-
-export type SelectionFilters = {
-  readonly assetProfile?: string;
-  readonly memoryMb?: number;
-  readonly shinMaxConcurrency?: number;
-};
 
 interface DataSelection {
   runRecords: BenchmarkRecord[];
@@ -244,10 +256,7 @@ function formatBytes(value: number): string {
     : `${amount.toFixed(1).replace(/\.0$/, "")} ${units[unitIndex]}`;
 }
 
-function findSelections(
-  records: readonly BenchmarkRecord[],
-  filters: SelectionFilters,
-): DataSelection[] {
+function findSelections(records: BenchmarkRecord[]): DataSelection[] {
   const shinGroups = new Map<string, BenchmarkRecord[]>();
   for (const record of records.filter((record) => record.implementation === "shin")) {
     if (
@@ -261,15 +270,15 @@ function findSelections(
     ) {
       continue;
     }
-    if (filters.assetProfile !== undefined && record.profile !== filters.assetProfile) {
+    if (requestedProfile !== undefined && record.profile !== requestedProfile) {
       continue;
     }
-    if (filters.memoryMb !== undefined && record.memoryMb !== filters.memoryMb) {
+    if (requestedMemoryMb !== undefined && record.memoryMb !== requestedMemoryMb) {
       continue;
     }
     if (
-      filters.shinMaxConcurrency !== undefined &&
-      record.parallel !== filters.shinMaxConcurrency
+      requestedShinMaxConcurrency !== undefined &&
+      record.parallel !== requestedShinMaxConcurrency
     ) {
       continue;
     }
@@ -326,18 +335,6 @@ function findSelections(
       left.memoryMb - right.memoryMb ||
       left.parallel - right.parallel,
   );
-}
-
-/**
- * Builds the chart data items for a render from joined benchmark records.
- * Extracted from the CLI entry so tests can point the selection at fixture
- * ledgers in a temp directory instead of the committed files.
- */
-export function selectChartItems(
-  records: readonly BenchmarkRunSample[],
-  filters: SelectionFilters,
-): BenchmarkData[] {
-  return findSelections(records, filters).map(buildBenchmarkData);
 }
 
 function buildBenchmarkData(selection: DataSelection): BenchmarkData {
@@ -419,12 +416,10 @@ function simulateAwsWins(rows: Row[]): Row[] {
   }));
 }
 
-function snapshotFileName(
-  benchmarkData: BenchmarkData,
-  filenamePrefix: string,
-  outFileSuffix: string,
-): string {
-  return `${filenamePrefix}${safeFileToken(benchmarkData.profile)}-${benchmarkData.memoryMb}mib-${benchmarkData.parallel}${outFileSuffix}.svg`;
+const outFileSuffix = `${chartVariant === "aws" ? "-aws" : ""}${headerLayout === "two-line" ? "-two-line" : ""}`;
+
+function snapshotFileName(benchmarkData: BenchmarkData): string {
+  return `${requestedFilenamePrefix}${safeFileToken(benchmarkData.profile)}-${benchmarkData.memoryMb}mib-${benchmarkData.parallel}${outFileSuffix}.svg`;
 }
 
 function safeFileToken(value: string): string {
@@ -541,7 +536,7 @@ function renderSectionHeader(y: number, title: string, deltaLabel: string): stri
   return s;
 }
 
-function renderHeader(benchmarkData: BenchmarkData, headerLayout: HeaderLayout): string {
+function renderHeader(benchmarkData: BenchmarkData): string {
   if (headerLayout === "three-line") {
     return `<text x="${CANVAS_PAD_LEFT}" y="23" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_TITLE}" font-weight="800" fill="#f0f8ff" letter-spacing="-0.3">ShinBucketDeployment</text>
 <text x="${CANVAS_PAD_LEFT}" y="43" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_SUBTITLE + 1}" font-weight="600" fill="${COLOR_SECTION_HEADER_TEXT}">vs BucketDeployment</text>
@@ -567,11 +562,7 @@ function renderMetadataCard(
 <text x="${x + 10}" y="${y + 35}" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="600" fill="#b6cedc">${value}</text>`;
 }
 
-function renderLegend(
-  benchmarkData: BenchmarkData,
-  legendX: number,
-  headerLayout: HeaderLayout,
-): string {
+function renderLegend(benchmarkData: BenchmarkData, legendX: number): string {
   if (headerLayout === "two-line") {
     return `<rect x="${legendX}" y="12" width="12" height="8" rx="2" fill="url(#shin)"/>
 <text x="${legendX + 18}" y="20" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_HEADER_LEGEND}" font-weight="700" fill="#8ab8d0">SHIN</text>
@@ -589,11 +580,7 @@ function renderLegend(
 }
 
 // ═══ RENDER ═══
-function render(
-  benchmarkData: BenchmarkData,
-  chartVariant: ChartVariant,
-  headerLayout: HeaderLayout,
-): string {
+function render(benchmarkData: BenchmarkData): string {
   const chartDuration =
     chartVariant === "aws" ? simulateAwsWins(benchmarkData.duration) : benchmarkData.duration;
   const chartMemory =
@@ -601,8 +588,7 @@ function render(
   const maxDuration = Math.max(...chartDuration.flatMap((row) => [row.shin, row.aws]));
   const maxMemory = Math.max(...chartMemory.flatMap((row) => [row.shin, row.aws]));
   const legendX = CANVAS_W - CANVAS_PAD_LEFT - LEGEND_W;
-  const headerH = headerHeight(headerLayout);
-  const sectionATop = headerH;
+  const sectionATop = HEADER_H;
   const sectionARowsTop = sectionATop + SECTION_HDR_H + 1;
   const sectionABottom = sectionARowsTop + ROW_H * chartDuration.length - 1;
   const dividerY = sectionABottom;
@@ -641,9 +627,9 @@ function render(
 <rect width="${CANVAS_W}" height="${canvasHeight}" fill="url(#bgGrad)"/>
 
 <!-- Header -->
-${renderHeader(benchmarkData, headerLayout)}
-${renderLegend(benchmarkData, legendX, headerLayout)}
-<rect x="0" y="${headerH - 1}" width="${CANVAS_W}" height="1" fill="#1a2a38"/>
+${renderHeader(benchmarkData)}
+${renderLegend(benchmarkData, legendX)}
+<rect x="0" y="${HEADER_H - 1}" width="${CANVAS_W}" height="1" fill="#1a2a38"/>
 
 `;
 
@@ -667,66 +653,31 @@ ${renderLegend(benchmarkData, legendX, headerLayout)}
 }
 
 // ═══ OUTPUT ═══
-function main(): void {
-  const cliArgs = process.argv.slice(2);
-  const chartVariant = parseVariant(cliArgs);
-  const headerLayout = parseHeaderLayout(cliArgs);
-  const requestedProfile = parseStringArg(cliArgs, "--asset-profile");
-  const requestedMemoryMb = parseNumberArg(cliArgs, "--lambda-memory-mb");
-  const requestedShinMaxConcurrency = parseNumberArg(cliArgs, "--transfer-max-concurrency");
-  const requestedRunId = parseStringArg(cliArgs, "--run-id");
-  const requestedConfigFile = parseStringArg(cliArgs, "--config");
-  const requestedScratchRoot = parseStringArg(cliArgs, "--scratch-root");
-  const requestedOutputDirectory = parseStringArg(cliArgs, "--output-directory");
-  const requestedFilenamePrefix = parseStringArg(cliArgs, "--filename-prefix") ?? "";
-  const requestedPreview = parseBooleanArg(cliArgs, "--preview") ?? false;
-  if (!/^[a-z0-9-]*$/.test(requestedFilenamePrefix)) {
-    throw new Error("--filename-prefix may contain only lowercase letters, digits, and hyphens");
-  }
-  const inputFile = resolve(
-    process.cwd(),
-    parseStringArg(cliArgs, "--input-file") ?? "benchmarks/results.jsonl",
-  );
-  const selectRecords = requestedPreview
-    ? selectValidatedBenchmarkPreview
-    : selectValidatedBenchmarkRun;
-  const outFileSuffix = `${chartVariant === "aws" ? "-aws" : ""}${headerLayout === "two-line" ? "-two-line" : ""}`;
-  const benchmarkDataItems = selectChartItems(
-    selectRecords({
-      ...readBenchmarkEvidence(inputFile),
-      runId: requestedRunId,
-      configFile: requestedConfigFile,
-      inputFile,
-      scratchRoot: requestedScratchRoot,
-    }),
-    {
-      assetProfile: requestedProfile,
-      memoryMb: requestedMemoryMb,
-      shinMaxConcurrency: requestedShinMaxConcurrency,
-    },
-  );
-  if (benchmarkDataItems.length === 0) {
-    console.error(
-      `No chart could be rendered from ${inputFile}: no phase has both a shin and an aws sample. ` +
-        `A ledger with no shin evidence renders nothing; re-run the benchmark before publishing.`,
-    );
-    process.exit(1);
-  }
-  for (const benchmarkData of benchmarkDataItems) {
-    const outPath = resolve(
-      requestedOutputDirectory ?? resolve(process.cwd(), "benchmarks", "snapshots"),
-      snapshotFileName(benchmarkData, requestedFilenamePrefix, outFileSuffix),
-    );
-    mkdirSync(dirname(outPath), { recursive: true });
-    writeFileSync(outPath, render(benchmarkData, chartVariant, headerLayout));
-    console.log(`Written: ${outPath}`);
-  }
-  console.log(`Generated: ${benchmarkDataItems.length}`);
-  console.log(`Variant: ${chartVariant}`);
-  console.log(`Header: ${headerLayout}`);
-  console.log(`Canvas width: ${CANVAS_W}, Row height: ${ROW_H}px, Bar: ${BAR_H}px`);
+const selectRecords = requestedPreview
+  ? selectValidatedBenchmarkPreview
+  : selectValidatedBenchmarkRun;
+const benchmarkDataItems = findSelections(
+  selectRecords({
+    ...readBenchmarkEvidence(inputFile),
+    runId: requestedRunId,
+    configFile: requestedConfigFile,
+    inputFile,
+    scratchRoot: requestedScratchRoot,
+  }),
+).map(buildBenchmarkData);
+if (benchmarkDataItems.length === 0) {
+  throw new Error("No complete Shin/AWS benchmark pairs matched the selected filters");
 }
-
-if (require.main === module) {
-  main();
+for (const benchmarkData of benchmarkDataItems) {
+  const outPath = resolve(
+    requestedOutputDirectory ?? resolve(process.cwd(), "benchmarks", "snapshots"),
+    snapshotFileName(benchmarkData),
+  );
+  mkdirSync(dirname(outPath), { recursive: true });
+  writeFileSync(outPath, render(benchmarkData));
+  console.log(`Written: ${outPath}`);
 }
+console.log(`Generated: ${benchmarkDataItems.length}`);
+console.log(`Variant: ${chartVariant}`);
+console.log(`Header: ${headerLayout}`);
+console.log(`Canvas width: ${CANVAS_W}, Row height: ${ROW_H}px, Bar: ${BAR_H}px`);
