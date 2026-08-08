@@ -24,13 +24,30 @@ const DEFAULT_DESTINATION_WRITE_RETRY_BASE_DELAY_MS = 250;
 const DEFAULT_DESTINATION_WRITE_RETRY_MAX_DELAY_MS = 5_000;
 const DEFAULT_DESTINATION_WRITE_SLOWDOWN_RETRY_BASE_DELAY_MS = 1_000;
 const DEFAULT_DESTINATION_WRITE_SLOWDOWN_RETRY_MAX_DELAY_MS = 30_000;
-const MAX_DESTINATION_KEY_PREFIX_LENGTH = 102;
+// S3 caps a tag key at 128 characters (the object-tagging user guide, linked on
+// the UTF-16 comment in validateDestinationKeyPrefix). The ownership tag key
+// built in src/shin-bucket-deployment.ts is `aws-cdk:cr-owned:<prefix>:<suffix>`:
+// the 16-character owner constant, a colon, the prefix, a colon, and the
+// 16-hex-character 64-bit ownership suffix (destinationOwnerId). The prefix
+// budget is the remainder of that 128-character key and drifts if any other
+// term changes: 128 - 16 - 1 - 16 - 1 = 94.
+const MAX_DESTINATION_KEY_PREFIX_LENGTH = 128 - 16 - 1 - 16 - 1;
+// CloudFront's documented maximum invalidation path length:
+// https://docs.aws.amazon.com/AmazonCloudFront/latest/DeveloperGuide/invalidation-specifying-objects.html
 const MAX_CLOUDFRONT_INVALIDATION_PATH_CHARACTERS = 4_000;
-// CloudFront's documented per-invalidation-batch limits: at most 3,000 paths,
-// of which at most 15 may be wildcard paths (a path whose final character is
-// `*`). See .plans/plan-consolidated.md T-5.
+// CloudFront documents the file and wildcard quotas as separate dimensions:
+// "File invalidation: maximum number of files allowed in active invalidation
+// requests, excluding wildcard invalidations" (3,000) and "File invalidation:
+// maximum number of active wildcard invalidations allowed" (15). The 3,000 is a
+// per-request file count that does not include wildcard paths (a path whose
+// final character is `*`); the 15 is a per-distribution limit on active
+// wildcard invalidations, which is runtime service state, so the 15-wildcard
+// cap per request here is the synthesis-time proxy for that quota:
+// https://docs.aws.amazon.com/general/latest/gr/cf_region.html
 const MAX_CLOUDFRONT_INVALIDATION_PATHS = 3_000;
 const MAX_CLOUDFRONT_WILDCARD_INVALIDATION_PATHS = 15;
+// S3's user-defined tag key charset (Unicode letters, numbers, whitespace, and
+// `_ . : / = + - @`): https://docs.aws.amazon.com/AmazonS3/latest/userguide/tagging.html
 const DESTINATION_OWNER_TAG_PREFIX_PATTERN = /^[\p{L}\p{Z}\p{N}_.:/=+\-@]*$/u;
 
 const ROOT_KEYS = [
@@ -635,16 +652,16 @@ function validateCloudFrontPaths(scope: Construct, paths: unknown): void {
       scope,
     );
   }
-  if (paths.length > MAX_CLOUDFRONT_INVALIDATION_PATHS) {
-    throw new ValidationError(
-      "ShinBucketDeploymentCloudFrontPathsLimit",
-      `cloudfrontInvalidation.paths must contain at most ${MAX_CLOUDFRONT_INVALIDATION_PATHS} paths; ${paths.length} were provided.`,
-      scope,
-    );
-  }
   const wildcardPathCount = paths.filter(
     (path) => !Token.isUnresolved(path) && typeof path === "string" && path.endsWith("*"),
   ).length;
+  if (paths.length - wildcardPathCount > MAX_CLOUDFRONT_INVALIDATION_PATHS) {
+    throw new ValidationError(
+      "ShinBucketDeploymentCloudFrontPathsLimit",
+      `cloudfrontInvalidation.paths must contain at most ${MAX_CLOUDFRONT_INVALIDATION_PATHS} non-wildcard paths (paths not ending in "*"); ${paths.length - wildcardPathCount} were provided.`,
+      scope,
+    );
+  }
   if (wildcardPathCount > MAX_CLOUDFRONT_WILDCARD_INVALIDATION_PATHS) {
     throw new ValidationError(
       "ShinBucketDeploymentCloudFrontWildcardPathsLimit",
@@ -712,10 +729,25 @@ function validateDestinationKeyPrefix(scope: Construct, prefix: unknown): void {
   if (typeof prefix !== "string") {
     throw invalidValue(scope, "destination.keyPrefix", "a string");
   }
+  // S3 measures tag-key length in UTF-16 code units, not Unicode code points.
+  // The S3 user guide states that object tags are "internally represented in
+  // UTF-16" and that "characters consume either 1 or 2 character positions"
+  // within the 128-position key limit:
+  // https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-tagging.html
+  // JavaScript's `String.prototype.length` counts exactly those UTF-16 code
+  // units, so it is the matching count: a prefix of astral-plane characters
+  // (two code units each) is correctly rejected here, because the resulting
+  // tag key would exceed S3's limit at deploy time.
+  //
+  // This citation is load-bearing: it is the evidence that overturned a review
+  // finding. Without it, the next person "corrects" `.length` to
+  // `Array.from(...).length` (code points) and makes synthesis MORE permissive
+  // than S3 — a 94-astral-character prefix would pass here even though S3
+  // rejects the resulting 222-code-unit tag key at deploy time.
   if (prefix.length > MAX_DESTINATION_KEY_PREFIX_LENGTH) {
     throw new ValidationError(
       "ShinBucketDeploymentDestinationKeyPrefixTooLong",
-      `destination.keyPrefix must be <=${MAX_DESTINATION_KEY_PREFIX_LENGTH} characters.`,
+      `destination.keyPrefix must be <=${MAX_DESTINATION_KEY_PREFIX_LENGTH} characters (S3 counts tag-key characters in UTF-16 code units).`,
       scope,
     );
   }

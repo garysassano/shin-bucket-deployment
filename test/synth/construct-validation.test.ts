@@ -52,8 +52,10 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     });
 
     expect(customResourceProperties(stack)).toMatchObject({
-      MaxUncompressedEntryBytes: DEFAULT_MAX_UNCOMPRESSED_ENTRY_BYTES,
-      MaxCompressionRatio: DEFAULT_MAX_COMPRESSION_RATIO,
+      SourceProcessing: {
+        MaxUncompressedEntryBytes: DEFAULT_MAX_UNCOMPRESSED_ENTRY_BYTES,
+        MaxCompressionRatio: DEFAULT_MAX_COMPRESSION_RATIO,
+      },
     });
   });
 
@@ -72,8 +74,10 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     });
 
     expect(customResourceProperties(stack)).toMatchObject({
-      MaxUncompressedEntryBytes: 5 * 1024 * 1024 * 1024,
-      MaxCompressionRatio: 10_000,
+      SourceProcessing: {
+        MaxUncompressedEntryBytes: 5 * 1024 * 1024 * 1024,
+        MaxCompressionRatio: 10_000,
+      },
     });
   });
 
@@ -171,7 +175,7 @@ describe("ShinBucketDeployment validation and option coverage", () => {
 
     const properties = customResourceProperties(stack);
     const destinationOwnerId = properties.DestinationOwnerId;
-    expect(destinationOwnerId).toEqual(expect.stringMatching(/^[a-f0-9]{8}$/));
+    expect(destinationOwnerId).toEqual(expect.stringMatching(/^[a-f0-9]{16}$/));
     Template.fromStack(stack).hasResourceProperties("AWS::S3::Bucket", {
       Tags: Match.arrayWith([
         {
@@ -180,10 +184,20 @@ describe("ShinBucketDeployment validation and option coverage", () => {
         },
       ]),
     });
-    expect(customResourceProperties(stack).DeletePreviousObjectsOnChange).toBeUndefined();
-    expect(customResourceProperties(stack).InvalidatePreviousDistributionOnChange).toBeUndefined();
-    expect(customResourceProperties(stack).DeleteCurrentObjectsOnDelete).toBe(false);
-    expect(customResourceProperties(stack).DeleteStaleObjectsOnDeployment).toBe(true);
+    const lifecycle = customResourceProperties(stack).DestinationLifecycle as {
+      OnChange: {
+        DeletePreviousObjects: boolean;
+        PreviousBucketName?: unknown;
+        InvalidatePreviousDistribution?: unknown;
+      };
+      OnDelete: { DeleteCurrentObjects: boolean };
+      OnDeploy: { DeleteStaleObjects: boolean };
+    };
+    expect(lifecycle.OnChange.DeletePreviousObjects).toBe(false);
+    expect(lifecycle.OnChange.PreviousBucketName).toBeUndefined();
+    expect(lifecycle.OnChange.InvalidatePreviousDistribution).toBeUndefined();
+    expect(lifecycle.OnDelete.DeleteCurrentObjects).toBe(false);
+    expect(lifecycle.OnDeploy.DeleteStaleObjects).toBe(true);
   });
 
   test("canonicalizes a slash destination prefix to root ownership", () => {
@@ -202,7 +216,7 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     });
 
     const properties = customResourceProperties(stack);
-    expect(properties.DestinationBucketKeyPrefix).toBe("/");
+    expect((properties.Destination as Record<string, unknown>).KeyPrefix).toBe("/");
     Template.fromStack(stack).hasResourceProperties("AWS::S3::Bucket", {
       Tags: Match.arrayWith([
         {
@@ -213,10 +227,10 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     });
   });
 
-  test("accepts a 102-character destination prefix", () => {
+  test("accepts a 94-character destination prefix", () => {
     const stack = new Stack();
     const destinationBucket = new Bucket(stack, "Dest");
-    const prefix = "a".repeat(102);
+    const prefix = "a".repeat(94);
 
     new ShinBucketDeployment(stack, "Deploy", {
       sources: [Source.data("index.html", "ok")],
@@ -240,7 +254,7 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     });
   });
 
-  test("rejects a destination prefix longer than 102 characters with a specific code", () => {
+  test("rejects a destination prefix longer than 94 characters with a specific code", () => {
     const stack = new Stack();
     const destinationBucket = new Bucket(stack, "Dest");
 
@@ -249,7 +263,7 @@ describe("ShinBucketDeployment validation and option coverage", () => {
         sources: [Source.data("index.html", "ok")],
         destination: {
           bucket: destinationBucket,
-          keyPrefix: "a".repeat(103),
+          keyPrefix: "a".repeat(95),
         },
         providerLambda: {
           localBuild: testLocalProviderBuild(),
@@ -258,9 +272,59 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     }).toThrowError(
       expect.objectContaining({
         code: "ShinBucketDeploymentDestinationKeyPrefixTooLong",
-        message: "destination.keyPrefix must be <=102 characters.",
+        message:
+          "destination.keyPrefix must be <=94 characters (S3 counts tag-key characters in UTF-16 code units).",
       }) as ValidationError,
     );
+  });
+
+  test("rejects an astral-plane prefix over 94 UTF-16 code units even when under 94 code points", () => {
+    const stack = new Stack();
+    const destinationBucket = new Bucket(stack, "Dest");
+
+    // S3 represents object tags internally in UTF-16, where characters consume
+    // either 1 or 2 character positions, so the 94-position prefix limit is
+    // counted in code units: 94 astral-plane characters report length 188 and
+    // must be rejected even though they are only 94 Unicode code points.
+    expect(() => {
+      new ShinBucketDeployment(stack, "Deploy", {
+        sources: [Source.data("index.html", "ok")],
+        destination: {
+          bucket: destinationBucket,
+          keyPrefix: "\u{10400}".repeat(94),
+        },
+        providerLambda: {
+          localBuild: testLocalProviderBuild(),
+        },
+      });
+    }).toThrowError(
+      expect.objectContaining({
+        code: "ShinBucketDeploymentDestinationKeyPrefixTooLong",
+      }) as ValidationError,
+    );
+  });
+
+  test("accepts an astral-plane prefix of 94 UTF-16 code units", () => {
+    const stack = new Stack();
+    const destinationBucket = new Bucket(stack, "Dest");
+
+    const prefix = "\u{10400}".repeat(47);
+    expect(prefix.length).toBe(94);
+
+    new ShinBucketDeployment(stack, "Deploy", {
+      sources: [Source.data("index.html", "ok")],
+      destination: {
+        bucket: destinationBucket,
+        keyPrefix: prefix,
+      },
+      providerLambda: {
+        localBuild: testLocalProviderBuild(),
+      },
+    });
+
+    // Construction succeeded; validation runs in the constructor, so reaching
+    // the synthesized template is the acceptance check.
+    Template.fromStack(stack);
   });
 
   test.each([
@@ -355,16 +419,17 @@ describe("ShinBucketDeployment validation and option coverage", () => {
       },
     });
 
-    const previousDestinationAuthorization = customResourceProperties(stack)
-      .DeletePreviousObjectsOnChange as {
-      DestinationBucketName: { Ref: string };
-      DestinationBucketKeyPrefix?: string;
+    const lifecycle = customResourceProperties(stack).DestinationLifecycle as {
+      OnChange: {
+        DeletePreviousObjects: boolean;
+        PreviousBucketName?: { Ref: string };
+      };
     };
-    expect(previousDestinationAuthorization).toEqual({
-      DestinationBucketName: {
-        Ref: expect.stringMatching(/^Dest/),
-      },
+    expect(lifecycle.OnChange.DeletePreviousObjects).toBe(true);
+    expect(lifecycle.OnChange.PreviousBucketName).toEqual({
+      Ref: expect.stringMatching(/^Dest/),
     });
+    const previousBucketName = lifecycle.OnChange.PreviousBucketName as { Ref: string };
 
     Template.fromStack(stack).hasResourceProperties("AWS::IAM::Policy", {
       PolicyDocument: {
@@ -376,10 +441,7 @@ describe("ShinBucketDeployment validation and option coverage", () => {
                 "",
                 Match.arrayWith([
                   Match.objectLike({
-                    "Fn::GetAtt": [
-                      previousDestinationAuthorization.DestinationBucketName.Ref,
-                      "Arn",
-                    ],
+                    "Fn::GetAtt": [previousBucketName.Ref, "Arn"],
                   }),
                   "/*",
                 ]),
@@ -389,7 +451,7 @@ describe("ShinBucketDeployment validation and option coverage", () => {
           Match.objectLike({
             Action: "s3:ListBucket",
             Resource: {
-              "Fn::GetAtt": [previousDestinationAuthorization.DestinationBucketName.Ref, "Arn"],
+              "Fn::GetAtt": [previousBucketName.Ref, "Arn"],
             },
           }),
         ]),
@@ -432,20 +494,27 @@ describe("ShinBucketDeployment validation and option coverage", () => {
       },
     });
 
-    const previousDestinationAuthorization = customResourceProperties(stack)
-      .DeletePreviousObjectsOnChange as {
-      DestinationBucketName: { Ref: string };
+    const lifecycle = customResourceProperties(stack).DestinationLifecycle as {
+      OnChange: {
+        DeletePreviousObjects: boolean;
+        PreviousBucketName?: { Ref: string };
+        InvalidatePreviousDistribution?: { Ref: string };
+      };
     };
-    expect(previousDestinationAuthorization).toEqual({
-      DestinationBucketName: {
-        Ref: expect.stringMatching(/^PreviousDest/),
-      },
+    expect(lifecycle.OnChange.DeletePreviousObjects).toBe(true);
+    expect(lifecycle.OnChange.PreviousBucketName).toEqual({
+      Ref: expect.stringMatching(/^PreviousDest/),
     });
-    expect(customResourceProperties(stack).InvalidatePreviousDistributionOnChange).toEqual({
+    expect(lifecycle.OnChange.InvalidatePreviousDistribution).toEqual({
       Ref: expect.stringMatching(/^PreviousDistribution/),
     });
-    expect(customResourceProperties(stack).DeleteCurrentObjectsOnDelete).toBe(true);
-    expect(customResourceProperties(stack).DeleteStaleObjectsOnDeployment).toBe(false);
+    const renderedLifecycle = customResourceProperties(stack).DestinationLifecycle as {
+      OnDelete: { DeleteCurrentObjects: boolean };
+      OnDeploy: { DeleteStaleObjects: boolean };
+    };
+    expect(renderedLifecycle.OnDelete.DeleteCurrentObjects).toBe(true);
+    expect(renderedLifecycle.OnDeploy.DeleteStaleObjects).toBe(false);
+    const previousBucketName = lifecycle.OnChange.PreviousBucketName as { Ref: string };
 
     const template = Template.fromStack(stack);
     template.hasResourceProperties("AWS::IAM::Policy", {
@@ -458,10 +527,7 @@ describe("ShinBucketDeployment validation and option coverage", () => {
                 "",
                 Match.arrayWith([
                   Match.objectLike({
-                    "Fn::GetAtt": [
-                      previousDestinationAuthorization.DestinationBucketName.Ref,
-                      "Arn",
-                    ],
+                    "Fn::GetAtt": [previousBucketName.Ref, "Arn"],
                   }),
                   "/*",
                 ]),
@@ -471,7 +537,7 @@ describe("ShinBucketDeployment validation and option coverage", () => {
           Match.objectLike({
             Action: "s3:ListBucket",
             Resource: {
-              "Fn::GetAtt": [previousDestinationAuthorization.DestinationBucketName.Ref, "Arn"],
+              "Fn::GetAtt": [previousBucketName.Ref, "Arn"],
             },
           }),
           Match.objectLike({
@@ -917,7 +983,7 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     const customResourceScope = deployment.node.findChild("CustomResource");
     const customResource = customResourceScope.node.children[0];
     if (!customResource) throw new Error("Shin custom resource not found");
-    const ownershipTagKey = `aws-cdk:cr-owned:${customResource.node.addr.slice(-8)}`;
+    const ownershipTagKey = `aws-cdk:cr-owned:${customResource.node.addr.slice(-16)}`;
     const bucketResource = destinationBucket.node.defaultChild as CfnBucket;
     bucketResource.tagsRaw = [{ key: ownershipTagKey, value: "duplicate" }];
 
@@ -953,11 +1019,13 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     const template = Template.fromStack(stack);
 
     template.hasResourceProperties("AWS::CloudFormation::CustomResource", {
-      DistributionId: {
-        Ref: Match.anyValue(),
+      CloudfrontInvalidation: {
+        DistributionId: {
+          Ref: Match.anyValue(),
+        },
+        Paths: ["/site/index.html", "/site/app.js"],
+        WaitForCompletion: false,
       },
-      DistributionPaths: ["/site/index.html", "/site/app.js"],
-      WaitForDistributionInvalidation: false,
     });
 
     template.hasResourceProperties("AWS::IAM::Policy", {
@@ -1047,18 +1115,24 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     });
 
     expect(customResourceProperties(stack)).toMatchObject({
-      MaxParallelTransfers: 7,
-      SourceBlockBytes: 4 * 1024 * 1024,
-      SourceBlockMergeGapBytes: 64 * 1024,
-      SourceGetConcurrency: 3,
-      SourceWindowBytes: 32 * 1024 * 1024,
-      SourceWindowMemoryBudgetMb: 512,
-      PutObjectMaxAttempts: 4,
-      PutObjectRetryBaseDelayMs: 100,
-      PutObjectRetryMaxDelayMs: 1_000,
-      PutObjectSlowdownRetryBaseDelayMs: 2_000,
-      PutObjectSlowdownRetryMaxDelayMs: 20_000,
-      PutObjectRetryJitter: "none",
+      Transfer: {
+        MaxConcurrency: 7,
+        AdvancedTuning: {
+          SourceBlockBytes: 4 * 1024 * 1024,
+          SourceBlockMergeGapBytes: 64 * 1024,
+          SourceGetConcurrency: 3,
+          SourceWindowBytes: 32 * 1024 * 1024,
+          SourceWindowMemoryBudgetMiB: 512,
+          DestinationWriteRetry: {
+            MaxAttempts: 4,
+            BaseDelayMs: 100,
+            MaxDelayMs: 1_000,
+            SlowdownBaseDelayMs: 2_000,
+            SlowdownMaxDelayMs: 20_000,
+            Jitter: "none",
+          },
+        },
+      },
     });
   });
 
@@ -1173,16 +1247,35 @@ describe("ShinBucketDeployment validation and option coverage", () => {
       },
     });
 
-    expect(customResourceProperties(stack).MaxParallelTransfers).toEqual({
-      Ref: "MaxConcurrency",
-    });
-    expect(customResourceProperties(stack).SourceBlockBytes).toEqual({ Ref: "Block" });
-    expect(customResourceProperties(stack).MaxUncompressedEntryBytes).toEqual({
-      Ref: "MaxEntryBytes",
-    });
-    expect(customResourceProperties(stack).MaxCompressionRatio).toEqual({
-      Ref: "MaxCompressionRatio",
-    });
+    expect(
+      (
+        customResourceProperties(stack).Transfer as {
+          MaxConcurrency?: unknown;
+          AdvancedTuning: { SourceBlockBytes?: unknown };
+        }
+      ).MaxConcurrency,
+    ).toEqual({ Ref: "MaxConcurrency" });
+    expect(
+      (
+        customResourceProperties(stack).Transfer as {
+          AdvancedTuning: { SourceBlockBytes?: unknown };
+        }
+      ).AdvancedTuning.SourceBlockBytes,
+    ).toEqual({ Ref: "Block" });
+    expect(
+      (
+        customResourceProperties(stack).SourceProcessing as {
+          MaxUncompressedEntryBytes?: unknown;
+        }
+      ).MaxUncompressedEntryBytes,
+    ).toEqual({ Ref: "MaxEntryBytes" });
+    expect(
+      (
+        customResourceProperties(stack).SourceProcessing as {
+          MaxCompressionRatio?: unknown;
+        }
+      ).MaxCompressionRatio,
+    ).toEqual({ Ref: "MaxCompressionRatio" });
     Annotations.fromStack(stack).hasNoWarning(
       "/Default/Deploy",
       Match.stringLikeRegexp("transfer\\.maxConcurrency"),
@@ -1427,7 +1520,7 @@ describe("ShinBucketDeployment validation and option coverage", () => {
           paths: tooManyPaths,
         },
       });
-    }).toThrow(/at most 3000 paths/);
+    }).toThrow(/at most 3000 non-wildcard paths/);
 
     const tooManyWildcards = Array.from({ length: 16 }, (_, index) => `/wild-${index}/*`);
     expect(() => {
@@ -1458,6 +1551,20 @@ describe("ShinBucketDeployment validation and option coverage", () => {
             ...Array.from({ length: 15 }, (_, index) => `/wild-${index}/*`),
             ...Array.from({ length: 2985 }, (_, index) => `/path-${index}`),
           ],
+        },
+      });
+    }).not.toThrow();
+
+    // CloudFront's 3,000-file quota excludes wildcard invalidations, so the
+    // documented maximum of each dimension can coexist in one request.
+    expect(() => {
+      new ShinBucketDeployment(stack, "DeployMixed", {
+        sources: [Source.data("index.html", "ok")],
+        destination: { bucket: destinationBucket },
+        providerLambda: { localBuild: testLocalProviderBuild() },
+        cloudfrontInvalidation: {
+          distribution: distributionRef("E1EXAMPLE"),
+          paths: [...Array.from({ length: 3000 }, (_, index) => `/path-${index}`), "/wild/*"],
         },
       });
     }).not.toThrow();

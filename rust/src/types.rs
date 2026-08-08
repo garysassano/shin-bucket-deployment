@@ -427,7 +427,6 @@ struct OnceInstant(Instant);
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DeploymentStatsSnapshot<'a> {
     pub(crate) event: &'static str,
-    pub(crate) schema_version: u8,
     pub(crate) request_type: &'a str,
     pub(crate) deployment_status: &'a str,
     pub(crate) extract: bool,
@@ -1045,7 +1044,6 @@ impl DeploymentStats {
     ) -> DeploymentStatsSnapshot<'a> {
         DeploymentStatsSnapshot {
             event: "shin_deployment_summary",
-            schema_version: 6,
             request_type,
             deployment_status,
             extract: request.extract,

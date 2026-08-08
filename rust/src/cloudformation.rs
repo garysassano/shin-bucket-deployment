@@ -897,6 +897,36 @@ mod tests {
         json!({
             "SourceBucketNames": ["source"],
             "SourceObjectKeys": ["asset.zip"],
+            "Destination": {
+                "BucketName": bucket,
+                "KeyPrefix": prefix
+            },
+            "DestinationOwnerId": owner_id,
+            "SourceProcessing": {
+                "MaxUncompressedEntryBytes": 1073741824,
+                "MaxCompressionRatio": 100
+            },
+            "DestinationLifecycle": {
+                "OnDeploy": {},
+                "OnChange": {},
+                "OnDelete": {}
+            },
+            "CloudfrontInvalidation": {},
+            "Transfer": {
+                "AdvancedTuning": {
+                    "DestinationWriteRetry": {}
+                }
+            }
+        })
+    }
+
+    /// The pre-rename wire names, kept to pin the clean-break rejection behavior:
+    /// an `OldResourceProperties` payload using them must fail loudly rather than
+    /// being partially parsed into a wrong previous-namespace decision.
+    fn legacy_wire_properties(bucket: &str, prefix: &str, owner_id: &str) -> Value {
+        json!({
+            "SourceBucketNames": ["source"],
+            "SourceObjectKeys": ["asset.zip"],
             "DestinationBucketName": bucket,
             "DestinationBucketKeyPrefix": prefix,
             "DestinationOwnerId": owner_id,
@@ -906,7 +936,7 @@ mod tests {
     }
 
     #[test]
-    fn deployment_summary_uses_diagnostics_schema_v6() {
+    fn deployment_summary_matches_the_diagnostics_contract() {
         let request = deployment_request_with_paths(vec!["/*".to_string()]);
         let stats = crate::types::DeploymentStats::new(true);
         stats.add_marker_planning_pass();
@@ -935,8 +965,6 @@ mod tests {
         });
         let summary = serde_json::to_value(stats.snapshot("Create", "success", &request))
             .expect("serializable summary");
-
-        assert_eq!(summary["schemaVersion"], 6);
 
         // Copy diagnostics aggregate into their own section and stay independent of
         // the PutObject counters, which remain zero for an `extract:false` deployment.
@@ -1146,7 +1174,6 @@ mod tests {
 
         let summary = serde_json::to_value(stats.snapshot("Create", "failed", &request))
             .expect("serializable summary");
-        assert_eq!(summary["schemaVersion"], 6);
         assert_eq!(summary["detailedFailureDiagnosticsEnabled"], false);
         assert_eq!(summary["putObject"]["failedAttempts"], 1);
         assert_eq!(summary["putObject"]["failuresBySdkErrorKind"], json!({}));
@@ -1164,14 +1191,11 @@ mod tests {
             "StackId": "stack-123",
             "ResourceType": RESOURCE_TYPE,
             "LogicalResourceId": "Deploy",
-            "ResourceProperties": {
-                "SourceBucketNames": ["source"],
-                "SourceObjectKeys": ["asset.zip"],
-                "DestinationBucketName": "destination",
-                "DestinationOwnerId": "resource-type-owner",
-                "MaxUncompressedEntryBytes": 1073741824,
-                "MaxCompressionRatio": 100
-            }
+            "ResourceProperties": deployment_request_properties(
+                "destination",
+                "",
+                "resource-type-owner"
+            )
         }))
         .expect("valid envelope");
         assert!(validate_resource_type(&valid).is_ok());
@@ -1185,14 +1209,11 @@ mod tests {
             "ResourceType": "Custom::UnsupportedProvider",
             "LogicalResourceId": "Deploy",
             "PhysicalResourceId": "physical-id",
-            "ResourceProperties": {
-                "SourceBucketNames": ["source"],
-                "SourceObjectKeys": ["asset.zip"],
-                "DestinationBucketName": "destination",
-                "DestinationOwnerId": "invalid-delete-owner",
-                "MaxUncompressedEntryBytes": 1073741824,
-                "MaxCompressionRatio": 100
-            }
+            "ResourceProperties": deployment_request_properties(
+                "destination",
+                "",
+                "invalid-delete-owner"
+            )
         }))
         .expect("invalid Delete resource type still forms an envelope");
         let error = decode_deployment_request(&invalid_delete)
@@ -1211,14 +1232,11 @@ mod tests {
             "StackId": "stack-123",
             "ResourceType": "Custom::WrongProvider",
             "LogicalResourceId": "Deploy",
-            "ResourceProperties": {
-                "SourceBucketNames": ["source"],
-                "SourceObjectKeys": ["asset.zip"],
-                "DestinationBucketName": "destination",
-                "DestinationOwnerId": "invalid-resource-owner",
-                "MaxUncompressedEntryBytes": 1073741824,
-                "MaxCompressionRatio": 100
-            }
+            "ResourceProperties": deployment_request_properties(
+                "destination",
+                "",
+                "invalid-resource-owner"
+            )
         }))
         .expect("invalid resource type still forms an envelope");
         let error = decode_deployment_request(&invalid)
@@ -1238,14 +1256,11 @@ mod tests {
             "StackId": "stack-123",
             "ResourceType": hostile_type,
             "LogicalResourceId": "Deploy",
-            "ResourceProperties": {
-                "SourceBucketNames": ["source"],
-                "SourceObjectKeys": ["asset.zip"],
-                "DestinationBucketName": "destination",
-                "DestinationOwnerId": "hostile-resource-owner",
-                "MaxUncompressedEntryBytes": 1073741824,
-                "MaxCompressionRatio": 100
-            }
+            "ResourceProperties": deployment_request_properties(
+                "destination",
+                "",
+                "hostile-resource-owner"
+            )
         }))
         .expect("hostile resource type still forms an envelope");
         let error = validate_resource_type(&hostile)
@@ -1259,28 +1274,64 @@ mod tests {
 
     #[test]
     fn delete_requires_the_current_request_schema() {
-        let request = decode_request_envelope(json!({
+        // The Delete path must decode through the same strict decoder as every
+        // other request type: a complete Delete envelope carrying the
+        // pre-rename flat wire names (the previous template's shape) must be
+        // rejected by the envelope decoder, never parsed into a current-schema
+        // request. This pins the operator-visible behavior: a Delete delivered
+        // from a template that still has the old names strands the stack in
+        // DELETE_FAILED, which the breaking-changes recovery documents.
+        let legacy_delete = decode_request_envelope(json!({
             "RequestType": "Delete",
-            "RequestId": "request-delete",
+            "RequestId": "request-delete-schema",
             "ResponseURL": "https://example.com/response",
             "StackId": "stack-123",
             "ResourceType": RESOURCE_TYPE,
             "LogicalResourceId": "Deploy",
             "PhysicalResourceId": "physical-id",
-            "ResourceProperties": {
-                "SourceBucketNames": ["source"],
-                "SourceObjectKeys": ["asset.zip"],
-                "DestinationBucketName": "destination",
-                "DestinationOwnerId": "delete-schema-owner",
-                "MaxUncompressedEntryBytes": 1073741824,
-                "MaxCompressionRatio": 100,
-                // One catalog descriptor for two declared sources: a Delete envelope has
-                // to fail this the same way every other request type does.
-                "SourceCatalogs": [{ "Version": 1, "Sha256": "00" }, { "Version": 1, "Sha256": "11" }]
-            }
+            "ResourceProperties": legacy_wire_properties(
+                "destination",
+                "",
+                "delete-schema-owner"
+            )
         }))
-        .expect("Delete envelope");
-        let decoded = decode_deployment_request(&request).expect("current resource type");
+        .expect("legacy Delete resource properties still form an envelope");
+        let error = decode_deployment_request(&legacy_delete)
+            .err()
+            .expect("Delete must not relax the strict current request schema");
+        assert!(
+            error
+                .to_string()
+                .contains("failed to deserialize ResourceProperties"),
+            "unexpected error: {error}"
+        );
+        assert!(
+            format!("{error:#}").contains("DestinationBucketName"),
+            "unexpected error: {error}"
+        );
+
+        // A Delete that decodes cleanly still runs the same cross-field
+        // validation as every other request type (the parse inside
+        // process_request): one catalog descriptor for two declared sources
+        // must fail the same way it fails Create and Update.
+        let mut delete_properties =
+            deployment_request_properties("destination", "", "delete-schema-owner");
+        // One catalog descriptor for two declared sources: a Delete envelope has
+        // to fail this the same way every other request type does.
+        delete_properties["SourceCatalogs"] =
+            json!([{ "Version": 1, "Sha256": "00" }, { "Version": 1, "Sha256": "11" }]);
+        let delete = decode_request_envelope(json!({
+            "RequestType": "Delete",
+            "RequestId": "request-delete-schema-2",
+            "ResponseURL": "https://example.com/response",
+            "StackId": "stack-123",
+            "ResourceType": RESOURCE_TYPE,
+            "LogicalResourceId": "Deploy",
+            "PhysicalResourceId": "physical-id",
+            "ResourceProperties": delete_properties,
+        }))
+        .expect("Delete resource properties still form an envelope");
+        let decoded = decode_deployment_request(&delete).expect("current-schema Delete decodes");
         let error = parse_request_with_memory(decoded.resource_properties, "1024")
             .expect_err("Delete must not relax the current request schema");
 
@@ -1504,7 +1555,9 @@ mod tests {
             "ResourceType": RESOURCE_TYPE,
             "LogicalResourceId": "Deploy",
             "ResourceProperties": {
-                "DestinationBucketName": "dest"
+                "Destination": {
+                    "BucketName": "dest"
+                }
             }
         });
 
@@ -1516,6 +1569,52 @@ mod tests {
         assert_eq!(create.response_url, "https://example.com/response");
         assert!(
             decode_resource_properties(&create.resource_properties, "ResourceProperties").is_err()
+        );
+    }
+
+    #[test]
+    fn old_wire_property_names_are_rejected_in_old_resource_properties() {
+        // The first Update after upgrading from the pre-rename contract carries the
+        // previous template's property names in OldResourceProperties. The strict
+        // single-shape decoder must reject that payload loudly -- never partially
+        // parse it into a wrong previous-prefix or previous-bucket decision.
+        let incoming_id = destination_physical_resource_id(&deployment_request_for_destination(
+            "previous-bucket",
+            "old-site",
+            "owner-a",
+        ));
+
+        let envelope = decode_request_envelope(json!({
+            "RequestType": "Update",
+            "RequestId": "request-legacy",
+            "ResponseURL": "https://example.com/response",
+            "StackId": "stack-a",
+            "ResourceType": RESOURCE_TYPE,
+            "LogicalResourceId": "Deploy",
+            "PhysicalResourceId": incoming_id,
+            "ResourceProperties": deployment_request_properties(
+                "current-bucket",
+                "new-site",
+                "owner-a"
+            ),
+            "OldResourceProperties": legacy_wire_properties(
+                "previous-bucket",
+                "old-site",
+                "owner-a"
+            ),
+        }))
+        .expect("Update envelope");
+        let error = match decode_deployment_request(&envelope) {
+            Ok(_) => {
+                panic!("an OldResourceProperties payload using the pre-rename wire names must fail")
+            }
+            Err(error) => error,
+        };
+
+        let chain = format!("{error:#}");
+        assert!(
+            chain.contains("DestinationBucketName"),
+            "unexpected legacy-payload error: {chain}"
         );
     }
 

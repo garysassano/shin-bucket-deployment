@@ -30,13 +30,6 @@ const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 const MIB: u64 = 1024 * 1024;
 const LAMBDA_MEMORY_ENV: &str = "AWS_LAMBDA_FUNCTION_MEMORY_SIZE";
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-#[serde(rename_all = "PascalCase")]
-pub(crate) struct RawDeletePreviousObjectsOnChange {
-    pub(crate) destination_bucket_name: String,
-}
-
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 #[serde(rename_all = "PascalCase")]
@@ -67,34 +60,14 @@ pub(crate) struct RawDeploymentRequest {
     pub(crate) source_markers: Vec<HashMap<String, String>>,
     #[serde(default)]
     pub(crate) source_markers_config: Vec<MarkerConfig>,
-    pub(crate) destination_bucket_name: String,
-    #[serde(default)]
-    pub(crate) destination_bucket_key_prefix: Option<String>,
-    #[serde(
-        default = "default_true",
-        deserialize_with = "crate::util::deserialize_boolish"
-    )]
-    pub(crate) extract: bool,
-    #[serde(default, deserialize_with = "crate::util::deserialize_boolish")]
-    pub(crate) delete_current_objects_on_delete: bool,
-    #[serde(default)]
-    pub(crate) distribution_id: Option<String>,
-    #[serde(default)]
-    pub(crate) distribution_paths: Option<Vec<String>>,
-    #[serde(
-        default = "default_true",
-        deserialize_with = "crate::util::deserialize_boolish"
-    )]
-    pub(crate) wait_for_distribution_invalidation: bool,
-    #[serde(
-        default = "default_true",
-        deserialize_with = "crate::util::deserialize_boolish"
-    )]
-    pub(crate) delete_stale_objects_on_deployment: bool,
-    #[serde(default)]
-    pub(crate) exclude: Vec<String>,
-    #[serde(default)]
-    pub(crate) include: Vec<String>,
+    /// The current destination. Wire names mirror the public API paths the
+    /// construct synthesizes them from; non-public values (the ownership
+    /// identity, envelope fields) stay flat.
+    pub(crate) destination: RawDestination,
+    pub(crate) source_processing: RawSourceProcessing,
+    pub(crate) destination_lifecycle: RawDestinationLifecycle,
+    pub(crate) cloudfront_invalidation: RawCloudfrontInvalidation,
+    pub(crate) transfer: RawTransferOptions,
     #[serde(
         default = "default_true",
         deserialize_with = "crate::util::deserialize_boolish"
@@ -103,38 +76,6 @@ pub(crate) struct RawDeploymentRequest {
     #[serde(default)]
     pub(crate) destination_bucket_arn: Option<String>,
     pub(crate) destination_owner_id: String,
-    #[serde(default)]
-    pub(crate) delete_previous_objects_on_change: Option<RawDeletePreviousObjectsOnChange>,
-    #[serde(default)]
-    pub(crate) invalidate_previous_distribution_on_change: Option<String>,
-    #[serde(deserialize_with = "deserialize_u64ish")]
-    pub(crate) max_uncompressed_entry_bytes: u64,
-    #[serde(deserialize_with = "deserialize_u64ish")]
-    pub(crate) max_compression_ratio: u64,
-    #[serde(default, deserialize_with = "deserialize_optional_usizeish")]
-    pub(crate) max_parallel_transfers: Option<usize>,
-    #[serde(default, deserialize_with = "deserialize_optional_usizeish")]
-    pub(crate) source_block_bytes: Option<usize>,
-    #[serde(default, deserialize_with = "deserialize_optional_usizeish")]
-    pub(crate) source_block_merge_gap_bytes: Option<usize>,
-    #[serde(default, deserialize_with = "deserialize_optional_usizeish")]
-    pub(crate) source_get_concurrency: Option<usize>,
-    #[serde(default, deserialize_with = "deserialize_optional_usizeish")]
-    pub(crate) source_window_bytes: Option<usize>,
-    #[serde(default, deserialize_with = "deserialize_optional_u64ish")]
-    pub(crate) source_window_memory_budget_mb: Option<u64>,
-    #[serde(default, deserialize_with = "deserialize_optional_usizeish")]
-    pub(crate) put_object_max_attempts: Option<usize>,
-    #[serde(default, deserialize_with = "deserialize_optional_u64ish")]
-    pub(crate) put_object_retry_base_delay_ms: Option<u64>,
-    #[serde(default, deserialize_with = "deserialize_optional_u64ish")]
-    pub(crate) put_object_retry_max_delay_ms: Option<u64>,
-    #[serde(default, deserialize_with = "deserialize_optional_u64ish")]
-    pub(crate) put_object_slowdown_retry_base_delay_ms: Option<u64>,
-    #[serde(default, deserialize_with = "deserialize_optional_u64ish")]
-    pub(crate) put_object_slowdown_retry_max_delay_ms: Option<u64>,
-    #[serde(default)]
-    pub(crate) put_object_retry_jitter: Option<PutObjectRetryJitter>,
     /// CloudFormation puts the custom-resource envelope in `ResourceProperties` alongside the
     /// deployment inputs, so a strict request has to declare it. `ServiceToken` is the handler
     /// ARN CloudFormation dispatched through; `ServiceTimeout` is the CDK `serviceTimeout`
@@ -153,6 +94,135 @@ pub(crate) struct RawDeploymentRequest {
     /// strict for every other field rather than reopening the request to arbitrary keys.
     #[serde(default)]
     pub(crate) deployment_nonce: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+#[serde(rename_all = "PascalCase")]
+pub(crate) struct RawDestination {
+    pub(crate) bucket_name: String,
+    #[serde(default)]
+    pub(crate) key_prefix: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+#[serde(rename_all = "PascalCase")]
+pub(crate) struct RawSourceProcessing {
+    #[serde(
+        default = "default_true",
+        deserialize_with = "crate::util::deserialize_boolish"
+    )]
+    pub(crate) extract: bool,
+    #[serde(deserialize_with = "deserialize_u64ish")]
+    pub(crate) max_uncompressed_entry_bytes: u64,
+    #[serde(deserialize_with = "deserialize_u64ish")]
+    pub(crate) max_compression_ratio: u64,
+    #[serde(default)]
+    pub(crate) exclude: Vec<String>,
+    #[serde(default)]
+    pub(crate) include: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+#[serde(rename_all = "PascalCase")]
+pub(crate) struct RawDestinationLifecycle {
+    pub(crate) on_deploy: RawDestinationLifecycleOnDeploy,
+    pub(crate) on_change: RawDestinationLifecycleOnChange,
+    pub(crate) on_delete: RawDestinationLifecycleOnDelete,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+#[serde(rename_all = "PascalCase")]
+pub(crate) struct RawDestinationLifecycleOnDeploy {
+    #[serde(
+        default = "default_true",
+        deserialize_with = "crate::util::deserialize_boolish"
+    )]
+    pub(crate) delete_stale_objects: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+#[serde(rename_all = "PascalCase")]
+pub(crate) struct RawDestinationLifecycleOnChange {
+    #[serde(default, deserialize_with = "crate::util::deserialize_boolish")]
+    pub(crate) delete_previous_objects: bool,
+    #[serde(default)]
+    pub(crate) previous_bucket_name: Option<String>,
+    #[serde(default)]
+    pub(crate) invalidate_previous_distribution: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+#[serde(rename_all = "PascalCase")]
+pub(crate) struct RawDestinationLifecycleOnDelete {
+    #[serde(default, deserialize_with = "crate::util::deserialize_boolish")]
+    pub(crate) delete_current_objects: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+#[serde(rename_all = "PascalCase")]
+pub(crate) struct RawCloudfrontInvalidation {
+    #[serde(default)]
+    pub(crate) distribution_id: Option<String>,
+    #[serde(default)]
+    #[serde(rename = "Paths")]
+    pub(crate) distribution_paths: Option<Vec<String>>,
+    #[serde(
+        default = "default_true",
+        deserialize_with = "crate::util::deserialize_boolish"
+    )]
+    pub(crate) wait_for_completion: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+#[serde(rename_all = "PascalCase")]
+pub(crate) struct RawTransferOptions {
+    #[serde(default, deserialize_with = "deserialize_optional_usizeish")]
+    pub(crate) max_concurrency: Option<usize>,
+    pub(crate) advanced_tuning: RawAdvancedTuning,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+#[serde(rename_all = "PascalCase")]
+pub(crate) struct RawAdvancedTuning {
+    #[serde(default, deserialize_with = "deserialize_optional_usizeish")]
+    pub(crate) source_block_bytes: Option<usize>,
+    #[serde(default, deserialize_with = "deserialize_optional_usizeish")]
+    pub(crate) source_block_merge_gap_bytes: Option<usize>,
+    #[serde(default, deserialize_with = "deserialize_optional_usizeish")]
+    pub(crate) source_get_concurrency: Option<usize>,
+    #[serde(default, deserialize_with = "deserialize_optional_usizeish")]
+    pub(crate) source_window_bytes: Option<usize>,
+    #[serde(default, deserialize_with = "deserialize_optional_u64ish")]
+    #[serde(rename = "SourceWindowMemoryBudgetMiB")]
+    pub(crate) source_window_memory_budget_mib: Option<u64>,
+    pub(crate) destination_write_retry: RawDestinationWriteRetry,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+#[serde(rename_all = "PascalCase")]
+pub(crate) struct RawDestinationWriteRetry {
+    #[serde(default, deserialize_with = "deserialize_optional_usizeish")]
+    pub(crate) max_attempts: Option<usize>,
+    #[serde(default, deserialize_with = "deserialize_optional_u64ish")]
+    pub(crate) base_delay_ms: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_optional_u64ish")]
+    pub(crate) max_delay_ms: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_optional_u64ish")]
+    pub(crate) slowdown_base_delay_ms: Option<u64>,
+    #[serde(default, deserialize_with = "deserialize_optional_u64ish")]
+    pub(crate) slowdown_max_delay_ms: Option<u64>,
+    #[serde(default)]
+    pub(crate) jitter: Option<PutObjectRetryJitter>,
 }
 
 impl Filters {
@@ -179,14 +249,20 @@ pub(crate) fn parse_request_with_memory(
     lambda_memory: &str,
 ) -> Result<DeploymentRequest> {
     validate_destination_owner_id(&raw.destination_owner_id)?;
-    validate_distribution_id("DistributionId", raw.distribution_id.as_deref())?;
     validate_distribution_id(
-        "InvalidatePreviousDistributionOnChange",
-        raw.invalidate_previous_distribution_on_change.as_deref(),
+        "CloudfrontInvalidation.DistributionId",
+        raw.cloudfront_invalidation.distribution_id.as_deref(),
+    )?;
+    validate_distribution_id(
+        "DestinationLifecycle.OnChange.InvalidatePreviousDistribution",
+        raw.destination_lifecycle
+            .on_change
+            .invalidate_previous_distribution
+            .as_deref(),
     )?;
     let source_catalogs = parse_source_catalogs(&raw)?;
-    let archive_expansion = archive_expansion_limits(&raw)?;
-    let runtime = runtime_options_with_memory(&raw, lambda_memory)?;
+    let archive_expansion = archive_expansion_limits(&raw.source_processing)?;
+    let runtime = runtime_options_with_memory(&raw.transfer, lambda_memory)?;
 
     let source_count = raw.source_bucket_names.len();
     let mut source_markers = raw.source_markers;
@@ -199,8 +275,22 @@ pub(crate) fn parse_request_with_memory(
         source_markers_config = vec![MarkerConfig::default(); source_count];
     }
 
+    let delete_previous_objects_on_change = raw
+        .destination_lifecycle
+        .on_change
+        .delete_previous_objects
+        .then(|| {
+            let bucket_name = raw
+                .destination_lifecycle
+                .on_change
+                .previous_bucket_name
+                .clone()
+                .unwrap_or_else(|| raw.destination.bucket_name.clone());
+            DeletePreviousObjectsOnChange { bucket_name }
+        });
+
     let dest_bucket_prefix =
-        normalize_destination_prefix(raw.destination_bucket_key_prefix.unwrap_or_default());
+        normalize_destination_prefix(raw.destination.key_prefix.unwrap_or_default());
 
     let default_distribution_path = default_distribution_path(&dest_bucket_prefix);
 
@@ -210,48 +300,54 @@ pub(crate) fn parse_request_with_memory(
         source_catalogs,
         source_markers,
         source_markers_config,
-        dest_bucket_name: raw.destination_bucket_name,
+        dest_bucket_name: raw.destination.bucket_name,
         dest_bucket_prefix,
-        extract: raw.extract,
-        delete_current_objects_on_delete: raw.delete_current_objects_on_delete,
-        distribution_id: raw.distribution_id,
+        extract: raw.source_processing.extract,
+        delete_current_objects_on_delete: raw
+            .destination_lifecycle
+            .on_delete
+            .delete_current_objects,
+        distribution_id: raw.cloudfront_invalidation.distribution_id,
         distribution_paths: raw
+            .cloudfront_invalidation
             .distribution_paths
             .unwrap_or_else(|| vec![default_distribution_path]),
-        wait_for_distribution_invalidation: raw.wait_for_distribution_invalidation,
-        delete_stale_objects_on_deployment: raw.delete_stale_objects_on_deployment,
-        exclude: raw.exclude,
-        include: raw.include,
+        wait_for_distribution_invalidation: raw.cloudfront_invalidation.wait_for_completion,
+        delete_stale_objects_on_deployment: raw
+            .destination_lifecycle
+            .on_deploy
+            .delete_stale_objects,
+        exclude: raw.source_processing.exclude,
+        include: raw.source_processing.include,
         output_object_keys: raw.output_object_keys,
         destination_bucket_arn: raw.destination_bucket_arn,
         destination_owner_id: raw.destination_owner_id,
-        delete_previous_objects_on_change: raw.delete_previous_objects_on_change.map(|previous| {
-            DeletePreviousObjectsOnChange {
-                bucket_name: previous.destination_bucket_name,
-            }
-        }),
-        invalidate_previous_distribution_on_change: raw.invalidate_previous_distribution_on_change,
+        delete_previous_objects_on_change,
+        invalidate_previous_distribution_on_change: raw
+            .destination_lifecycle
+            .on_change
+            .invalidate_previous_distribution,
         archive_expansion,
         runtime,
     })
 }
 
-fn archive_expansion_limits(raw: &RawDeploymentRequest) -> Result<ArchiveExpansionLimits> {
+fn archive_expansion_limits(processing: &RawSourceProcessing) -> Result<ArchiveExpansionLimits> {
     validate_u64_range(
-        "MaxUncompressedEntryBytes",
-        raw.max_uncompressed_entry_bytes,
+        "SourceProcessing.MaxUncompressedEntryBytes",
+        processing.max_uncompressed_entry_bytes,
         1,
         S3_SINGLE_PUT_LIMIT,
     )?;
     validate_u64_range(
-        "MaxCompressionRatio",
-        raw.max_compression_ratio,
+        "SourceProcessing.MaxCompressionRatio",
+        processing.max_compression_ratio,
         1,
         MAX_COMPRESSION_RATIO,
     )?;
     Ok(ArchiveExpansionLimits {
-        max_uncompressed_entry_bytes: raw.max_uncompressed_entry_bytes,
-        max_compression_ratio: raw.max_compression_ratio,
+        max_uncompressed_entry_bytes: processing.max_uncompressed_entry_bytes,
+        max_compression_ratio: processing.max_compression_ratio,
     })
 }
 
@@ -311,7 +407,7 @@ fn parse_lambda_memory_env(value: Option<&OsStr>) -> Result<&str> {
 }
 
 fn runtime_options_with_memory(
-    raw: &RawDeploymentRequest,
+    transfer: &RawTransferOptions,
     lambda_memory: &str,
 ) -> Result<RuntimeOptions> {
     let available_memory_mb = lambda_memory.parse::<u64>().with_context(|| {
@@ -323,118 +419,149 @@ fn runtime_options_with_memory(
         .checked_mul(MIB)
         .ok_or_else(|| anyhow!("Lambda memory size overflowed while converting MiB to bytes"))?;
     let memory_cap_bytes = lambda_memory_bytes / 2;
-    let source_memory_budget_bytes = match raw.source_window_memory_budget_mb {
+    let source_memory_budget_bytes = match transfer.advanced_tuning.source_window_memory_budget_mib
+    {
         Some(memory_mb) => {
-            validate_u64_range("SourceWindowMemoryBudgetMb", memory_mb, 1, MAX_SAFE_INTEGER)?;
+            validate_u64_range(
+                "Transfer.AdvancedTuning.SourceWindowMemoryBudgetMiB",
+                memory_mb,
+                1,
+                MAX_SAFE_INTEGER,
+            )?;
             memory_mb.checked_mul(MIB).ok_or_else(|| {
-                anyhow!("SourceWindowMemoryBudgetMb overflowed while converting MiB to bytes")
+                anyhow!("Transfer.AdvancedTuning.SourceWindowMemoryBudgetMiB overflowed while converting MiB to bytes")
             })?
         }
         None => memory_cap_bytes,
     };
     ensure!(
         source_memory_budget_bytes <= memory_cap_bytes,
-        "SourceWindowMemoryBudgetMb must not exceed 50% of the actual Lambda memory"
+        "Transfer.AdvancedTuning.SourceWindowMemoryBudgetMiB must not exceed 50% of the actual Lambda memory"
     );
     let source_memory_budget_bytes = usize::try_from(source_memory_budget_bytes)
         .context("source memory budget cannot be represented on this provider architecture")?;
 
-    let max_parallel_transfers = raw
-        .max_parallel_transfers
+    let max_parallel_transfers = transfer
+        .max_concurrency
         .unwrap_or(DEFAULT_TRANSFER_MAX_CONCURRENCY);
     validate_usize_range(
-        "MaxParallelTransfers",
+        "Transfer.MaxConcurrency",
         max_parallel_transfers,
         1,
         MAX_PARALLEL_TRANSFERS,
     )?;
 
-    let source_block_bytes = raw.source_block_bytes.unwrap_or(DEFAULT_SOURCE_BLOCK_BYTES);
+    let source_block_bytes = transfer
+        .advanced_tuning
+        .source_block_bytes
+        .unwrap_or(DEFAULT_SOURCE_BLOCK_BYTES);
     validate_usize_range(
-        "SourceBlockBytes",
+        "Transfer.AdvancedTuning.SourceBlockBytes",
         source_block_bytes,
         MIN_SOURCE_BLOCK_BYTES,
         usize::try_from(MAX_SAFE_INTEGER).unwrap_or(usize::MAX),
     )?;
     ensure!(
         source_block_bytes <= source_memory_budget_bytes,
-        "SourceBlockBytes must fit within the invocation-global source memory budget"
+        "Transfer.AdvancedTuning.SourceBlockBytes must fit within the invocation-global source memory budget"
     );
 
-    let source_block_merge_gap_bytes = raw
+    let source_block_merge_gap_bytes = transfer
+        .advanced_tuning
         .source_block_merge_gap_bytes
         .unwrap_or(DEFAULT_SOURCE_BLOCK_MERGE_GAP_BYTES);
     validate_usize_range(
-        "SourceBlockMergeGapBytes",
+        "Transfer.AdvancedTuning.SourceBlockMergeGapBytes",
         source_block_merge_gap_bytes,
         0,
         usize::try_from(MAX_SAFE_INTEGER).unwrap_or(usize::MAX),
     )?;
 
-    let source_get_concurrency = raw
+    let source_get_concurrency = transfer
+        .advanced_tuning
         .source_get_concurrency
         .unwrap_or_else(|| adaptive_source_get_concurrency(available_memory_mb));
     validate_usize_range(
-        "SourceGetConcurrency",
+        "Transfer.AdvancedTuning.SourceGetConcurrency",
         source_get_concurrency,
         1,
         MAX_SOURCE_GET_CONCURRENCY,
     )?;
     let concurrent_source_block_bytes = source_block_bytes
         .checked_mul(source_get_concurrency)
-        .ok_or_else(|| anyhow!("SourceBlockBytes * SourceGetConcurrency overflowed"))?;
+        .ok_or_else(|| {
+            anyhow!(
+                "Transfer.AdvancedTuning.SourceBlockBytes * Transfer.AdvancedTuning.SourceGetConcurrency overflowed"
+            )
+        })?;
     ensure!(
         concurrent_source_block_bytes <= source_memory_budget_bytes,
-        "SourceBlockBytes * SourceGetConcurrency must fit within the invocation-global source memory budget"
+        "Transfer.AdvancedTuning.SourceBlockBytes * Transfer.AdvancedTuning.SourceGetConcurrency must fit within the invocation-global source memory budget"
     );
 
-    if let Some(source_window_bytes) = raw.source_window_bytes {
+    if let Some(source_window_bytes) = transfer.advanced_tuning.source_window_bytes {
         validate_usize_range(
-            "SourceWindowBytes",
+            "Transfer.AdvancedTuning.SourceWindowBytes",
             source_window_bytes,
             1,
             usize::try_from(MAX_SAFE_INTEGER).unwrap_or(usize::MAX),
         )?;
         ensure!(
             source_window_bytes >= source_block_bytes,
-            "SourceWindowBytes must be greater than or equal to SourceBlockBytes"
+            "Transfer.AdvancedTuning.SourceWindowBytes must be greater than or equal to Transfer.AdvancedTuning.SourceBlockBytes"
         );
         ensure!(
             source_window_bytes <= source_memory_budget_bytes,
-            "SourceWindowBytes must fit within the invocation-global source memory budget"
+            "Transfer.AdvancedTuning.SourceWindowBytes must fit within the invocation-global source memory budget"
         );
     }
 
-    let put_object_max_attempts = raw
-        .put_object_max_attempts
+    let put_object_max_attempts = transfer
+        .advanced_tuning
+        .destination_write_retry
+        .max_attempts
         .unwrap_or(PUT_OBJECT_MAX_ATTEMPTS);
     validate_usize_range(
-        "PutObjectMaxAttempts",
+        "Transfer.AdvancedTuning.DestinationWriteRetry.MaxAttempts",
         put_object_max_attempts,
         1,
         MAX_PUT_OBJECT_ATTEMPTS,
     )?;
-    let retry_base_delay_ms = raw
-        .put_object_retry_base_delay_ms
+    let retry_base_delay_ms = transfer
+        .advanced_tuning
+        .destination_write_retry
+        .base_delay_ms
         .unwrap_or(PUT_OBJECT_RETRY_BASE_DELAY_MS);
-    let retry_max_delay_ms = raw
-        .put_object_retry_max_delay_ms
+    let retry_max_delay_ms = transfer
+        .advanced_tuning
+        .destination_write_retry
+        .max_delay_ms
         .unwrap_or(PUT_OBJECT_RETRY_MAX_DELAY_MS);
-    let slowdown_retry_base_delay_ms = raw
-        .put_object_slowdown_retry_base_delay_ms
+    let slowdown_retry_base_delay_ms = transfer
+        .advanced_tuning
+        .destination_write_retry
+        .slowdown_base_delay_ms
         .unwrap_or(PUT_OBJECT_SLOWDOWN_RETRY_BASE_DELAY_MS);
-    let slowdown_retry_max_delay_ms = raw
-        .put_object_slowdown_retry_max_delay_ms
+    let slowdown_retry_max_delay_ms = transfer
+        .advanced_tuning
+        .destination_write_retry
+        .slowdown_max_delay_ms
         .unwrap_or(PUT_OBJECT_SLOWDOWN_RETRY_MAX_DELAY_MS);
     for (name, value) in [
-        ("PutObjectRetryBaseDelayMs", retry_base_delay_ms),
-        ("PutObjectRetryMaxDelayMs", retry_max_delay_ms),
         (
-            "PutObjectSlowdownRetryBaseDelayMs",
+            "Transfer.AdvancedTuning.DestinationWriteRetry.BaseDelayMs",
+            retry_base_delay_ms,
+        ),
+        (
+            "Transfer.AdvancedTuning.DestinationWriteRetry.MaxDelayMs",
+            retry_max_delay_ms,
+        ),
+        (
+            "Transfer.AdvancedTuning.DestinationWriteRetry.SlowdownBaseDelayMs",
             slowdown_retry_base_delay_ms,
         ),
         (
-            "PutObjectSlowdownRetryMaxDelayMs",
+            "Transfer.AdvancedTuning.DestinationWriteRetry.SlowdownMaxDelayMs",
             slowdown_retry_max_delay_ms,
         ),
     ] {
@@ -442,11 +569,11 @@ fn runtime_options_with_memory(
     }
     ensure!(
         retry_base_delay_ms <= retry_max_delay_ms,
-        "PutObjectRetryBaseDelayMs must be less than or equal to PutObjectRetryMaxDelayMs"
+        "Transfer.AdvancedTuning.DestinationWriteRetry.BaseDelayMs must be less than or equal to Transfer.AdvancedTuning.DestinationWriteRetry.MaxDelayMs"
     );
     ensure!(
         slowdown_retry_base_delay_ms <= slowdown_retry_max_delay_ms,
-        "PutObjectSlowdownRetryBaseDelayMs must be less than or equal to PutObjectSlowdownRetryMaxDelayMs"
+        "Transfer.AdvancedTuning.DestinationWriteRetry.SlowdownBaseDelayMs must be less than or equal to Transfer.AdvancedTuning.DestinationWriteRetry.SlowdownMaxDelayMs"
     );
 
     Ok(RuntimeOptions {
@@ -455,7 +582,7 @@ fn runtime_options_with_memory(
         source_block_bytes,
         source_block_merge_gap_bytes,
         source_get_concurrency,
-        source_window_bytes: raw.source_window_bytes,
+        source_window_bytes: transfer.advanced_tuning.source_window_bytes,
         source_memory_budget_bytes,
         put_object_retry: PutObjectRetryOptions {
             max_attempts: put_object_max_attempts,
@@ -463,8 +590,10 @@ fn runtime_options_with_memory(
             retry_max_delay_ms,
             slowdown_retry_base_delay_ms,
             slowdown_retry_max_delay_ms,
-            jitter: raw
-                .put_object_retry_jitter
+            jitter: transfer
+                .advanced_tuning
+                .destination_write_retry
+                .jitter
                 .unwrap_or(PutObjectRetryJitter::Full),
         },
     })
@@ -488,17 +617,18 @@ fn validate_u64_range(name: &str, value: u64, minimum: u64, maximum: u64) -> Res
 
 pub(crate) fn parse_old_destination(raw: &RawDeploymentRequest) -> Result<PreviousDestination> {
     validate_destination_owner_id(&raw.destination_owner_id)?;
-    validate_distribution_id("DistributionId", raw.distribution_id.as_deref())?;
-    let old_prefix = normalize_destination_prefix(
-        raw.destination_bucket_key_prefix
-            .clone()
-            .unwrap_or_default(),
-    );
+    validate_distribution_id(
+        "CloudfrontInvalidation.DistributionId",
+        raw.cloudfront_invalidation.distribution_id.as_deref(),
+    )?;
+    let old_prefix =
+        normalize_destination_prefix(raw.destination.key_prefix.clone().unwrap_or_default());
     Ok(PreviousDestination {
-        bucket_name: raw.destination_bucket_name.clone(),
+        bucket_name: raw.destination.bucket_name.clone(),
         bucket_prefix: old_prefix.clone(),
-        distribution_id: raw.distribution_id.clone(),
+        distribution_id: raw.cloudfront_invalidation.distribution_id.clone(),
         distribution_paths: raw
+            .cloudfront_invalidation
             .distribution_paths
             .clone()
             .unwrap_or_else(|| vec![default_distribution_path(&old_prefix)]),
@@ -935,15 +1065,47 @@ mod tests {
         json!({
             "SourceBucketNames": ["source-bucket"],
             "SourceObjectKeys": ["source.zip"],
-            "DestinationBucketName": "dest-bucket",
+            "Destination": {
+                "BucketName": "dest-bucket"
+            },
             "DestinationOwnerId": "owner-123",
-            "MaxUncompressedEntryBytes": 1073741824,
-            "MaxCompressionRatio": 100,
+            "SourceProcessing": {
+                "MaxUncompressedEntryBytes": 1073741824,
+                "MaxCompressionRatio": 100
+            },
+            "DestinationLifecycle": {
+                "OnDeploy": {},
+                "OnChange": {},
+                "OnDelete": {}
+            },
+            "CloudfrontInvalidation": {},
+            "Transfer": {
+                "AdvancedTuning": {
+                    "DestinationWriteRetry": {}
+                }
+            }
         })
     }
 
     fn parse_test_request(raw: RawDeploymentRequest) -> Result<DeploymentRequest> {
         parse_request_with_memory(raw, "1024")
+    }
+
+    /// Sets a nested wire property, creating intermediate objects as needed.
+    fn set_request_property(props: &mut serde_json::Value, path: &str, value: serde_json::Value) {
+        let segments: Vec<&str> = path.split('.').collect();
+        let mut current = props;
+        for segment in &segments[..segments.len() - 1] {
+            current = current
+                .as_object_mut()
+                .expect("nested path segment must be an object")
+                .entry((*segment).to_string())
+                .or_insert_with(|| serde_json::json!({}));
+        }
+        current
+            .as_object_mut()
+            .expect("leaf path parent must be an object")
+            .insert(segments[segments.len() - 1].to_string(), value);
     }
 
     #[test]
@@ -1012,34 +1174,50 @@ mod tests {
     #[test]
     fn distribution_ids_must_be_nonempty_and_free_of_control_characters() {
         for (property, value) in [
-            ("DistributionId", ""),
-            ("DistributionId", "distribution\nforged"),
-            ("InvalidatePreviousDistributionOnChange", "previous\u{7f}"),
+            ("CloudfrontInvalidation.DistributionId", ""),
+            (
+                "CloudfrontInvalidation.DistributionId",
+                "distribution\nforged",
+            ),
+            (
+                "DestinationLifecycle.OnChange.InvalidatePreviousDistribution",
+                "previous\u{7f}",
+            ),
         ] {
             let mut props = minimal_request();
-            props[property] = json!(value);
+            set_request_property(&mut props, property, json!(value));
             let raw: RawDeploymentRequest = serde_json::from_value(props).unwrap();
 
             let error = parse_test_request(raw).expect_err("invalid distribution id must fail");
 
-            assert!(error.to_string().contains(property));
+            assert!(
+                error.to_string().contains(property),
+                "unexpected error for {property}: {error}"
+            );
         }
     }
 
     #[test]
     fn archive_expansion_limits_are_required() {
-        for missing in ["MaxUncompressedEntryBytes", "MaxCompressionRatio"] {
+        for missing in [
+            "SourceProcessing.MaxUncompressedEntryBytes",
+            "SourceProcessing.MaxCompressionRatio",
+        ] {
             let mut props = minimal_request();
-            props
+            let path: Vec<&str> = missing.split('.').collect();
+            let parent = props
+                .pointer_mut(&format!("/{}", path[..path.len() - 1].join("/")))
+                .expect("parent path exists");
+            parent
                 .as_object_mut()
-                .expect("request is an object")
-                .remove(missing);
+                .expect("parent is an object")
+                .remove(path[path.len() - 1]);
 
             let error = serde_json::from_value::<RawDeploymentRequest>(props)
                 .expect_err("a missing archive expansion limit must fail");
 
             assert!(
-                error.to_string().contains(missing),
+                error.to_string().contains(path[path.len() - 1]),
                 "unexpected error for {missing}: {error}"
             );
         }
@@ -1057,12 +1235,13 @@ mod tests {
             ),
         ] {
             let mut props = minimal_request();
-            props["MaxUncompressedEntryBytes"] = entry_bytes;
-            props["MaxCompressionRatio"] = ratio;
+            props["SourceProcessing"]["MaxUncompressedEntryBytes"] = entry_bytes;
+            props["SourceProcessing"]["MaxCompressionRatio"] = ratio;
 
             let raw: RawDeploymentRequest = serde_json::from_value(props)
                 .expect("number and decimal string forms should deserialize");
-            let limits = archive_expansion_limits(&raw).expect("boundary must be accepted");
+            let limits = archive_expansion_limits(&raw.source_processing)
+                .expect("boundary must be accepted");
 
             assert_eq!(limits.max_uncompressed_entry_bytes, expected_entry_bytes);
             assert_eq!(limits.max_compression_ratio, expected_ratio);
@@ -1072,17 +1251,23 @@ mod tests {
     #[test]
     fn archive_expansion_limits_reject_zero_and_values_above_the_current_bounds() {
         for (property, value) in [
-            ("MaxUncompressedEntryBytes", json!(0)),
-            ("MaxUncompressedEntryBytes", json!(S3_SINGLE_PUT_LIMIT + 1)),
-            ("MaxCompressionRatio", json!(0)),
-            ("MaxCompressionRatio", json!(MAX_COMPRESSION_RATIO + 1)),
+            ("SourceProcessing.MaxUncompressedEntryBytes", json!(0)),
+            (
+                "SourceProcessing.MaxUncompressedEntryBytes",
+                json!(S3_SINGLE_PUT_LIMIT + 1),
+            ),
+            ("SourceProcessing.MaxCompressionRatio", json!(0)),
+            (
+                "SourceProcessing.MaxCompressionRatio",
+                json!(MAX_COMPRESSION_RATIO + 1),
+            ),
         ] {
             let mut props = minimal_request();
-            props[property] = value;
+            set_request_property(&mut props, property, value);
             let raw: RawDeploymentRequest = serde_json::from_value(props)
                 .expect("range-invalid unsigned integer should deserialize");
 
-            let error = archive_expansion_limits(&raw)
+            let error = archive_expansion_limits(&raw.source_processing)
                 .expect_err("out-of-range archive expansion limit must fail");
 
             assert!(
@@ -1095,20 +1280,23 @@ mod tests {
     #[test]
     fn archive_expansion_limits_reject_null_blank_signed_fractional_and_malformed_values() {
         for (property, value) in [
-            ("MaxUncompressedEntryBytes", json!(null)),
-            ("MaxUncompressedEntryBytes", json!("")),
-            ("MaxUncompressedEntryBytes", json!(" 1")),
-            ("MaxUncompressedEntryBytes", json!(-1)),
-            ("MaxUncompressedEntryBytes", json!(1.5)),
-            ("MaxCompressionRatio", json!(null)),
-            ("MaxCompressionRatio", json!("")),
-            ("MaxCompressionRatio", json!("1 ")),
-            ("MaxCompressionRatio", json!(-1)),
-            ("MaxCompressionRatio", json!(1.5)),
-            ("MaxCompressionRatio", json!("not-a-number")),
+            ("SourceProcessing.MaxUncompressedEntryBytes", json!(null)),
+            ("SourceProcessing.MaxUncompressedEntryBytes", json!("")),
+            ("SourceProcessing.MaxUncompressedEntryBytes", json!(" 1")),
+            ("SourceProcessing.MaxUncompressedEntryBytes", json!(-1)),
+            ("SourceProcessing.MaxUncompressedEntryBytes", json!(1.5)),
+            ("SourceProcessing.MaxCompressionRatio", json!(null)),
+            ("SourceProcessing.MaxCompressionRatio", json!("")),
+            ("SourceProcessing.MaxCompressionRatio", json!("1 ")),
+            ("SourceProcessing.MaxCompressionRatio", json!(-1)),
+            ("SourceProcessing.MaxCompressionRatio", json!(1.5)),
+            (
+                "SourceProcessing.MaxCompressionRatio",
+                json!("not-a-number"),
+            ),
         ] {
             let mut props = minimal_request();
-            props[property] = value;
+            set_request_property(&mut props, property, value);
 
             assert!(
                 serde_json::from_value::<RawDeploymentRequest>(props).is_err(),
@@ -1187,7 +1375,7 @@ mod tests {
     fn lambda_memory_environment_controls_the_global_budget() {
         let raw: RawDeploymentRequest = serde_json::from_value(minimal_request()).unwrap();
 
-        let runtime = runtime_options_with_memory(&raw, "512").expect("runtime options");
+        let runtime = runtime_options_with_memory(&raw.transfer, "512").expect("runtime options");
 
         assert_eq!(runtime.available_memory_mb, 512);
         assert_eq!(runtime.source_memory_budget_bytes, 256 * 1024 * 1024);
@@ -1197,37 +1385,61 @@ mod tests {
     #[test]
     fn runtime_tuning_rejects_zero_extremes_and_budget_overcommit() {
         for (property, value, expected) in [
-            ("MaxParallelTransfers", json!(0), "MaxParallelTransfers"),
-            ("MaxParallelTransfers", json!(257), "MaxParallelTransfers"),
-            ("SourceGetConcurrency", json!(0), "SourceGetConcurrency"),
-            ("SourceGetConcurrency", json!(65), "SourceGetConcurrency"),
-            ("PutObjectMaxAttempts", json!(0), "PutObjectMaxAttempts"),
-            ("PutObjectMaxAttempts", json!(11), "PutObjectMaxAttempts"),
             (
-                "PutObjectRetryMaxDelayMs",
-                json!(60_001),
-                "PutObjectRetryMaxDelayMs",
+                "Transfer.MaxConcurrency",
+                json!(0),
+                "Transfer.MaxConcurrency",
             ),
             (
-                "SourceWindowMemoryBudgetMb",
+                "Transfer.MaxConcurrency",
+                json!(257),
+                "Transfer.MaxConcurrency",
+            ),
+            (
+                "Transfer.AdvancedTuning.SourceGetConcurrency",
+                json!(0),
+                "Transfer.AdvancedTuning.SourceGetConcurrency",
+            ),
+            (
+                "Transfer.AdvancedTuning.SourceGetConcurrency",
+                json!(65),
+                "Transfer.AdvancedTuning.SourceGetConcurrency",
+            ),
+            (
+                "Transfer.AdvancedTuning.DestinationWriteRetry.MaxAttempts",
+                json!(0),
+                "Transfer.AdvancedTuning.DestinationWriteRetry.MaxAttempts",
+            ),
+            (
+                "Transfer.AdvancedTuning.DestinationWriteRetry.MaxAttempts",
+                json!(11),
+                "Transfer.AdvancedTuning.DestinationWriteRetry.MaxAttempts",
+            ),
+            (
+                "Transfer.AdvancedTuning.DestinationWriteRetry.MaxDelayMs",
+                json!(60_001),
+                "Transfer.AdvancedTuning.DestinationWriteRetry.MaxDelayMs",
+            ),
+            (
+                "Transfer.AdvancedTuning.SourceWindowMemoryBudgetMiB",
                 json!(513),
                 "50% of the actual Lambda memory",
             ),
             (
-                "SourceWindowBytes",
+                "Transfer.AdvancedTuning.SourceWindowBytes",
                 json!(4 * 1024 * 1024),
-                "SourceWindowBytes must be greater",
+                "Transfer.AdvancedTuning.SourceWindowBytes must be greater",
             ),
             (
-                "SourceBlockMergeGapBytes",
+                "Transfer.AdvancedTuning.SourceBlockMergeGapBytes",
                 json!("9007199254740992"),
-                "SourceBlockMergeGapBytes",
+                "Transfer.AdvancedTuning.SourceBlockMergeGapBytes",
             ),
         ] {
             let mut props = minimal_request();
-            props[property] = value;
+            set_request_property(&mut props, property, value);
             let raw: RawDeploymentRequest = serde_json::from_value(props).unwrap();
-            let error = runtime_options_with_memory(&raw, "1024")
+            let error = runtime_options_with_memory(&raw.transfer, "1024")
                 .expect_err("invalid runtime tuning must fail");
             assert!(
                 error.to_string().contains(expected),
@@ -1236,32 +1448,32 @@ mod tests {
         }
 
         let mut props = minimal_request();
-        props["SourceBlockBytes"] = json!(128 * 1024 * 1024);
-        props["SourceGetConcurrency"] = json!(5);
+        props["Transfer"]["AdvancedTuning"]["SourceBlockBytes"] = json!(128 * 1024 * 1024);
+        props["Transfer"]["AdvancedTuning"]["SourceGetConcurrency"] = json!(5);
         let raw: RawDeploymentRequest = serde_json::from_value(props).unwrap();
         assert!(
-            runtime_options_with_memory(&raw, "1024")
+            runtime_options_with_memory(&raw.transfer, "1024")
                 .unwrap_err()
                 .to_string()
-                .contains("SourceBlockBytes * SourceGetConcurrency")
+                .contains("Transfer.AdvancedTuning.SourceBlockBytes * Transfer.AdvancedTuning.SourceGetConcurrency")
         );
     }
 
     #[test]
     fn runtime_tuning_rejects_malformed_memory_and_inverted_delays() {
         let raw: RawDeploymentRequest = serde_json::from_value(minimal_request()).unwrap();
-        assert!(runtime_options_with_memory(&raw, "not-a-number").is_err());
-        assert!(runtime_options_with_memory(&raw, "0").is_err());
+        assert!(runtime_options_with_memory(&raw.transfer, "not-a-number").is_err());
+        assert!(runtime_options_with_memory(&raw.transfer, "0").is_err());
 
         let mut props = minimal_request();
-        props["PutObjectRetryBaseDelayMs"] = json!(20);
-        props["PutObjectRetryMaxDelayMs"] = json!(10);
+        props["Transfer"]["AdvancedTuning"]["DestinationWriteRetry"]["BaseDelayMs"] = json!(20);
+        props["Transfer"]["AdvancedTuning"]["DestinationWriteRetry"]["MaxDelayMs"] = json!(10);
         let raw: RawDeploymentRequest = serde_json::from_value(props).unwrap();
         assert!(
-            runtime_options_with_memory(&raw, "1024")
+            runtime_options_with_memory(&raw.transfer, "1024")
                 .unwrap_err()
                 .to_string()
-                .contains("PutObjectRetryBaseDelayMs")
+                .contains("Transfer.AdvancedTuning.DestinationWriteRetry.BaseDelayMs")
         );
     }
 
@@ -1430,7 +1642,7 @@ mod tests {
     #[test]
     fn serde_rejects_non_string_distribution_paths() {
         let mut props = minimal_request();
-        props["DistributionPaths"] = json!(["/index.html", {"bad": true}]);
+        props["CloudfrontInvalidation"]["Paths"] = json!(["/index.html", {"bad": true}]);
 
         assert!(serde_json::from_value::<RawDeploymentRequest>(props).is_err());
     }
@@ -1467,7 +1679,7 @@ mod tests {
     #[test]
     fn serde_rejects_non_boolean_properties() {
         let mut props = minimal_request();
-        props["DeleteStaleObjectsOnDeployment"] = json!({"bad": true});
+        props["DestinationLifecycle"]["OnDeploy"]["DeleteStaleObjects"] = json!({"bad": true});
 
         assert!(serde_json::from_value::<RawDeploymentRequest>(props).is_err());
     }
@@ -1475,10 +1687,10 @@ mod tests {
     #[test]
     fn deserializes_cloudformation_string_booleans() {
         let mut props = minimal_request();
-        props["Extract"] = json!("true");
-        props["DeleteCurrentObjectsOnDelete"] = json!("true");
-        props["WaitForDistributionInvalidation"] = json!("true");
-        props["DeleteStaleObjectsOnDeployment"] = json!("false");
+        props["SourceProcessing"]["Extract"] = json!("true");
+        props["DestinationLifecycle"]["OnDelete"]["DeleteCurrentObjects"] = json!("true");
+        props["CloudfrontInvalidation"]["WaitForCompletion"] = json!("true");
+        props["DestinationLifecycle"]["OnDeploy"]["DeleteStaleObjects"] = json!("false");
         props["OutputObjectKeys"] = json!("true");
 
         let raw: RawDeploymentRequest =
@@ -1495,18 +1707,20 @@ mod tests {
     #[test]
     fn deserializes_runtime_tuning_overrides() {
         let mut props = minimal_request();
-        props["MaxParallelTransfers"] = json!("12");
-        props["SourceBlockBytes"] = json!("4096");
-        props["SourceBlockMergeGapBytes"] = json!("128");
-        props["SourceGetConcurrency"] = json!("6");
-        props["SourceWindowBytes"] = json!("65536");
-        props["SourceWindowMemoryBudgetMb"] = json!("512");
-        props["PutObjectMaxAttempts"] = json!("3");
-        props["PutObjectRetryBaseDelayMs"] = json!("10");
-        props["PutObjectRetryMaxDelayMs"] = json!("20");
-        props["PutObjectSlowdownRetryBaseDelayMs"] = json!("30");
-        props["PutObjectSlowdownRetryMaxDelayMs"] = json!("40");
-        props["PutObjectRetryJitter"] = json!("none");
+        props["Transfer"]["MaxConcurrency"] = json!("12");
+        props["Transfer"]["AdvancedTuning"]["SourceBlockBytes"] = json!("4096");
+        props["Transfer"]["AdvancedTuning"]["SourceBlockMergeGapBytes"] = json!("128");
+        props["Transfer"]["AdvancedTuning"]["SourceGetConcurrency"] = json!("6");
+        props["Transfer"]["AdvancedTuning"]["SourceWindowBytes"] = json!("65536");
+        props["Transfer"]["AdvancedTuning"]["SourceWindowMemoryBudgetMiB"] = json!("512");
+        props["Transfer"]["AdvancedTuning"]["DestinationWriteRetry"]["MaxAttempts"] = json!("3");
+        props["Transfer"]["AdvancedTuning"]["DestinationWriteRetry"]["BaseDelayMs"] = json!("10");
+        props["Transfer"]["AdvancedTuning"]["DestinationWriteRetry"]["MaxDelayMs"] = json!("20");
+        props["Transfer"]["AdvancedTuning"]["DestinationWriteRetry"]["SlowdownBaseDelayMs"] =
+            json!("30");
+        props["Transfer"]["AdvancedTuning"]["DestinationWriteRetry"]["SlowdownMaxDelayMs"] =
+            json!("40");
+        props["Transfer"]["AdvancedTuning"]["DestinationWriteRetry"]["Jitter"] = json!("none");
 
         let raw: RawDeploymentRequest = serde_json::from_value(props).unwrap();
         let request = parse_test_request(raw).expect("valid request");
@@ -1545,10 +1759,10 @@ mod tests {
     fn deserializes_previous_destination_delete_authorization() {
         let mut props = minimal_request();
         props["DestinationOwnerId"] = json!("owner-456");
-        props["DeletePreviousObjectsOnChange"] = json!({
-            "DestinationBucketName": "old-bucket"
-        });
-        props["InvalidatePreviousDistributionOnChange"] = json!("old-distribution");
+        props["DestinationLifecycle"]["OnChange"]["DeletePreviousObjects"] = json!(true);
+        props["DestinationLifecycle"]["OnChange"]["PreviousBucketName"] = json!("old-bucket");
+        props["DestinationLifecycle"]["OnChange"]["InvalidatePreviousDistribution"] =
+            json!("old-distribution");
 
         let raw: RawDeploymentRequest = serde_json::from_value(props).unwrap();
         let request = parse_test_request(raw).expect("valid request");
@@ -1571,10 +1785,11 @@ mod tests {
     #[test]
     fn rejects_unknown_previous_prefix_authorization() {
         let mut props = minimal_request();
-        props["DeletePreviousObjectsOnChange"] = json!({
-            "DestinationBucketName": "old-bucket",
-            "DestinationBucketKeyPrefix": "old-site"
-        });
+        props["DestinationLifecycle"]["OnChange"]["DeletePreviousObjects"] = json!(true);
+        // A renamed old-name field inside OnChange must be rejected by the strict
+        // single-shape decoder, never partially parsed into a previous-namespace
+        // decision.
+        props["DestinationLifecycle"]["OnChange"]["PreviousKeyPrefix"] = json!("old-site");
 
         assert!(serde_json::from_value::<RawDeploymentRequest>(props).is_err());
     }
@@ -1582,11 +1797,15 @@ mod tests {
     #[test]
     fn rejects_source_blocks_below_zip_local_header_length() {
         let mut props = minimal_request();
-        props["SourceBlockBytes"] = json!("1");
+        props["Transfer"]["AdvancedTuning"]["SourceBlockBytes"] = json!("1");
 
         let raw: RawDeploymentRequest = serde_json::from_value(props).unwrap();
         let error = parse_test_request(raw).expect_err("undersized source block must fail");
 
-        assert!(error.to_string().contains("SourceBlockBytes"));
+        assert!(
+            error
+                .to_string()
+                .contains("Transfer.AdvancedTuning.SourceBlockBytes")
+        );
     }
 }

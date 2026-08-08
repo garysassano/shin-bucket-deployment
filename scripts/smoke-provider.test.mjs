@@ -65,21 +65,21 @@ test("buildCreateEvent uses the strict provider contract", () => {
   assert.equal(event.RequestType, "Create");
   assert.equal(event.ResourceType, "AWS::CloudFormation::CustomResource");
   assert.match(event.ResponseURL, /^https:\/\//);
-  assert.equal(event.ResourceProperties.DestinationBucketName, "shin-smoke-destination");
+  assert.equal(event.ResourceProperties.Destination.BucketName, "shin-smoke-destination");
   assert.equal(event.ResourceProperties.SourceBucketNames.length, 1);
   assert.equal(event.ResourceProperties.SourceObjectKeys.length, 1);
 
   const declared = [
-    "DeleteStaleObjectsOnDeployment",
-    "DestinationBucketName",
+    "CloudfrontInvalidation",
+    "Destination",
+    "DestinationLifecycle",
     "DestinationOwnerId",
-    "Extract",
-    "MaxCompressionRatio",
-    "MaxUncompressedEntryBytes",
     "OutputObjectKeys",
     "ServiceToken",
     "SourceBucketNames",
     "SourceObjectKeys",
+    "SourceProcessing",
+    "Transfer",
   ];
   assert.deepEqual(Object.keys(event.ResourceProperties).sort(), declared);
   for (const key of declared) {

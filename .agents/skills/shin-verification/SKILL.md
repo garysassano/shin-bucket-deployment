@@ -85,6 +85,13 @@ Do not include benchmark configs in correctness verification unless the task is 
 
 ## AWS End-To-End Verification
 
+> **Any change under `rust/` requires `pnpm prebuild:bootstrap` before `pnpm verify deploy`.**
+>
+> The construct prefers a prebuilt provider archive (`assets/bootstrap-<arch>/bootstrap.zip`) and only compiles the Rust provider when no archive exists (`src/provider.ts`).
+> `pnpm verify` does not rebuild that archive — only `pnpm prebuild:bootstrap` does — and a stale archive is selected silently, with no freshness warning.
+> Deploying after a `rust/` change without rebuilding therefore runs the previous provider binary: on the PR-B run every stack failed with `unknown field CloudfrontInvalidation, expected one of …`, which looked like a provider bug when it was actually a build that predated the new wire schema.
+> Run `pnpm prebuild:bootstrap` (it stages both arm64 and x86_64 archives) after any `rust/` change, before the first `pnpm verify deploy` of a session.
+
 AWS end-to-end verification is opt-in because it creates billable AWS resources and requests. Never run it automatically for every push or pull request. Run local gates first, then choose the smallest AWS scope that can validate the changed boundary.
 
 Do not run AWS verification for documentation, formatting, workflow syntax, local validation, synthesis-only API changes, or refactors whose deployed template/provider behavior is proven unchanged. Record why no AWS run was needed when documenting meaningful verification work.

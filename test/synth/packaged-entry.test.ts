@@ -56,7 +56,9 @@ describe.skipIf(!packagedBuildPresent)("packaged entry smoke test", () => {
         (resource) =>
           (resource as { Type?: string }).Type === "AWS::CloudFormation::CustomResource",
       ) as { Properties?: Record<string, unknown> } | undefined;
-      expect(customResource?.Properties?.DestinationBucketName).toEqual({
+      expect(
+        (customResource?.Properties?.Destination as { BucketName?: unknown }).BucketName,
+      ).toEqual({
         Ref: expect.stringMatching(/^Dest/),
       });
       // The packaged entry must resolve the prebuilt bootstrap archive relative

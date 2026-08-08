@@ -174,34 +174,40 @@ describe("benchmark result collector", () => {
     ).toThrow("memoryMeasurementScope must be phase-local");
   });
 
-  test("fails closed on a stale provider summary schema", () => {
+  test("fails closed on a stale provider summary that still carries the removed schemaVersion marker", () => {
     const dir = mkdtempSync(join(tmpdir(), "shin-bench-collector-schema-"));
     const logFile = join(dir, "deploy.log");
     const summaryFile = join(dir, "summary.json");
     writeFileSync(logFile, "Stack.BenchmarkImplementation = shin\n");
-    writeFileSync(
-      summaryFile,
-      JSON.stringify({
-        events: [
-          {
-            timestamp: 1,
-            logStreamName: "stream",
-            message: `requestId="summary-id": summary=${JSON.stringify(
-              JSON.stringify(liveSummaryFixture({ schemaVersion: 5 })),
-            )}`,
-          },
-        ],
-      }),
-    );
-    expect(() =>
-      collectBenchmarkResult({
-        implementation: "shin",
-        logFile,
+    // The removed marker was a constant on the single living contract, so ANY
+    // summary still carrying it -- including the old contract value 6, which the
+    // pre-bump collector accepted and stripped -- is a stale-contract payload.
+    // The collector must reject it, never accept or silently strip it.
+    for (const marker of [6, 5]) {
+      writeFileSync(
         summaryFile,
-        outputFile: join(dir, "results.jsonl"),
-        phase: "cold-create",
-      }),
-    ).toThrow("schemaVersion must be 6");
+        JSON.stringify({
+          events: [
+            {
+              timestamp: 1,
+              logStreamName: "stream",
+              message: `requestId="summary-id": summary=${JSON.stringify(
+                JSON.stringify(liveSummaryFixture({ schemaVersion: marker })),
+              )}`,
+            },
+          ],
+        }),
+      );
+      expect(() =>
+        collectBenchmarkResult({
+          implementation: "shin",
+          logFile,
+          summaryFile,
+          outputFile: join(dir, "results.jsonl"),
+          phase: "cold-create",
+        }),
+      ).toThrow("unexpected field schemaVersion");
+    }
   });
 
   test("round-trips strict current-schema PutObject failure diagnostics", () => {
@@ -510,13 +516,13 @@ function summaryFixture() {
 }
 
 /**
- * The current live provider output shape: the stored summary fields plus the
- * constant `schemaVersion` marker the provider still emits (V-1 removes it in
- * the provider contract bump). The collector requires exactly this value at the
- * parse boundary and strips it before storing.
+ * The current live provider output shape: exactly the stored summary shape.
+ * The constant `schemaVersion` marker is gone from the provider contract (V-1),
+ * so a live summary carrying one is a stale-contract payload the collector
+ * rejects at the parse boundary.
  */
 function liveSummaryFixture(overrides: Record<string, unknown> = {}) {
-  return { ...summaryFixture(), schemaVersion: 6, ...overrides };
+  return { ...summaryFixture(), ...overrides };
 }
 
 function summaryBaseFixture() {

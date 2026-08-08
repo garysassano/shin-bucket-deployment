@@ -282,11 +282,27 @@ mod tests {
         let raw: RawDeploymentRequest = serde_json::from_value(json!({
             "SourceBucketNames": [],
             "SourceObjectKeys": [],
-            "DestinationBucketName": "destination",
+            "Destination": {
+                "BucketName": "destination"
+            },
             "DestinationOwnerId": "integration-owner",
-            "MaxUncompressedEntryBytes": 1073741824,
-            "MaxCompressionRatio": 100,
-            "DeleteStaleObjectsOnDeployment": true
+            "SourceProcessing": {
+                "MaxUncompressedEntryBytes": 1073741824,
+                "MaxCompressionRatio": 100
+            },
+            "DestinationLifecycle": {
+                "OnDeploy": {
+                    "DeleteStaleObjects": true
+                },
+                "OnChange": {},
+                "OnDelete": {}
+            },
+            "CloudfrontInvalidation": {},
+            "Transfer": {
+                "AdvancedTuning": {
+                    "DestinationWriteRetry": {}
+                }
+            }
         }))
         .expect("empty source request should deserialize");
         let request = parse_request_with_memory(raw, "1024")
@@ -329,7 +345,12 @@ mod aws_integration_tests {
     use zip::write::{SimpleFileOptions, ZipWriter};
 
     use crate::deadline::InvocationDeadlines;
-    use crate::request::{RawDeploymentRequest, parse_request_with_memory};
+    use crate::request::{
+        RawAdvancedTuning, RawCloudfrontInvalidation, RawDeploymentRequest, RawDestination,
+        RawDestinationLifecycle, RawDestinationLifecycleOnChange, RawDestinationLifecycleOnDelete,
+        RawDestinationLifecycleOnDeploy, RawDestinationWriteRetry, RawSourceProcessing,
+        RawTransferOptions, parse_request_with_memory,
+    };
     use crate::types::{AppState, MarkerConfig};
 
     use super::deploy;
@@ -405,35 +426,56 @@ mod aws_integration_tests {
                     source_catalogs: None,
                     source_markers: vec![HashMap::new(), marker_map()],
                     source_markers_config: vec![MarkerConfig::default(), MarkerConfig::default()],
-                    destination_bucket_name: destination_bucket.clone(),
-                    destination_bucket_key_prefix: Some(prefix.clone()),
-                    extract: true,
-                    delete_current_objects_on_delete: false,
-                    distribution_id: None,
-                    distribution_paths: None,
-                    wait_for_distribution_invalidation: true,
-                    delete_stale_objects_on_deployment: true,
-                    exclude: Vec::new(),
-                    include: Vec::new(),
+                    destination: RawDestination {
+                        bucket_name: destination_bucket.clone(),
+                        key_prefix: Some(prefix.clone()),
+                    },
+                    source_processing: RawSourceProcessing {
+                        extract: true,
+                        max_uncompressed_entry_bytes: 1024 * 1024 * 1024,
+                        max_compression_ratio: 100,
+                        exclude: Vec::new(),
+                        include: Vec::new(),
+                    },
+                    destination_lifecycle: RawDestinationLifecycle {
+                        on_deploy: RawDestinationLifecycleOnDeploy {
+                            delete_stale_objects: true,
+                        },
+                        on_change: RawDestinationLifecycleOnChange {
+                            delete_previous_objects: false,
+                            previous_bucket_name: None,
+                            invalidate_previous_distribution: None,
+                        },
+                        on_delete: RawDestinationLifecycleOnDelete {
+                            delete_current_objects: false,
+                        },
+                    },
+                    cloudfront_invalidation: RawCloudfrontInvalidation {
+                        distribution_id: None,
+                        distribution_paths: None,
+                        wait_for_completion: true,
+                    },
+                    transfer: RawTransferOptions {
+                        max_concurrency: Some(8),
+                        advanced_tuning: RawAdvancedTuning {
+                            source_block_bytes: Some(64 * 1024),
+                            source_block_merge_gap_bytes: Some(4 * 1024),
+                            source_get_concurrency: Some(2),
+                            source_window_bytes: Some(128 * 1024),
+                            source_window_memory_budget_mib: Some(64),
+                            destination_write_retry: RawDestinationWriteRetry {
+                                max_attempts: Some(3),
+                                base_delay_ms: Some(50),
+                                max_delay_ms: Some(500),
+                                slowdown_base_delay_ms: Some(100),
+                                slowdown_max_delay_ms: Some(1_000),
+                                jitter: None,
+                            },
+                        },
+                    },
                     output_object_keys: true,
                     destination_bucket_arn: None,
                     destination_owner_id: "integration-owner".to_string(),
-                    delete_previous_objects_on_change: None,
-                    invalidate_previous_distribution_on_change: None,
-                    max_uncompressed_entry_bytes: 1024 * 1024 * 1024,
-                    max_compression_ratio: 100,
-                    max_parallel_transfers: Some(8),
-                    source_block_bytes: Some(64 * 1024),
-                    source_block_merge_gap_bytes: Some(4 * 1024),
-                    source_get_concurrency: Some(2),
-                    source_window_bytes: Some(128 * 1024),
-                    source_window_memory_budget_mb: Some(64),
-                    put_object_max_attempts: Some(3),
-                    put_object_retry_base_delay_ms: Some(50),
-                    put_object_retry_max_delay_ms: Some(500),
-                    put_object_slowdown_retry_base_delay_ms: Some(100),
-                    put_object_slowdown_retry_max_delay_ms: Some(1_000),
-                    put_object_retry_jitter: None,
                     service_token: None,
                     service_timeout: None,
                     deployment_nonce: None,

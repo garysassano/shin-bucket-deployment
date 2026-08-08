@@ -41,6 +41,8 @@ import {
 import { destinationOwnerPrefix, validateDeploymentProps } from "./validation";
 
 const CUSTOM_RESOURCE_OWNER_TAG = "aws-cdk:cr-owned";
+// S3 caps each bucket's tag set at 50 user-defined tags:
+// https://docs.aws.amazon.com/AmazonS3/latest/userguide/tagging.html
 const MAX_S3_BUCKET_TAGS = 50;
 
 export interface ShinBucketDeploymentBundlingCommandHooks {
@@ -335,7 +337,7 @@ export interface ShinBucketDeploymentDestination {
   /**
    * S3 key prefix under which objects are deployed.
    *
-   * This must be a concrete string no longer than 102 characters. `"/"` and
+   * This must be a concrete string no longer than 94 characters. `"/"` and
    * an omitted value both select the bucket root. Because Shin embeds this
    * prefix in its S3 ownership tag, it may contain only Unicode letters,
    * numbers, whitespace, or `_ . : / = + - @`.
@@ -550,10 +552,14 @@ export interface ShinBucketDeploymentCloudFrontInvalidation {
   /**
    * Distribution paths to invalidate.
    *
-   * A concrete list must contain at least one path and at most 3,000 paths, of
-   * which at most 15 may be wildcard paths (a path whose final character is
-   * `*`). Every concrete path must start with `/`, contain at most 4,000
-   * Unicode characters, and contain no control characters.
+   * A concrete list must contain at least one path, at most 3,000 non-wildcard
+   * paths, and at most 15 wildcard paths (a path whose final character is
+   * `*`). CloudFront documents these as separate quotas: 3,000 files per
+   * invalidation request excluding wildcard invalidations, and 15 active
+   * wildcard invalidations per distribution; the 15-wildcard cap per request is
+   * the synthesis-time proxy for the latter, which is runtime service state.
+   * Every concrete path must start with `/`, contain at most 4,000 Unicode
+   * characters, and contain no control characters.
    *
    * Paths must not contain `~`, in either its literal or percent-encoded form.
    * CloudFront does not support that character for invalidations, so such a path
@@ -890,6 +896,23 @@ export class ShinBucketDeployment extends Construct {
     this.cr = new CustomResource(customResourceIdentity, this.handlerFunction.node.id, {
       serviceToken: this.handlerFunction.functionArn,
       serviceTimeout: PROVIDER_TIMEOUT,
+      /**
+       * Wire names mirror the public API path of the value they carry: each
+       * camelCase path segment becomes one PascalCase key, nested as a dotted
+       * object (`destinationLifecycle.onChange.deletePreviousObjects` becomes
+       * `DestinationLifecycle.OnChange.DeletePreviousObjects`). The leaf
+       * property name is PascalCased under its container, so
+       * `cloudfrontInvalidation.waitForCompletion` becomes
+       * `CloudfrontInvalidation.WaitForCompletion` and
+       * `cloudfrontInvalidation.paths` becomes `CloudfrontInvalidation.Paths`;
+       * `CloudfrontInvalidation.DistributionId` keeps the `Distribution`
+       * qualifier because it is part of the leaf property name
+       * (`distributionId`), not the dropped container prefix. Values that do
+       * not carry a public API property -- bound source data (`Source*`), the
+       * transport envelope (`ServiceToken`/`ServiceTimeout`), and internal
+       * identities (`DestinationOwnerId`, `OutputObjectKeys`,
+       * `DestinationBucketArn`) -- keep their flat wire names.
+       */
       properties: {
         SourceBucketNames: Lazy.uncachedList({
           produce: () => this.sources.map((source) => source.bucket.bucketName),
@@ -912,29 +935,40 @@ export class ShinBucketDeployment extends Construct {
           },
           { omitEmptyArray: true },
         ),
-        DestinationBucketName: this.destinationBucket.bucketName,
-        DestinationBucketKeyPrefix: destination.keyPrefix,
+        Destination: {
+          BucketName: this.destinationBucket.bucketName,
+          KeyPrefix: destination.keyPrefix,
+        },
         DestinationOwnerId: Lazy.uncachedString({
           produce: () => destinationOwnerId,
         }),
-        DeletePreviousObjectsOnChange: previousBucket
-          ? {
-              DestinationBucketName: previousBucket.bucketName,
-            }
-          : undefined,
-        InvalidatePreviousDistributionOnChange:
-          previousDistribution?.distributionRef.distributionId,
-        WaitForDistributionInvalidation: props.cloudfrontInvalidation?.waitForCompletion ?? true,
-        DeleteCurrentObjectsOnDelete: deleteCurrentObjectsOnDelete,
-        Extract: sourceProcessing.extract ?? true,
-        MaxUncompressedEntryBytes:
-          sourceProcessing.maxUncompressedEntryBytes ?? DEFAULT_MAX_UNCOMPRESSED_ENTRY_BYTES,
-        MaxCompressionRatio: sourceProcessing.maxCompressionRatio ?? DEFAULT_MAX_COMPRESSION_RATIO,
-        DeleteStaleObjectsOnDeployment: deleteStaleObjectsOnDeploy,
-        Exclude: sourceProcessing.exclude,
-        Include: sourceProcessing.include,
-        DistributionId: props.cloudfrontInvalidation?.distribution.distributionRef.distributionId,
-        DistributionPaths: props.cloudfrontInvalidation?.paths,
+        DestinationLifecycle: {
+          OnDeploy: {
+            DeleteStaleObjects: deleteStaleObjectsOnDeploy,
+          },
+          OnChange: {
+            DeletePreviousObjects: deletePreviousObjectsOnChange,
+            PreviousBucketName: previousBucket?.bucketName,
+            InvalidatePreviousDistribution: previousDistribution?.distributionRef.distributionId,
+          },
+          OnDelete: {
+            DeleteCurrentObjects: deleteCurrentObjectsOnDelete,
+          },
+        },
+        CloudfrontInvalidation: {
+          DistributionId: props.cloudfrontInvalidation?.distribution.distributionRef.distributionId,
+          Paths: props.cloudfrontInvalidation?.paths,
+          WaitForCompletion: props.cloudfrontInvalidation?.waitForCompletion ?? true,
+        },
+        SourceProcessing: {
+          Extract: sourceProcessing.extract ?? true,
+          MaxUncompressedEntryBytes:
+            sourceProcessing.maxUncompressedEntryBytes ?? DEFAULT_MAX_UNCOMPRESSED_ENTRY_BYTES,
+          MaxCompressionRatio:
+            sourceProcessing.maxCompressionRatio ?? DEFAULT_MAX_COMPRESSION_RATIO,
+          Exclude: sourceProcessing.exclude,
+          Include: sourceProcessing.include,
+        },
         OutputObjectKeys: Lazy.any({
           produce: () => this.requestObjectKeys,
         }),
@@ -942,18 +976,24 @@ export class ShinBucketDeployment extends Construct {
           produce: () =>
             this.requestDestinationArn ? this.destinationBucket.bucketArn : undefined,
         }),
-        MaxParallelTransfers: transfer.maxConcurrency,
-        SourceBlockBytes: advancedTuning.sourceBlockBytes,
-        SourceBlockMergeGapBytes: advancedTuning.sourceBlockMergeGapBytes,
-        SourceGetConcurrency: advancedTuning.sourceGetConcurrency,
-        SourceWindowBytes: advancedTuning.sourceWindowBytes,
-        SourceWindowMemoryBudgetMb: advancedTuning.sourceWindowMemoryBudgetMiB,
-        PutObjectMaxAttempts: destinationWriteRetryTuning.maxAttempts,
-        PutObjectRetryBaseDelayMs: destinationWriteRetryTuning.baseDelayMs,
-        PutObjectRetryMaxDelayMs: destinationWriteRetryTuning.maxDelayMs,
-        PutObjectSlowdownRetryBaseDelayMs: destinationWriteRetryTuning.slowdownBaseDelayMs,
-        PutObjectSlowdownRetryMaxDelayMs: destinationWriteRetryTuning.slowdownMaxDelayMs,
-        PutObjectRetryJitter: destinationWriteRetryTuning.jitter,
+        Transfer: {
+          MaxConcurrency: transfer.maxConcurrency,
+          AdvancedTuning: {
+            SourceBlockBytes: advancedTuning.sourceBlockBytes,
+            SourceBlockMergeGapBytes: advancedTuning.sourceBlockMergeGapBytes,
+            SourceGetConcurrency: advancedTuning.sourceGetConcurrency,
+            SourceWindowBytes: advancedTuning.sourceWindowBytes,
+            SourceWindowMemoryBudgetMiB: advancedTuning.sourceWindowMemoryBudgetMiB,
+            DestinationWriteRetry: {
+              MaxAttempts: destinationWriteRetryTuning.maxAttempts,
+              BaseDelayMs: destinationWriteRetryTuning.baseDelayMs,
+              MaxDelayMs: destinationWriteRetryTuning.maxDelayMs,
+              SlowdownBaseDelayMs: destinationWriteRetryTuning.slowdownBaseDelayMs,
+              SlowdownMaxDelayMs: destinationWriteRetryTuning.slowdownMaxDelayMs,
+              Jitter: destinationWriteRetryTuning.jitter,
+            },
+          },
+        },
       },
     });
 
@@ -965,16 +1005,16 @@ export class ShinBucketDeployment extends Construct {
       this.cr.node.addDependency(dependable);
     }
 
-    // 32-bit ownership suffix derived from the custom resource's tree address.
+    // 64-bit ownership suffix derived from the custom resource's tree address.
     // S3 ownership tags are per-bucket and limited in number, so the suffix is
-    // deliberately short; under the birthday bound, ~92,000 deployments sharing
-    // one prefix would make a suffix collision plausible (p≈0.5). A collision
-    // merges co-tenant ownership, which only affects stale-object deletion
-    // scope, and the provider's runtime owner probes keep behavior confined to
-    // the deployment's namespace. Lengthen the suffix on a future
-    // provider-contract bump rather than here, where it would change every
-    // deployment's ownership tag.
-    const destinationOwnerId = this.cr.node.addr.slice(-8);
+    // 16 hex characters; under the birthday bound, 2^32 (~4.30 billion)
+    // deployments sharing one prefix collide with probability ~39.4%, and the
+    // p≈0.5 point is ~5.06 billion deployments (1.1774 · sqrt(2^64)). A
+    // collision merges co-tenant ownership, which only affects stale-object
+    // deletion scope, and the provider's runtime owner probes keep behavior
+    // confined to the deployment's namespace. The prefix limit (94 characters)
+    // is what keeps the complete tag key within the S3 128-character key limit.
+    const destinationOwnerId = this.cr.node.addr.slice(-16);
     const ownerPrefix = destinationOwnerPrefix(destination.keyPrefix);
     const tagKey = `${CUSTOM_RESOURCE_OWNER_TAG}${ownerPrefix ? `:${ownerPrefix}` : ""}:${destinationOwnerId}`;
 
