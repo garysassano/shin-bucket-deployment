@@ -114,7 +114,45 @@ Do not commit `.benchmark-runs/` or other raw AWS output. Commit only sanitized 
 
 ## Ledger state: `phaseMs` plan sub-timings
 
-The `phaseMs` contract now requires `planCatalog`, `planDirectory`, `planEntries`, and `planValidation` alongside `plan`. The committed `benchmarks/results.jsonl` predates those required members, so every committed shin sample reports four shape errors under `benchmarkSampleRecordErrors` and the ledger is not readable as current evidence until it is repopulated. That invalidation is expected and accepted: the fields are required by the pre-`1.0` contract, they are never synthesized for old rows, and no compatibility reader will be added. The next AWS measurement session writes the new-format rows and replaces the ledger.
+The `phaseMs` contract requires `planCatalog`, `planDirectory`, `planEntries`, and `planValidation` alongside `plan`. The pre-sub-timings shin rows were superseded and moved to `archive/benchmarks/`, and the 2026-08-09 measurement session (run `3a1fe594`, 240 samples) repopulated `benchmarks/results.jsonl` in the current shape. `pnpm verify:ledger` gates the committed ledger in `pnpm check`, so a shape invalidation can no longer hide behind a green gate.
+
+## Performance limits
+
+_Measured conclusions from run `3a1fe594` (three canonical profiles, five repetitions each, configs 1024 MiB/32 and 2048 MiB/64). Medians re-derived per profile directly from the committed rows on 2026-08-09. These are interpretive conclusions about where the construct is bound; re-derive them when the evidence ledger is repopulated._
+
+### Where the time goes
+
+Cold-create medians (the dominant phase) per profile and config:
+
+| profile     | config  | cold-create total | plan   | transfer | peak memory |
+| ----------- | ------- | ----------------- | ------ | -------- | ----------- |
+| `mixed`     | 1024/32 | 1.31 s            | 194 ms | 1037 ms  | 102 MiB     |
+| `mixed`     | 2048/64 | 0.90 s            | 198 ms | 626 ms   | 114 MiB     |
+| `large-few` | 1024/32 | 2.20 s            | 195 ms | 1919 ms  | 113 MiB     |
+| `large-few` | 2048/64 | 1.41 s            | 242 ms | 1069 ms  | 189 MiB     |
+| `tiny-many` | 1024/32 | 2.68 s            | 247 ms | 2331 ms  | 56 MiB      |
+| `tiny-many` | 2048/64 | 1.64 s            | 278 ms | 1293 ms  | 70 MiB      |
+
+Update phases are small in comparison (plan ~150–280 ms, transfer 0–210 ms) except pruned-update delete (~700–800 ms on `mixed`/`tiny-many`, ~65 ms on `large-few`, which deletes fewer keys). The three dominant costs are cold-create transfer, pruned-update delete, and the plan floor paid by every phase. 2048/64 beats 1024/32 on cold-create by 31–39% on every profile.
+
+### Bound-by-phase verdict
+
+- **Plan is network-latency bound, not CPU and not bandwidth.** Across all 120 committed shin rows, the median share of the plan phase spent in sequential S3 round-trips is ~50% (`planDirectory` ~32%, `planCatalog` ~15%); `planEntries` (per-entry CPU) is ~0 at the median and never exceeds 1.5%. The remainder is the residual (per-source `HeadObject` plus `collect_zip_entry_plans`), which the current instrument does not split. More memory or bandwidth does nothing for this phase; only planning concurrency (P-7) or speculative fetch would. Allocation work in `planner.rs` is not a viable direction on this evidence.
+- **Transfer — the largest single cost — is not attributable yet.** It mixes real CPU work (MD5+CRC hashing, deflate decode, marker replacement) with S3 PUT round-trips and throughput, and no sub-timing separates them. It is demonstrably not memory-capacity bound (see below). Attribution needs the transfer sub-timings instrument before any tuning conclusion is durable.
+- **Delete is service-bound.** A pruned update deletes its stale keys in a single `DeleteObjects` call with zero retries; the ~700 ms is fixed per-call service latency with no provider-side lever.
+- **Memory capacity is not a constraint on the canonical profiles.** Peak usage is ~56–189 MiB against 1024–2048 MiB configured. Caveat: half of configured memory is the invocation-global ZIP-planning and source-block budget (`large-few` at 2048 MiB already shows the budget effect at 189 MiB), so multi-GiB archives use materially more; these figures are specific to the canonical profile sizes.
+- **Concurrency has a measured ceiling at 64.** 128 slowed cold-create by 18% at both 1024 MiB and 2048 MiB (see the construct's validation warning). The knee between 32 and 64 is unmeasured.
+- **Bandwidth matters at large sizes, not at canonical size.** At 625 Mbps (~78 MB/s), a perfectly bandwidth-bound 50 MiB transfer would take ~0.64 s versus the measured ~0.6–2.3 s cold-create transfer medians, so per-object round-trip latency and the concurrency pool dominate at canonical sizes (`tiny-many`, with the most objects and fewest bytes, has the slowest transfer — a latency signature, not a bandwidth one). At 5–50× the bytes, bandwidth becomes the binding constraint; AWS Lambda's scalable network bandwidth (2026-08: 625 Mbps at 2 GiB scaling to 3,000 Mbps at 10 GiB, non-VPC, opt-in via Service Quotas, no extra charge) makes memory the lever that buys both vCPU and up to 4.8× bandwidth for that regime.
+
+### What the canonical matrix cannot answer
+
+The two canonical points (1024/32, 2048/64) vary memory and concurrency together, so the 31–39% cold-create improvement is not attributable between 2× vCPU and 2× concurrency. Open questions, in value order: whether transfer is CPU-bound above 2048 MiB at fixed concurrency (memory = vCPU on Lambda), where the concurrency knee sits between 32 and the known-bad 128, and how a large-bytes profile responds to the memory/bandwidth axis with the bandwidth quota enabled. These require one-off diagnostic configs; the committed ledger accepts only the canonical matrix.
+
+### Measurement cadence
+
+- **Upstream AWS CDK `BucketDeployment` baselines are certified per chosen `aws-cdk-lib` release**, not continuously: the committed baseline was measured on `2.260.0` (run records carry `awsCdkLibVersion`). Re-measure the upstream side only when deliberately certifying a newer release; otherwise reuse the pinned baseline rather than re-paying its AWS cost.
+- **Shin rows are re-measured after merging a performance-relevant provider change or before a release**, per the `AGENTS.md` benchmark policy: implementation first, then a maintainer-approved AWS session, then the sanitized rows land through an evidence PR identifying the measured `main` commit.
+- **Diagnostic sweeps (non-canonical configs) are one-off maintainer sessions**; their outputs inform docs and defaults but are not committed as ledger evidence.
 
 ## Destination-cleanup follow-up: planning-overhead attribution
 
@@ -155,4 +193,8 @@ using only the committed sanitized rows plus a host micro-measurement:
   fused per-key decisions match the standalone predicates for every listing key
   shape. No performance acceptance is claimed for this change: at benchmark
   scale the saving is below run noise, and the real planning cost driver
-  remains per-entry source planning (P-9's remaining bullets).
+  remains per-entry source planning (P-9's remaining bullets). _[2026-08-09:
+  the final clause is refuted by the F-4 plan sub-timings in run `3a1fe594` —
+  `planEntries≈0` across all rows. The plan phase is dominated by sequential
+  S3 round-trips plus the uninstrumented residual; see "Performance limits"
+  above.]_
