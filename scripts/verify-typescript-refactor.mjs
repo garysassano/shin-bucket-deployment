@@ -11,47 +11,60 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, relative } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = join(__dirname, "..");
-const baselineRef = optionValue("--baseline-ref") ?? mergeBase();
-const assembliesOnly = process.argv.includes("--assemblies-only");
-const scratchRoot = mkdtempSync(join(tmpdir(), "shin-typescript-contract-"));
-const baselineRoot = join(scratchRoot, "baseline");
-const createdCurrentArchives = [];
 
-try {
-  run("git", ["worktree", "add", "--detach", baselineRoot, baselineRef], repositoryRoot);
-  run("pnpm", ["install", "--offline", "--frozen-lockfile"], baselineRoot);
-  prepareBootstrapArchives(baselineRoot);
-  prepareBootstrapArchives(repositoryRoot);
+if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+  await main();
+}
 
-  buildContract(baselineRoot);
-  buildContract(repositoryRoot);
+async function main() {
+  const baselineRef = optionValue("--baseline-ref") ?? mergeBase();
+  const assembliesOnly = process.argv.includes("--assemblies-only");
+  const expectChangesPath = optionValue("--expect-changes");
+  const scratchRoot = mkdtempSync(join(tmpdir(), "shin-typescript-contract-"));
+  const baselineRoot = join(scratchRoot, "baseline");
+  const createdCurrentArchives = [];
 
-  const verificationTemplateCount = compareAssemblyTrees(".verification-assets/cdk.out");
-  const benchmarkTemplateCount = compareAssemblyTrees(".benchmark-assets/cdk.out");
-  if (assembliesOnly) {
-    console.log(
-      `Synthesis contract matches ${baselineRef}: ${verificationTemplateCount} verification templates, ` +
-        `${benchmarkTemplateCount} benchmark templates.`,
-    );
-  } else {
-    const declarationCount = comparePublicDeclarations();
-    await compareRuntimeExports();
-    comparePackageEntrypoints();
-    console.log(
-      `TypeScript refactor contract matches ${baselineRef}: ${declarationCount} declarations, ` +
-        `${verificationTemplateCount} verification templates, ${benchmarkTemplateCount} benchmark templates.`,
-    );
-  }
-} finally {
-  run("git", ["worktree", "remove", "--force", baselineRoot], repositoryRoot, true);
-  rmSync(scratchRoot, { recursive: true, force: true });
-  for (const archive of createdCurrentArchives) {
-    rmSync(archive, { force: true });
+  try {
+    run("git", ["worktree", "add", "--detach", baselineRoot, baselineRef], repositoryRoot);
+    run("pnpm", ["install", "--offline", "--frozen-lockfile"], baselineRoot);
+    prepareBootstrapArchives(baselineRoot);
+    prepareBootstrapArchives(repositoryRoot);
+
+    buildContract(baselineRoot);
+    buildContract(repositoryRoot);
+
+    const verification = compareAssemblyTrees(".verification-assets/cdk.out");
+    const benchmark = compareAssemblyTrees(".benchmark-assets/cdk.out");
+    const assemblyDifferences = [...verification.differences, ...benchmark.differences];
+    const expectedChanges =
+      expectChangesPath === undefined ? undefined : loadExpectedChanges(expectChangesPath);
+    evaluateSynthesisContract(assemblyDifferences, expectedChanges);
+
+    if (assembliesOnly) {
+      console.log(
+        `Synthesis contract matches ${baselineRef}: ${verification.templateCount} verification templates, ` +
+          `${benchmark.templateCount} benchmark templates.`,
+      );
+    } else {
+      const declarationCount = comparePublicDeclarations();
+      await compareRuntimeExports();
+      comparePackageEntrypoints();
+      console.log(
+        `TypeScript refactor contract matches ${baselineRef}: ${declarationCount} declarations, ` +
+          `${verification.templateCount} verification templates, ${benchmark.templateCount} benchmark templates.`,
+      );
+    }
+  } finally {
+    run("git", ["worktree", "remove", "--force", baselineRoot], repositoryRoot, true);
+    rmSync(scratchRoot, { recursive: true, force: true });
+    for (const archive of createdCurrentArchives) {
+      rmSync(archive, { force: true });
+    }
   }
 }
 
@@ -179,6 +192,15 @@ function publicDeclarationPaths(root) {
 function compareAssemblyTrees(relativeRoot) {
   const baselineDirectory = join(baselineRoot, relativeRoot);
   const currentDirectory = join(repositoryRoot, relativeRoot);
+  const differences = collectAssemblyDifferences(baselineDirectory, currentDirectory, relativeRoot);
+  const templateCount = walk(baselineDirectory, (path) => path.endsWith(".template.json")).length;
+  if (templateCount === 0) {
+    throw new Error(`${relativeRoot} emitted no templates.`);
+  }
+  return { differences, templateCount };
+}
+
+export function collectAssemblyDifferences(baselineDirectory, currentDirectory, relativeRoot) {
   const include = (path) => {
     const name = basename(path);
     return (
@@ -194,19 +216,100 @@ function compareAssemblyTrees(relativeRoot) {
   const currentPaths = walk(currentDirectory, include)
     .map((path) => relative(currentDirectory, path))
     .sort();
-  compareValue(`${relativeRoot} assembly contract file set`, baselinePaths, currentPaths);
-  const templateCount = baselinePaths.filter((path) => path.endsWith(".template.json")).length;
-  if (templateCount === 0) {
-    throw new Error(`${relativeRoot} emitted no templates.`);
+  const paths = [...new Set([...baselinePaths, ...currentPaths])].sort();
+  const differences = [];
+  for (const path of paths) {
+    const baselineFile = join(baselineDirectory, path);
+    const currentFile = join(currentDirectory, path);
+    const baselineExists = existsSync(baselineFile);
+    const currentExists = existsSync(currentFile);
+    const label = `${relativeRoot}/${path}`;
+    if (!baselineExists) {
+      differences.push({ label, detail: "added" });
+    } else if (!currentExists) {
+      differences.push({ label, detail: "removed" });
+    } else if (!sameJson(baselineFile, currentFile)) {
+      differences.push({ label, detail: "contents differ" });
+    }
   }
-  for (const path of baselinePaths) {
-    compareValue(
-      `${relativeRoot}/${path}`,
-      JSON.parse(readFileSync(join(baselineDirectory, path), "utf8")),
-      JSON.parse(readFileSync(join(currentDirectory, path), "utf8")),
+  return differences;
+}
+
+function loadExpectedChanges(relativePath) {
+  const manifestPath = resolve(repositoryRoot, relativePath);
+  if (!existsSync(manifestPath)) {
+    throw new Error(`--expect-changes manifest does not exist: ${relativePath}`);
+  }
+  try {
+    return JSON.parse(readFileSync(manifestPath, "utf8"));
+  } catch (error) {
+    throw new Error(
+      `--expect-changes manifest is not valid JSON: ${relativePath} (${error.message})`,
     );
   }
-  return templateCount;
+}
+
+export function evaluateSynthesisContract(differences, expectedChanges) {
+  if (expectedChanges === undefined) {
+    if (differences.length === 0) {
+      return;
+    }
+    throw new Error(
+      `${formatAssemblyDifferences(differences)}\n` +
+        "Acknowledge intentional synthesis changes in contract/expected-synthesis-changes.json " +
+        "and pass --expect-changes, or keep the synthesis byte-identical.",
+    );
+  }
+  const problems = [];
+  if (
+    expectedChanges === null ||
+    typeof expectedChanges !== "object" ||
+    Array.isArray(expectedChanges)
+  ) {
+    throw new Error(
+      "Expected synthesis changes manifest must be a JSON object mapping each changed label " +
+        "to a non-empty reason string.",
+    );
+  }
+  for (const [label, reason] of Object.entries(expectedChanges)) {
+    if (typeof reason !== "string" || reason.trim() === "") {
+      problems.push(`${label}: reason must be a non-empty string`);
+    }
+  }
+  const observed = new Set(differences.map(({ label }) => label));
+  const expected = new Set(Object.keys(expectedChanges));
+  for (const difference of differences) {
+    if (!expected.has(difference.label)) {
+      problems.push(
+        `${difference.label}: changed but not listed in the expected changes manifest (${difference.detail})`,
+      );
+    }
+  }
+  for (const label of expected) {
+    if (!observed.has(label)) {
+      problems.push(`${label}: listed in the expected changes manifest but did not change`);
+    }
+  }
+  if (problems.length > 0) {
+    throw new Error(
+      "Expected synthesis changes do not match observed changes:\n" +
+        problems.map((problem) => `  - ${problem}`).join("\n"),
+    );
+  }
+}
+
+function formatAssemblyDifferences(differences) {
+  return (
+    `Synthesis differs from baseline in ${differences.length} place(s):\n` +
+    differences.map(({ label, detail }) => `  - ${label} (${detail})`).join("\n")
+  );
+}
+
+function sameJson(baselinePath, currentPath) {
+  return (
+    JSON.stringify(JSON.parse(readFileSync(baselinePath, "utf8"))) ===
+    JSON.stringify(JSON.parse(readFileSync(currentPath, "utf8")))
+  );
 }
 
 async function compareRuntimeExports() {

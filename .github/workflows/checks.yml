@@ -333,7 +333,16 @@ jobs:
 
       - name: Verify TypeScript contract against pull request base
         if: github.event_name == 'pull_request'
-        run: pnpm verify:typescript-contract -- --baseline-ref "${{ github.event.pull_request.base.sha }}"
+        # A PR that intentionally changes synthesized output acknowledges each
+        # changed label in contract/expected-synthesis-changes.json. The gate
+        # matches that manifest exactly (both directions) when it exists and
+        # stays strict otherwise, so a stale manifest fails the next PR.
+        run: |
+          if [[ -f contract/expected-synthesis-changes.json ]]; then
+            pnpm verify:typescript-contract -- --baseline-ref "${{ github.event.pull_request.base.sha }}" --expect-changes contract/expected-synthesis-changes.json
+          else
+            pnpm verify:typescript-contract -- --baseline-ref "${{ github.event.pull_request.base.sha }}"
+          fi
 
       - name: Verify TypeScript contract self-check
         if: github.event_name != 'pull_request'
