@@ -2390,7 +2390,18 @@ mod tests {
                 + snapshot.phase_ms.plan_directory
                 + snapshot.phase_ms.plan_entries
                 + snapshot.phase_ms.plan_validation;
-            assert!(parts_ms >= parts_micros / 1_000);
+            // Four buckets round to nearest independently, so parts_ms minus the
+            // floored microsecond total lands in exactly [-1, +2]: each bucket
+            // that rounds down loses up to 499 us (four of them can drop the sum
+            // one whole ms below the floor -> -1), and each that rounds up adds
+            // up to 500 us (four -> +2). The old lower bound was written exact
+            // and so failed whenever a fast host rounded every bucket down (four
+            // 400 us buckets snap to 0 ms while the total is 1600 us -> 0 >= 1
+            // fails). +1 is the tight lower bound: it still passes the -1 floor
+            // case yet rejects the -2 that only an undercounting accounting bug
+            // could produce. +2 would have been one looser than reachable. The
+            // upper bound is already tight at +2 (== (micros + 2000)/1000).
+            assert!(parts_ms + 1 >= parts_micros / 1_000);
             assert!(parts_ms <= (parts_micros + 2_000) / 1_000);
         }
     }
