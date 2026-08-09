@@ -3,12 +3,12 @@ import { basename, dirname } from "node:path";
 import { parseCliOptions } from "../cli";
 import {
   type BenchmarkRunSample,
-  type ProviderSummary,
   benchmarkSampleKey,
   phaseRank,
   readBenchmarkEvidence,
   readBenchmarkSampleRows,
 } from "../model";
+import type { ProviderSummary } from "../provider-summary";
 import { selectValidatedBenchmarkPreview, selectValidatedBenchmarkRun } from "../validation";
 
 type RenderOptions = {
