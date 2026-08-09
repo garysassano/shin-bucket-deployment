@@ -24,7 +24,6 @@ mod replace;
 mod request;
 mod s3;
 mod state;
-mod types;
 mod util;
 mod wire_contract;
 
