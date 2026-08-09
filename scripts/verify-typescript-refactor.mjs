@@ -16,6 +16,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = join(__dirname, "..");
+// Module scope: prepareBootstrapArchives() records fallback archives it creates so
+// the caller can delete them, and that helper is not nested inside main().
+const createdCurrentArchives = [];
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
   await main();
@@ -27,7 +30,6 @@ async function main() {
   const expectChangesPath = optionValue("--expect-changes");
   const scratchRoot = mkdtempSync(join(tmpdir(), "shin-typescript-contract-"));
   const baselineRoot = join(scratchRoot, "baseline");
-  const createdCurrentArchives = [];
 
   try {
     run("git", ["worktree", "add", "--detach", baselineRoot, baselineRef], repositoryRoot);
@@ -115,7 +117,22 @@ function run(command, args, cwd, allowFailure = false) {
   return result;
 }
 
-function prepareBootstrapArchives(root) {
+/**
+ * Stages a bootstrap archive for each architecture under `root`, recording any
+ * fallback it creates under the current repository so the caller can delete it.
+ *
+ * `created` and `repoRoot` are parameters rather than closed-over module state
+ * because this helper is not nested inside `main()`. When the tracking array
+ * was declared inside `main()`, this function threw
+ * `ReferenceError: createdCurrentArchives is not defined` -- but only in a
+ * checkout without prebuilt archives, since the loop skips an architecture whose
+ * archive already exists and CI always has both from the Bootstrap jobs.
+ */
+export function prepareBootstrapArchives(
+  root,
+  created = createdCurrentArchives,
+  repoRoot = repositoryRoot,
+) {
   for (const architecture of ["arm64", "x86_64"]) {
     const relativeArchive = join("assets", `bootstrap-${architecture}`, "bootstrap.zip");
     const currentArchive = join(repositoryRoot, relativeArchive);
@@ -130,8 +147,8 @@ function prepareBootstrapArchives(root) {
         ? readFileSync(currentArchive)
         : Buffer.from(`typescript refactor contract bootstrap ${architecture}\n`),
     );
-    if (root === repositoryRoot) {
-      createdCurrentArchives.push(archive);
+    if (root === repoRoot) {
+      created.push(archive);
     }
   }
 }

@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import {
   collectAssemblyDifferences,
   evaluateSynthesisContract,
+  prepareBootstrapArchives,
 } from "./verify-typescript-refactor.mjs";
 
 const RELATIVE_ROOT = "out";
@@ -170,4 +171,43 @@ test("acknowledgement mode reports both mismatch directions in one message", () 
       return true;
     },
   );
+});
+
+// The buggy line only runs for the current repository root, so the tracking
+// array must be exercised with root === repoRoot. Passing an unrelated temp
+// root skips it entirely and tests nothing.
+test("prepareBootstrapArchives records the fallback archives it creates", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "shin-contract-bootstrap-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const created = [];
+
+  assert.doesNotThrow(() => prepareBootstrapArchives(root, created, root));
+
+  assert.equal(created.length, 2, "both architectures should be recorded for cleanup");
+  for (const architecture of ["arm64", "x86_64"]) {
+    const archive = join(root, "assets", `bootstrap-${architecture}`, "bootstrap.zip");
+    assert.ok(existsSync(archive), `expected a staged ${architecture} archive`);
+    assert.ok(created.includes(archive), `expected ${architecture} to be tracked for cleanup`);
+  }
+});
+
+test("prepareBootstrapArchives does not record archives staged outside the repository", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "shin-contract-baseline-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const created = [];
+
+  prepareBootstrapArchives(root, created, join(root, "elsewhere"));
+
+  assert.deepEqual(created, [], "a baseline worktree's archives are not ours to delete");
+});
+
+// The CLI calls this with defaults, so the default expressions must resolve.
+// This is the shape that actually broke: with the tracking array declared
+// inside main(), evaluating the default threw
+// "ReferenceError: createdCurrentArchives is not defined" on the first call.
+test("prepareBootstrapArchives resolves its defaults the way the CLI calls it", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "shin-contract-defaults-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+
+  assert.doesNotThrow(() => prepareBootstrapArchives(root));
 });
