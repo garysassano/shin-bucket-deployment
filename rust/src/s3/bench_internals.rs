@@ -28,10 +28,10 @@ use crate::deployment::{
     PlannedObject, PutObjectRetryJitter, PutObjectRetryOptions, RuntimeOptions,
     TrustedEntryIntegrity, TrustedSourceCatalog,
 };
+use crate::diagnostics::DeploymentStats;
 use crate::request::compile_filters;
 use crate::s3::archive::budget::SourceByteBudget;
 use crate::state::AppState;
-use crate::types::DeploymentStats;
 
 const MIXED_PROFILE_ENTRY_COUNT: usize = 442;
 const MIXED_PROFILE_TOTAL_BYTES: u64 = 52_904_649;

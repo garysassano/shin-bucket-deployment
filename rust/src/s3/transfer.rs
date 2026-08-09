@@ -25,14 +25,14 @@ use crate::deadline::{InvocationDeadlines, TaskDrainBudget};
 use crate::deployment::{
     DeploymentRequest, PutObjectRetryJitter, PutObjectRetryOptions, SourceArchive,
 };
-use crate::replace::MarkerReplacements;
-use crate::state::AppState;
-use crate::types::{
+use crate::diagnostics::{
     CopyObjectStats, DeploymentStats, DiagnosticRangeStats, MAX_FAILURE_DIAGNOSTIC_GROUPS,
     MAX_FAILURE_DIAGNOSTIC_LABELS, OTHER_DIAGNOSTIC_LABEL, PutObjectFailureBodyStats,
     PutObjectFailureSourceStats, PutObjectFailureStateStats, PutObjectStats, SourceFetchPhase,
     TransferFetchStats, same_failure_signature,
 };
+use crate::replace::MarkerReplacements;
+use crate::state::AppState;
 use crate::util::{MAX_DIAGNOSTIC_VALUE_BYTES, sanitize_diagnostic};
 
 use super::archive::block_store::{SourceAttemptSnapshot, SourceBlockOptions, SourceBlockStore};
@@ -420,7 +420,7 @@ pub(super) async fn upload_zip_entries(
                         // error paths, which did the same comparison work. These
                         // accumulate per task and are summed across concurrently
                         // running tasks; see the `PhaseMillis` definition site
-                        // in `types.rs` for why they are not a wall-clock
+                        // in `diagnostics.rs` for why they are not a wall-clock
                         // partition of `transfer`.
                         let task_started = std::time::Instant::now();
                         let outcome = async {
@@ -1998,6 +1998,7 @@ mod tests {
         DeploymentRequest, MarkerConfig, PutObjectRetryJitter, PutObjectRetryOptions,
         SourceArchive, TrustedEntryIntegrity,
     };
+    use crate::diagnostics::DeploymentStats;
     use crate::replace::MarkerReplacements;
     use crate::s3::archive::block_store::{SourceBlockOptions, SourceBlockStore};
     use crate::s3::archive::budget::SourceByteBudget;
@@ -2009,7 +2010,6 @@ mod tests {
     use crate::s3::planner::{CopyPlan, ZipEntryPlan};
     use crate::s3::source_window_bytes_for_archive;
     use crate::state::test_app_state_with_replay;
-    use crate::types::DeploymentStats;
     use crate::util::{duration_ms, finalize_digest};
     use md5::{Digest as Md5Digest, Md5};
     use std::time::Duration;

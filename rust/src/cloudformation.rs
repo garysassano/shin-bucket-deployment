@@ -15,6 +15,7 @@ use tracing::error;
 
 use crate::cloudfront::{create_invalidation, validate_invalidation_paths, wait_for_invalidation};
 use crate::deadline::InvocationDeadlines;
+use crate::diagnostics::DeploymentStats;
 use crate::lifecycle::{
     DestinationChangeCleanupDecision, PreviousCleanupStrategy, destination_namespaces_overlap,
     plan_destination_change_cleanup, previous_distribution_authorized,
@@ -26,7 +27,7 @@ use crate::s3::{
     guarded_delete_namespace,
 };
 use crate::state::AppState;
-use crate::types::{DeploymentStats, ResponsePayload};
+use crate::types::ResponsePayload;
 use crate::util::{MAX_DIAGNOSTIC_VALUE_BYTES, duration_ms, finalize_digest, sanitize_diagnostic};
 
 mod callback;
@@ -939,7 +940,7 @@ mod tests {
     #[test]
     fn deployment_summary_matches_the_diagnostics_contract() {
         let request = deployment_request_with_paths(vec!["/*".to_string()]);
-        let stats = crate::types::DeploymentStats::new(true);
+        let stats = crate::diagnostics::DeploymentStats::new(true);
         stats.add_marker_planning_pass();
         stats.add_marker_upload_pass();
         stats.add_trusted_catalog(3);
@@ -955,7 +956,7 @@ mod tests {
         stats.record_callback_attempt(true);
         stats.record_callback_success();
         stats.add_callback_millis(12);
-        stats.add_copy_stats(&crate::types::CopyObjectStats {
+        stats.add_copy_stats(&crate::diagnostics::CopyObjectStats {
             wire_attempts: 7,
             failed_attempts: 2,
             retry_attempts: 3,
@@ -1047,7 +1048,7 @@ mod tests {
     fn deployment_summary_bounds_and_merges_put_failure_diagnostics() {
         use std::collections::BTreeMap;
 
-        use crate::types::{
+        use crate::diagnostics::{
             DiagnosticRangeStats, PutObjectFailureBodyStats, PutObjectFailureSourceStats,
             PutObjectFailureStateStats, PutObjectStats,
         };
@@ -1096,7 +1097,7 @@ mod tests {
         }
 
         let request = deployment_request_with_paths(vec!["/*".to_string()]);
-        let stats = crate::types::DeploymentStats::new(true);
+        let stats = crate::diagnostics::DeploymentStats::new(true);
         let first = failure("Code0", 10);
         stats.add_put_stats(&PutObjectStats {
             wire_attempts: 2,
@@ -1160,10 +1161,10 @@ mod tests {
     fn deployment_summary_marks_disabled_failure_diagnostics_and_omits_detail() {
         use std::collections::BTreeMap;
 
-        use crate::types::PutObjectStats;
+        use crate::diagnostics::PutObjectStats;
 
         let request = deployment_request_with_paths(vec!["/*".to_string()]);
-        let stats = crate::types::DeploymentStats::default();
+        let stats = crate::diagnostics::DeploymentStats::default();
         stats.add_put_stats(&PutObjectStats {
             wire_attempts: 1,
             failed_attempts: 1,
@@ -1817,7 +1818,7 @@ mod tests {
                 std::time::Duration::from_secs(120),
             ),
         };
-        let stats = crate::types::DeploymentStats::new(true);
+        let stats = crate::diagnostics::DeploymentStats::new(true);
 
         let handle = tokio::spawn(async move {
             invalidate_distributions(

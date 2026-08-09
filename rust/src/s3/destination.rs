@@ -15,10 +15,10 @@ use tracing::warn;
 use crate::deployment::{
     DeploymentManifest, DeploymentRequest, Filters, PutObjectRetryJitter, PutObjectRetryOptions,
 };
+use crate::diagnostics::DeploymentStats;
 use crate::namespace::{key_is_excluded, namespace_list_prefix, read_bucket_owner_tags};
 use crate::request::strip_destination_prefix;
 use crate::state::AppState;
-use crate::types::DeploymentStats;
 
 const MAX_RETAINED_DELETION_KEY_BYTES: usize = 4 * 1024 * 1024;
 
@@ -1393,7 +1393,7 @@ mod tests {
     fn fused_cleanup_keeps_current_and_previous_authorization_scopes_separate() {
         let filters = compile_filters(&[], &[]).unwrap();
         let manifest = DeploymentManifest::new();
-        let stats = crate::types::DeploymentStats::default();
+        let stats = crate::diagnostics::DeploymentStats::default();
         let current_only = UnplannedDeletionContext {
             bucket: "destination",
             list_prefix: Some("site/"),

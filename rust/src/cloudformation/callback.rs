@@ -5,7 +5,8 @@ use aws_lambda_events::event::cloudformation::CloudFormationCustomResourceReques
 use serde_json::json;
 use tokio::time::{Instant as TokioInstant, sleep_until, timeout_at};
 
-use crate::types::{DeploymentStats, ResponsePayload};
+use crate::diagnostics::DeploymentStats;
+use crate::types::ResponsePayload;
 use crate::util::{duration_ms, sanitize_diagnostic};
 
 use super::RequestEnvelope;
@@ -660,7 +661,7 @@ mod tests {
 
     #[tokio::test]
     async fn callback_retries_5xx_until_success() {
-        let stats = crate::types::DeploymentStats::default();
+        let stats = crate::diagnostics::DeploymentStats::default();
         let server = MockCallbackServer::start(vec![
             MockCallback::Status(500),
             MockCallback::Status(503),
@@ -771,7 +772,7 @@ mod tests {
 
     #[tokio::test]
     async fn callback_request_cannot_run_past_its_absolute_deadline() {
-        let stats = crate::types::DeploymentStats::default();
+        let stats = crate::diagnostics::DeploymentStats::default();
         let server =
             MockCallbackServer::start(vec![MockCallback::Timeout(Duration::from_millis(150))]);
         let result = send_response_with_policy(

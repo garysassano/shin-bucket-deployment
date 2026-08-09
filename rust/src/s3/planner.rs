@@ -13,9 +13,9 @@ use crate::deployment::{
     ArchiveExpansionLimits, DeploymentManifest, DeploymentRequest, Filters, PlannedAction,
     PlannedObject, SourceArchive, TrustedEntryIntegrity,
 };
+use crate::diagnostics::DeploymentStats;
 use crate::request::{join_s3_key, normalize_archive_key, source_basename};
 use crate::state::AppState;
-use crate::types::DeploymentStats;
 use crate::util::{MAX_DIAGNOSTIC_VALUE_BYTES, sanitize_diagnostic};
 
 use super::archive::block_store::{SourceBlockOptions, SourceBlockStore};
@@ -435,7 +435,7 @@ async fn add_archive_entries_to_manifest(
     // catalog-to-ZIP half of this bucket is charged inside
     // `load_authenticated_catalog`, and the phase-level half (deployment
     // preflight) in `s3.rs`; see the accounting rules at the `PhaseMillis`
-    // definition site in `types.rs`.
+    // definition site in `diagnostics.rs`.
     let started_validation = std::time::Instant::now();
     let source_offsets =
         validate_archive_directory(entries, source.len(), central_directory_start)?;
@@ -606,7 +606,7 @@ async fn load_authenticated_catalog(
     // below is charged to `planValidation`, the documented validation bucket:
     // fetching and authenticating the catalog object is not validating the
     // archive against it. See the accounting rules at the `PhaseMillis`
-    // definition site in `types.rs`.
+    // definition site in `diagnostics.rs`.
     let started_catalog = std::time::Instant::now();
     let stored = authenticated_catalog_entry(entries)?;
 
@@ -1156,10 +1156,10 @@ mod tests {
         ArchiveExpansionLimits, DeploymentManifest, DeploymentRequest, PlannedAction,
         PlannedObject, PutObjectRetryOptions, RuntimeOptions, TrustedSourceCatalog,
     };
+    use crate::diagnostics::DeploymentStats;
     use crate::request::compile_filters;
     use crate::s3::archive::budget::SourceByteBudget;
     use crate::s3::destination::{DestinationObject, DestinationWritePrecondition};
-    use crate::types::DeploymentStats;
 
     #[derive(Clone, Default)]
     struct TestWriter(Arc<Mutex<Vec<u8>>>);

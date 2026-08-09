@@ -56,7 +56,7 @@ pub(crate) async fn prepare_source_zip(
     state: &AppState,
     bucket: &str,
     key: &str,
-    stats: &crate::types::DeploymentStats,
+    stats: &crate::diagnostics::DeploymentStats,
 ) -> Result<Arc<SourceClient>> {
     let head = head_source(state, bucket, key, stats).await?;
 
@@ -74,7 +74,7 @@ async fn head_source(
     state: &AppState,
     bucket: &str,
     key: &str,
-    stats: &crate::types::DeploymentStats,
+    stats: &crate::diagnostics::DeploymentStats,
 ) -> Result<SourceHead> {
     tracing::info!(bucket, key, "reading source archive metadata");
 

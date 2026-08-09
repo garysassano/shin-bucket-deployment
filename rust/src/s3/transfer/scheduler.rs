@@ -8,7 +8,7 @@ use tokio::task::JoinSet;
 use tokio::time::timeout_at;
 
 use crate::deadline::{InvocationDeadlines, TaskDrainBudget};
-use crate::types::DeploymentStats;
+use crate::diagnostics::DeploymentStats;
 
 pub(super) struct TransferScheduler {
     tasks: JoinSet<TransferTaskCompletion>,
@@ -242,7 +242,7 @@ mod tests {
     use tokio::time::Instant as TokioInstant;
 
     use crate::deadline::InvocationDeadlines;
-    use crate::types::DeploymentStats;
+    use crate::diagnostics::DeploymentStats;
 
     use super::{TransferScheduler, TransferTaskCompletion};
 

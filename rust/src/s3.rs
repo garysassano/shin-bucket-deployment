@@ -5,9 +5,9 @@ use tokio::time::timeout_at;
 
 use crate::deadline::InvocationDeadlines;
 use crate::deployment::{DeploymentRequest, RuntimeOptions};
+use crate::diagnostics::DeploymentStats;
 use crate::request::compile_filters;
 use crate::state::AppState;
-use crate::types::DeploymentStats;
 
 pub(crate) mod archive;
 #[cfg(feature = "bench-internals")]
@@ -166,7 +166,7 @@ pub(crate) async fn deploy(
     // planValidation (phase-level half): the deployment preflight over the
     // whole manifest. The per-archive halves (directory validation and
     // catalog-to-ZIP validation) are charged in `s3/planner.rs`; see the
-    // accounting rules at the `PhaseMillis` definition site in `types.rs`.
+    // accounting rules at the `PhaseMillis` definition site in `diagnostics.rs`.
     let started_validation = std::time::Instant::now();
     planner::validate_deployment_preflight(request, &deployment_manifest)?;
     stats.add_plan_validation_micros(crate::util::duration_micros(started_validation.elapsed()));
@@ -260,8 +260,8 @@ mod tests {
     use tokio::time::Instant as TokioInstant;
 
     use crate::deadline::InvocationDeadlines;
+    use crate::diagnostics::DeploymentStats;
     use crate::request::{RawDeploymentRequest, parse_request_with_memory};
-    use crate::types::DeploymentStats;
 
     use super::{adaptive_source_window_bytes, deploy};
 
@@ -499,7 +499,7 @@ mod aws_integration_tests {
                 &state,
                 &request,
                 None,
-                std::sync::Arc::new(crate::types::DeploymentStats::default()),
+                std::sync::Arc::new(crate::diagnostics::DeploymentStats::default()),
                 InvocationDeadlines::from_remaining_at(
                     TokioInstant::now(),
                     Duration::from_secs(900),
@@ -513,7 +513,7 @@ mod aws_integration_tests {
                 &state,
                 &request,
                 None,
-                std::sync::Arc::new(crate::types::DeploymentStats::default()),
+                std::sync::Arc::new(crate::diagnostics::DeploymentStats::default()),
                 InvocationDeadlines::from_remaining_at(
                     TokioInstant::now(),
                     Duration::from_secs(900),

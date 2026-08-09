@@ -19,7 +19,7 @@
 //! A second group benchmarks `collect_zip_entry_plans`, the follow-up per-entry pass
 //! (grouping + destination-key formatting + sort) that planning performs after the
 //! manifest loop; it is not part of the `planEntries` bucket (see the accounting rules
-//! at the `PhaseMillis` definition site in `types.rs`), so it is reported separately.
+//! at the `PhaseMillis` definition site in `diagnostics.rs`), so it is reported separately.
 //!
 //! # The fixture
 //!
