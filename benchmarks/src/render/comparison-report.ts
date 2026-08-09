@@ -384,6 +384,38 @@ type MetricPair = {
 
 type AggregatedRow = BenchmarkAggregate;
 
+/**
+ * Metrics that a valid sample may legitimately lack, so completeness cannot be
+ * asserted across every phase.
+ *
+ * Lambda emits `Init Duration` only on a cold start. `cold-create` is the first
+ * invocation against a fresh stack and the collector still refuses a report
+ * without it there, but an update phase that reused a warm container has none.
+ * Asserting n=5 for every phase therefore fails the whole canonical report the
+ * first time a container survives between phases -- turning a service
+ * scheduling detail into a publish-time failure after the measurement has
+ * already been paid for.
+ */
+const PHASE_OPTIONAL_METRICS = new Set<MetricName>(["initDurationSeconds"]);
+const COLD_START_PHASE = "cold-create";
+
+/**
+ * Narrows the rows a metric's completeness is asserted over.
+ *
+ * A phase-optional metric is checked only on the cold-start phase, where the
+ * collector still refuses a report that lacks it, so a genuinely missing
+ * measurement is caught where it must exist while a warm update phase does not
+ * fail the whole report. Every other metric is checked across all phases.
+ */
+export function rowsRequiringCompleteSamples<T extends { readonly phase?: string }>(
+  rows: readonly T[],
+  metric: MetricName,
+): readonly T[] {
+  return PHASE_OPTIONAL_METRICS.has(metric)
+    ? rows.filter((row) => row.phase === COLD_START_PHASE)
+    : rows;
+}
+
 function aggregateRows(
   records: BenchmarkRecord[],
   metric: MetricName,
@@ -391,7 +423,7 @@ function aggregateRows(
 ): AggregatedRow[] {
   const rows = aggregateMetric(records, metric).sort(compareAggregatedRows);
   if (!preview) {
-    assertCompleteSamples(rows);
+    assertCompleteSamples(rowsRequiringCompleteSamples(rows, metric));
   }
   return rows;
 }
