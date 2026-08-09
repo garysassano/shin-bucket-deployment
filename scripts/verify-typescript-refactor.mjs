@@ -19,6 +19,13 @@ const repositoryRoot = join(__dirname, "..");
 // Module scope: prepareBootstrapArchives() records fallback archives it creates so
 // the caller can delete them, and that helper is not nested inside main().
 const createdCurrentArchives = [];
+// Assigned inside main(), read by the comparison helpers below, which are not
+// nested in main(). Declaring them inside main() made the CLI throw
+// `ReferenceError: baselineRoot is not defined`. `let` at module scope rather
+// than an initializer here keeps the temp directory from being created merely
+// by importing this module for its exported helpers in tests.
+let scratchRoot;
+let baselineRoot;
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
   await main();
@@ -28,8 +35,8 @@ async function main() {
   const baselineRef = optionValue("--baseline-ref") ?? mergeBase();
   const assembliesOnly = process.argv.includes("--assemblies-only");
   const expectChangesPath = optionValue("--expect-changes");
-  const scratchRoot = mkdtempSync(join(tmpdir(), "shin-typescript-contract-"));
-  const baselineRoot = join(scratchRoot, "baseline");
+  scratchRoot = mkdtempSync(join(tmpdir(), "shin-typescript-contract-"));
+  baselineRoot = join(scratchRoot, "baseline");
 
   try {
     run("git", ["worktree", "add", "--detach", baselineRoot, baselineRef], repositoryRoot);
