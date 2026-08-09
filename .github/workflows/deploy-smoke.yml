@@ -1,0 +1,103 @@
+name: Deploy smoke
+
+# Manual only, by deliberate decision. A standing per-merge deploy gate was
+# considered and rejected: its cost (a real deploy plus destroy and a full Rust
+# cross-compile on every merge to main) is not justified while merges are
+# low-frequency and agent-supervised. Dispatch this after merging a change that
+# touches deployed behaviour — the provider Rust, the construct's synthesis of
+# the provider, or its IAM — and skip it for docs, CI, and benchmark tooling.
+#
+# This catches the class where CI is green while every deployment is broken,
+# because CI checks synthesis and unit tests but never deploys the provider.
+on:
+  workflow_dispatch:
+    inputs:
+      group:
+        description: Verification group to deploy and destroy
+        type: choice
+        default: simple
+        options:
+          - simple
+          - marker-replacement
+          - large-archive
+          - replacement-safety
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: eu-central-1
+  AWS_DEFAULT_REGION: eu-central-1
+
+jobs:
+  deploy-smoke:
+    name: Deploy smoke (${{ inputs.group }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # The existing benchmark OIDC role's trust is bound to this environment, so
+    # the job runs here rather than widening that trust. No new IAM is needed:
+    # `pnpm verify deploy` uses the CDK bootstrap roles the role already
+    # assumes, and the SDK assertions read the bucket through the resource
+    # policy the deployed stack grants to the caller's own ARN.
+    environment: aws-benchmarks
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      MISE_DATA_DIR: /tmp/shin-mise
+      MISE_RUSTUP_HOME: /tmp/shin-mise/rustup
+      CARGO_TARGET_DIR: /tmp/shin-cargo-target
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Install Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "lts/*"
+          cache: pnpm
+
+      # The provider toolchain is not optional here: prebuild cross-compiles the
+      # archive, and the F-7 freshness gate re-derives the toolchain digests at
+      # deploy time and refuses a stale archive.
+      - name: Setup provider toolchain
+        uses: jdx/mise-action@v4
+        with:
+          cache: true
+          install_args: rust zig cargo:cargo-lambda
+
+      - name: Install Rust target
+        run: rustup target add aarch64-unknown-linux-gnu
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust -> target
+          cache-targets: true
+          cache-workspace-crates: true
+          cache-all-crates: false
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_BENCHMARKS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Build provider archives
+        run: pnpm prebuild:bootstrap
+
+      - name: Deploy
+        run: pnpm verify deploy "${{ inputs.group }}"
+
+      # Always destroy, including when the deploy failed part way: a partial
+      # stack still holds billable resources.
+      - name: Destroy
+        if: always()
+        run: pnpm verify destroy "${{ inputs.group }}"
