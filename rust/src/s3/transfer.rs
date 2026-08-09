@@ -100,6 +100,7 @@ impl UploadPayload {
         store: Arc<SourceBlockStore>,
         plan: ZipEntryPlan,
         content_length: u64,
+        stats: &Arc<DeploymentStats>,
         detailed_failure_diagnostics: bool,
     ) -> Self {
         Self::ZipEntry {
@@ -109,7 +110,7 @@ impl UploadPayload {
             body_state: Arc::new(UploadBodyState::new(detailed_failure_diagnostics)),
             body_attempts: Arc::new(AtomicUsize::new(0)),
             marker_replacements: None,
-            deployment_stats: None,
+            deployment_stats: Some(Arc::clone(stats)),
         }
     }
 
@@ -404,36 +405,61 @@ pub(super) async fn upload_zip_entries(
 
                 scheduler
                     .spawn(async move {
-                        let Some(payload) = prepare_zip_entry_upload(
-                            &task_store,
-                            &plan,
-                            marker_replacements,
-                            destination_object.as_ref(),
-                            &stats,
-                            spool_limit_bytes,
-                        )
-                        .await?
-                        else {
-                            return Ok(());
-                        };
+                        // transferTaskTotal / transferPrepare / transferPutWait:
+                        // the task body encloses the comparison pass and the
+                        // destination PUT, so the two sub-spans are disjoint and
+                        // their sum is at most the task total at microsecond
+                        // resolution. These accumulate per task and are summed
+                        // across concurrently running tasks; see the
+                        // `PhaseMillis` definition site in `types.rs` for why
+                        // they are not a wall-clock partition of `transfer`.
+                        let task_started = std::time::Instant::now();
+                        let outcome = async {
+                            let prepare_started = std::time::Instant::now();
+                            let Some(payload) = prepare_zip_entry_upload(
+                                &task_store,
+                                &plan,
+                                marker_replacements,
+                                destination_object.as_ref(),
+                                &stats,
+                                spool_limit_bytes,
+                            )
+                            .await?
+                            else {
+                                return Ok(());
+                            };
+                            stats.add_transfer_prepare_micros(crate::util::duration_micros(
+                                prepare_started.elapsed(),
+                            ));
 
-                        let precondition =
-                            destination_write_precondition(destination_object.as_ref());
-                        upload_payload(
-                            PutContext {
-                                destination_s3: &state.destination_s3,
-                                destination_bucket: &destination_bucket,
-                                retry: &put_retry,
-                                retry_coordinator: &put_retry_coordinator,
-                                diagnostics: &put_diagnostics,
-                                stats: &stats,
-                                work_deadline: deadlines.work(),
-                            },
-                            &plan.destination_key,
-                            payload,
-                            precondition,
-                        )
-                        .await
+                            let put_started = std::time::Instant::now();
+                            let precondition =
+                                destination_write_precondition(destination_object.as_ref());
+                            let result = upload_payload(
+                                PutContext {
+                                    destination_s3: &state.destination_s3,
+                                    destination_bucket: &destination_bucket,
+                                    retry: &put_retry,
+                                    retry_coordinator: &put_retry_coordinator,
+                                    diagnostics: &put_diagnostics,
+                                    stats: &stats,
+                                    work_deadline: deadlines.work(),
+                                },
+                                &plan.destination_key,
+                                payload,
+                                precondition,
+                            )
+                            .await;
+                            stats.add_transfer_put_wait_micros(crate::util::duration_micros(
+                                put_started.elapsed(),
+                            ));
+                            result
+                        }
+                        .await;
+                        stats.add_transfer_task_total_micros(crate::util::duration_micros(
+                            task_started.elapsed(),
+                        ));
+                        outcome
                     })
                     .await?;
                 if !scheduler_started {
@@ -499,6 +525,7 @@ async fn prepare_zip_entry_upload(
             store.clone(),
             plan.clone(),
             plan.size,
+            stats,
             stats.detailed_failure_diagnostics_enabled(),
         )));
     }
@@ -852,6 +879,7 @@ async fn prepare_zip_entry_for_comparison(
             plan.clone(),
             &replacements,
             spool_limit_bytes,
+            Some(Arc::clone(stats)),
         )
         .await?;
         let etag = Some(planned.md5);
@@ -889,7 +917,8 @@ async fn prepare_zip_entry_for_comparison(
     } else {
         // The marker-free comparison pass spools decoded output within the budget; a
         // spooled payload no longer reads the archive during upload.
-        let hashed = hash_zip_entry_reader(store.clone(), plan.clone(), spool_limit_bytes).await?;
+        let hashed =
+            hash_zip_entry_reader(store.clone(), plan.clone(), spool_limit_bytes, stats).await?;
         let spooled = hashed.spooled.is_some();
         let payload = match hashed.spooled {
             Some(bytes) => UploadPayload::from_spooled_bytes(
@@ -900,6 +929,7 @@ async fn prepare_zip_entry_for_comparison(
                 store,
                 plan.clone(),
                 plan.size,
+                stats,
                 stats.detailed_failure_diagnostics_enabled(),
             ),
         };
@@ -1129,6 +1159,7 @@ fn payload_body(payload: &UploadPayload) -> ByteStream {
                     replacements: Arc::clone(marker_replacements),
                     stats: Arc::clone(deployment_stats),
                 },
+                Some(Arc::clone(deployment_stats)),
             ),
             _ => zip_entry_body(
                 store.clone(),
@@ -1136,6 +1167,7 @@ fn payload_body(payload: &UploadPayload) -> ByteStream {
                 *content_length,
                 Arc::clone(body_state),
                 Arc::clone(body_attempts),
+                deployment_stats.clone(),
             ),
         },
     }
@@ -1206,8 +1238,9 @@ async fn hash_zip_entry_reader(
     store: Arc<SourceBlockStore>,
     plan: ZipEntryPlan,
     spool_limit_bytes: u64,
+    stats: &Arc<DeploymentStats>,
 ) -> Result<HashedZipEntry> {
-    let reader = zip_entry_reader(store, plan.clone())?;
+    let reader = zip_entry_reader(store, plan.clone(), Some(Arc::clone(stats)))?;
     let (etag, _, _, spooled) = digest_async_reader(reader, &plan, spool_limit_bytes).await?;
     Ok(HashedZipEntry {
         etag,
@@ -1933,29 +1966,34 @@ mod tests {
     use super::super::destination::{
         DestinationObject, DestinationWritePrecondition, destination_write_precondition,
     };
+    use crate::deadline::InvocationDeadlines;
     use crate::replace::MarkerReplacements;
+    use crate::s3::archive::budget::SourceByteBudget;
     use crate::s3::archive::entry::{MarkerBodyContext, UploadBodyState, marker_zip_entry_body};
+    use crate::s3::archive::prepare_source_zip;
     use crate::s3::archive::tests::{
         ready_store_for_plan_with_claims, zip_from_entry, zip_plan_from_archive,
     };
     use crate::s3::planner::{CopyPlan, ZipEntryPlan};
     use crate::types::{
         DeploymentRequest, DeploymentStats, MarkerConfig, PutObjectRetryJitter,
-        PutObjectRetryOptions, TrustedEntryIntegrity,
+        PutObjectRetryOptions, SourceArchive, TrustedEntryIntegrity, test_app_state_with_replay,
     };
     use crate::util::{duration_ms, finalize_digest};
     use md5::{Digest as Md5Digest, Md5};
+    use std::time::Duration;
+    use tokio::time::Instant as TokioInstant;
 
     use super::{
         COMPARISON_SPOOL_TOTAL_BUDGET_BYTES, COPY_RECONCILIATION_METADATA_KEY, CopyContext,
-        CopyOutcome, PutContext, UploadPayload, WriteDiagnostics, WriteDiagnosticsSnapshot,
-        WriteRetryCoordinator, catalog_skips_zip_entry, comparison_spool_limit_bytes,
-        compile_marker_replacements, copy_reconciliation_identity, copy_source_object,
-        digest_async_reader, dispatch_failure_kind, log_copy_diagnostics, log_put_diagnostics,
-        md5_hex, payload_body, prepare_zip_entry_upload, quoted_etag, read_async_reader_to_vec,
-        record_bounded_diagnostic_count, record_copy_outcome, sanitize_diagnostic_label,
-        serialize_put_attempt_failure, should_compare_marker_free_entry, upload_payload,
-        write_error_kind, write_retry_cap_millis,
+        CopyOutcome, PutContext, TransferExecution, UploadPayload, WriteDiagnostics,
+        WriteDiagnosticsSnapshot, WriteRetryCoordinator, catalog_skips_zip_entry,
+        comparison_spool_limit_bytes, compile_marker_replacements, copy_reconciliation_identity,
+        copy_source_object, digest_async_reader, dispatch_failure_kind, log_copy_diagnostics,
+        log_put_diagnostics, md5_hex, payload_body, prepare_zip_entry_upload, quoted_etag,
+        read_async_reader_to_vec, record_bounded_diagnostic_count, record_copy_outcome,
+        sanitize_diagnostic_label, serialize_put_attempt_failure, should_compare_marker_free_entry,
+        upload_payload, upload_zip_entries, write_error_kind, write_retry_cap_millis,
     };
 
     #[derive(Clone, Default)]
@@ -2911,6 +2949,7 @@ mod tests {
                 replacements,
                 stats: Arc::new(DeploymentStats::default()),
             },
+            None,
         );
         let second_pass = ByteStream::new(body.into_inner())
             .collect()
@@ -3032,6 +3071,91 @@ mod tests {
             .expect("streaming marker body")
             .into_bytes();
         assert_eq!(uploaded.as_ref(), expected);
+    }
+
+    /// Drives a real transfer of one marker entry through `upload_zip_entries`
+    /// (scheduler, source block fetch, comparison pass, destination PUT) so the
+    /// transfer sub-timings come from the instrumented task body rather than
+    /// being hand-seeded. The prepare and put spans must be nonzero, their sum
+    /// must fit inside the enclosing task total at microsecond resolution, and
+    /// the marker planning read must record a source fetch wait. Removing any
+    /// accumulation site below must make one of these assertions fail.
+    #[tokio::test]
+    async fn transfer_sub_timings_cover_prepare_put_and_source_fetch_waits() {
+        let zip = zip_from_entry(
+            "marker.txt",
+            format!("{}TOKEN{}", "x".repeat(4 * 1024), "y".repeat(4 * 1024)).as_bytes(),
+        );
+        let plan = zip_plan_from_archive(&zip, "marker.txt");
+
+        // The store `upload_zip_entries` builds fetches the entry's source span
+        // through the source client, so the replay serves the ranged GET, the
+        // metadata HEAD (via `prepare_source_zip`), and the destination PUT.
+        let source_span =
+            zip[plan.source_offset as usize..plan.source_span_end_exclusive as usize].to_vec();
+        let replay = StaticReplayClient::new(vec![
+            head_event(vec![
+                (
+                    "content-length",
+                    Box::leak(zip.len().to_string().into_boxed_str()),
+                ),
+                ("etag", "\"test-source-etag\""),
+            ]),
+            range_success_event(source_span, plan.source_offset, zip.len() as u64),
+            put_success_event(),
+        ]);
+        let state = test_app_state_with_replay(replay.clone());
+        let stats = Arc::new(DeploymentStats::default());
+        let source = prepare_source_zip(&state, "source", "source.zip", &stats)
+            .await
+            .expect("source metadata HEAD succeeds");
+        let archives = vec![SourceArchive { source }];
+        let mut request = DeploymentRequest::for_test();
+        request.extract = true;
+        request.source_markers[0] =
+            HashMap::from([("TOKEN".to_string(), "expanded-value".to_string())]);
+        request.source_markers_config[0] = MarkerConfig::default();
+        let source_budget = SourceByteBudget::new(256 * 1024 * 1024, Arc::clone(&stats), false)
+            .expect("valid test source budget");
+
+        upload_zip_entries(
+            &state,
+            &archives,
+            &request,
+            BTreeMap::from([(0_usize, vec![plan])]),
+            &HashMap::new(),
+            source_budget,
+            TransferExecution {
+                stats: Arc::clone(&stats),
+                deadlines: InvocationDeadlines::from_remaining_at(
+                    TokioInstant::now(),
+                    Duration::from_secs(120),
+                ),
+            },
+        )
+        .await
+        .expect("synthetic transfer run succeeds");
+
+        let (task_total, prepare, put, source_fetch_wait) =
+            stats.transfer_subtimings_micros_for_test();
+        assert!(
+            prepare > 0,
+            "the comparison pass must be measured, got {prepare} us"
+        );
+        assert!(
+            put > 0,
+            "the destination PUT must be measured, got {put} us"
+        );
+        assert!(
+            prepare.saturating_add(put) <= task_total,
+            "prepare ({prepare} us) + put ({put} us) must fit inside the task total \
+             ({task_total} us)"
+        );
+        assert!(
+            source_fetch_wait > 0,
+            "the marker planning read must record its source fetch wait, \
+             got {source_fetch_wait} us"
+        );
     }
 
     #[test]
@@ -3457,6 +3581,23 @@ mod tests {
             Response::builder()
                 .status(200)
                 .body(SdkBody::empty())
+                .unwrap(),
+        )
+    }
+
+    fn range_success_event(bytes: Vec<u8>, start: u64, source_len: u64) -> ReplayEvent {
+        let len = bytes.len();
+        let end = start + len as u64 - 1;
+        ReplayEvent::new(
+            Request::builder()
+                .uri("https://s3.test/expected")
+                .body(SdkBody::empty())
+                .unwrap(),
+            Response::builder()
+                .status(206)
+                .header("content-length", len)
+                .header("content-range", format!("bytes {start}-{end}/{source_len}"))
+                .body(SdkBody::from(bytes))
                 .unwrap(),
         )
     }
