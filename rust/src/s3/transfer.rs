@@ -164,6 +164,11 @@ struct PreparedUploadPayload {
     /// The payload already holds the decoded bytes, so the upload will not read the
     /// archive again.
     spooled: bool,
+    /// This payload is a marker entry whose replaced output was retained during the
+    /// comparison pass. `markerReplacement.spooledUploads` counts these, but only once
+    /// the caller commits to uploading: an entry skipped by a matching destination ETag
+    /// materialized a spool yet issued no PutObject, so the counter must not fire here.
+    marker_spooled: bool,
 }
 
 struct WriteDiagnostics {
@@ -528,6 +533,13 @@ async fn prepare_zip_entry_upload(
         return Ok(None);
     }
 
+    // The entry is now committed to uploading, so a marker entry that retained its
+    // replaced output during comparison counts as a spooled upload here — never in the
+    // comparison pass, which also runs for entries the ETag check above skips.
+    if prepared.marker_spooled {
+        stats.add_marker_spooled_upload();
+    }
+
     // A spooled payload no longer reads the archive, so the source blocks behind it must
     // not be pinned for a replay that will never happen.
     if !prepared.spooled {
@@ -844,17 +856,17 @@ async fn prepare_zip_entry_for_comparison(
         .await?;
         let etag = Some(planned.md5);
         validate_put_object_size(plan, planned.output_bytes)?;
-        let (payload, spooled) = match spooled {
-            Some(bytes) => {
-                stats.add_marker_spooled_upload();
-                (
-                    UploadPayload::from_spooled_bytes(
-                        bytes,
-                        stats.detailed_failure_diagnostics_enabled(),
-                    ),
-                    true,
-                )
-            }
+        // Counting the spooled upload is deferred to the caller: an entry whose ETag
+        // matches the destination is skipped without uploading, and must not count.
+        let (payload, spooled, marker_spooled) = match spooled {
+            Some(bytes) => (
+                UploadPayload::from_spooled_bytes(
+                    bytes,
+                    stats.detailed_failure_diagnostics_enabled(),
+                ),
+                true,
+                true,
+            ),
             None => (
                 UploadPayload::from_marker_zip_entry(
                     store,
@@ -865,12 +877,14 @@ async fn prepare_zip_entry_for_comparison(
                     stats.detailed_failure_diagnostics_enabled(),
                 ),
                 false,
+                false,
             ),
         };
         Ok(PreparedUploadPayload {
             payload,
             etag,
             spooled,
+            marker_spooled,
         })
     } else {
         // The marker-free comparison pass spools decoded output within the budget; a
@@ -893,6 +907,7 @@ async fn prepare_zip_entry_for_comparison(
             payload,
             etag: Some(hashed.etag),
             spooled,
+            marker_spooled: false,
         })
     }
 }
@@ -1928,7 +1943,8 @@ mod tests {
         DeploymentRequest, DeploymentStats, MarkerConfig, PutObjectRetryJitter,
         PutObjectRetryOptions, TrustedEntryIntegrity,
     };
-    use crate::util::duration_ms;
+    use crate::util::{duration_ms, finalize_digest};
+    use md5::{Digest as Md5Digest, Md5};
 
     use super::{
         COMPARISON_SPOOL_TOTAL_BUDGET_BYTES, COPY_RECONCILIATION_METADATA_KEY, CopyContext,
@@ -2903,6 +2919,57 @@ mod tests {
             .into_bytes();
         assert_eq!(second_pass.as_ref(), expected);
         assert_eq!(second_pass.as_ref(), bytes.as_ref());
+    }
+
+    #[tokio::test]
+    async fn marker_spooled_entry_skipped_by_matching_etag_is_not_counted_as_an_upload() {
+        // A re-deploy of unchanged marker content: the replaced output fits the spool
+        // and its MD5 matches the destination ETag, so the entry is skipped without a
+        // PutObject. `spooledUploads` counts uploads, so it must stay 0 here even though
+        // the comparison pass materialized a spool.
+        let zip = zip_from_entry("marker.txt", b"before TOKEN after");
+        let plan = zip_plan_from_archive(&zip, "marker.txt");
+        let expected = b"before expanded-value after";
+        let replacements = Arc::new(
+            MarkerReplacements::new(
+                &HashMap::from([("TOKEN".to_string(), "expanded-value".to_string())]),
+                &MarkerConfig::default(),
+            )
+            .expect("marker automaton"),
+        );
+        let mut etag_hasher = Md5::new();
+        etag_hasher.update(expected);
+        // finalize_digest is the exact function production uses to derive the ETag,
+        // so this matching value cannot drift from what the comparison pass computes.
+        let matching_etag = finalize_digest(etag_hasher);
+        let destination = DestinationObject {
+            etag: Some(matching_etag),
+            size: Some(expected.len() as u64),
+        };
+        // Only the comparison/planning read happens; the skip returns before any upload.
+        let store = ready_store_for_plan_with_claims(&zip, &plan, 1);
+        let stats = Arc::new(DeploymentStats::default());
+
+        let result = prepare_zip_entry_upload(
+            &store,
+            &plan,
+            Some(Arc::clone(&replacements)),
+            Some(&destination),
+            &stats,
+            expected.len() as u64,
+        )
+        .await
+        .expect("marker prepare must succeed");
+
+        assert!(result.is_none(), "a matching ETag must skip the upload");
+
+        let summary = stats.snapshot("Update", "success", &DeploymentRequest::for_test());
+        assert_eq!(
+            summary.marker_replacement.spooled_uploads, 0,
+            "a skipped entry issued no PutObject, so it is not a spooled upload"
+        );
+        assert_eq!(summary.marker_replacement.planning_passes, 1);
+        assert_eq!(summary.marker_replacement.upload_passes, 0);
     }
 
     #[tokio::test]
