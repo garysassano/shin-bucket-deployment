@@ -27,8 +27,8 @@ Runtime tuning defaults:
 
 | Setting                     |  Default | Purpose                                                                                                                                                                             |
 | --------------------------- | -------: | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `transfer.maxConcurrency`   |       32 | Bounds the continuously drained set of copy, hash, upload, and related logical object tasks; valid range 1–256. Resolved values above 64 emit an acknowledgeable synthesis warning. |
-| `providerLambda.memorySize` | 1024 MiB | Sizes the Lambda. The provider reads the actual value from the Lambda runtime environment.                                                                                          |
+| `transfer.maxConcurrency`   |       64 | Bounds the continuously drained set of copy, hash, upload, and related logical object tasks; valid range 1–256. Resolved values above 64 emit an acknowledgeable synthesis warning. |
+| `providerLambda.memorySize` | 2048 MiB | Sizes the Lambda. The provider reads the actual value from the Lambda runtime environment.                                                                                          |
 
 Most deployments should tune only `providerLambda.memorySize` and, when needed, `transfer.maxConcurrency`. The experimental `transfer.advancedTuning` object keeps source block/window and destination-write retry settings available as support and benchmark escape hatches:
 
