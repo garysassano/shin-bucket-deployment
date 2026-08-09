@@ -4,9 +4,10 @@ use anyhow::{Context, Result};
 use tokio::time::timeout_at;
 
 use crate::deadline::InvocationDeadlines;
+use crate::deployment::{DeploymentRequest, RuntimeOptions};
 use crate::request::compile_filters;
 use crate::state::AppState;
-use crate::types::{DeploymentRequest, DeploymentStats, RuntimeOptions};
+use crate::types::DeploymentStats;
 
 pub(crate) mod archive;
 #[cfg(feature = "bench-internals")]
@@ -355,6 +356,7 @@ mod aws_integration_tests {
     use zip::write::{SimpleFileOptions, ZipWriter};
 
     use crate::deadline::InvocationDeadlines;
+    use crate::deployment::MarkerConfig;
     use crate::request::{
         RawAdvancedTuning, RawCloudfrontInvalidation, RawDeploymentRequest, RawDestination,
         RawDestinationLifecycle, RawDestinationLifecycleOnChange, RawDestinationLifecycleOnDelete,
@@ -362,7 +364,6 @@ mod aws_integration_tests {
         RawTransferOptions, parse_request_with_memory,
     };
     use crate::state::AppState;
-    use crate::types::MarkerConfig;
 
     use super::deploy;
 

@@ -39,11 +39,12 @@ use super::{
     SourceClient, head_source, range_get_request_error, source_get_retry_cap_millis,
     source_get_retry_delay,
 };
+use crate::deployment::{MarkerConfig, TrustedEntryIntegrity};
 use crate::replace::MarkerReplacements;
 use crate::s3::planner::ZipEntryPlan;
 use crate::s3::{DEFAULT_SOURCE_BLOCK_BYTES, DEFAULT_SOURCE_BLOCK_MERGE_GAP_BYTES};
 use crate::state::AppState;
-use crate::types::{DeploymentStats, MarkerConfig, TrustedEntryIntegrity};
+use crate::types::DeploymentStats;
 use crate::util::finalize_digest;
 use md5::{Digest as Md5Digest, Md5};
 

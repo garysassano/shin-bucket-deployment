@@ -7,7 +7,7 @@ use md5::{Digest as Md5Digest, Md5};
 use serde_json::Value;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-use crate::types::MarkerConfig;
+use crate::deployment::MarkerConfig;
 use crate::util::finalize_digest;
 
 const INPUT_CHUNK_BYTES: usize = 64 * 1024;

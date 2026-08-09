@@ -22,13 +22,15 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::time::{Instant, sleep_until};
 
 use crate::deadline::{InvocationDeadlines, TaskDrainBudget};
+use crate::deployment::{
+    DeploymentRequest, PutObjectRetryJitter, PutObjectRetryOptions, SourceArchive,
+};
 use crate::replace::MarkerReplacements;
 use crate::state::AppState;
 use crate::types::{
-    CopyObjectStats, DeploymentRequest, DeploymentStats, DiagnosticRangeStats,
-    MAX_FAILURE_DIAGNOSTIC_GROUPS, MAX_FAILURE_DIAGNOSTIC_LABELS, OTHER_DIAGNOSTIC_LABEL,
-    PutObjectFailureBodyStats, PutObjectFailureSourceStats, PutObjectFailureStateStats,
-    PutObjectRetryJitter, PutObjectRetryOptions, PutObjectStats, SourceArchive, SourceFetchPhase,
+    CopyObjectStats, DeploymentStats, DiagnosticRangeStats, MAX_FAILURE_DIAGNOSTIC_GROUPS,
+    MAX_FAILURE_DIAGNOSTIC_LABELS, OTHER_DIAGNOSTIC_LABEL, PutObjectFailureBodyStats,
+    PutObjectFailureSourceStats, PutObjectFailureStateStats, PutObjectStats, SourceFetchPhase,
     TransferFetchStats, same_failure_signature,
 };
 use crate::util::{MAX_DIAGNOSTIC_VALUE_BYTES, sanitize_diagnostic};
@@ -954,7 +956,7 @@ async fn prepare_zip_entry_for_comparison(
 
 fn compile_marker_replacements(
     markers: &HashMap<String, String>,
-    config: &crate::types::MarkerConfig,
+    config: &crate::deployment::MarkerConfig,
 ) -> Result<Option<Arc<MarkerReplacements>>> {
     if markers.is_empty() {
         Ok(None)
@@ -1992,6 +1994,10 @@ mod tests {
         DestinationObject, DestinationWritePrecondition, destination_write_precondition,
     };
     use crate::deadline::InvocationDeadlines;
+    use crate::deployment::{
+        DeploymentRequest, MarkerConfig, PutObjectRetryJitter, PutObjectRetryOptions,
+        SourceArchive, TrustedEntryIntegrity,
+    };
     use crate::replace::MarkerReplacements;
     use crate::s3::archive::block_store::{SourceBlockOptions, SourceBlockStore};
     use crate::s3::archive::budget::SourceByteBudget;
@@ -2003,10 +2009,7 @@ mod tests {
     use crate::s3::planner::{CopyPlan, ZipEntryPlan};
     use crate::s3::source_window_bytes_for_archive;
     use crate::state::test_app_state_with_replay;
-    use crate::types::{
-        DeploymentRequest, DeploymentStats, MarkerConfig, PutObjectRetryJitter,
-        PutObjectRetryOptions, SourceArchive, TrustedEntryIntegrity,
-    };
+    use crate::types::DeploymentStats;
     use crate::util::{duration_ms, finalize_digest};
     use md5::{Digest as Md5Digest, Md5};
     use std::time::Duration;
@@ -3864,11 +3867,11 @@ mod tests {
         tokio::time::Instant::now() + std::time::Duration::from_secs(120)
     }
 
-    fn summary_request() -> crate::types::DeploymentRequest {
-        crate::types::DeploymentRequest {
+    fn summary_request() -> crate::deployment::DeploymentRequest {
+        crate::deployment::DeploymentRequest {
             source_object_keys: vec!["archive.zip".to_string()],
             destination_owner_id: "summary-owner".to_string(),
-            ..crate::types::DeploymentRequest::for_test()
+            ..crate::deployment::DeploymentRequest::for_test()
         }
     }
 

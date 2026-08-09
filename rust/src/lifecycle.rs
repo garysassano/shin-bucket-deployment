@@ -1,7 +1,7 @@
+use crate::deployment::{DeploymentRequest, PreviousDestination};
 use crate::namespace::{
     NamespaceRelation, canonical_namespace, namespace_relation, namespaces_overlap,
 };
-use crate::types::{DeploymentRequest, PreviousDestination};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RetainReason {
@@ -118,7 +118,7 @@ fn previous_namespace_authorized(
 
 #[cfg(test)]
 mod tests {
-    use crate::types::{DeletePreviousObjectsOnChange, DeploymentRequest};
+    use crate::deployment::{DeletePreviousObjectsOnChange, DeploymentRequest};
 
     use super::*;
 

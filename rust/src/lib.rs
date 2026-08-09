@@ -16,6 +16,7 @@
 mod cloudformation;
 mod cloudfront;
 mod deadline;
+mod deployment;
 mod lifecycle;
 mod namespace;
 mod replace;

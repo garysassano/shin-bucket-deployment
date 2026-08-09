@@ -12,13 +12,13 @@ use fastrand::Rng;
 use tokio::time::{Instant, sleep_until};
 use tracing::warn;
 
+use crate::deployment::{
+    DeploymentManifest, DeploymentRequest, Filters, PutObjectRetryJitter, PutObjectRetryOptions,
+};
 use crate::namespace::{key_is_excluded, namespace_list_prefix, read_bucket_owner_tags};
 use crate::request::strip_destination_prefix;
 use crate::state::AppState;
-use crate::types::{
-    DeploymentManifest, DeploymentRequest, DeploymentStats, Filters, PutObjectRetryJitter,
-    PutObjectRetryOptions,
-};
+use crate::types::DeploymentStats;
 
 const MAX_RETAINED_DELETION_KEY_BYTES: usize = 4 * 1024 * 1024;
 
@@ -1183,12 +1183,12 @@ mod tests {
         record_destination_object, record_destination_object_original, stale_destination_key,
         unplanned_cleanup_key, unplanned_destination_key,
     };
-    use crate::request::{compile_filters, strip_destination_prefix};
-    use crate::state::AppState;
-    use crate::types::{
+    use crate::deployment::{
         DeploymentManifest, PlannedAction, PlannedObject, PutObjectRetryJitter,
         PutObjectRetryOptions,
     };
+    use crate::request::{compile_filters, strip_destination_prefix};
+    use crate::state::AppState;
 
     #[test]
     fn fused_per_key_checks_match_the_original_two_predicate_path() {

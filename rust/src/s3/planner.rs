@@ -9,12 +9,13 @@ use crc32fast::Hasher as Crc32Hasher;
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncReadExt;
 
+use crate::deployment::{
+    ArchiveExpansionLimits, DeploymentManifest, DeploymentRequest, Filters, PlannedAction,
+    PlannedObject, SourceArchive, TrustedEntryIntegrity,
+};
 use crate::request::{join_s3_key, normalize_archive_key, source_basename};
 use crate::state::AppState;
-use crate::types::{
-    ArchiveExpansionLimits, DeploymentManifest, DeploymentRequest, DeploymentStats, Filters,
-    PlannedAction, PlannedObject, SourceArchive, TrustedEntryIntegrity,
-};
+use crate::types::DeploymentStats;
 use crate::util::{MAX_DIAGNOSTIC_VALUE_BYTES, sanitize_diagnostic};
 
 use super::archive::block_store::{SourceBlockOptions, SourceBlockStore};
@@ -1151,14 +1152,14 @@ mod tests {
         validate_archive_expansion, validate_catalog_entries, validate_deployment_preflight,
         validate_stored_file_entry,
     };
+    use crate::deployment::{
+        ArchiveExpansionLimits, DeploymentManifest, DeploymentRequest, PlannedAction,
+        PlannedObject, PutObjectRetryOptions, RuntimeOptions, TrustedSourceCatalog,
+    };
     use crate::request::compile_filters;
     use crate::s3::archive::budget::SourceByteBudget;
     use crate::s3::destination::{DestinationObject, DestinationWritePrecondition};
     use crate::types::DeploymentStats;
-    use crate::types::{
-        ArchiveExpansionLimits, DeploymentManifest, DeploymentRequest, PlannedAction,
-        PlannedObject, PutObjectRetryOptions, RuntimeOptions, TrustedSourceCatalog,
-    };
 
     #[derive(Clone, Default)]
     struct TestWriter(Arc<Mutex<Vec<u8>>>);
@@ -2116,9 +2117,9 @@ mod tests {
                     retry_max_delay_ms: 1,
                     slowdown_retry_base_delay_ms: 1,
                     slowdown_retry_max_delay_ms: 1,
-                    ..crate::types::test_runtime_options().put_object_retry
+                    ..crate::deployment::test_runtime_options().put_object_retry
                 },
-                ..crate::types::test_runtime_options()
+                ..crate::deployment::test_runtime_options()
             },
             ..DeploymentRequest::for_test()
         }

@@ -556,12 +556,12 @@ mod tests {
         assert_eq!(callback_retry_delay(8, policy), Duration::from_secs(2));
     }
 
-    fn deployment_request_with_paths(paths: Vec<String>) -> crate::types::DeploymentRequest {
-        crate::types::DeploymentRequest {
+    fn deployment_request_with_paths(paths: Vec<String>) -> crate::deployment::DeploymentRequest {
+        crate::deployment::DeploymentRequest {
             distribution_id: Some("distribution".to_string()),
             distribution_paths: paths,
             destination_owner_id: "callback-owner".to_string(),
-            ..crate::types::DeploymentRequest::for_test()
+            ..crate::deployment::DeploymentRequest::for_test()
         }
     }
 

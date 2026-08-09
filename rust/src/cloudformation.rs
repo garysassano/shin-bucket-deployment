@@ -88,7 +88,7 @@ struct DecodedRequest<'a> {
 
 struct ProcessedRequest {
     request_type: &'static str,
-    request: crate::types::DeploymentRequest,
+    request: crate::deployment::DeploymentRequest,
     stats: Arc<DeploymentStats>,
     result: Result<Vec<u8>>,
 }
@@ -428,7 +428,7 @@ fn validate_resource_type(request: &RequestEnvelope) -> Result<()> {
 }
 
 fn success_payload(
-    request: &crate::types::DeploymentRequest,
+    request: &crate::deployment::DeploymentRequest,
     physical_resource_id: String,
 ) -> Result<ResponsePayload> {
     let mut data = Map::new();
@@ -456,8 +456,8 @@ fn success_payload(
 
 fn preflight_invalidation_requests(
     request_type: &str,
-    request: &crate::types::DeploymentRequest,
-    previous: Option<&crate::types::PreviousDestination>,
+    request: &crate::deployment::DeploymentRequest,
+    previous: Option<&crate::deployment::PreviousDestination>,
 ) -> Result<()> {
     let current_may_invalidate = matches!(request_type, "Create" | "Update")
         || (request_type == "Delete" && request.delete_current_objects_on_delete);
@@ -512,8 +512,8 @@ async fn process_request_inner(
     state: &AppState,
     request_type: &str,
     execution: RequestExecution<'_>,
-    previous_destination: Option<&crate::types::PreviousDestination>,
-    request: &crate::types::DeploymentRequest,
+    previous_destination: Option<&crate::deployment::PreviousDestination>,
+    request: &crate::deployment::DeploymentRequest,
     stats: Arc<DeploymentStats>,
 ) -> Result<()> {
     let deadlines = execution.deadlines;
@@ -643,8 +643,8 @@ async fn invalidate_distributions(
     state: &AppState,
     execution: RequestExecution<'_>,
     request_type: &str,
-    previous_destination: Option<&crate::types::PreviousDestination>,
-    request: &crate::types::DeploymentRequest,
+    previous_destination: Option<&crate::deployment::PreviousDestination>,
+    request: &crate::deployment::DeploymentRequest,
     previous_destination_cleaned: bool,
     deleted_current_destination: bool,
     stats: &DeploymentStats,
@@ -798,7 +798,7 @@ fn cloudfront_caller_reference(
     format!("shin-bucket-deployment-{}", finalize_digest(hasher))
 }
 
-fn destination_physical_resource_id(request: &crate::types::DeploymentRequest) -> String {
+fn destination_physical_resource_id(request: &crate::deployment::DeploymentRequest) -> String {
     let mut hasher = Sha256::new();
     hash_identity_field(&mut hasher, "shin-bucket-deployment-physical-resource-v1");
     hash_identity_field(&mut hasher, &request.destination_owner_id);
@@ -811,7 +811,7 @@ fn destination_physical_resource_id(request: &crate::types::DeploymentRequest) -
 fn response_physical_resource_id(
     request_type: &str,
     physical_resource_id: Option<&str>,
-    request: &crate::types::DeploymentRequest,
+    request: &crate::deployment::DeploymentRequest,
 ) -> Result<String> {
     match request_type {
         "Create" => Ok(destination_physical_resource_id(request)),
@@ -836,7 +836,7 @@ fn log_deployment_summary(
     stats: &DeploymentStats,
     request_type: &str,
     deployment_status: &str,
-    request: &crate::types::DeploymentRequest,
+    request: &crate::deployment::DeploymentRequest,
 ) {
     if !tracing::enabled!(tracing::Level::INFO) {
         // The summary is only ever emitted at INFO, so snapshotting and serializing
@@ -870,12 +870,12 @@ mod tests {
         response_target, serialize_response, success_payload, validate_resource_type,
     };
 
-    fn deployment_request_with_paths(paths: Vec<String>) -> crate::types::DeploymentRequest {
-        crate::types::DeploymentRequest {
+    fn deployment_request_with_paths(paths: Vec<String>) -> crate::deployment::DeploymentRequest {
+        crate::deployment::DeploymentRequest {
             distribution_id: Some("distribution".to_string()),
             distribution_paths: paths,
             destination_owner_id: "summary-owner".to_string(),
-            ..crate::types::DeploymentRequest::for_test()
+            ..crate::deployment::DeploymentRequest::for_test()
         }
     }
 
@@ -883,12 +883,12 @@ mod tests {
         bucket: &str,
         prefix: &str,
         owner_id: &str,
-    ) -> crate::types::DeploymentRequest {
-        crate::types::DeploymentRequest {
+    ) -> crate::deployment::DeploymentRequest {
+        crate::deployment::DeploymentRequest {
             dest_bucket_name: bucket.to_string(),
             dest_bucket_prefix: prefix.to_string(),
             destination_owner_id: owner_id.to_string(),
-            ..crate::types::DeploymentRequest::for_test()
+            ..crate::deployment::DeploymentRequest::for_test()
         }
     }
 
@@ -1795,11 +1795,11 @@ mod tests {
         };
 
         let request = deployment_request_with_paths(vec!["/*".to_string()]);
-        let request = crate::types::DeploymentRequest {
+        let request = crate::deployment::DeploymentRequest {
             invalidate_previous_distribution_on_change: Some("previous-dist".to_string()),
             ..request
         };
-        let previous = crate::types::PreviousDestination {
+        let previous = crate::deployment::PreviousDestination {
             bucket_name: "previous-bucket".to_string(),
             bucket_prefix: "previous-site/".to_string(),
             distribution_id: Some("previous-dist".to_string()),
