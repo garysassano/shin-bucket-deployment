@@ -32,6 +32,8 @@ fn parse_detailed_failure_diagnostics(value: Option<impl AsRef<OsStr>>) -> io::R
     }
 }
 
+/// `AppState` with deterministic test clients: an S3 client pinned to a replayed
+/// endpoint and a CloudFront client with test credentials.
 #[cfg(test)]
 pub(crate) fn test_app_state_with_replay(replay: StaticReplayClient) -> AppState {
     let s3 = S3Client::from_conf(
