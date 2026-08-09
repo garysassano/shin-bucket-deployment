@@ -20,7 +20,7 @@ pub(crate) use destination::{
     GuardedDeleteContext, GuardedDeleteOutcome, guarded_delete_namespace,
 };
 
-pub(crate) const DEFAULT_TRANSFER_MAX_CONCURRENCY: usize = 32;
+pub(crate) const DEFAULT_TRANSFER_MAX_CONCURRENCY: usize = 64;
 pub(crate) const DEFAULT_SOURCE_BLOCK_BYTES: usize = 8 * 1024 * 1024;
 pub(crate) const DEFAULT_SOURCE_BLOCK_MERGE_GAP_BYTES: usize = 256 * 1024;
 pub(crate) const ZIP_ENTRY_BODY_CHUNK_BYTES: usize = 256 * 1024;
