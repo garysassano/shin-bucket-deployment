@@ -5,17 +5,19 @@ import {
   type BenchmarkRunRecord,
   type BenchmarkRunRecordSource,
   type BenchmarkSampleRecord,
-  type ProviderSummary,
   benchmarkEvidenceErrors,
   benchmarkEvidenceSanitizationErrors,
   benchmarkRunRecordFrom,
   cleanupStatusFrom,
   normalizeImplementation,
-  providerSummaryErrors,
   runsFileFor,
-  sanitizeProviderSummary,
 } from "./model";
 import { upsertBenchmarkRun, upsertBenchmarkSample } from "./persistence";
+import {
+  type ProviderSummary,
+  providerSummaryErrors,
+  sanitizeProviderSummary,
+} from "./provider-summary";
 
 export type CollectBenchmarkOptions = {
   readonly runId?: string;

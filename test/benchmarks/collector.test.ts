@@ -4,12 +4,12 @@ import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { collectBenchmarkResult } from "../../benchmarks/src/collect-results";
 import { parseBenchmarkRunOptions } from "../../benchmarks/src/config";
+import { benchmarkEvidenceErrors } from "../../benchmarks/src/model";
+import { createBenchmarkPlan } from "../../benchmarks/src/plan";
 import {
-  benchmarkEvidenceErrors,
   providerSummaryErrors,
   sanitizeProviderSummary,
-} from "../../benchmarks/src/model";
-import { createBenchmarkPlan } from "../../benchmarks/src/plan";
+} from "../../benchmarks/src/provider-summary";
 import {
   renderBenchmarkReport,
   rowsRequiringCompleteSamples,
