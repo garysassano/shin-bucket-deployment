@@ -10,7 +10,10 @@ import {
   sanitizeProviderSummary,
 } from "../../benchmarks/src/model";
 import { createBenchmarkPlan } from "../../benchmarks/src/plan";
-import { renderBenchmarkReport } from "../../benchmarks/src/render/comparison-report";
+import {
+  renderBenchmarkReport,
+  rowsRequiringCompleteSamples,
+} from "../../benchmarks/src/render/comparison-report";
 import { renderBenchmarkResultsTable } from "../../benchmarks/src/render/telemetry-table";
 import { CANONICAL_BENCHMARK_CONFIG } from "../../benchmarks/src/validation";
 import {
@@ -22,6 +25,34 @@ import {
 } from "../support/benchmark-records";
 
 describe("benchmark result collector", () => {
+  // Lambda emits Init Duration only on a cold start, so an update phase that
+  // reused a warm container has none. Asserting the full repetition count for
+  // that metric on every phase failed the entire canonical report the first
+  // time a container survived between phases -- at publish time, after the
+  // measurement had already been paid for.
+  describe("phase-optional metric completeness", () => {
+    const rows = [
+      { phase: "cold-create", count: 5 },
+      { phase: "unchanged-update", count: 5 },
+      { phase: "pruned-update", count: 4 },
+    ];
+
+    test("checks a phase-optional metric only on the cold-start phase", () => {
+      expect(rowsRequiringCompleteSamples(rows, "initDurationSeconds")).toEqual([
+        { phase: "cold-create", count: 5 },
+      ]);
+    });
+
+    test("still checks every phase for a required metric", () => {
+      expect(rowsRequiringCompleteSamples(rows, "providerDurationSeconds")).toEqual(rows);
+    });
+
+    test("does not exempt the cold-start phase, where the measurement must exist", () => {
+      expect(
+        rowsRequiringCompleteSamples([{ phase: "cold-create", count: 4 }], "initDurationSeconds"),
+      ).toEqual([{ phase: "cold-create", count: 4 }]);
+    });
+  });
   // A warm Lambda container omits Init Duration. Requiring it on every phase
   // aborted a canonical run on pruned-update -- the fourth invocation of the
   // same function -- after every stack had deployed and destroyed cleanly.
