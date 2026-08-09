@@ -114,7 +114,7 @@ Do not commit `.benchmark-runs/` or other raw AWS output. Commit only sanitized 
 
 ## Ledger state: `phaseMs` plan sub-timings
 
-The `phaseMs` contract requires `planCatalog`, `planDirectory`, `planEntries`, and `planValidation` alongside `plan`. The pre-sub-timings shin rows were superseded and moved to `archive/benchmarks/`, and the 2026-08-09 measurement session (run `3a1fe594`, 240 samples) repopulated `benchmarks/results.jsonl` in the current shape. `pnpm verify:ledger` gates the committed ledger in `pnpm check`, so a shape invalidation can no longer hide behind a green gate.
+The `phaseMs` contract requires `planSourceHeads`, `planCatalog`, `planDirectory`, `planEntries`, and `planValidation` alongside `plan`, and `transferTaskTotal`, `transferPrepare`, `transferPutWait`, and `transferSourceFetchWait` alongside `transfer`. The transfer sub-timings schema addition (branch `t2-transfer-subtimings`) superseded the previous shin rows, which moved to `archive/benchmarks/`; the shin side of `benchmarks/results.jsonl` is empty again pending the next paid measurement session, while the pinned AWS CDK `BucketDeployment` baseline rows remain. `pnpm verify:ledger` gates the committed ledger in `pnpm check`, so a shape invalidation can no longer hide behind a green gate.
 
 ## Performance limits
 
