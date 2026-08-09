@@ -80,17 +80,20 @@ async fn head_source(
 
     // planSourceHeads: the per-source metadata await in extract mode. The await
     // happens in the `plan_deployment` loop, outside every ZIP planning bucket,
-    // so the span is exclusive and feeds the plan parts total.
+    // so the span is exclusive and feeds the plan parts total. The span is
+    // recorded on the error path too: a failed or timed-out HEAD still waited,
+    // and failure summaries retain and log these stats.
     let started = std::time::Instant::now();
-    let output = state
+    let head = state
         .source_s3
         .head_object()
         .bucket(bucket)
         .key(key)
         .send()
-        .await
-        .with_context(|| format!("failed to read source archive metadata s3://{bucket}/{key}"))?;
+        .await;
     stats.add_plan_source_heads_micros(crate::util::duration_micros(started.elapsed()));
+    let output = head
+        .with_context(|| format!("failed to read source archive metadata s3://{bucket}/{key}"))?;
 
     let len = output
         .content_length()

@@ -2117,6 +2117,41 @@ async fn head_source_rejects_a_source_without_an_etag() {
 }
 
 #[tokio::test]
+async fn head_source_records_the_wait_span_on_a_failed_head() {
+    // The HEAD request itself fails (500), so `.send().await` errors; the
+    // request still waited, and that span must land in `planSourceHeads` on the
+    // error path too, because failure summaries retain and log these stats.
+    let state = replay_app_state(StaticReplayClient::new(vec![ReplayEvent::new(
+        Request::builder()
+            .method("HEAD")
+            .uri("https://s3.test/bucket/archive.zip")
+            .body(SdkBody::empty())
+            .unwrap(),
+        Response::builder()
+            .status(500)
+            .body(SdkBody::empty())
+            .unwrap(),
+    )]));
+    let stats = DeploymentStats::default();
+
+    let error = head_source(&state, "bucket", "archive.zip", &stats)
+        .await
+        .expect_err("a failed source HEAD must fail closed");
+    assert!(
+        error
+            .to_string()
+            .contains("failed to read source archive metadata"),
+        "unexpected error: {error}"
+    );
+
+    let (source_heads_micros, ..) = stats.plan_parts_micros_for_test();
+    assert!(
+        source_heads_micros > 0,
+        "a failed HEAD still waited for its span, got {source_heads_micros} us"
+    );
+}
+
+#[tokio::test]
 async fn head_source_keeps_the_returned_etag_verbatim() {
     let state = replay_app_state(StaticReplayClient::new(vec![head_replay_event(
         Some("\"source-etag\""),

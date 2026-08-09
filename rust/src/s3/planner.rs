@@ -369,17 +369,19 @@ async fn source_object_metadata(
     // planSourceHeads: the per-source metadata await in copy mode. Like the
     // extract-mode `HeadObject`, it runs in the `plan_deployment` loop outside
     // every ZIP planning bucket, so the span is exclusive and feeds the plan
-    // parts total.
+    // parts total. The span is recorded on the error path too: a failed or
+    // timed-out HEAD still waited, and failure summaries retain these stats.
     let started = std::time::Instant::now();
-    let response = state
+    let head = state
         .source_s3
         .head_object()
         .bucket(bucket)
         .key(key)
         .send()
-        .await
-        .with_context(|| format!("failed to read source object metadata s3://{bucket}/{key}"))?;
+        .await;
     stats.add_plan_source_heads_micros(crate::util::duration_micros(started.elapsed()));
+    let response =
+        head.with_context(|| format!("failed to read source object metadata s3://{bucket}/{key}"))?;
 
     let size = response
         .content_length()
@@ -655,7 +657,7 @@ async fn load_authenticated_catalog(
         source_budget,
     );
     // No stats handle: this plan-phase catalog read is not a transfer reader,
-    // so its fetch waits must not land in `transferSourceFetchWait`.
+    // so its fetch waits must not land in either transfer source-wait counter.
     let mut reader = zip_entry_reader(store, plan.clone(), None)?;
     // Reserve the declared size up front. The read loop below refuses to append past
     // `plan.size`, which is that same declared size, so the buffer can never outgrow this
@@ -2472,6 +2474,44 @@ mod tests {
         assert_eq!(
             parts_micros, source_heads_micros,
             "copy mode must partition into planSourceHeads alone"
+        );
+    }
+
+    /// The copy-mode metadata `HeadObject` is recorded on the error path too:
+    /// a failed HEAD still waited, and `planSourceHeads` must keep that span so
+    /// failure summaries retain the wait they logged.
+    #[tokio::test]
+    async fn failed_copy_mode_head_still_records_its_wait_span() {
+        let mut request = copy_request();
+        request.extract = false;
+
+        let state = crate::types::test_app_state_with_replay(StaticReplayClient::new(vec![
+            ReplayEvent::new(
+                Request::builder()
+                    .method("HEAD")
+                    .uri("https://s3.test/source-bucket/assets/archive.zip")
+                    .body(SdkBody::empty())
+                    .unwrap(),
+                Response::builder()
+                    .status(500)
+                    .body(SdkBody::empty())
+                    .unwrap(),
+            ),
+        ]));
+        let stats = Arc::new(DeploymentStats::default());
+        let budget = SourceByteBudget::new(256 * 1024 * 1024, Arc::clone(&stats), false)
+            .expect("valid test source budget");
+        let filters = compile_filters(&[], &[]).expect("empty filters compile");
+
+        super::plan_deployment(&state, &request, &filters, &stats, Arc::clone(&budget))
+            .await
+            .err()
+            .expect("a failed copy-mode metadata HEAD must fail planning");
+
+        let (source_heads_micros, ..) = stats.plan_parts_micros_for_test();
+        assert!(
+            source_heads_micros > 0,
+            "a failed HEAD still waited for its span, got {source_heads_micros} us"
         );
     }
 
