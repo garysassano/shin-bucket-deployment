@@ -8,6 +8,9 @@ use crate::request::compile_filters;
 use crate::types::{AppState, DeploymentRequest, DeploymentStats, RuntimeOptions};
 
 pub(crate) mod archive;
+#[cfg(feature = "bench-internals")]
+#[allow(dead_code)] // linked by the criterion bench target only; the bin build compiles it unused
+pub mod bench_internals;
 mod content_type;
 mod destination;
 mod planner;

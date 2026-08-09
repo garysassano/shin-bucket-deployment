@@ -810,7 +810,10 @@ impl DeploymentStats {
         self.add_plan_stage_micros(&self.plan_validation_micros, micros);
     }
 
-    #[cfg(test)]
+    // Read accessor for the plan sub-timings. `bench-internals` is the dev-only
+    // criterion-bench feature (`pnpm rust:bench`); the normal build is unchanged.
+    #[cfg(any(test, feature = "bench-internals"))]
+    #[cfg_attr(feature = "bench-internals", allow(dead_code))]
     pub(crate) fn plan_parts_micros_for_test(&self) -> (u64, u64, u64, u64, u64) {
         (
             self.plan_catalog_micros.load(Ordering::Relaxed),

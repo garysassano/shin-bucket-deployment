@@ -64,6 +64,7 @@
     "rust:fmt": "cargo fmt --manifest-path rust/Cargo.toml --all",
     "rust:fmt:check": "cargo fmt --manifest-path rust/Cargo.toml --all --check",
     "rust:check": "cargo check --manifest-path rust/Cargo.toml --all-targets --all-features",
+    "rust:bench": "cargo bench --manifest-path rust/Cargo.toml --features bench-internals",
     "rust:clippy": "cargo clippy --manifest-path rust/Cargo.toml --all-targets --all-features -- -D warnings",
     "rust:test": "cargo test --manifest-path rust/Cargo.toml --all-features",
     "rust:audit": "cargo audit --file rust/Cargo.lock",
