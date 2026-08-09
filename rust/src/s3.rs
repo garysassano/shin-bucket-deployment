@@ -5,7 +5,8 @@ use tokio::time::timeout_at;
 
 use crate::deadline::InvocationDeadlines;
 use crate::request::compile_filters;
-use crate::types::{AppState, DeploymentRequest, DeploymentStats, RuntimeOptions};
+use crate::state::AppState;
+use crate::types::{DeploymentRequest, DeploymentStats, RuntimeOptions};
 
 pub(crate) mod archive;
 #[cfg(feature = "bench-internals")]
@@ -287,7 +288,7 @@ mod tests {
     #[tokio::test]
     async fn empty_sources_are_rejected_before_any_s3_request() {
         let replay = StaticReplayClient::new(Vec::new());
-        let state = crate::types::test_app_state_with_replay(replay.clone());
+        let state = crate::state::test_app_state_with_replay(replay.clone());
         let raw: RawDeploymentRequest = serde_json::from_value(json!({
             "SourceBucketNames": [],
             "SourceObjectKeys": [],
@@ -360,7 +361,8 @@ mod aws_integration_tests {
         RawDestinationLifecycleOnDeploy, RawDestinationWriteRetry, RawSourceProcessing,
         RawTransferOptions, parse_request_with_memory,
     };
-    use crate::types::{AppState, MarkerConfig};
+    use crate::state::AppState;
+    use crate::types::MarkerConfig;
 
     use super::deploy;
 
@@ -390,7 +392,7 @@ mod aws_integration_tests {
             destination_s3: destination_s3.clone(),
             cloudfront: CloudFrontClient::new(&config),
             http: HttpClient::new(),
-            detailed_failure_diagnostics: crate::types::detailed_failure_diagnostics_from_env()?,
+            detailed_failure_diagnostics: crate::state::detailed_failure_diagnostics_from_env()?,
         };
 
         let suffix = Uuid::new_v4().simple().to_string();

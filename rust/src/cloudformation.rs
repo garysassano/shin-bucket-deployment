@@ -25,7 +25,8 @@ use crate::s3::{
     GuardedDeleteContext, GuardedDeleteOutcome, OverlappingPreviousCleanup, deploy,
     guarded_delete_namespace,
 };
-use crate::types::{AppState, DeploymentStats, ResponsePayload};
+use crate::state::AppState;
+use crate::types::{DeploymentStats, ResponsePayload};
 use crate::util::{MAX_DIAGNOSTIC_VALUE_BYTES, duration_ms, finalize_digest, sanitize_diagnostic};
 
 mod callback;
@@ -859,7 +860,7 @@ mod tests {
 
     use crate::deadline::InvocationDeadlines;
     use crate::request::parse_request_with_memory;
-    use crate::types::AppState;
+    use crate::state::AppState;
 
     use super::{
         EnvelopeResponseTarget, RESOURCE_TYPE, RequestExecution, RequestIdentity,

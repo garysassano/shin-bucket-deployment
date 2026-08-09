@@ -42,7 +42,8 @@ use super::{
 use crate::replace::MarkerReplacements;
 use crate::s3::planner::ZipEntryPlan;
 use crate::s3::{DEFAULT_SOURCE_BLOCK_BYTES, DEFAULT_SOURCE_BLOCK_MERGE_GAP_BYTES};
-use crate::types::{AppState, DeploymentStats, MarkerConfig, TrustedEntryIntegrity};
+use crate::state::AppState;
+use crate::types::{DeploymentStats, MarkerConfig, TrustedEntryIntegrity};
 use crate::util::finalize_digest;
 use md5::{Digest as Md5Digest, Md5};
 
@@ -2100,7 +2101,7 @@ fn head_replay_event(etag: Option<&str>, len: u64) -> ReplayEvent {
 }
 
 fn replay_app_state(replay: StaticReplayClient) -> AppState {
-    crate::types::test_app_state_with_replay(replay)
+    crate::state::test_app_state_with_replay(replay)
 }
 
 #[tokio::test]

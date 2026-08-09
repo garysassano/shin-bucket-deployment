@@ -14,9 +14,10 @@ use tracing::warn;
 
 use crate::namespace::{key_is_excluded, namespace_list_prefix, read_bucket_owner_tags};
 use crate::request::strip_destination_prefix;
+use crate::state::AppState;
 use crate::types::{
-    AppState, DeploymentManifest, DeploymentRequest, DeploymentStats, Filters,
-    PutObjectRetryJitter, PutObjectRetryOptions,
+    DeploymentManifest, DeploymentRequest, DeploymentStats, Filters, PutObjectRetryJitter,
+    PutObjectRetryOptions,
 };
 
 const MAX_RETAINED_DELETION_KEY_BYTES: usize = 4 * 1024 * 1024;
@@ -1183,8 +1184,9 @@ mod tests {
         unplanned_cleanup_key, unplanned_destination_key,
     };
     use crate::request::{compile_filters, strip_destination_prefix};
+    use crate::state::AppState;
     use crate::types::{
-        AppState, DeploymentManifest, PlannedAction, PlannedObject, PutObjectRetryJitter,
+        DeploymentManifest, PlannedAction, PlannedObject, PutObjectRetryJitter,
         PutObjectRetryOptions,
     };
 
@@ -1958,7 +1960,7 @@ mod tests {
     }
 
     fn replay_app_state(replay: StaticReplayClient) -> AppState {
-        crate::types::test_app_state_with_replay(replay)
+        crate::state::test_app_state_with_replay(replay)
     }
 
     fn retry_options(max_attempts: usize, delay_ms: u64) -> PutObjectRetryOptions {

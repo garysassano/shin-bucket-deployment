@@ -9,7 +9,7 @@ use aws_sdk_s3::error::{ProvideErrorMetadata, SdkError};
 use aws_sdk_s3::operation::get_object::GetObjectError;
 use bytes::Bytes;
 
-use crate::types::AppState;
+use crate::state::AppState;
 
 pub(super) mod block_store;
 pub(super) mod budget;

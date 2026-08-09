@@ -10,9 +10,10 @@ use sha2::{Digest, Sha256};
 use tokio::io::AsyncReadExt;
 
 use crate::request::{join_s3_key, normalize_archive_key, source_basename};
+use crate::state::AppState;
 use crate::types::{
-    AppState, ArchiveExpansionLimits, DeploymentManifest, DeploymentRequest, DeploymentStats,
-    Filters, PlannedAction, PlannedObject, SourceArchive, TrustedEntryIntegrity,
+    ArchiveExpansionLimits, DeploymentManifest, DeploymentRequest, DeploymentStats, Filters,
+    PlannedAction, PlannedObject, SourceArchive, TrustedEntryIntegrity,
 };
 use crate::util::{MAX_DIAGNOSTIC_VALUE_BYTES, sanitize_diagnostic};
 
@@ -2352,7 +2353,7 @@ mod tests {
                     central_directory_start,
                 ));
             }
-            let state = crate::types::test_app_state_with_replay(StaticReplayClient::new(events));
+            let state = crate::state::test_app_state_with_replay(StaticReplayClient::new(events));
             let stats = Arc::new(DeploymentStats::default());
             let budget = SourceByteBudget::new(256 * 1024 * 1024, Arc::clone(&stats), false)
                 .expect("valid test source budget");
@@ -2441,7 +2442,7 @@ mod tests {
         let mut request = copy_request();
         request.extract = false;
 
-        let state = crate::types::test_app_state_with_replay(StaticReplayClient::new(vec![
+        let state = crate::state::test_app_state_with_replay(StaticReplayClient::new(vec![
             replay_head_event(128),
         ]));
         let stats = Arc::new(DeploymentStats::default());
@@ -2485,7 +2486,7 @@ mod tests {
         let mut request = copy_request();
         request.extract = false;
 
-        let state = crate::types::test_app_state_with_replay(StaticReplayClient::new(vec![
+        let state = crate::state::test_app_state_with_replay(StaticReplayClient::new(vec![
             ReplayEvent::new(
                 Request::builder()
                     .method("HEAD")

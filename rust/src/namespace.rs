@@ -12,7 +12,7 @@ use anyhow::{Context, Result};
 use aws_sdk_s3::error::ProvideErrorMetadata;
 use tracing::warn;
 
-use crate::types::AppState;
+use crate::state::AppState;
 use crate::util::{MAX_DIAGNOSTIC_VALUE_BYTES, sanitize_diagnostic};
 
 pub(crate) const OWNER_TAG_BASE: &str = "aws-cdk:cr-owned";

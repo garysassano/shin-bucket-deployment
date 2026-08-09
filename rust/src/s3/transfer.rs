@@ -23,8 +23,9 @@ use tokio::time::{Instant, sleep_until};
 
 use crate::deadline::{InvocationDeadlines, TaskDrainBudget};
 use crate::replace::MarkerReplacements;
+use crate::state::AppState;
 use crate::types::{
-    AppState, CopyObjectStats, DeploymentRequest, DeploymentStats, DiagnosticRangeStats,
+    CopyObjectStats, DeploymentRequest, DeploymentStats, DiagnosticRangeStats,
     MAX_FAILURE_DIAGNOSTIC_GROUPS, MAX_FAILURE_DIAGNOSTIC_LABELS, OTHER_DIAGNOSTIC_LABEL,
     PutObjectFailureBodyStats, PutObjectFailureSourceStats, PutObjectFailureStateStats,
     PutObjectRetryJitter, PutObjectRetryOptions, PutObjectStats, SourceArchive, SourceFetchPhase,
@@ -2001,9 +2002,10 @@ mod tests {
     };
     use crate::s3::planner::{CopyPlan, ZipEntryPlan};
     use crate::s3::source_window_bytes_for_archive;
+    use crate::state::test_app_state_with_replay;
     use crate::types::{
         DeploymentRequest, DeploymentStats, MarkerConfig, PutObjectRetryJitter,
-        PutObjectRetryOptions, SourceArchive, TrustedEntryIntegrity, test_app_state_with_replay,
+        PutObjectRetryOptions, SourceArchive, TrustedEntryIntegrity,
     };
     use crate::util::{duration_ms, finalize_digest};
     use md5::{Digest as Md5Digest, Md5};
