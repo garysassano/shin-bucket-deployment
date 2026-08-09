@@ -144,12 +144,17 @@ const PROVIDER_SUMMARY_SCALARS = {
 const PROVIDER_SUMMARY_SECTIONS = {
   phaseMs: {
     plan: "number",
+    planSourceHeads: "number",
     planCatalog: "number",
     planDirectory: "number",
     planEntries: "number",
     planValidation: "number",
     destinationList: "number",
     transfer: "number",
+    transferTaskTotal: "number",
+    transferPrepare: "number",
+    transferPutWait: "number",
+    transferSourceFetchWait: "number",
     delete: "number",
     cloudfront: "number",
     oldPrefixDelete: "number",
