@@ -47,12 +47,22 @@ const MAX_S3_BUCKET_TAGS = 50;
 
 export interface ShinBucketDeploymentBundlingCommandHooks {
   /**
-   * Returns commands to run before bundling.
+   * Commands to run before `cargo lambda build` inside the bundling
+   * environment.
+   *
+   * Use for build prerequisites that must run where the compile happens,
+   * such as vendoring dependencies or generating source files. The returned
+   * commands run in the same Docker container or local environment as the
+   * build itself.
    */
   beforeBundling(inputDir: string, outputDir: string): string[];
 
   /**
-   * Returns commands to run after bundling.
+   * Commands to run after `cargo lambda build` inside the bundling
+   * environment.
+   *
+   * Use for post-build steps, for example copying extra files into the
+   * output directory before the compiled asset is packaged.
    */
   afterBundling(inputDir: string, outputDir: string): string[];
 }
@@ -60,24 +70,38 @@ export interface ShinBucketDeploymentBundlingCommandHooks {
 export interface ShinBucketDeploymentBundlingDockerOptions {
   /**
    * The entrypoint to run in the Docker container.
+   *
+   * Override it when the bundling image's default entrypoint would consume
+   * the build command instead of running it.
+   *
    * @default - run the entrypoint defined in the image
    */
   readonly entrypoint?: string[];
 
   /**
    * The command to run in the Docker container.
+   *
+   * Override it to change how the provider compile is invoked.
+   *
    * @default - a cargo lambda compilation
    */
   readonly command?: string[];
 
   /**
    * Additional Docker volumes to mount.
+   *
+   * Use them to share toolchain caches or credentials into the bundling
+   * container.
+   *
    * @default - no additional volumes are mounted
    */
   readonly volumes?: DockerVolume[];
 
   /**
    * Where to mount the specified volumes from.
+   *
+   * Use it to reuse volumes owned by another running container.
+   *
    * @default - no containers are specified to mount volumes from
    */
   readonly volumesFrom?: string[];
@@ -96,6 +120,9 @@ export interface ShinBucketDeploymentBundlingDockerOptions {
 
   /**
    * Local bundling provider.
+   *
+   * Supply one to run the compile on the host instead of in Docker.
+   *
    * @default - local cargo-lambda when available, otherwise Docker
    */
   readonly local?: ILocalBundling;
@@ -128,18 +155,30 @@ export interface ShinBucketDeploymentBundlingDockerOptions {
 export interface ShinBucketDeploymentBundlingOptions {
   /**
    * Environment variables defined when Cargo runs.
+   *
+   * Use them to pass build-time configuration to the provider crate during
+   * compilation.
+   *
    * @default - no environment variables are defined
    */
   readonly environment?: Record<string, string>;
 
   /**
    * Force bundling in a Docker container even if local bundling is possible.
+   *
+   * Set this when the local environment lacks the Rust toolchain or must not
+   * be used, for example on a sandboxed build host.
+   *
    * @default false
    */
   readonly forcedDockerBundling?: boolean;
 
   /**
    * A custom bundling Docker image.
+   *
+   * Set it to pin or replace the local compile helper image, for example when
+   * a specific cargo-lambda release is required.
+   *
    * @default - local compile helper default image
    */
   readonly dockerImage?: DockerImage;
@@ -152,28 +191,49 @@ export interface ShinBucketDeploymentBundlingOptions {
 
   /**
    * Determines how the asset hash is calculated.
+   *
+   * The hash decides whether a provider source change rebuilds and re-uploads
+   * the compiled asset. When `assetHash` is also specified, the effective
+   * default is `CUSTOM`.
+   *
    * @default AssetHashType.OUTPUT
    */
   readonly assetHashType?: AssetHashType;
 
   /**
    * Specify a custom hash for this asset.
+   *
+   * Supply one to pin the compiled provider asset to a fixed hash, for
+   * example in reproducible builds. You must update it whenever the provider
+   * sources change, or the changed asset may not be re-uploaded.
+   *
+   * @default - based on `assetHashType`
    */
   readonly assetHash?: string;
 
   /**
    * Command hooks.
+   *
+   * Use them to run extra steps before or after the compile inside the
+   * bundling environment.
+   *
    * @default - do not run additional commands
    */
   readonly commandHooks?: ShinBucketDeploymentBundlingCommandHooks;
 
   /**
    * Additional flags to pass to `cargo lambda build`.
+   *
+   * @default - no additional flags
    */
   readonly cargoLambdaFlags?: string[];
 
   /**
    * Cargo build profile.
+   *
+   * Change it to a faster-iterating profile such as `dev` during local
+   * development of the provider.
+   *
    * @default "release"
    */
   readonly profile?: string;
@@ -188,6 +248,10 @@ export interface ShinBucketDeploymentBundlingOptions {
 export interface ShinBucketDeploymentLocalBuildOptions {
   /**
    * Rust provider project directory.
+   *
+   * Required when the provider sources are not discoverable from the
+   * package's default locations, which is the case for installed packages:
+   * the lookup finds `rust` only in the repository layout.
    *
    * @default - the repository's `rust` directory when available
    */
@@ -209,6 +273,10 @@ export interface ShinBucketDeploymentDestinationWriteRetryTuning {
    * Maximum provider-owned destination write attempts per object.
    * Applies to both `PutObject` and `CopyObject`.
    * Must be in the inclusive range 1..10.
+   *
+   * Increase it when the destination recovers slowly from transient
+   * failures; decrease it when a failing deployment should surface faster.
+   *
    * @default 6
    */
   readonly maxAttempts?: number;
@@ -216,6 +284,10 @@ export interface ShinBucketDeploymentDestinationWriteRetryTuning {
   /**
    * Base retry delay for non-throttling destination write failures, in milliseconds.
    * Must be in the inclusive range 0..60000 and no greater than `maxDelayMs`.
+   *
+   * Raise it to reduce request volume between attempts; lower it to retry
+   * sooner.
+   *
    * @default 250
    */
   readonly baseDelayMs?: number;
@@ -223,6 +295,9 @@ export interface ShinBucketDeploymentDestinationWriteRetryTuning {
   /**
    * Maximum retry delay for non-throttling destination write failures, in milliseconds.
    * Must be in the inclusive range 0..60000.
+   *
+   * The upper bound of the same backoff; keep it above `baseDelayMs`.
+   *
    * @default 5000
    */
   readonly maxDelayMs?: number;
@@ -231,6 +306,10 @@ export interface ShinBucketDeploymentDestinationWriteRetryTuning {
    * Base retry delay for throttling destination write failures, in milliseconds.
    * Must be in the inclusive range 0..60000 and no greater than
    * `slowdownMaxDelayMs`.
+   *
+   * Raise it when the destination throttles frequently and needs more time
+   * between attempts.
+   *
    * @default 1000
    */
   readonly slowdownBaseDelayMs?: number;
@@ -238,12 +317,20 @@ export interface ShinBucketDeploymentDestinationWriteRetryTuning {
   /**
    * Maximum retry delay for throttling destination write failures, in milliseconds.
    * Must be in the inclusive range 0..60000.
+   *
+   * The upper bound of the throttling backoff; keep it above
+   * `slowdownBaseDelayMs`.
+   *
    * @default 30000
    */
   readonly slowdownMaxDelayMs?: number;
 
   /**
    * Jitter mode applied to computed destination write retry delays.
+   *
+   * `FULL` randomizes each delay between zero and the calculated backoff,
+   * spreading concurrent retries; `NONE` keeps deterministic delays.
+   *
    * @default DestinationWriteRetryJitter.FULL
    */
   readonly jitter?: DestinationWriteRetryJitter;
@@ -264,12 +351,19 @@ export interface ShinBucketDeploymentAdvancedTransferTuning {
    * block, and must fit the invocation-global source memory budget both alone
    * and when multiplied by `sourceGetConcurrency`.
    *
+   * Larger blocks amortize ranged-read overhead for dense archives; smaller
+   * blocks waste less when the plan reads sparse spans.
+   *
    * @default 8 MiB
    */
   readonly sourceBlockBytes?: number;
 
   /**
    * Maximum gap in bytes to coalesce between adjacent source ranges.
+   *
+   * Raise it to merge fragmented plans into fewer blocks; lower it to avoid
+   * fetching large gaps of unneeded bytes.
+   *
    * @default 256 KiB
    */
   readonly sourceBlockMergeGapBytes?: number;
@@ -277,6 +371,12 @@ export interface ShinBucketDeploymentAdvancedTransferTuning {
   /**
    * Maximum concurrent ranged GetObject requests per source archive.
    * Must be in the inclusive range 1..64.
+   *
+   * The derived default scales with provider Lambda memory: one slot per
+   * 256 MiB, clamped between 1 and 8. Raise it for archives whose fetches
+   * have high round-trip latency; block size times concurrency must fit the
+   * invocation-global source budget.
+   *
    * @default - derived from the provider Lambda memory size
    */
   readonly sourceGetConcurrency?: number;
@@ -284,6 +384,11 @@ export interface ShinBucketDeploymentAdvancedTransferTuning {
   /**
    * Resident source block window size in bytes per source archive.
    * This local window must fit the invocation-global source memory budget.
+   *
+   * The window bounds how far ahead the scheduler prefetches blocks for one
+   * archive; raise it to let a large archive prefetch further ahead, lower it
+   * to leave more of the shared budget to concurrent archives.
+   *
    * @default - derived from the provider Lambda memory size and source archive shape
    */
   readonly sourceWindowBytes?: number;
@@ -318,10 +423,19 @@ export interface ShinBucketDeploymentAdvancedTransferTuning {
   readonly destinationWriteRetry?: ShinBucketDeploymentDestinationWriteRetryTuning;
 }
 
-/** Current S3 destination location. */
+/**
+ * Current S3 destination location.
+ *
+ * The bucket and key prefix that receive the deployed objects, and the
+ * namespace covered by the lifecycle cleanup options.
+ */
 export interface ShinBucketDeploymentDestination {
   /**
    * Bucket that receives the deployed objects.
+   *
+   * Change it to deploy into a different bucket; a bucket change during an
+   * Update is a destination change handled by
+   * `destinationLifecycle.onChange`.
    *
    * Shin inspects the synthesized bucket encryption configuration to select
    * the cheapest sound conditional-write reconciliation strategy. Imported or
@@ -352,6 +466,9 @@ export interface ShinBucketDeploymentSourceProcessingOptions {
   /**
    * Extract ZIP source contents instead of copying source archives as objects.
    *
+   * Set `false` when the source ZIP itself must arrive at the destination
+   * intact rather than as its extracted contents.
+   *
    * @default true
    */
   readonly extract?: boolean;
@@ -361,6 +478,9 @@ export interface ShinBucketDeploymentSourceProcessingOptions {
    *
    * The provider rejects an archive during source planning when any regular
    * entry exceeds this limit. Copy mode (`extract: false`) is unaffected.
+   *
+   * Raise it to accept larger entries; lower it to reject oversized entries
+   * earlier during planning.
    *
    * @default DEFAULT_MAX_UNCOMPRESSED_ENTRY_BYTES (1073741824)
    */
@@ -374,6 +494,9 @@ export interface ShinBucketDeploymentSourceProcessingOptions {
    * The provider rejects non-empty entries with zero compressed bytes. Empty
    * entries are valid. Copy mode (`extract: false`) is unaffected.
    *
+   * Raise it to admit highly compressible entries; lower it to reject
+   * archives that expand more than a fixed factor.
+   *
    * @default DEFAULT_MAX_COMPRESSION_RATIO (100)
    */
   readonly maxCompressionRatio?: number;
@@ -382,6 +505,9 @@ export interface ShinBucketDeploymentSourceProcessingOptions {
    * Include matching source-relative object paths.
    *
    * Include patterns take precedence over matching exclude patterns.
+   *
+   * Use them to deploy only a subset of the source-relative paths, for
+   * example a single subdirectory of the archive.
    *
    * @default - include all paths not excluded
    */
@@ -393,6 +519,9 @@ export interface ShinBucketDeploymentSourceProcessingOptions {
    * Excluded destination keys are also outside the stale-object deletion scope
    * controlled by `destinationLifecycle.onDeploy.deleteStaleObjects`, unless an
    * include pattern selects them again.
+   *
+   * Use them to drop specific paths from the deployment, for example
+   * environment-specific or local-only files.
    *
    * @default - exclude no paths
    */
@@ -413,12 +542,20 @@ export interface ShinBucketDeploymentProviderLambdaOptions {
    * Isolation creates more Lambda, role, and log resources and gives each
    * deployment an independent cold-start lifecycle.
    *
+   * Choose `ProviderSharing.DEPLOYMENT` when deployments must not accumulate
+   * permissions on one shared role, for example when their destinations sit
+   * in different accounts or trust boundaries.
+   *
    * @default ProviderSharing.STACK
    */
   readonly sharing?: ProviderSharing;
 
   /**
    * Lambda architecture for the Rust provider.
+   *
+   * Change it to run the provider on x86_64 instead of arm64, for example to
+   * match an account or tooling constraint; prebuilt binaries ship for both
+   * architectures.
    *
    * @default Architecture.ARM_64
    */
@@ -431,6 +568,7 @@ export interface ShinBucketDeploymentProviderLambdaOptions {
    * actual Lambda memory and caps it at 50%. Memory is part of the handler
    * identity, so sharing deployments using a different value select a distinct
    * provider. A deployment-scoped provider updates this setting in place.
+   * Must be in the inclusive range 128..10240.
    *
    * The default pairs with `transfer.maxConcurrency` of 64. That combination
    * measured 31-39% faster cold-create than 1024 MiB with 32 transfers on
@@ -486,12 +624,20 @@ export interface ShinBucketDeploymentProviderLambdaOptions {
   /**
    * Log group used by the provider Lambda.
    *
+   * Supply one to set log retention or encryption, or to reuse an existing
+   * group; a caller-supplied group stays caller-owned and is not removed with
+   * the stack.
+   *
    * @default - a default log group created by Lambda
    */
   readonly logGroup?: ILogGroupRef;
 
   /**
    * VPC containing the provider Lambda.
+   *
+   * Use one when the source or destination buckets are reachable only from
+   * within a VPC, or when the deployment must run inside a private network
+   * boundary.
    *
    * @default - no VPC
    */
@@ -500,6 +646,9 @@ export interface ShinBucketDeploymentProviderLambdaOptions {
   /**
    * VPC subnet selection.
    *
+   * Choose specific subnets when the VPC spans multiple availability zones or
+   * mixes public and private subnets.
+   *
    * @default - the VPC default selection
    */
   readonly vpcSubnets?: SubnetSelection;
@@ -507,12 +656,18 @@ export interface ShinBucketDeploymentProviderLambdaOptions {
   /**
    * Security groups attached to the provider Lambda.
    *
+   * Supply existing groups to reuse their egress rules; without a VPC,
+   * security groups have no effect.
+   *
    * @default - create a dedicated group when a VPC is configured
    */
   readonly securityGroups?: ISecurityGroup[];
 
   /**
    * Local Rust provider compilation.
+   *
+   * Use it to compile the provider from a local checkout instead of the
+   * prebuilt binary, for example while developing the provider itself.
    *
    * @default - the prebuilt provider binary shipped with the package
    */
@@ -524,6 +679,11 @@ export interface ShinBucketDeploymentTransferOptions {
   /**
    * Maximum concurrent logical object transfers run by the provider.
    * Must be in the inclusive range 1..256.
+   *
+   * The limit bounds the continuously drained set of comparison/hash,
+   * upload, and copy tasks, not a throughput target. Raise it to let more
+   * objects proceed in parallel; lower it to reduce peak memory and
+   * destination request pressure.
    *
    * Values above 64 produce a synthesis warning. Measurements found that 128
    * slowed cold-create at both 1024 MiB and 2048 MiB because the source
@@ -553,6 +713,11 @@ export interface ShinBucketDeploymentTransferOptions {
 export interface ShinBucketDeploymentCloudFrontInvalidation {
   /**
    * CloudFront distribution whose cached content should be invalidated.
+   *
+   * Set it to invalidate the distribution that serves the destination
+   * objects after each successful deployment. When a destination change
+   * replaces the distribution, this is the current distribution that is
+   * invalidated alongside the previous one.
    */
   readonly distribution: IDistributionRef;
 
@@ -620,6 +785,10 @@ export interface ShinBucketDeploymentDestinationLifecycle {
      * `sourceProcessing.exclude` also removes matching keys from this stale
      * deletion scope unless an include pattern selects them again.
      *
+     * Set `false` to keep objects that are no longer produced by the sources,
+     * for example when the namespace also holds content managed outside this
+     * deployment.
+     *
      * @default true
      */
     readonly deleteStaleObjects?: boolean;
@@ -649,6 +818,9 @@ export interface ShinBucketDeploymentDestinationLifecycle {
      * option back off after the destination change if that authority is no
      * longer needed.
      *
+     * Enable it only across the Update that changes the destination; leave it
+     * off otherwise so the bucket-wide delete grant is not granted needlessly.
+     *
      * @default false
      */
     readonly deletePreviousObjects?: boolean;
@@ -660,6 +832,9 @@ export interface ShinBucketDeploymentDestinationLifecycle {
      * Omit this for same-bucket prefix changes. Requires
      * `deletePreviousObjects=true`.
      *
+     * Provide it only when the destination moves to a different bucket and the
+     * previous bucket's objects must be removed.
+     *
      * @default - the current destination bucket
      */
     readonly previousBucket?: IBucket;
@@ -670,6 +845,9 @@ export interface ShinBucketDeploymentDestinationLifecycle {
      *
      * Provide this only when the distribution changed. An unchanged current
      * distribution is invalidated automatically.
+     *
+     * Set it when the destination distribution changed, so the previous
+     * distribution's cached content is invalidated too.
      *
      * @default - no separate previous distribution
      */
@@ -686,12 +864,30 @@ export interface ShinBucketDeploymentDestinationLifecycle {
      * With an omitted `destination.keyPrefix` or `/`, the namespace is the
      * whole bucket and synthesis emits an acknowledgeable warning.
      *
+     * Set `true` to remove the deployed objects when the custom resource is
+     * deleted; because the bucket and distribution resources themselves are
+     * never deleted, this is the only way to clean up the deployed content.
+     *
      * @default false
      */
     readonly deleteCurrentObjects?: boolean;
   };
 }
 
+/**
+ * Construction properties for `ShinBucketDeployment`.
+ *
+ * @example
+ * new ShinBucketDeployment(this, "DeployWebsite", {
+ *   sources: [Source.asset("dist")],
+ *   destination: {
+ *     bucket: new Bucket(this, "WebsiteBucket"),
+ *     keyPrefix: "site",
+ *   },
+ *   providerLambda: { memorySize: 1024 },
+ *   transfer: { maxConcurrency: 32 },
+ * });
+ */
 export interface ShinBucketDeploymentProps {
   /**
    * Sources deployed in array order. Later sources replace earlier sources
@@ -706,7 +902,12 @@ export interface ShinBucketDeploymentProps {
    */
   readonly sources: ISource[];
 
-  /** Current S3 destination location. */
+  /**
+   * S3 bucket and key prefix that receive the deployed objects.
+   *
+   * The bucket must be inspectable at synthesis: imported buckets and
+   * otherwise uninspectable configurations are rejected.
+   */
   readonly destination: ShinBucketDeploymentDestination;
 
   /**
@@ -766,6 +967,25 @@ export interface ShinBucketDeploymentProps {
  * can differ between sharing deployments. Set
  * `providerLambda.sharing: ProviderSharing.DEPLOYMENT` for a deployment-scoped
  * function and generated role.
+ *
+ * @example
+ * import { Bucket } from "aws-cdk-lib/aws-s3";
+ * import { Construct } from "constructs";
+ * import { ShinBucketDeployment, Source } from "shin-bucket-deployment";
+ *
+ * export class StaticSite extends Construct {
+ *   constructor(scope: Construct, id: string) {
+ *     super(scope, id);
+ *
+ *     new ShinBucketDeployment(this, "DeployWebsite", {
+ *       sources: [Source.asset("dist")],
+ *       destination: {
+ *         bucket: new Bucket(this, "WebsiteBucket"),
+ *         keyPrefix: "site",
+ *       },
+ *     });
+ *   }
+ * }
  */
 export class ShinBucketDeployment extends Construct {
   private readonly cr: CustomResource;
