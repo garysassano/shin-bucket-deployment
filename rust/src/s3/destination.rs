@@ -12,12 +12,13 @@ use fastrand::Rng;
 use tokio::time::{Instant, sleep_until};
 use tracing::warn;
 
+use crate::deployment::{
+    DeploymentManifest, DeploymentRequest, Filters, PutObjectRetryJitter, PutObjectRetryOptions,
+};
+use crate::diagnostics::DeploymentStats;
 use crate::namespace::{key_is_excluded, namespace_list_prefix, read_bucket_owner_tags};
 use crate::request::strip_destination_prefix;
-use crate::types::{
-    AppState, DeploymentManifest, DeploymentRequest, DeploymentStats, Filters,
-    PutObjectRetryJitter, PutObjectRetryOptions,
-};
+use crate::state::AppState;
 
 const MAX_RETAINED_DELETION_KEY_BYTES: usize = 4 * 1024 * 1024;
 
@@ -1182,11 +1183,12 @@ mod tests {
         record_destination_object, record_destination_object_original, stale_destination_key,
         unplanned_cleanup_key, unplanned_destination_key,
     };
-    use crate::request::{compile_filters, strip_destination_prefix};
-    use crate::types::{
-        AppState, DeploymentManifest, PlannedAction, PlannedObject, PutObjectRetryJitter,
+    use crate::deployment::{
+        DeploymentManifest, PlannedAction, PlannedObject, PutObjectRetryJitter,
         PutObjectRetryOptions,
     };
+    use crate::request::{compile_filters, strip_destination_prefix};
+    use crate::state::AppState;
 
     #[test]
     fn fused_per_key_checks_match_the_original_two_predicate_path() {
@@ -1391,7 +1393,7 @@ mod tests {
     fn fused_cleanup_keeps_current_and_previous_authorization_scopes_separate() {
         let filters = compile_filters(&[], &[]).unwrap();
         let manifest = DeploymentManifest::new();
-        let stats = crate::types::DeploymentStats::default();
+        let stats = crate::diagnostics::DeploymentStats::default();
         let current_only = UnplannedDeletionContext {
             bucket: "destination",
             list_prefix: Some("site/"),
@@ -1958,7 +1960,7 @@ mod tests {
     }
 
     fn replay_app_state(replay: StaticReplayClient) -> AppState {
-        crate::types::test_app_state_with_replay(replay)
+        crate::state::test_app_state_with_replay(replay)
     }
 
     fn retry_options(max_attempts: usize, delay_ms: u64) -> PutObjectRetryOptions {

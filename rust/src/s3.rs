@@ -4,8 +4,10 @@ use anyhow::{Context, Result};
 use tokio::time::timeout_at;
 
 use crate::deadline::InvocationDeadlines;
+use crate::deployment::{DeploymentRequest, RuntimeOptions};
+use crate::diagnostics::DeploymentStats;
 use crate::request::compile_filters;
-use crate::types::{AppState, DeploymentRequest, DeploymentStats, RuntimeOptions};
+use crate::state::AppState;
 
 pub(crate) mod archive;
 #[cfg(feature = "bench-internals")]
@@ -164,7 +166,7 @@ pub(crate) async fn deploy(
     // planValidation (phase-level half): the deployment preflight over the
     // whole manifest. The per-archive halves (directory validation and
     // catalog-to-ZIP validation) are charged in `s3/planner.rs`; see the
-    // accounting rules at the `PhaseMillis` definition site in `types.rs`.
+    // accounting rules at the `PhaseMillis` definition site in `diagnostics.rs`.
     let started_validation = std::time::Instant::now();
     planner::validate_deployment_preflight(request, &deployment_manifest)?;
     stats.add_plan_validation_micros(crate::util::duration_micros(started_validation.elapsed()));
@@ -258,8 +260,8 @@ mod tests {
     use tokio::time::Instant as TokioInstant;
 
     use crate::deadline::InvocationDeadlines;
+    use crate::diagnostics::DeploymentStats;
     use crate::request::{RawDeploymentRequest, parse_request_with_memory};
-    use crate::types::DeploymentStats;
 
     use super::{adaptive_source_window_bytes, deploy};
 
@@ -287,7 +289,7 @@ mod tests {
     #[tokio::test]
     async fn empty_sources_are_rejected_before_any_s3_request() {
         let replay = StaticReplayClient::new(Vec::new());
-        let state = crate::types::test_app_state_with_replay(replay.clone());
+        let state = crate::state::test_app_state_with_replay(replay.clone());
         let raw: RawDeploymentRequest = serde_json::from_value(json!({
             "SourceBucketNames": [],
             "SourceObjectKeys": [],
@@ -354,13 +356,14 @@ mod aws_integration_tests {
     use zip::write::{SimpleFileOptions, ZipWriter};
 
     use crate::deadline::InvocationDeadlines;
+    use crate::deployment::MarkerConfig;
     use crate::request::{
         RawAdvancedTuning, RawCloudfrontInvalidation, RawDeploymentRequest, RawDestination,
         RawDestinationLifecycle, RawDestinationLifecycleOnChange, RawDestinationLifecycleOnDelete,
         RawDestinationLifecycleOnDeploy, RawDestinationWriteRetry, RawSourceProcessing,
         RawTransferOptions, parse_request_with_memory,
     };
-    use crate::types::{AppState, MarkerConfig};
+    use crate::state::AppState;
 
     use super::deploy;
 
@@ -390,7 +393,7 @@ mod aws_integration_tests {
             destination_s3: destination_s3.clone(),
             cloudfront: CloudFrontClient::new(&config),
             http: HttpClient::new(),
-            detailed_failure_diagnostics: crate::types::detailed_failure_diagnostics_from_env()?,
+            detailed_failure_diagnostics: crate::state::detailed_failure_diagnostics_from_env()?,
         };
 
         let suffix = Uuid::new_v4().simple().to_string();
@@ -496,7 +499,7 @@ mod aws_integration_tests {
                 &state,
                 &request,
                 None,
-                std::sync::Arc::new(crate::types::DeploymentStats::default()),
+                std::sync::Arc::new(crate::diagnostics::DeploymentStats::default()),
                 InvocationDeadlines::from_remaining_at(
                     TokioInstant::now(),
                     Duration::from_secs(900),
@@ -510,7 +513,7 @@ mod aws_integration_tests {
                 &state,
                 &request,
                 None,
-                std::sync::Arc::new(crate::types::DeploymentStats::default()),
+                std::sync::Arc::new(crate::diagnostics::DeploymentStats::default()),
                 InvocationDeadlines::from_remaining_at(
                     TokioInstant::now(),
                     Duration::from_secs(900),

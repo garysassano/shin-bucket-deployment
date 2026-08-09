@@ -15,6 +15,7 @@ use tracing::error;
 
 use crate::cloudfront::{create_invalidation, validate_invalidation_paths, wait_for_invalidation};
 use crate::deadline::InvocationDeadlines;
+use crate::diagnostics::DeploymentStats;
 use crate::lifecycle::{
     DestinationChangeCleanupDecision, PreviousCleanupStrategy, destination_namespaces_overlap,
     plan_destination_change_cleanup, previous_distribution_authorized,
@@ -25,13 +26,13 @@ use crate::s3::{
     GuardedDeleteContext, GuardedDeleteOutcome, OverlappingPreviousCleanup, deploy,
     guarded_delete_namespace,
 };
-use crate::types::{AppState, DeploymentStats, ResponsePayload};
+use crate::state::AppState;
 use crate::util::{MAX_DIAGNOSTIC_VALUE_BYTES, duration_ms, finalize_digest, sanitize_diagnostic};
 
 mod callback;
 
 use callback::{
-    physical_resource_id, response_target, sanitize_failure_reason, send_response,
+    ResponsePayload, physical_resource_id, response_target, sanitize_failure_reason, send_response,
     serialize_failure_response, serialize_response, validate_response_body_size,
     validate_response_url,
 };
@@ -87,7 +88,7 @@ struct DecodedRequest<'a> {
 
 struct ProcessedRequest {
     request_type: &'static str,
-    request: crate::types::DeploymentRequest,
+    request: crate::deployment::DeploymentRequest,
     stats: Arc<DeploymentStats>,
     result: Result<Vec<u8>>,
 }
@@ -427,7 +428,7 @@ fn validate_resource_type(request: &RequestEnvelope) -> Result<()> {
 }
 
 fn success_payload(
-    request: &crate::types::DeploymentRequest,
+    request: &crate::deployment::DeploymentRequest,
     physical_resource_id: String,
 ) -> Result<ResponsePayload> {
     let mut data = Map::new();
@@ -455,8 +456,8 @@ fn success_payload(
 
 fn preflight_invalidation_requests(
     request_type: &str,
-    request: &crate::types::DeploymentRequest,
-    previous: Option<&crate::types::PreviousDestination>,
+    request: &crate::deployment::DeploymentRequest,
+    previous: Option<&crate::deployment::PreviousDestination>,
 ) -> Result<()> {
     let current_may_invalidate = matches!(request_type, "Create" | "Update")
         || (request_type == "Delete" && request.delete_current_objects_on_delete);
@@ -511,8 +512,8 @@ async fn process_request_inner(
     state: &AppState,
     request_type: &str,
     execution: RequestExecution<'_>,
-    previous_destination: Option<&crate::types::PreviousDestination>,
-    request: &crate::types::DeploymentRequest,
+    previous_destination: Option<&crate::deployment::PreviousDestination>,
+    request: &crate::deployment::DeploymentRequest,
     stats: Arc<DeploymentStats>,
 ) -> Result<()> {
     let deadlines = execution.deadlines;
@@ -642,8 +643,8 @@ async fn invalidate_distributions(
     state: &AppState,
     execution: RequestExecution<'_>,
     request_type: &str,
-    previous_destination: Option<&crate::types::PreviousDestination>,
-    request: &crate::types::DeploymentRequest,
+    previous_destination: Option<&crate::deployment::PreviousDestination>,
+    request: &crate::deployment::DeploymentRequest,
     previous_destination_cleaned: bool,
     deleted_current_destination: bool,
     stats: &DeploymentStats,
@@ -797,7 +798,7 @@ fn cloudfront_caller_reference(
     format!("shin-bucket-deployment-{}", finalize_digest(hasher))
 }
 
-fn destination_physical_resource_id(request: &crate::types::DeploymentRequest) -> String {
+fn destination_physical_resource_id(request: &crate::deployment::DeploymentRequest) -> String {
     let mut hasher = Sha256::new();
     hash_identity_field(&mut hasher, "shin-bucket-deployment-physical-resource-v1");
     hash_identity_field(&mut hasher, &request.destination_owner_id);
@@ -810,7 +811,7 @@ fn destination_physical_resource_id(request: &crate::types::DeploymentRequest) -
 fn response_physical_resource_id(
     request_type: &str,
     physical_resource_id: Option<&str>,
-    request: &crate::types::DeploymentRequest,
+    request: &crate::deployment::DeploymentRequest,
 ) -> Result<String> {
     match request_type {
         "Create" => Ok(destination_physical_resource_id(request)),
@@ -835,7 +836,7 @@ fn log_deployment_summary(
     stats: &DeploymentStats,
     request_type: &str,
     deployment_status: &str,
-    request: &crate::types::DeploymentRequest,
+    request: &crate::deployment::DeploymentRequest,
 ) {
     if !tracing::enabled!(tracing::Level::INFO) {
         // The summary is only ever emitted at INFO, so snapshotting and serializing
@@ -859,7 +860,7 @@ mod tests {
 
     use crate::deadline::InvocationDeadlines;
     use crate::request::parse_request_with_memory;
-    use crate::types::AppState;
+    use crate::state::AppState;
 
     use super::{
         EnvelopeResponseTarget, RESOURCE_TYPE, RequestExecution, RequestIdentity,
@@ -869,12 +870,12 @@ mod tests {
         response_target, serialize_response, success_payload, validate_resource_type,
     };
 
-    fn deployment_request_with_paths(paths: Vec<String>) -> crate::types::DeploymentRequest {
-        crate::types::DeploymentRequest {
+    fn deployment_request_with_paths(paths: Vec<String>) -> crate::deployment::DeploymentRequest {
+        crate::deployment::DeploymentRequest {
             distribution_id: Some("distribution".to_string()),
             distribution_paths: paths,
             destination_owner_id: "summary-owner".to_string(),
-            ..crate::types::DeploymentRequest::for_test()
+            ..crate::deployment::DeploymentRequest::for_test()
         }
     }
 
@@ -882,12 +883,12 @@ mod tests {
         bucket: &str,
         prefix: &str,
         owner_id: &str,
-    ) -> crate::types::DeploymentRequest {
-        crate::types::DeploymentRequest {
+    ) -> crate::deployment::DeploymentRequest {
+        crate::deployment::DeploymentRequest {
             dest_bucket_name: bucket.to_string(),
             dest_bucket_prefix: prefix.to_string(),
             destination_owner_id: owner_id.to_string(),
-            ..crate::types::DeploymentRequest::for_test()
+            ..crate::deployment::DeploymentRequest::for_test()
         }
     }
 
@@ -938,7 +939,7 @@ mod tests {
     #[test]
     fn deployment_summary_matches_the_diagnostics_contract() {
         let request = deployment_request_with_paths(vec!["/*".to_string()]);
-        let stats = crate::types::DeploymentStats::new(true);
+        let stats = crate::diagnostics::DeploymentStats::new(true);
         stats.add_marker_planning_pass();
         stats.add_marker_upload_pass();
         stats.add_trusted_catalog(3);
@@ -954,7 +955,7 @@ mod tests {
         stats.record_callback_attempt(true);
         stats.record_callback_success();
         stats.add_callback_millis(12);
-        stats.add_copy_stats(&crate::types::CopyObjectStats {
+        stats.add_copy_stats(&crate::diagnostics::CopyObjectStats {
             wire_attempts: 7,
             failed_attempts: 2,
             retry_attempts: 3,
@@ -1046,7 +1047,7 @@ mod tests {
     fn deployment_summary_bounds_and_merges_put_failure_diagnostics() {
         use std::collections::BTreeMap;
 
-        use crate::types::{
+        use crate::diagnostics::{
             DiagnosticRangeStats, PutObjectFailureBodyStats, PutObjectFailureSourceStats,
             PutObjectFailureStateStats, PutObjectStats,
         };
@@ -1095,7 +1096,7 @@ mod tests {
         }
 
         let request = deployment_request_with_paths(vec!["/*".to_string()]);
-        let stats = crate::types::DeploymentStats::new(true);
+        let stats = crate::diagnostics::DeploymentStats::new(true);
         let first = failure("Code0", 10);
         stats.add_put_stats(&PutObjectStats {
             wire_attempts: 2,
@@ -1159,10 +1160,10 @@ mod tests {
     fn deployment_summary_marks_disabled_failure_diagnostics_and_omits_detail() {
         use std::collections::BTreeMap;
 
-        use crate::types::PutObjectStats;
+        use crate::diagnostics::PutObjectStats;
 
         let request = deployment_request_with_paths(vec!["/*".to_string()]);
-        let stats = crate::types::DeploymentStats::default();
+        let stats = crate::diagnostics::DeploymentStats::default();
         stats.add_put_stats(&PutObjectStats {
             wire_attempts: 1,
             failed_attempts: 1,
@@ -1794,11 +1795,11 @@ mod tests {
         };
 
         let request = deployment_request_with_paths(vec!["/*".to_string()]);
-        let request = crate::types::DeploymentRequest {
+        let request = crate::deployment::DeploymentRequest {
             invalidate_previous_distribution_on_change: Some("previous-dist".to_string()),
             ..request
         };
-        let previous = crate::types::PreviousDestination {
+        let previous = crate::deployment::PreviousDestination {
             bucket_name: "previous-bucket".to_string(),
             bucket_prefix: "previous-site/".to_string(),
             distribution_id: Some("previous-dist".to_string()),
@@ -1816,7 +1817,7 @@ mod tests {
                 std::time::Duration::from_secs(120),
             ),
         };
-        let stats = crate::types::DeploymentStats::new(true);
+        let stats = crate::diagnostics::DeploymentStats::new(true);
 
         let handle = tokio::spawn(async move {
             invalidate_distributions(

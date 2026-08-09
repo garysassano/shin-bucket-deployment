@@ -39,10 +39,12 @@ use super::{
     SourceClient, head_source, range_get_request_error, source_get_retry_cap_millis,
     source_get_retry_delay,
 };
+use crate::deployment::{MarkerConfig, TrustedEntryIntegrity};
+use crate::diagnostics::DeploymentStats;
 use crate::replace::MarkerReplacements;
 use crate::s3::planner::ZipEntryPlan;
 use crate::s3::{DEFAULT_SOURCE_BLOCK_BYTES, DEFAULT_SOURCE_BLOCK_MERGE_GAP_BYTES};
-use crate::types::{AppState, DeploymentStats, MarkerConfig, TrustedEntryIntegrity};
+use crate::state::AppState;
 use crate::util::finalize_digest;
 use md5::{Digest as Md5Digest, Md5};
 
@@ -306,7 +308,7 @@ proptest! {
 
 #[tokio::test]
 async fn invocation_budget_bounds_multiple_sources_and_cancel_releases_permits() {
-    let stats = Arc::new(crate::types::DeploymentStats::default());
+    let stats = Arc::new(crate::diagnostics::DeploymentStats::default());
     let budget =
         SourceByteBudget::new(64, Arc::clone(&stats), true).expect("valid test source budget");
     let first = pending_store_for_span(48, Arc::clone(&budget));
@@ -348,7 +350,7 @@ async fn invocation_budget_bounds_multiple_sources_and_cancel_releases_permits()
 #[tokio::test(start_paused = true)]
 async fn replay_demand_borrows_global_capacity_when_the_local_window_is_full() {
     const BLOCK_BYTES: usize = 4 * 1024;
-    let stats = Arc::new(crate::types::DeploymentStats::default());
+    let stats = Arc::new(crate::diagnostics::DeploymentStats::default());
     let budget = SourceByteBudget::new(BLOCK_BYTES * 2, Arc::clone(&stats), false)
         .expect("valid test source budget");
     let plans = [
@@ -1924,7 +1926,7 @@ fn ready_store(
         cancel_notify: Arc::new(tokio::sync::Notify::new()),
         budget: SourceByteBudget::new(
             usize::try_from(resident).unwrap(),
-            Arc::new(crate::types::DeploymentStats::default()),
+            Arc::new(crate::diagnostics::DeploymentStats::default()),
             false,
         )
         .expect("valid test source budget"),
@@ -2100,7 +2102,7 @@ fn head_replay_event(etag: Option<&str>, len: u64) -> ReplayEvent {
 }
 
 fn replay_app_state(replay: StaticReplayClient) -> AppState {
-    crate::types::test_app_state_with_replay(replay)
+    crate::state::test_app_state_with_replay(replay)
 }
 
 #[tokio::test]

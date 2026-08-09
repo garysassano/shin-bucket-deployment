@@ -5,7 +5,7 @@ use aws_sdk_cloudfront::error::ProvideErrorMetadata;
 use aws_sdk_cloudfront::types::{InvalidationBatch, Paths};
 use tokio::time::{Instant, sleep_until, timeout_at};
 
-use crate::types::AppState;
+use crate::state::AppState;
 
 const INVALIDATION_POLL_INTERVAL: Duration = Duration::from_secs(20);
 /// Jitter added to each poll so that stacks deploying many distributions at once do not

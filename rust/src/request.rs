@@ -7,16 +7,16 @@ use anyhow::{Context, Result, anyhow, ensure};
 use globset::{Glob, GlobMatcher};
 use serde::{Deserialize, Deserializer, Serialize};
 
+use crate::deployment::{
+    ArchiveExpansionLimits, DeletePreviousObjectsOnChange, DeploymentRequest, Filters,
+    MarkerConfig, PreviousDestination, PutObjectRetryJitter, PutObjectRetryOptions, RuntimeOptions,
+    TrustedSourceCatalog,
+};
 use crate::s3::{
     DEFAULT_SOURCE_BLOCK_BYTES, DEFAULT_SOURCE_BLOCK_MERGE_GAP_BYTES,
     DEFAULT_TRANSFER_MAX_CONCURRENCY, PUT_OBJECT_MAX_ATTEMPTS, PUT_OBJECT_RETRY_BASE_DELAY_MS,
     PUT_OBJECT_RETRY_MAX_DELAY_MS, PUT_OBJECT_SLOWDOWN_RETRY_BASE_DELAY_MS,
     PUT_OBJECT_SLOWDOWN_RETRY_MAX_DELAY_MS, S3_SINGLE_PUT_LIMIT, adaptive_source_get_concurrency,
-};
-use crate::types::{
-    ArchiveExpansionLimits, DeletePreviousObjectsOnChange, DeploymentRequest, Filters,
-    MarkerConfig, PreviousDestination, PutObjectRetryJitter, PutObjectRetryOptions, RuntimeOptions,
-    TrustedSourceCatalog,
 };
 use crate::util::{MAX_DIAGNOSTIC_VALUE_BYTES, sanitize_diagnostic};
 

@@ -1,12 +1,14 @@
 mod cloudformation;
 mod cloudfront;
 mod deadline;
+mod deployment;
+mod diagnostics;
 mod lifecycle;
 mod namespace;
 mod replace;
 mod request;
 mod s3;
-mod types;
+mod state;
 mod util;
 mod wire_contract;
 
@@ -23,7 +25,7 @@ use reqwest::redirect::Policy as RedirectPolicy;
 use tracing_subscriber::EnvFilter;
 
 use crate::cloudformation::handle_event;
-use crate::types::{AppState, detailed_failure_diagnostics_from_env};
+use crate::state::{AppState, detailed_failure_diagnostics_from_env};
 
 // Bound the CloudFormation response PUT independently of Lambda timeout.
 const RESPONSE_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);

@@ -23,13 +23,15 @@ use aws_sdk_cloudfront::Client as CloudFrontClient;
 use aws_sdk_s3::Client as S3Client;
 use reqwest::Client as HttpClient;
 
+use crate::deployment::{
+    ArchiveExpansionLimits, DeploymentManifest, DeploymentRequest, MarkerConfig, PlannedAction,
+    PlannedObject, PutObjectRetryJitter, PutObjectRetryOptions, RuntimeOptions,
+    TrustedEntryIntegrity, TrustedSourceCatalog,
+};
+use crate::diagnostics::DeploymentStats;
 use crate::request::compile_filters;
 use crate::s3::archive::budget::SourceByteBudget;
-use crate::types::{
-    AppState, ArchiveExpansionLimits, DeploymentManifest, DeploymentRequest, DeploymentStats,
-    MarkerConfig, PlannedAction, PlannedObject, PutObjectRetryJitter, PutObjectRetryOptions,
-    RuntimeOptions, TrustedEntryIntegrity, TrustedSourceCatalog,
-};
+use crate::state::AppState;
 
 const MIXED_PROFILE_ENTRY_COUNT: usize = 442;
 const MIXED_PROFILE_TOTAL_BYTES: u64 = 52_904_649;

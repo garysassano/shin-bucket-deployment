@@ -9,11 +9,13 @@ use crc32fast::Hasher as Crc32Hasher;
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncReadExt;
 
-use crate::request::{join_s3_key, normalize_archive_key, source_basename};
-use crate::types::{
-    AppState, ArchiveExpansionLimits, DeploymentManifest, DeploymentRequest, DeploymentStats,
-    Filters, PlannedAction, PlannedObject, SourceArchive, TrustedEntryIntegrity,
+use crate::deployment::{
+    ArchiveExpansionLimits, DeploymentManifest, DeploymentRequest, Filters, PlannedAction,
+    PlannedObject, SourceArchive, TrustedEntryIntegrity,
 };
+use crate::diagnostics::DeploymentStats;
+use crate::request::{join_s3_key, normalize_archive_key, source_basename};
+use crate::state::AppState;
 use crate::util::{MAX_DIAGNOSTIC_VALUE_BYTES, sanitize_diagnostic};
 
 use super::archive::block_store::{SourceBlockOptions, SourceBlockStore};
@@ -433,7 +435,7 @@ async fn add_archive_entries_to_manifest(
     // catalog-to-ZIP half of this bucket is charged inside
     // `load_authenticated_catalog`, and the phase-level half (deployment
     // preflight) in `s3.rs`; see the accounting rules at the `PhaseMillis`
-    // definition site in `types.rs`.
+    // definition site in `diagnostics.rs`.
     let started_validation = std::time::Instant::now();
     let source_offsets =
         validate_archive_directory(entries, source.len(), central_directory_start)?;
@@ -604,7 +606,7 @@ async fn load_authenticated_catalog(
     // below is charged to `planValidation`, the documented validation bucket:
     // fetching and authenticating the catalog object is not validating the
     // archive against it. See the accounting rules at the `PhaseMillis`
-    // definition site in `types.rs`.
+    // definition site in `diagnostics.rs`.
     let started_catalog = std::time::Instant::now();
     let stored = authenticated_catalog_entry(entries)?;
 
@@ -1150,14 +1152,14 @@ mod tests {
         validate_archive_expansion, validate_catalog_entries, validate_deployment_preflight,
         validate_stored_file_entry,
     };
-    use crate::request::compile_filters;
-    use crate::s3::archive::budget::SourceByteBudget;
-    use crate::s3::destination::{DestinationObject, DestinationWritePrecondition};
-    use crate::types::DeploymentStats;
-    use crate::types::{
+    use crate::deployment::{
         ArchiveExpansionLimits, DeploymentManifest, DeploymentRequest, PlannedAction,
         PlannedObject, PutObjectRetryOptions, RuntimeOptions, TrustedSourceCatalog,
     };
+    use crate::diagnostics::DeploymentStats;
+    use crate::request::compile_filters;
+    use crate::s3::archive::budget::SourceByteBudget;
+    use crate::s3::destination::{DestinationObject, DestinationWritePrecondition};
 
     #[derive(Clone, Default)]
     struct TestWriter(Arc<Mutex<Vec<u8>>>);
@@ -2115,9 +2117,9 @@ mod tests {
                     retry_max_delay_ms: 1,
                     slowdown_retry_base_delay_ms: 1,
                     slowdown_retry_max_delay_ms: 1,
-                    ..crate::types::test_runtime_options().put_object_retry
+                    ..crate::deployment::test_runtime_options().put_object_retry
                 },
-                ..crate::types::test_runtime_options()
+                ..crate::deployment::test_runtime_options()
             },
             ..DeploymentRequest::for_test()
         }
@@ -2352,7 +2354,7 @@ mod tests {
                     central_directory_start,
                 ));
             }
-            let state = crate::types::test_app_state_with_replay(StaticReplayClient::new(events));
+            let state = crate::state::test_app_state_with_replay(StaticReplayClient::new(events));
             let stats = Arc::new(DeploymentStats::default());
             let budget = SourceByteBudget::new(256 * 1024 * 1024, Arc::clone(&stats), false)
                 .expect("valid test source budget");
@@ -2441,7 +2443,7 @@ mod tests {
         let mut request = copy_request();
         request.extract = false;
 
-        let state = crate::types::test_app_state_with_replay(StaticReplayClient::new(vec![
+        let state = crate::state::test_app_state_with_replay(StaticReplayClient::new(vec![
             replay_head_event(128),
         ]));
         let stats = Arc::new(DeploymentStats::default());
@@ -2485,7 +2487,7 @@ mod tests {
         let mut request = copy_request();
         request.extract = false;
 
-        let state = crate::types::test_app_state_with_replay(StaticReplayClient::new(vec![
+        let state = crate::state::test_app_state_with_replay(StaticReplayClient::new(vec![
             ReplayEvent::new(
                 Request::builder()
                     .method("HEAD")

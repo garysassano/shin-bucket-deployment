@@ -1,342 +1,16 @@
-use std::collections::{BTreeMap, HashMap};
-use std::ffi::OsStr;
-use std::io;
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use serde::Serialize;
+
+use crate::deployment::DeploymentRequest;
 use crate::util::{duration_ms, lock_telemetry};
-use aws_sdk_cloudfront::Client as CloudFrontClient;
-use aws_sdk_s3::Client as S3Client;
-use reqwest::Client as HttpClient;
-use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
 
 pub(crate) const MAX_FAILURE_DIAGNOSTIC_GROUPS: usize = 32;
 pub(crate) const MAX_FAILURE_DIAGNOSTIC_LABELS: usize = 32;
 pub(crate) const OTHER_DIAGNOSTIC_LABEL: &str = "Other";
-
-#[derive(Clone)]
-pub(crate) struct AppState {
-    pub(crate) source_s3: S3Client,
-    pub(crate) destination_s3: S3Client,
-    pub(crate) cloudfront: CloudFrontClient,
-    pub(crate) http: HttpClient,
-    pub(crate) detailed_failure_diagnostics: bool,
-}
-
-pub(crate) fn detailed_failure_diagnostics_from_env() -> io::Result<bool> {
-    parse_detailed_failure_diagnostics(std::env::var_os("SHIN_DETAILED_FAILURE_DIAGNOSTICS"))
-}
-
-fn parse_detailed_failure_diagnostics(value: Option<impl AsRef<OsStr>>) -> io::Result<bool> {
-    match value {
-        None => Ok(false),
-        Some(value) if value.as_ref() == OsStr::new("true") => Ok(true),
-        Some(_) => Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "SHIN_DETAILED_FAILURE_DIAGNOSTICS must be absent or exactly `true`",
-        )),
-    }
-}
-
-#[cfg(test)]
-mod detailed_failure_diagnostics_tests {
-    use std::ffi::{OsStr, OsString};
-    use std::sync::atomic::Ordering;
-
-    use super::{DeploymentStats, parse_detailed_failure_diagnostics};
-
-    #[test]
-    fn detailed_failure_diagnostics_default_to_disabled() {
-        assert!(!parse_detailed_failure_diagnostics(None::<&OsStr>).expect("absent flag"));
-    }
-
-    #[test]
-    fn detailed_failure_diagnostics_require_exact_true() {
-        assert!(
-            parse_detailed_failure_diagnostics(Some(OsStr::new("true")))
-                .expect("exact true should enable diagnostics")
-        );
-        for invalid in ["false", "TRUE", " true", "true ", "1", ""] {
-            let error = parse_detailed_failure_diagnostics(Some(OsString::from(invalid)))
-                .expect_err("all non-exact values must fail closed");
-            assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
-        }
-    }
-
-    #[test]
-    fn source_global_release_saturates_and_records_anomaly() {
-        let stats = DeploymentStats::default();
-        stats.acquire_source_global_bytes(8);
-
-        stats.release_source_global_bytes(12);
-
-        assert_eq!(stats.source_global_resident_bytes_current(), 0);
-        assert_eq!(
-            stats
-                .source_global_release_anomalies
-                .load(Ordering::Relaxed),
-            1
-        );
-    }
-}
-
-#[cfg(test)]
-mod marker_spooled_upload_tests {
-    use std::sync::atomic::Ordering;
-
-    use super::DeploymentStats;
-
-    #[test]
-    fn marker_spooled_upload_counter_starts_at_zero_and_increments() {
-        let stats = DeploymentStats::default();
-
-        assert_eq!(
-            stats.marker_spooled_uploads.load(Ordering::Relaxed),
-            0,
-            "the F-3 spool fast path does not exist yet"
-        );
-
-        stats.add_marker_spooled_upload();
-
-        assert_eq!(stats.marker_spooled_uploads.load(Ordering::Relaxed), 1);
-    }
-}
-
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-#[serde(deny_unknown_fields)]
-pub(crate) struct MarkerConfig {
-    #[serde(default, deserialize_with = "crate::util::deserialize_boolish")]
-    pub(crate) json_escape: bool,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct DeploymentRequest {
-    pub(crate) source_bucket_names: Vec<String>,
-    pub(crate) source_object_keys: Vec<String>,
-    pub(crate) source_catalogs: Vec<Option<TrustedSourceCatalog>>,
-    pub(crate) source_markers: Vec<HashMap<String, String>>,
-    pub(crate) source_markers_config: Vec<MarkerConfig>,
-    pub(crate) dest_bucket_name: String,
-    pub(crate) dest_bucket_prefix: String,
-    pub(crate) extract: bool,
-    pub(crate) delete_current_objects_on_delete: bool,
-    pub(crate) distribution_id: Option<String>,
-    pub(crate) distribution_paths: Vec<String>,
-    pub(crate) wait_for_distribution_invalidation: bool,
-    pub(crate) delete_stale_objects_on_deployment: bool,
-    pub(crate) exclude: Vec<String>,
-    pub(crate) include: Vec<String>,
-    pub(crate) output_object_keys: bool,
-    pub(crate) destination_bucket_arn: Option<String>,
-    pub(crate) destination_owner_id: String,
-    pub(crate) delete_previous_objects_on_change: Option<DeletePreviousObjectsOnChange>,
-    pub(crate) invalidate_previous_distribution_on_change: Option<String>,
-    pub(crate) archive_expansion: ArchiveExpansionLimits,
-    pub(crate) runtime: RuntimeOptions,
-}
-
-#[cfg(test)]
-impl DeploymentRequest {
-    /// Shared defaults for the common single-archive, single-destination test shape.
-    /// Module-local test builders that need different policies override fields
-    /// directly (`DeploymentRequest` fields are `pub(crate)`), so a test keeps the
-    /// values that are its point while the rest of the boilerplate lives here.
-    pub(crate) fn for_test() -> Self {
-        DeploymentRequest {
-            source_bucket_names: vec!["source".to_string()],
-            source_object_keys: vec!["source.zip".to_string()],
-            source_catalogs: vec![None],
-            source_markers: vec![HashMap::new()],
-            source_markers_config: vec![MarkerConfig::default()],
-            dest_bucket_name: "destination".to_string(),
-            dest_bucket_prefix: "site".to_string(),
-            extract: false,
-            delete_current_objects_on_delete: false,
-            distribution_id: None,
-            distribution_paths: vec!["/*".to_string()],
-            wait_for_distribution_invalidation: true,
-            delete_stale_objects_on_deployment: true,
-            exclude: Vec::new(),
-            include: Vec::new(),
-            output_object_keys: true,
-            destination_bucket_arn: None,
-            destination_owner_id: "owner".to_string(),
-            delete_previous_objects_on_change: None,
-            invalidate_previous_distribution_on_change: None,
-            archive_expansion: ArchiveExpansionLimits {
-                max_uncompressed_entry_bytes: 1024 * 1024 * 1024,
-                max_compression_ratio: 100,
-            },
-            runtime: test_runtime_options(),
-        }
-    }
-}
-
-/// Deterministic runtime profile for unit tests: a single parallel transfer, no retry
-/// backoff, and a small source block so tests stay exact and fast.
-#[cfg(test)]
-pub(crate) fn test_runtime_options() -> RuntimeOptions {
-    RuntimeOptions {
-        available_memory_mb: 1024,
-        max_parallel_transfers: 1,
-        source_block_bytes: 1024,
-        source_block_merge_gap_bytes: 0,
-        source_get_concurrency: 1,
-        source_window_bytes: None,
-        source_memory_budget_bytes: 256 * 1024 * 1024,
-        put_object_retry: PutObjectRetryOptions {
-            max_attempts: 1,
-            retry_base_delay_ms: 0,
-            retry_max_delay_ms: 0,
-            slowdown_retry_base_delay_ms: 0,
-            slowdown_retry_max_delay_ms: 0,
-            jitter: PutObjectRetryJitter::None,
-        },
-    }
-}
-
-#[cfg(test)]
-use aws_smithy_http_client::test_util::StaticReplayClient;
-
-/// `AppState` with deterministic test clients: an S3 client pinned to a replayed
-/// endpoint and a CloudFront client with test credentials.
-#[cfg(test)]
-pub(crate) fn test_app_state_with_replay(replay: StaticReplayClient) -> AppState {
-    let s3 = S3Client::from_conf(
-        aws_sdk_s3::Config::builder()
-            .behavior_version_latest()
-            .region(aws_sdk_s3::config::Region::new("us-east-1"))
-            .credentials_provider(aws_sdk_s3::config::Credentials::new(
-                "test-access-key",
-                "test-secret-key",
-                None,
-                None,
-                "shin-bucket-deployment-test",
-            ))
-            .endpoint_url("https://s3.test")
-            .force_path_style(true)
-            .http_client(replay)
-            .build(),
-    );
-    AppState {
-        source_s3: s3.clone(),
-        destination_s3: s3,
-        cloudfront: CloudFrontClient::from_conf(
-            aws_sdk_cloudfront::Config::builder()
-                .behavior_version_latest()
-                .region(aws_sdk_cloudfront::config::Region::new("us-east-1"))
-                .credentials_provider(aws_sdk_cloudfront::config::Credentials::new(
-                    "test-access-key",
-                    "test-secret-key",
-                    None,
-                    None,
-                    "shin-bucket-deployment-test",
-                ))
-                .build(),
-        ),
-        http: HttpClient::new(),
-        detailed_failure_diagnostics: false,
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ArchiveExpansionLimits {
-    pub(crate) max_uncompressed_entry_bytes: u64,
-    pub(crate) max_compression_ratio: u64,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct TrustedSourceCatalog {
-    pub(crate) sha256: [u8; 32],
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct TrustedEntryIntegrity {
-    pub(crate) size: u64,
-    pub(crate) md5: String,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct DeletePreviousObjectsOnChange {
-    pub(crate) bucket_name: String,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct PreviousDestination {
-    pub(crate) bucket_name: String,
-    pub(crate) bucket_prefix: String,
-    pub(crate) distribution_id: Option<String>,
-    pub(crate) distribution_paths: Vec<String>,
-    pub(crate) owner_id: String,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct RuntimeOptions {
-    pub(crate) available_memory_mb: u64,
-    pub(crate) max_parallel_transfers: usize,
-    pub(crate) source_block_bytes: usize,
-    pub(crate) source_block_merge_gap_bytes: usize,
-    pub(crate) source_get_concurrency: usize,
-    pub(crate) source_window_bytes: Option<usize>,
-    pub(crate) source_memory_budget_bytes: usize,
-    pub(crate) put_object_retry: PutObjectRetryOptions,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct PutObjectRetryOptions {
-    pub(crate) max_attempts: usize,
-    pub(crate) retry_base_delay_ms: u64,
-    pub(crate) retry_max_delay_ms: u64,
-    pub(crate) slowdown_retry_base_delay_ms: u64,
-    pub(crate) slowdown_retry_max_delay_ms: u64,
-    pub(crate) jitter: PutObjectRetryJitter,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum PutObjectRetryJitter {
-    Full,
-    None,
-}
-
-#[derive(Clone)]
-pub(crate) struct Filters {
-    pub(crate) exclude: Vec<globset::GlobMatcher>,
-    pub(crate) include: Vec<globset::GlobMatcher>,
-}
-
-pub(crate) struct PlannedObject {
-    pub(crate) relative_key: String,
-    pub(crate) expected_etag: Option<String>,
-    pub(crate) action: PlannedAction,
-}
-
-pub(crate) enum PlannedAction {
-    CopyObject {
-        source_index: usize,
-        size: Option<u64>,
-    },
-    ZipEntry {
-        archive_index: usize,
-        source_index: usize,
-        size: u64,
-        compressed_size: u64,
-        compression_code: u16,
-        crc32: u32,
-        trusted_integrity: Option<TrustedEntryIntegrity>,
-        source_offset: u64,
-        source_span_end_exclusive: u64,
-    },
-}
-
-pub(crate) type DeploymentManifest = BTreeMap<String, PlannedObject>;
-
-pub(crate) struct SourceArchive {
-    pub(crate) source: Arc<crate::s3::archive::SourceClient>,
-}
 
 /// Which transfer-phase span contains a source block fetch. The transfer entry
 /// reader records each fetch wait into the counter of the phase that drove the
@@ -1623,8 +1297,47 @@ pub(crate) fn same_failure_signature(
         && left.source.observed == right.source.observed
 }
 
-pub(crate) struct ResponsePayload {
-    pub(crate) physical_resource_id: String,
-    pub(crate) reason: Option<String>,
-    pub(crate) data: Map<String, Value>,
+#[cfg(test)]
+mod detailed_failure_diagnostics_tests {
+    use std::sync::atomic::Ordering;
+
+    use super::DeploymentStats;
+
+    #[test]
+    fn source_global_release_saturates_and_records_anomaly() {
+        let stats = DeploymentStats::default();
+        stats.acquire_source_global_bytes(8);
+
+        stats.release_source_global_bytes(12);
+
+        assert_eq!(stats.source_global_resident_bytes_current(), 0);
+        assert_eq!(
+            stats
+                .source_global_release_anomalies
+                .load(Ordering::Relaxed),
+            1
+        );
+    }
+}
+
+#[cfg(test)]
+mod marker_spooled_upload_tests {
+    use std::sync::atomic::Ordering;
+
+    use super::DeploymentStats;
+
+    #[test]
+    fn marker_spooled_upload_counter_starts_at_zero_and_increments() {
+        let stats = DeploymentStats::default();
+
+        assert_eq!(
+            stats.marker_spooled_uploads.load(Ordering::Relaxed),
+            0,
+            "the F-3 spool fast path does not exist yet"
+        );
+
+        stats.add_marker_spooled_upload();
+
+        assert_eq!(stats.marker_spooled_uploads.load(Ordering::Relaxed), 1);
+    }
 }

@@ -16,8 +16,8 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, ReadBuf};
 use tokio::sync::mpsc;
 use tokio::task::AbortHandle;
 
+use crate::diagnostics::{DeploymentStats, SourceFetchPhase, TransferFetchStats};
 use crate::replace::{MarkerReplacements, ReplacementOptions, ReplacementResult};
-use crate::types::{DeploymentStats, SourceFetchPhase, TransferFetchStats};
 
 use super::super::planner::ZipEntryPlan;
 use super::super::{S3_SINGLE_PUT_LIMIT, ZIP_ENTRY_BODY_CHUNK_BYTES, ZIP_ENTRY_BODY_PIPE_CHUNKS};

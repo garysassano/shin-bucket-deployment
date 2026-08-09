@@ -9,7 +9,7 @@ use aws_sdk_s3::error::{ProvideErrorMetadata, SdkError};
 use aws_sdk_s3::operation::get_object::GetObjectError;
 use bytes::Bytes;
 
-use crate::types::AppState;
+use crate::state::AppState;
 
 pub(super) mod block_store;
 pub(super) mod budget;
@@ -56,7 +56,7 @@ pub(crate) async fn prepare_source_zip(
     state: &AppState,
     bucket: &str,
     key: &str,
-    stats: &crate::types::DeploymentStats,
+    stats: &crate::diagnostics::DeploymentStats,
 ) -> Result<Arc<SourceClient>> {
     let head = head_source(state, bucket, key, stats).await?;
 
@@ -74,7 +74,7 @@ async fn head_source(
     state: &AppState,
     bucket: &str,
     key: &str,
-    stats: &crate::types::DeploymentStats,
+    stats: &crate::diagnostics::DeploymentStats,
 ) -> Result<SourceHead> {
     tracing::info!(bucket, key, "reading source archive metadata");
 

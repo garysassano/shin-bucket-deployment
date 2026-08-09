@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use tokio::sync::futures::OwnedNotified;
 use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore};
 
-use crate::types::DeploymentStats;
+use crate::diagnostics::DeploymentStats;
 
 const SOURCE_BUDGET_PERMIT_UNIT_BYTES: u64 = 4 * 1024;
 

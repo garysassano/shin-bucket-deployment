@@ -2,10 +2,10 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, ensure};
 use aws_lambda_events::event::cloudformation::CloudFormationCustomResourceRequest;
-use serde_json::json;
+use serde_json::{Map, Value, json};
 use tokio::time::{Instant as TokioInstant, sleep_until, timeout_at};
 
-use crate::types::{DeploymentStats, ResponsePayload};
+use crate::diagnostics::DeploymentStats;
 use crate::util::{duration_ms, sanitize_diagnostic};
 
 use super::RequestEnvelope;
@@ -27,6 +27,12 @@ const CLOUDFORMATION_RESPONSE_PARTITIONS: &[(&str, &[&str])] = &[
     ("c2s.ic.gov", &["us-iso-"]),
     ("sc2s.sgov.gov", &["us-isob-"]),
 ];
+
+pub(crate) struct ResponsePayload {
+    pub(crate) physical_resource_id: String,
+    pub(crate) reason: Option<String>,
+    pub(crate) data: Map<String, Value>,
+}
 
 pub(super) fn sanitize_failure_reason(reason: &str) -> String {
     sanitize_diagnostic(reason, MAX_FAILURE_REASON_BYTES)
@@ -405,13 +411,11 @@ mod tests {
     use serde_json::{Map, Value};
     use tokio::time::Instant as TokioInstant;
 
-    use crate::types::ResponsePayload;
-
     use super::{
         CallbackRetryPolicy, MAX_CLOUDFORMATION_RESPONSE_BYTES, MAX_FAILURE_REASON_BYTES,
-        callback_retry_delay, callback_status_is_retryable, sanitize_failure_reason,
-        send_response_with_policy, serialize_failure_response, serialize_response,
-        validate_response_body_size, validate_response_url,
+        ResponsePayload, callback_retry_delay, callback_status_is_retryable,
+        sanitize_failure_reason, send_response_with_policy, serialize_failure_response,
+        serialize_response, validate_response_body_size, validate_response_url,
     };
 
     enum MockCallback {
@@ -556,12 +560,12 @@ mod tests {
         assert_eq!(callback_retry_delay(8, policy), Duration::from_secs(2));
     }
 
-    fn deployment_request_with_paths(paths: Vec<String>) -> crate::types::DeploymentRequest {
-        crate::types::DeploymentRequest {
+    fn deployment_request_with_paths(paths: Vec<String>) -> crate::deployment::DeploymentRequest {
+        crate::deployment::DeploymentRequest {
             distribution_id: Some("distribution".to_string()),
             distribution_paths: paths,
             destination_owner_id: "callback-owner".to_string(),
-            ..crate::types::DeploymentRequest::for_test()
+            ..crate::deployment::DeploymentRequest::for_test()
         }
     }
 
@@ -660,7 +664,7 @@ mod tests {
 
     #[tokio::test]
     async fn callback_retries_5xx_until_success() {
-        let stats = crate::types::DeploymentStats::default();
+        let stats = crate::diagnostics::DeploymentStats::default();
         let server = MockCallbackServer::start(vec![
             MockCallback::Status(500),
             MockCallback::Status(503),
@@ -771,7 +775,7 @@ mod tests {
 
     #[tokio::test]
     async fn callback_request_cannot_run_past_its_absolute_deadline() {
-        let stats = crate::types::DeploymentStats::default();
+        let stats = crate::diagnostics::DeploymentStats::default();
         let server =
             MockCallbackServer::start(vec![MockCallback::Timeout(Duration::from_millis(150))]);
         let result = send_response_with_policy(

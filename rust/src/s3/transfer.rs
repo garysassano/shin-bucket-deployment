@@ -22,14 +22,17 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::time::{Instant, sleep_until};
 
 use crate::deadline::{InvocationDeadlines, TaskDrainBudget};
-use crate::replace::MarkerReplacements;
-use crate::types::{
-    AppState, CopyObjectStats, DeploymentRequest, DeploymentStats, DiagnosticRangeStats,
-    MAX_FAILURE_DIAGNOSTIC_GROUPS, MAX_FAILURE_DIAGNOSTIC_LABELS, OTHER_DIAGNOSTIC_LABEL,
-    PutObjectFailureBodyStats, PutObjectFailureSourceStats, PutObjectFailureStateStats,
-    PutObjectRetryJitter, PutObjectRetryOptions, PutObjectStats, SourceArchive, SourceFetchPhase,
+use crate::deployment::{
+    DeploymentRequest, PutObjectRetryJitter, PutObjectRetryOptions, SourceArchive,
+};
+use crate::diagnostics::{
+    CopyObjectStats, DeploymentStats, DiagnosticRangeStats, MAX_FAILURE_DIAGNOSTIC_GROUPS,
+    MAX_FAILURE_DIAGNOSTIC_LABELS, OTHER_DIAGNOSTIC_LABEL, PutObjectFailureBodyStats,
+    PutObjectFailureSourceStats, PutObjectFailureStateStats, PutObjectStats, SourceFetchPhase,
     TransferFetchStats, same_failure_signature,
 };
+use crate::replace::MarkerReplacements;
+use crate::state::AppState;
 use crate::util::{MAX_DIAGNOSTIC_VALUE_BYTES, sanitize_diagnostic};
 
 use super::archive::block_store::{SourceAttemptSnapshot, SourceBlockOptions, SourceBlockStore};
@@ -417,7 +420,7 @@ pub(super) async fn upload_zip_entries(
                         // error paths, which did the same comparison work. These
                         // accumulate per task and are summed across concurrently
                         // running tasks; see the `PhaseMillis` definition site
-                        // in `types.rs` for why they are not a wall-clock
+                        // in `diagnostics.rs` for why they are not a wall-clock
                         // partition of `transfer`.
                         let task_started = std::time::Instant::now();
                         let outcome = async {
@@ -953,7 +956,7 @@ async fn prepare_zip_entry_for_comparison(
 
 fn compile_marker_replacements(
     markers: &HashMap<String, String>,
-    config: &crate::types::MarkerConfig,
+    config: &crate::deployment::MarkerConfig,
 ) -> Result<Option<Arc<MarkerReplacements>>> {
     if markers.is_empty() {
         Ok(None)
@@ -1991,6 +1994,11 @@ mod tests {
         DestinationObject, DestinationWritePrecondition, destination_write_precondition,
     };
     use crate::deadline::InvocationDeadlines;
+    use crate::deployment::{
+        DeploymentRequest, MarkerConfig, PutObjectRetryJitter, PutObjectRetryOptions,
+        SourceArchive, TrustedEntryIntegrity,
+    };
+    use crate::diagnostics::DeploymentStats;
     use crate::replace::MarkerReplacements;
     use crate::s3::archive::block_store::{SourceBlockOptions, SourceBlockStore};
     use crate::s3::archive::budget::SourceByteBudget;
@@ -2001,10 +2009,7 @@ mod tests {
     };
     use crate::s3::planner::{CopyPlan, ZipEntryPlan};
     use crate::s3::source_window_bytes_for_archive;
-    use crate::types::{
-        DeploymentRequest, DeploymentStats, MarkerConfig, PutObjectRetryJitter,
-        PutObjectRetryOptions, SourceArchive, TrustedEntryIntegrity, test_app_state_with_replay,
-    };
+    use crate::state::test_app_state_with_replay;
     use crate::util::{duration_ms, finalize_digest};
     use md5::{Digest as Md5Digest, Md5};
     use std::time::Duration;
@@ -3862,11 +3867,11 @@ mod tests {
         tokio::time::Instant::now() + std::time::Duration::from_secs(120)
     }
 
-    fn summary_request() -> crate::types::DeploymentRequest {
-        crate::types::DeploymentRequest {
+    fn summary_request() -> crate::deployment::DeploymentRequest {
+        crate::deployment::DeploymentRequest {
             source_object_keys: vec!["archive.zip".to_string()],
             destination_owner_id: "summary-owner".to_string(),
-            ..crate::types::DeploymentRequest::for_test()
+            ..crate::deployment::DeploymentRequest::for_test()
         }
     }
 
