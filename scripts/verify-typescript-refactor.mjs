@@ -49,18 +49,23 @@ async function main() {
 
     const verification = compareAssemblyTrees(".verification-assets/cdk.out");
     const benchmark = compareAssemblyTrees(".benchmark-assets/cdk.out");
-    const assemblyDifferences = [...verification.differences, ...benchmark.differences];
+    const differences = [...verification.differences, ...benchmark.differences];
     const expectedChanges =
       expectChangesPath === undefined ? undefined : loadExpectedChanges(expectChangesPath);
-    evaluateSynthesisContract(assemblyDifferences, expectedChanges);
 
     if (assembliesOnly) {
+      evaluateSynthesisContract(differences, expectedChanges);
       console.log(
         `Synthesis contract matches ${baselineRef}: ${verification.templateCount} verification templates, ` +
           `${benchmark.templateCount} benchmark templates.`,
       );
     } else {
-      const declarationCount = comparePublicDeclarations();
+      // Declaration contents join the same accumulator so one manifest covers
+      // every acknowledged change and still has to match exactly in both
+      // directions. Runtime exports and entrypoints stay fail-fast: they are
+      // shape, not content.
+      const declarationCount = comparePublicDeclarations(differences);
+      evaluateSynthesisContract(differences, expectedChanges);
       await compareRuntimeExports();
       comparePackageEntrypoints();
       console.log(
@@ -170,14 +175,23 @@ function buildContract(root) {
   run("pnpm", ["benchmark:synth"], root);
 }
 
-function comparePublicDeclarations() {
+function comparePublicDeclarations(differences) {
   const baselinePaths = publicDeclarationPaths(baselineRoot);
   const currentPaths = publicDeclarationPaths(repositoryRoot);
+  // The declaration *set* stays fail-fast: adding or removing a public
+  // declaration file is an API-shape change, not a content change, and must not
+  // be waved through by a manifest entry. Declaration *contents* accumulate like
+  // assembly contents, so a deliberate public-API change (a changed default, a
+  // reworded doc comment) can be acknowledged explicitly instead of being
+  // unmergeable.
   compareValue("public declaration set", baselinePaths, currentPaths);
   for (const relativePath of baselinePaths) {
     const baselineFile = join(baselineRoot, "lib", relativePath);
     const currentFile = join(repositoryRoot, "lib", relativePath);
-    compareBytes(`declaration ${relativePath}`, baselineFile, currentFile);
+    const label = `declaration ${relativePath}`;
+    if (!readFileSync(baselineFile).equals(readFileSync(currentFile))) {
+      differences.push({ label, detail: "contents differ" });
+    }
   }
   return baselinePaths.length;
 }

@@ -68,7 +68,7 @@ test("renders a Rust-backed custom resource", () => {
     Runtime: "provided.al2023",
     Handler: "bootstrap",
     Architectures: ["arm64"],
-    MemorySize: 1024,
+    MemorySize: 2048,
     Timeout: 900,
   });
 
@@ -244,7 +244,7 @@ test("binds shared prebuilt handler identity to the package version and archive 
             architecture: "arm64",
             bootstrapArchiveSha256: createHash("sha256").update(bootstrapArchive).digest("hex"),
           },
-          memoryLimit: 1024,
+          memoryLimit: 2048,
           stack: stack.node.addr,
         }),
       )
@@ -304,7 +304,7 @@ test("keeps every provider Lambda identity member in canonical handler selection
   ) => renderHandlerConfigHashInput(stack, config, architecture, handlerSource);
   const baseline = render();
   const variants = [
-    render({ memorySize: 2048 }),
+    render({ memorySize: 3072 }),
     render({ failureDiagnostics: FailureDiagnostics.DETAILED }),
     render({ role }),
     render({ logGroup }),
@@ -605,7 +605,7 @@ test("creates separate handlers when the provider configuration differs", () => 
       bucket: secondBucket,
     },
     providerLambda: {
-      memorySize: 2048,
+      memorySize: 3072,
       localBuild: testLocalProviderBuild(),
     },
   });

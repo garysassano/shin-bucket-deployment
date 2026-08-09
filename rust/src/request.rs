@@ -1141,7 +1141,7 @@ mod tests {
             512 * 1024 * 1024
         );
         assert_eq!(request.runtime.source_get_concurrency, 4);
-        assert_eq!(request.runtime.max_parallel_transfers, 32);
+        assert_eq!(request.runtime.max_parallel_transfers, 64);
         assert_eq!(
             request.archive_expansion,
             ArchiveExpansionLimits {

@@ -121,7 +121,7 @@ interface ShinBucketDeploymentProps {
   readonly providerLambda?: {
     readonly sharing?: ProviderSharing; // Default: ProviderSharing.STACK
     readonly architecture?: Architecture; // Default: Architecture.ARM_64
-    readonly memorySize?: number; // Default: 1024 MiB
+    readonly memorySize?: number; // Default: 2048 MiB
     readonly failureDiagnostics?: FailureDiagnostics; // Default: STANDARD
     readonly role?: IRole; // Default: create a shared provider role
     readonly logGroup?: ILogGroupRef; // Default: Lambda-managed log group
@@ -136,7 +136,7 @@ interface ShinBucketDeploymentProps {
 
   // Request-scoped controls; these do not split an identically configured shared handler.
   readonly transfer?: {
-    readonly maxConcurrency?: number; // Default: 32; values above 64 warn at synthesis
+    readonly maxConcurrency?: number; // Default: 64; values above 64 warn at synthesis
     readonly advancedTuning?: {
       readonly sourceBlockBytes?: number; // Default: 8 MiB
       readonly sourceBlockMergeGapBytes?: number; // Default: 256 KiB

@@ -80,6 +80,6 @@ describe.skipIf(!packagedBuildPresent)("packaged entry smoke test", () => {
     expect(packaged.ProviderSharing.STACK).toBe("stack");
     expect(packaged.ProviderSharing.DEPLOYMENT).toBe("deployment");
     expect(packaged.FailureDiagnostics.STANDARD).toBe("standard");
-    expect(packaged.DEFAULT_TRANSFER_MAX_CONCURRENCY).toBe(32);
+    expect(packaged.DEFAULT_TRANSFER_MAX_CONCURRENCY).toBe(64);
   });
 });

@@ -432,7 +432,14 @@ export interface ShinBucketDeploymentProviderLambdaOptions {
    * identity, so sharing deployments using a different value select a distinct
    * provider. A deployment-scoped provider updates this setting in place.
    *
-   * @default DEFAULT_PROVIDER_LAMBDA_MEMORY_SIZE_MIB (1024)
+   * The default pairs with `transfer.maxConcurrency` of 64. That combination
+   * measured 31-39% faster cold-create than 1024 MiB with 32 transfers on
+   * every canonical benchmark profile, at a peak usage well under either
+   * allocation. Lower it for cost-sensitive deployments that tolerate slower
+   * deploys; Lambda bills memory x duration, and the faster configuration is
+   * not always the cheaper one.
+   *
+   * @default DEFAULT_PROVIDER_LAMBDA_MEMORY_SIZE_MIB (2048)
    */
   readonly memorySize?: number;
 
@@ -524,7 +531,7 @@ export interface ShinBucketDeploymentTransferOptions {
    * workload before acknowledging the warning; 64 is guidance, not a
    * universal optimum.
    *
-   * @default DEFAULT_TRANSFER_MAX_CONCURRENCY (32)
+   * @default DEFAULT_TRANSFER_MAX_CONCURRENCY (64)
    */
   readonly maxConcurrency?: number;
 
@@ -712,14 +719,14 @@ export interface ShinBucketDeploymentProps {
   /**
    * Backing Lambda resource, sharing, build, and diagnostics configuration.
    *
-   * @default - shared prebuilt arm64 provider using 1024 MiB and standard diagnostics
+   * @default - shared prebuilt arm64 provider using 2048 MiB and standard diagnostics
    */
   readonly providerLambda?: ShinBucketDeploymentProviderLambdaOptions;
 
   /**
    * Request-scoped transfer execution controls.
    *
-   * @default - adaptive provider defaults with at most 32 logical transfers
+   * @default - adaptive provider defaults with at most 64 logical transfers
    */
   readonly transfer?: ShinBucketDeploymentTransferOptions;
 

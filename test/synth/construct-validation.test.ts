@@ -1413,6 +1413,9 @@ describe("ShinBucketDeployment validation and option coverage", () => {
       {
         id: "ConcurrentBlocksAboveBudget",
         props: {
+          // Memory is pinned so the case tests the budget invariant rather
+          // than tracking whatever the default memory size happens to be.
+          providerLambda: { memorySize: 1024 },
           transfer: {
             advancedTuning: {
               sourceBlockBytes: 128 * 1024 * 1024,
