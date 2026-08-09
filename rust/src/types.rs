@@ -518,7 +518,7 @@ pub(crate) struct DeploymentStatsSnapshot<'a> {
 // Phase timing definition site. The `phaseMs.plan` split is the instrument that
 // tells CPU cost apart from S3 round-trips inside source planning, so its
 // accounting rules live here and the call sites in `s3/planner.rs` and
-// `s3/mod.rs` must keep them:
+// `s3.rs` must keep them:
 //
 // - `planCatalog` is catalog-object work only: locating the embedded catalog
 //   entry, the ranged GET that fetches it, decompression, CRC, SHA-256
@@ -864,7 +864,7 @@ impl DeploymentStats {
     /// five buckets at microsecond resolution. The identity
     /// `parts == source_heads + catalog + directory + entries + validation` is what the
     /// sub-timing partition tests assert; the buckets are fed by the call sites
-    /// in `s3/planner.rs` and `s3/mod.rs` described at the `PhaseMillis`
+    /// in `s3/planner.rs` and `s3.rs` described at the `PhaseMillis`
     /// definition site.
     fn add_plan_stage_micros(&self, bucket: &AtomicU64, micros: u64) {
         bucket.fetch_add(micros, Ordering::Relaxed);
