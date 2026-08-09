@@ -2390,7 +2390,15 @@ mod tests {
                 + snapshot.phase_ms.plan_directory
                 + snapshot.phase_ms.plan_entries
                 + snapshot.phase_ms.plan_validation;
-            assert!(parts_ms >= parts_micros / 1_000);
+            // Each of the four buckets rounds independently, so the sum can sit
+            // up to 499 us below and 500 us above the true value per bucket --
+            // roughly 2 ms of slack in each direction. The upper bound already
+            // allowed 4 x 500; the lower bound was written exact, so four
+            // buckets that each rounded down (say 400 us apiece: each snaps to
+            // 0 ms while the total is 1600 us) failed the assertion. That is a
+            // property of the rounding, not a defect in the accounting, and it
+            // made the test fail or pass purely on how fast the host ran.
+            assert!(parts_ms + 2 >= parts_micros / 1_000);
             assert!(parts_ms <= (parts_micros + 2_000) / 1_000);
         }
     }
