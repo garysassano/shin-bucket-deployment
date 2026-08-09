@@ -720,6 +720,7 @@ fn zip_entry_sdk_body(init: ReceiverBodyInit, content_length: u64) -> SdkBody {
     })
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) async fn plan_marker_zip_entry(
     store: Arc<SourceBlockStore>,
     plan: ZipEntryPlan,
@@ -734,6 +735,82 @@ pub(crate) async fn plan_marker_zip_entry(
         &mut output,
     )
     .await
+}
+
+/// Planning variant that retains the replaced output while it fits `spool_limit_bytes`.
+/// Unlike the marker-free comparison pass (whose output length equals the declared
+/// entry size, so the spool decision is pre-made from `plan.size`), marker replacement
+/// changes the output length, so the cap is enforced as the output is written. The
+/// returned spool is `Some` iff the whole output fit; either way the replacement runs
+/// to completion, so the exact output length and MD5 are always produced.
+pub(crate) async fn plan_marker_zip_entry_spooled(
+    store: Arc<SourceBlockStore>,
+    plan: ZipEntryPlan,
+    marker_replacements: &MarkerReplacements,
+    spool_limit_bytes: u64,
+) -> io::Result<(ReplacementResult, Option<Bytes>)> {
+    let mut output = CappedMarkerSpool::new(spool_limit_bytes);
+    let result = replace_marker_zip_entry(
+        store,
+        std::sync::Arc::new(plan),
+        None,
+        marker_replacements,
+        &mut output,
+    )
+    .await?;
+    Ok((result, output.into_spool()))
+}
+
+/// Size-capped in-memory spool used in place of `tokio::io::sink()` during marker
+/// planning. Every replaced byte is mirrored here while the running total stays within
+/// the cap; the moment a write crosses it the spool is dropped (releasing the buffer)
+/// and later writes are accepted into the void, so decoding, replacement, hashing, and
+/// length accounting still run to completion.
+struct CappedMarkerSpool {
+    limit_bytes: u64,
+    bytes: Option<Vec<u8>>,
+}
+
+impl CappedMarkerSpool {
+    fn new(limit_bytes: u64) -> Self {
+        Self {
+            limit_bytes,
+            bytes: Some(Vec::new()),
+        }
+    }
+
+    fn into_spool(self) -> Option<Bytes> {
+        self.bytes.map(Bytes::from)
+    }
+}
+
+impl AsyncWrite for CappedMarkerSpool {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        _cx: &mut TaskContext<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        let limit_bytes = self.limit_bytes;
+        if let Some(bytes) = self.bytes.as_mut() {
+            let next = bytes.len().saturating_add(buf.len()) as u64;
+            if next > limit_bytes {
+                self.bytes = None;
+            } else {
+                bytes.extend_from_slice(buf);
+            }
+        }
+        // The write is always consumed: the spool is an accounting mirror, never a
+        // backpressure source, so the replacement stream cannot stall on it.
+        Poll::Ready(Ok(buf.len()))
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, _cx: &mut TaskContext<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut TaskContext<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
 }
 
 async fn replace_marker_zip_entry<W: AsyncWrite + Unpin>(

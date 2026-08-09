@@ -344,4 +344,4 @@ fn source_get_retry_delay(attempt: usize, throttled: bool, jitter: u64) -> Durat
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

@@ -19,6 +19,8 @@ use crate::util::{MAX_DIAGNOSTIC_VALUE_BYTES, sanitize_diagnostic};
 
 use super::SourceClient;
 use super::budget::{SourceBudgetPermit, SourceByteBudget};
+#[cfg(test)]
+use super::diagnostics::SourceDiagnosticsSnapshot;
 
 pub(super) struct EntryAttemptClaim {
     pub(super) store: Arc<SourceBlockStore>,
@@ -233,6 +235,13 @@ impl SourceBlockStore {
                 .map_or(0, |waiters| waiters.load(Ordering::Acquire)),
             active_fetches: self.source.diagnostics.active_gets.load(Ordering::Acquire),
         }
+    }
+
+    /// Source diagnostics for the archive behind this store, for transfer-level code
+    /// and tests that need the read behavior without owning the source client.
+    #[cfg(test)]
+    pub(crate) fn source_diagnostics_snapshot(&self) -> SourceDiagnosticsSnapshot {
+        self.source.diagnostics()
     }
 
     async fn run_scheduler(self: Arc<Self>) -> io::Result<()> {

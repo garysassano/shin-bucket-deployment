@@ -35,7 +35,7 @@ use crate::util::{MAX_DIAGNOSTIC_VALUE_BYTES, sanitize_diagnostic};
 use super::archive::block_store::{SourceAttemptSnapshot, SourceBlockOptions, SourceBlockStore};
 use super::archive::budget::SourceByteBudget;
 use super::archive::entry::{
-    MarkerBodyContext, UploadBodyState, marker_zip_entry_body, plan_marker_zip_entry,
+    MarkerBodyContext, UploadBodyState, marker_zip_entry_body, plan_marker_zip_entry_spooled,
     validate_zip_entry_output, validate_zip_entry_size_not_exceeded, zip_entry_body,
     zip_entry_reader,
 };
@@ -830,28 +830,51 @@ async fn prepare_zip_entry_for_comparison(
 ) -> Result<PreparedUploadPayload> {
     if let Some(replacements) = marker_replacements {
         // PutObject requires an exact length before its retryable body starts. This
-        // pass validates and counts without retaining replacement output; only an
-        // object that still needs uploading incurs the second streaming pass.
+        // pass validates and counts. When the replaced output fits the spool budget it
+        // is retained and becomes the retryable body directly, so the upload reuses
+        // this single decode; only an output over the cap incurs the second streaming
+        // pass (`from_marker_zip_entry`).
         stats.add_marker_planning_pass();
-        let planned = plan_marker_zip_entry(store.clone(), plan.clone(), &replacements).await?;
+        let (planned, spooled) = plan_marker_zip_entry_spooled(
+            store.clone(),
+            plan.clone(),
+            &replacements,
+            spool_limit_bytes,
+        )
+        .await?;
         let etag = Some(planned.md5);
         validate_put_object_size(plan, planned.output_bytes)?;
-        Ok(PreparedUploadPayload {
-            payload: UploadPayload::from_marker_zip_entry(
-                store,
-                plan.clone(),
-                planned.output_bytes,
-                replacements,
-                Arc::clone(stats),
-                stats.detailed_failure_diagnostics_enabled(),
+        let (payload, spooled) = match spooled {
+            Some(bytes) => {
+                stats.add_marker_spooled_upload();
+                (
+                    UploadPayload::from_spooled_bytes(
+                        bytes,
+                        stats.detailed_failure_diagnostics_enabled(),
+                    ),
+                    true,
+                )
+            }
+            None => (
+                UploadPayload::from_marker_zip_entry(
+                    store,
+                    plan.clone(),
+                    planned.output_bytes,
+                    replacements,
+                    Arc::clone(stats),
+                    stats.detailed_failure_diagnostics_enabled(),
+                ),
+                false,
             ),
+        };
+        Ok(PreparedUploadPayload {
+            payload,
             etag,
-            spooled: false,
+            spooled,
         })
     } else {
-        // Marker entries keep both passes on purpose: the retryable upload body is
-        // regenerated from the source, and the marker diagnostics contract describes that
-        // as `planning-plus-retryable-stream`. Only the marker-free path spools here.
+        // The marker-free comparison pass spools decoded output within the budget; a
+        // spooled payload no longer reads the archive during upload.
         let hashed = hash_zip_entry_reader(store.clone(), plan.clone(), spool_limit_bytes).await?;
         let spooled = hashed.spooled.is_some();
         let payload = match hashed.spooled {
@@ -1879,12 +1902,13 @@ mod tests {
     use std::collections::{BTreeMap, HashMap};
     use std::io::{Cursor, Write};
     use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::sync::atomic::AtomicUsize;
     use std::sync::{Arc, Mutex};
 
     use anyhow::Result;
     use aws_sdk_s3::error::ConnectorError;
     use aws_sdk_s3::operation::put_object::PutObjectError;
-    use aws_sdk_s3::primitives::SdkBody;
+    use aws_sdk_s3::primitives::{ByteStream, SdkBody};
     use aws_smithy_http_client::test_util::{ReplayEvent, StaticReplayClient};
     use http::{Request, Response};
     use tracing::instrument::WithSubscriber as _;
@@ -1894,9 +1918,15 @@ mod tests {
     use super::super::destination::{
         DestinationObject, DestinationWritePrecondition, destination_write_precondition,
     };
+    use crate::replace::MarkerReplacements;
+    use crate::s3::archive::entry::{MarkerBodyContext, UploadBodyState, marker_zip_entry_body};
+    use crate::s3::archive::tests::{
+        ready_store_for_plan_with_claims, zip_from_entry, zip_plan_from_archive,
+    };
     use crate::s3::planner::{CopyPlan, ZipEntryPlan};
     use crate::types::{
-        DeploymentStats, PutObjectRetryJitter, PutObjectRetryOptions, TrustedEntryIntegrity,
+        DeploymentRequest, DeploymentStats, MarkerConfig, PutObjectRetryJitter,
+        PutObjectRetryOptions, TrustedEntryIntegrity,
     };
     use crate::util::duration_ms;
 
@@ -1906,9 +1936,10 @@ mod tests {
         WriteRetryCoordinator, catalog_skips_zip_entry, comparison_spool_limit_bytes,
         compile_marker_replacements, copy_reconciliation_identity, copy_source_object,
         digest_async_reader, dispatch_failure_kind, log_copy_diagnostics, log_put_diagnostics,
-        md5_hex, quoted_etag, read_async_reader_to_vec, record_bounded_diagnostic_count,
-        record_copy_outcome, sanitize_diagnostic_label, serialize_put_attempt_failure,
-        should_compare_marker_free_entry, upload_payload, write_error_kind, write_retry_cap_millis,
+        md5_hex, payload_body, prepare_zip_entry_upload, quoted_etag, read_async_reader_to_vec,
+        record_bounded_diagnostic_count, record_copy_outcome, sanitize_diagnostic_label,
+        serialize_put_attempt_failure, should_compare_marker_free_entry, upload_payload,
+        write_error_kind, write_retry_cap_millis,
     };
 
     #[derive(Clone, Default)]
@@ -2804,6 +2835,136 @@ mod tests {
                 .await
                 .expect("entry over the limit still hashes");
         assert!(not_spooled.is_none());
+    }
+
+    #[tokio::test]
+    async fn marker_comparison_spools_small_entries_and_skips_the_second_pass() {
+        let zip = zip_from_entry("marker.txt", b"before TOKEN after");
+        let plan = zip_plan_from_archive(&zip, "marker.txt");
+        let expected = b"before expanded-value after";
+        let replacements = Arc::new(
+            MarkerReplacements::new(
+                &HashMap::from([("TOKEN".to_string(), "expanded-value".to_string())]),
+                &MarkerConfig::default(),
+            )
+            .expect("marker automaton"),
+        );
+        // One claim for the planning read and one for the reference second-pass body.
+        let store = ready_store_for_plan_with_claims(&zip, &plan, 2);
+        let stats = Arc::new(DeploymentStats::default());
+
+        let payload = prepare_zip_entry_upload(
+            &store,
+            &plan,
+            Some(Arc::clone(&replacements)),
+            None,
+            &stats,
+            expected.len() as u64,
+        )
+        .await
+        .expect("marker prepare must succeed")
+        .expect("a fresh destination must yield a payload");
+
+        let UploadPayload::Bytes { bytes, .. } = &payload else {
+            panic!("an output within the spool cap must become a spooled Bytes payload");
+        };
+        assert_eq!(bytes.as_ref(), expected);
+
+        // Planning ran once and the upload pass was skipped: planning 1 / upload 0.
+        let summary = stats.snapshot("Update", "success", &DeploymentRequest::for_test());
+        assert_eq!(summary.marker_replacement.planning_passes, 1);
+        assert_eq!(summary.marker_replacement.upload_passes, 0);
+        assert_eq!(summary.marker_replacement.spooled_uploads, 1);
+
+        // A spooled payload never reads the archive again, so the caller skipped
+        // `retain_zip_entry_for_replay` and no upload body was ever polled.
+        let source = store.source_diagnostics_snapshot();
+        assert_eq!(source.replay_claims, 0);
+        assert_eq!(source.body_attempts, 0);
+
+        // Byte-exactness against the second pass: the marker body the streaming
+        // variant would have produced must equal the spooled bytes exactly.
+        let body_state = Arc::new(UploadBodyState::default());
+        let body = marker_zip_entry_body(
+            Arc::clone(&store),
+            plan,
+            expected.len() as u64,
+            Arc::clone(&body_state),
+            Arc::new(AtomicUsize::new(0)),
+            MarkerBodyContext {
+                replacements,
+                stats: Arc::new(DeploymentStats::default()),
+            },
+        );
+        let second_pass = ByteStream::new(body.into_inner())
+            .collect()
+            .await
+            .expect("reference marker body")
+            .into_bytes();
+        assert_eq!(second_pass.as_ref(), expected);
+        assert_eq!(second_pass.as_ref(), bytes.as_ref());
+    }
+
+    #[tokio::test]
+    async fn marker_comparison_falls_back_to_streaming_when_the_output_exceeds_the_cap() {
+        let zip = zip_from_entry("marker.txt", b"before TOKEN after");
+        let plan = zip_plan_from_archive(&zip, "marker.txt");
+        let expected = b"before expanded-value after";
+        let replacements = Arc::new(
+            MarkerReplacements::new(
+                &HashMap::from([("TOKEN".to_string(), "expanded-value".to_string())]),
+                &MarkerConfig::default(),
+            )
+            .expect("marker automaton"),
+        );
+        // One claim for the planning read and one for the upload body poll below.
+        let store = ready_store_for_plan_with_claims(&zip, &plan, 2);
+        let stats = Arc::new(DeploymentStats::default());
+
+        let payload = prepare_zip_entry_upload(
+            &store,
+            &plan,
+            Some(Arc::clone(&replacements)),
+            None,
+            &stats,
+            expected.len() as u64 - 1,
+        )
+        .await
+        .expect("marker prepare must succeed")
+        .expect("a fresh destination must yield a payload");
+
+        let UploadPayload::ZipEntry {
+            content_length,
+            marker_replacements,
+            ..
+        } = &payload
+        else {
+            panic!("an output over the spool cap must keep the streaming marker payload");
+        };
+        assert_eq!(*content_length, expected.len() as u64);
+        assert!(
+            marker_replacements.is_some(),
+            "the streaming payload must carry the marker replacements"
+        );
+
+        // The spooled counter stays put: only the planning pass ran so far.
+        let summary = stats.snapshot("Update", "success", &DeploymentRequest::for_test());
+        assert_eq!(summary.marker_replacement.planning_passes, 1);
+        assert_eq!(summary.marker_replacement.upload_passes, 0);
+        assert_eq!(summary.marker_replacement.spooled_uploads, 0);
+
+        // The streaming payload replays from the archive, so the caller retained it
+        // with a replay claim for the upload body.
+        let source = store.source_diagnostics_snapshot();
+        assert_eq!(source.replay_claims, 1);
+
+        // The streaming body still produces the exact replaced output.
+        let uploaded = payload_body(&payload)
+            .collect()
+            .await
+            .expect("streaming marker body")
+            .into_bytes();
+        assert_eq!(uploaded.as_ref(), expected);
     }
 
     #[test]
