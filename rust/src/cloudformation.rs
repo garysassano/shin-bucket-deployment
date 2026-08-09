@@ -27,13 +27,12 @@ use crate::s3::{
     guarded_delete_namespace,
 };
 use crate::state::AppState;
-use crate::types::ResponsePayload;
 use crate::util::{MAX_DIAGNOSTIC_VALUE_BYTES, duration_ms, finalize_digest, sanitize_diagnostic};
 
 mod callback;
 
 use callback::{
-    physical_resource_id, response_target, sanitize_failure_reason, send_response,
+    ResponsePayload, physical_resource_id, response_target, sanitize_failure_reason, send_response,
     serialize_failure_response, serialize_response, validate_response_body_size,
     validate_response_url,
 };
