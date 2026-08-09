@@ -338,10 +338,30 @@ pub(crate) struct SourceArchive {
     pub(crate) source: Arc<crate::s3::archive::SourceClient>,
 }
 
+/// Which transfer-phase span contains a source block fetch. The transfer entry
+/// reader records each fetch wait into the counter of the phase that drove the
+/// read, so a streaming upload body generating its content during the PUT is
+/// attributed to the put span and a comparison-pass read to the prepare span.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SourceFetchPhase {
+    Prepare,
+    Put,
+}
+
+/// Stats handle plus the phase label for a transfer entry reader. `None` is
+/// threaded where a read must stay uncounted (the plan-phase embedded-catalog
+/// read, which is not a transfer reader).
+#[derive(Clone)]
+pub(crate) struct TransferFetchStats {
+    pub(crate) stats: Arc<DeploymentStats>,
+    pub(crate) phase: SourceFetchPhase,
+}
+
 #[derive(Default)]
 pub(crate) struct DeploymentStats {
     started: OnceInstant,
     plan_millis: AtomicU64,
+    plan_source_heads_micros: AtomicU64,
     plan_catalog_micros: AtomicU64,
     plan_directory_micros: AtomicU64,
     plan_entries_micros: AtomicU64,
@@ -349,6 +369,11 @@ pub(crate) struct DeploymentStats {
     plan_parts_micros: AtomicU64,
     destination_list_millis: AtomicU64,
     transfer_millis: AtomicU64,
+    transfer_task_total_micros: AtomicU64,
+    transfer_prepare_micros: AtomicU64,
+    transfer_put_wait_micros: AtomicU64,
+    transfer_prepare_source_wait_micros: AtomicU64,
+    transfer_put_source_wait_micros: AtomicU64,
     delete_millis: AtomicU64,
     cloudfront_millis: AtomicU64,
     old_prefix_delete_millis: AtomicU64,
@@ -510,22 +535,30 @@ pub(crate) struct DeploymentStatsSnapshot<'a> {
 //   archive, `validate_catalog_entries` for authenticated catalogs, and the
 //   phase-level `validate_deployment_preflight`.
 //
-// The four sub-timings accumulate per archive at microsecond resolution and are
-// converted to whole milliseconds once, at snapshot time. Per-call millisecond
-// truncation made every sub-millisecond stage report a constant 0, so the
-// instrument was coarser than the ~0.5 ms-per-entry cost it exists to
-// attribute; the snapshot conversion rounds to the nearest millisecond instead
-// (see [`micros_to_millis`]).
+// The five sub-timings accumulate at microsecond resolution and are converted
+// to whole milliseconds once, at snapshot time: `planCatalog`, `planDirectory`,
+// `planEntries`, and `planValidation` accumulate per archive, while
+// `planSourceHeads` accumulates per source. Per-call millisecond truncation
+// made every sub-millisecond stage report a constant 0, so the instrument was
+// coarser than the ~0.5 ms-per-entry cost it exists to attribute; the snapshot
+// conversion rounds to the nearest millisecond instead (see
+// [`micros_to_millis`]).
 //
-// What `plan` measures beyond the four parts (the residual is exactly
-// `plan - planCatalog - planDirectory - planEntries - planValidation`, all
-// four of which are present in every summary): request length checks,
-// source-budget setup, filter compilation, the per-source metadata `HeadObject`
-// in both extract and copy mode, manifest insertion in copy mode,
-// `collect_zip_entry_plans`, and the planned-entries accounting. In copy mode
-// (`Extract: false`) none of the ZIP stages run, so all four parts report 0 and
-// `plan` is those HeadObject round-trips plus the CPU-only residual; the parts
-// being zero there is the honest answer, not an omission.
+// What `plan` measures beyond the five parts (the residual is exactly
+// `plan - planSourceHeads - planCatalog - planDirectory - planEntries -
+// planValidation`, all five of which are present in every summary, at
+// microsecond resolution; the published millisecond values are rounded
+// independently, so a residual computed from them is approximate rather than
+// exact): request length checks, source-budget setup, filter compilation,
+// manifest insertion in copy mode, `collect_zip_entry_plans`, and the
+// planned-entries accounting.
+// `planSourceHeads` carries the per-source metadata `HeadObject` await in both
+// extract and copy mode; it is exclusive because those awaits happen in the
+// `plan_deployment` loop, outside the catalog/directory/entries/validation
+// buckets. In copy mode (`Extract: false`) none of the ZIP stages run, so the
+// four ZIP parts report 0 and `plan` is the `planSourceHeads` round-trips plus
+// the CPU-only residual; the parts being zero there is the honest answer, not
+// an omission.
 //
 // Concurrency constraint: these are wall-clock spans, and summing them only
 // means anything while source planning is sequential — it is today, one archive
@@ -534,16 +567,60 @@ pub(crate) struct DeploymentStatsSnapshot<'a> {
 // planValidation` stops being a partition; the accounting must then move to
 // per-archive self-time spans that degrade honestly instead of silently
 // double-counting elapsed time.
+//
+// What `transfer` measures beyond the five sub-timings: the scheduler loop
+// (per-archive source block stores, marker compilation, catalog skips) and the
+// direct-copy path (`copy_source_object`, which is never instrumented by the
+// transfer sub-timings), plus the post-transfer diagnostics logging. The five
+// sub-timings do NOT partition `transfer`, and `transferTaskTotal` is NOT a
+// wall-clock span: up to `maxParallelTransfers` ZIP-entry tasks run
+// concurrently, so `transferTaskTotal`, `transferPrepare`, and
+// `transferPutWait` are sums across tasks and can legitimately exceed the
+// `transfer` wall clock, often by a large multiple. For tasks that run to
+// completion, `transferPrepare + transferPutWait <= transferTaskTotal` holds
+// at microsecond resolution (the remainder is scheduler and task overhead). A
+// task aborted at the work deadline records `transferPrepare` but never
+// reaches the `transferPutWait` or `transferTaskTotal` accumulations, so
+// aborted tasks under-report the spans they never finished and can break that
+// containment across the summary. The published millisecond values are each
+// rounded independently, so every member can differ by up to its rounding
+// envelope; the containment must not be asserted on published values.
+//
+// Source fetches are attributed to the phase span that contains them rather
+// than accumulated in a separate overlay: the transfer entry reader carries a
+// phase label (`SourceFetchPhase`) alongside its stats handle, and a fetch
+// that resolves inside the comparison/prepare span lands in
+// `transferPrepareSourceWait` while one inside the upload/PUT span (a
+// streaming body that generates its content during the PUT) lands in
+// `transferPutSourceWait`. The plan-phase embedded-catalog read passes no
+// stats handle and is never counted. The resulting attribution:
+// source-network time = `transferPrepareSourceWait +
+// transferPutSourceWait`; prepare CPU = `transferPrepare -
+// transferPrepareSourceWait`; `transferPutWait - transferPutSourceWait` is
+// destination-network wait plus any streaming CPU done during the PUT — the
+// two are NOT separable with the current instrument, so there is no clean
+// three-way CPU/source/destination split. Only ZIP-entry transfer tasks are
+// instrumented; direct-copy tasks are a separate path and are excluded from
+// `transferTaskTotal`, so on copy-heavy workloads `transferTaskTotal` is much
+// smaller than `transfer`. These counters accumulate at microsecond
+// resolution and convert to whole milliseconds exactly once at snapshot time,
+// like the plan sub-timings.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct PhaseMillis {
     pub(crate) plan: u64,
+    pub(crate) plan_source_heads: u64,
     pub(crate) plan_catalog: u64,
     pub(crate) plan_directory: u64,
     pub(crate) plan_entries: u64,
     pub(crate) plan_validation: u64,
     pub(crate) destination_list: u64,
     pub(crate) transfer: u64,
+    pub(crate) transfer_task_total: u64,
+    pub(crate) transfer_prepare: u64,
+    pub(crate) transfer_put_wait: u64,
+    pub(crate) transfer_prepare_source_wait: u64,
+    pub(crate) transfer_put_source_wait: u64,
     pub(crate) delete: u64,
     pub(crate) cloudfront: u64,
     pub(crate) old_prefix_delete: u64,
@@ -784,14 +861,18 @@ impl DeploymentStats {
 
     /// Records one source-planning stage span into its bucket and into the
     /// shared parts total, so `plan_parts_micros` is the exclusive union of the
-    /// four buckets at microsecond resolution. The identity
-    /// `parts == catalog + directory + entries + validation` is what the
+    /// five buckets at microsecond resolution. The identity
+    /// `parts == source_heads + catalog + directory + entries + validation` is what the
     /// sub-timing partition tests assert; the buckets are fed by the call sites
     /// in `s3/planner.rs` and `s3/mod.rs` described at the `PhaseMillis`
     /// definition site.
     fn add_plan_stage_micros(&self, bucket: &AtomicU64, micros: u64) {
         bucket.fetch_add(micros, Ordering::Relaxed);
         self.plan_parts_micros.fetch_add(micros, Ordering::Relaxed);
+    }
+
+    pub(crate) fn add_plan_source_heads_micros(&self, micros: u64) {
+        self.add_plan_stage_micros(&self.plan_source_heads_micros, micros);
     }
 
     pub(crate) fn add_plan_catalog_micros(&self, micros: u64) {
@@ -810,12 +891,13 @@ impl DeploymentStats {
         self.add_plan_stage_micros(&self.plan_validation_micros, micros);
     }
 
-    // Read accessor for the plan sub-timings. `bench-internals` is the dev-only
+    // Read accessors for the sub-timings. `bench-internals` is the dev-only
     // criterion-bench feature (`pnpm rust:bench`); the normal build is unchanged.
     #[cfg(any(test, feature = "bench-internals"))]
     #[cfg_attr(feature = "bench-internals", allow(dead_code))]
-    pub(crate) fn plan_parts_micros_for_test(&self) -> (u64, u64, u64, u64, u64) {
+    pub(crate) fn plan_parts_micros_for_test(&self) -> (u64, u64, u64, u64, u64, u64) {
         (
+            self.plan_source_heads_micros.load(Ordering::Relaxed),
             self.plan_catalog_micros.load(Ordering::Relaxed),
             self.plan_directory_micros.load(Ordering::Relaxed),
             self.plan_entries_micros.load(Ordering::Relaxed),
@@ -824,9 +906,47 @@ impl DeploymentStats {
         )
     }
 
+    #[cfg(any(test, feature = "bench-internals"))]
+    #[cfg_attr(feature = "bench-internals", allow(dead_code))]
+    pub(crate) fn transfer_subtimings_micros_for_test(&self) -> (u64, u64, u64, u64, u64) {
+        (
+            self.transfer_task_total_micros.load(Ordering::Relaxed),
+            self.transfer_prepare_micros.load(Ordering::Relaxed),
+            self.transfer_put_wait_micros.load(Ordering::Relaxed),
+            self.transfer_prepare_source_wait_micros
+                .load(Ordering::Relaxed),
+            self.transfer_put_source_wait_micros.load(Ordering::Relaxed),
+        )
+    }
+
     pub(crate) fn add_destination_list_millis(&self, millis: u64) {
         self.destination_list_millis
             .fetch_add(millis, Ordering::Relaxed);
+    }
+
+    pub(crate) fn add_transfer_task_total_micros(&self, micros: u64) {
+        self.transfer_task_total_micros
+            .fetch_add(micros, Ordering::Relaxed);
+    }
+
+    pub(crate) fn add_transfer_prepare_micros(&self, micros: u64) {
+        self.transfer_prepare_micros
+            .fetch_add(micros, Ordering::Relaxed);
+    }
+
+    pub(crate) fn add_transfer_put_wait_micros(&self, micros: u64) {
+        self.transfer_put_wait_micros
+            .fetch_add(micros, Ordering::Relaxed);
+    }
+
+    pub(crate) fn add_transfer_prepare_source_wait_micros(&self, micros: u64) {
+        self.transfer_prepare_source_wait_micros
+            .fetch_add(micros, Ordering::Relaxed);
+    }
+
+    pub(crate) fn add_transfer_put_source_wait_micros(&self, micros: u64) {
+        self.transfer_put_source_wait_micros
+            .fetch_add(micros, Ordering::Relaxed);
     }
 
     pub(crate) fn add_transfer_millis(&self, millis: u64) {
@@ -1191,6 +1311,9 @@ impl DeploymentStats {
             duration_ms: duration_ms(self.started.0.elapsed()),
             phase_ms: PhaseMillis {
                 plan: self.plan_millis.load(Ordering::Relaxed),
+                plan_source_heads: micros_to_millis(
+                    self.plan_source_heads_micros.load(Ordering::Relaxed),
+                ),
                 plan_catalog: micros_to_millis(self.plan_catalog_micros.load(Ordering::Relaxed)),
                 plan_directory: micros_to_millis(
                     self.plan_directory_micros.load(Ordering::Relaxed),
@@ -1201,6 +1324,22 @@ impl DeploymentStats {
                 ),
                 destination_list: self.destination_list_millis.load(Ordering::Relaxed),
                 transfer: self.transfer_millis.load(Ordering::Relaxed),
+                transfer_task_total: micros_to_millis(
+                    self.transfer_task_total_micros.load(Ordering::Relaxed),
+                ),
+                transfer_prepare: micros_to_millis(
+                    self.transfer_prepare_micros.load(Ordering::Relaxed),
+                ),
+                transfer_put_wait: micros_to_millis(
+                    self.transfer_put_wait_micros.load(Ordering::Relaxed),
+                ),
+                transfer_prepare_source_wait: micros_to_millis(
+                    self.transfer_prepare_source_wait_micros
+                        .load(Ordering::Relaxed),
+                ),
+                transfer_put_source_wait: micros_to_millis(
+                    self.transfer_put_source_wait_micros.load(Ordering::Relaxed),
+                ),
                 delete: self.delete_millis.load(Ordering::Relaxed),
                 cloudfront: self.cloudfront_millis.load(Ordering::Relaxed),
                 old_prefix_delete: self.old_prefix_delete_millis.load(Ordering::Relaxed),

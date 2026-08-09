@@ -328,7 +328,7 @@ impl PlanningBench {
             super::planner::plan_deployment(&state, &self.request, &filters, &stats, budget)
                 .await
                 .expect("synthetic planning run must succeed");
-        let (_, _, entries_micros, _, _) = stats.plan_parts_micros_for_test();
+        let (_, _, entries_micros, _, _, _) = stats.plan_parts_micros_for_test();
         PlanningOutcome {
             plan_entries_micros: entries_micros,
             manifest_len: manifest.len(),

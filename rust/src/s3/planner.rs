@@ -186,6 +186,7 @@ pub(super) async fn plan_deployment(
                 state,
                 &request.source_bucket_names[source_index],
                 &request.source_object_keys[source_index],
+                stats,
             )
             .await?;
             let archive_index = archives.len();
@@ -217,6 +218,7 @@ pub(super) async fn plan_deployment(
                 state,
                 &request.source_bucket_names[source_index],
                 &request.source_object_keys[source_index],
+                stats,
             )
             .await?;
 
@@ -362,15 +364,24 @@ async fn source_object_metadata(
     state: &AppState,
     bucket: &str,
     key: &str,
+    stats: &DeploymentStats,
 ) -> Result<(String, u64)> {
-    let response = state
+    // planSourceHeads: the per-source metadata await in copy mode. Like the
+    // extract-mode `HeadObject`, it runs in the `plan_deployment` loop outside
+    // every ZIP planning bucket, so the span is exclusive and feeds the plan
+    // parts total. The span is recorded on the error path too: a failed or
+    // timed-out HEAD still waited, and failure summaries retain these stats.
+    let started = std::time::Instant::now();
+    let head = state
         .source_s3
         .head_object()
         .bucket(bucket)
         .key(key)
         .send()
-        .await
-        .with_context(|| format!("failed to read source object metadata s3://{bucket}/{key}"))?;
+        .await;
+    stats.add_plan_source_heads_micros(crate::util::duration_micros(started.elapsed()));
+    let response =
+        head.with_context(|| format!("failed to read source object metadata s3://{bucket}/{key}"))?;
 
     let size = response
         .content_length()
@@ -645,7 +656,9 @@ async fn load_authenticated_catalog(
         },
         source_budget,
     );
-    let mut reader = zip_entry_reader(store, plan.clone())?;
+    // No stats handle: this plan-phase catalog read is not a transfer reader,
+    // so its fetch waits must not land in either transfer source-wait counter.
+    let mut reader = zip_entry_reader(store, plan.clone(), None)?;
     // Reserve the declared size up front. The read loop below refuses to append past
     // `plan.size`, which is that same declared size, so the buffer can never outgrow this
     // capacity and geometric reallocation cannot overshoot what was just charged.
@@ -2351,15 +2364,29 @@ mod tests {
                     .expect("synthetic planning run succeeds");
             assert_eq!(manifest.len(), ENTRY_COUNT);
 
-            let (catalog_micros, directory_micros, entries_micros, validation_micros, parts_micros) =
-                stats.plan_parts_micros_for_test();
+            let (
+                source_heads_micros,
+                catalog_micros,
+                directory_micros,
+                entries_micros,
+                validation_micros,
+                parts_micros,
+            ) = stats.plan_parts_micros_for_test();
             assert_eq!(
                 parts_micros,
-                catalog_micros + directory_micros + entries_micros + validation_micros,
-                "the four sub-timings must partition the instrumented planning stages \
+                source_heads_micros
+                    + catalog_micros
+                    + directory_micros
+                    + entries_micros
+                    + validation_micros,
+                "the five sub-timings must partition the instrumented planning stages \
                  (trusted={trusted})"
             );
             assert!(parts_micros > 0, "the run must record planning work");
+            assert!(
+                source_heads_micros > 0,
+                "the per-source metadata HeadObject must be measured"
+            );
             assert!(
                 directory_micros > 0,
                 "the EOCD and central-directory fetch must be measured"
@@ -2386,24 +2413,106 @@ mod tests {
             // of the millisecond fields stays within one millisecond per bucket
             // of the microsecond identity.
             let snapshot = stats.snapshot("Create", "success", &request);
-            let parts_ms = snapshot.phase_ms.plan_catalog
+            let parts_ms = snapshot.phase_ms.plan_source_heads
+                + snapshot.phase_ms.plan_catalog
                 + snapshot.phase_ms.plan_directory
                 + snapshot.phase_ms.plan_entries
                 + snapshot.phase_ms.plan_validation;
-            // Four buckets round to nearest independently, so parts_ms minus the
-            // floored microsecond total lands in exactly [-1, +2]: each bucket
-            // that rounds down loses up to 499 us (four of them can drop the sum
-            // one whole ms below the floor -> -1), and each that rounds up adds
-            // up to 500 us (four -> +2). The old lower bound was written exact
-            // and so failed whenever a fast host rounded every bucket down (four
-            // 400 us buckets snap to 0 ms while the total is 1600 us -> 0 >= 1
-            // fails). +1 is the tight lower bound: it still passes the -1 floor
-            // case yet rejects the -2 that only an undercounting accounting bug
-            // could produce. +2 would have been one looser than reachable. The
-            // upper bound is already tight at +2 (== (micros + 2000)/1000).
-            assert!(parts_ms + 1 >= parts_micros / 1_000);
-            assert!(parts_ms <= (parts_micros + 2_000) / 1_000);
+            // Five buckets round to nearest independently, so parts_ms minus
+            // the floored microsecond total lands in exactly [-2, +3]: each
+            // bucket that rounds down loses its fractional part (five 499 us
+            // buckets total 2495 us -> floor 2 while the sum snaps to 0, a -2
+            // deficit), and each that rounds up gains up to one whole
+            // millisecond (five 500 us buckets total 2500 us -> floor 2 while
+            // the sum snaps to 5, a +3 surplus). The bounds are tight: -2 and
+            // +3 are each reachable, and any wider bound would accept an
+            // undercounting or overcounting accounting bug.
+            assert!(parts_ms + 2 >= parts_micros / 1_000);
+            assert!(parts_ms <= (parts_micros + 2_500) / 1_000);
         }
+    }
+
+    /// Copy mode (`Extract: false`) runs no ZIP stages, so the four ZIP buckets
+    /// report 0 and `planSourceHeads` carries the metadata `HeadObject`
+    /// round-trip alone; the parts total must equal that bucket and nothing
+    /// else.
+    #[tokio::test]
+    async fn plan_source_heads_carry_copy_mode_head_objects() {
+        let mut request = copy_request();
+        request.extract = false;
+
+        let state = crate::types::test_app_state_with_replay(StaticReplayClient::new(vec![
+            replay_head_event(128),
+        ]));
+        let stats = Arc::new(DeploymentStats::default());
+        let budget = SourceByteBudget::new(256 * 1024 * 1024, Arc::clone(&stats), false)
+            .expect("valid test source budget");
+        let filters = compile_filters(&[], &[]).expect("empty filters compile");
+
+        let (_, manifest) =
+            super::plan_deployment(&state, &request, &filters, &stats, Arc::clone(&budget))
+                .await
+                .expect("copy-mode planning run succeeds");
+        assert_eq!(manifest.len(), 1);
+
+        let (
+            source_heads_micros,
+            catalog_micros,
+            directory_micros,
+            entries_micros,
+            validation_micros,
+            parts_micros,
+        ) = stats.plan_parts_micros_for_test();
+        assert_eq!(
+            catalog_micros + directory_micros + entries_micros + validation_micros,
+            0
+        );
+        assert!(
+            source_heads_micros > 0,
+            "the copy-mode metadata HeadObject must be measured"
+        );
+        assert_eq!(
+            parts_micros, source_heads_micros,
+            "copy mode must partition into planSourceHeads alone"
+        );
+    }
+
+    /// The copy-mode metadata `HeadObject` is recorded on the error path too:
+    /// a failed HEAD still waited, and `planSourceHeads` must keep that span so
+    /// failure summaries retain the wait they logged.
+    #[tokio::test]
+    async fn failed_copy_mode_head_still_records_its_wait_span() {
+        let mut request = copy_request();
+        request.extract = false;
+
+        let state = crate::types::test_app_state_with_replay(StaticReplayClient::new(vec![
+            ReplayEvent::new(
+                Request::builder()
+                    .method("HEAD")
+                    .uri("https://s3.test/source-bucket/assets/archive.zip")
+                    .body(SdkBody::empty())
+                    .unwrap(),
+                Response::builder()
+                    .status(500)
+                    .body(SdkBody::empty())
+                    .unwrap(),
+            ),
+        ]));
+        let stats = Arc::new(DeploymentStats::default());
+        let budget = SourceByteBudget::new(256 * 1024 * 1024, Arc::clone(&stats), false)
+            .expect("valid test source budget");
+        let filters = compile_filters(&[], &[]).expect("empty filters compile");
+
+        super::plan_deployment(&state, &request, &filters, &stats, Arc::clone(&budget))
+            .await
+            .err()
+            .expect("a failed copy-mode metadata HEAD must fail planning");
+
+        let (source_heads_micros, ..) = stats.plan_parts_micros_for_test();
+        assert!(
+            source_heads_micros > 0,
+            "a failed HEAD still waited for its span, got {source_heads_micros} us"
+        );
     }
 
     /// Falsifiable F-4 gate (accounting defect 3): sub-millisecond spans are no
@@ -2441,11 +2550,15 @@ mod tests {
         assert_eq!(snapshot.phase_ms.plan_entries, 1);
 
         // The microsecond partition identity holds for synthetic spans too.
-        let (catalog, directory, entries, validation, parts) = stats.plan_parts_micros_for_test();
-        assert_eq!(parts, catalog + directory + entries + validation);
+        let (source_heads, catalog, directory, entries, validation, parts) =
+            stats.plan_parts_micros_for_test();
         assert_eq!(
-            (catalog, directory, entries, validation),
-            (500, 499, 500, 1500)
+            parts,
+            source_heads + catalog + directory + entries + validation
+        );
+        assert_eq!(
+            (source_heads, catalog, directory, entries, validation),
+            (0, 500, 499, 500, 1500)
         );
     }
 

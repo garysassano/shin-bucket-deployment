@@ -17,7 +17,7 @@ use tokio::sync::mpsc;
 use tokio::task::AbortHandle;
 
 use crate::replace::{MarkerReplacements, ReplacementOptions, ReplacementResult};
-use crate::types::DeploymentStats;
+use crate::types::{DeploymentStats, SourceFetchPhase, TransferFetchStats};
 
 use super::super::planner::ZipEntryPlan;
 use super::super::{S3_SINGLE_PUT_LIMIT, ZIP_ENTRY_BODY_CHUNK_BYTES, ZIP_ENTRY_BODY_PIPE_CHUNKS};
@@ -222,6 +222,7 @@ pub(crate) struct ZipEntryAsyncReader {
     attempt_claim: Option<EntryAttemptClaim>,
     reader: Option<EntryDataReader>,
     init: Option<Pin<Box<dyn Future<Output = io::Result<EntryDataReader>> + Send>>>,
+    stats: Option<TransferFetchStats>,
 }
 
 pub(super) struct EntryDataReader {
@@ -233,6 +234,14 @@ pub(super) struct EntryDataReader {
     in_flight: Option<Pin<Box<dyn Future<Output = io::Result<Bytes>> + Send>>>,
     in_flight_start: u64,
     remaining_blocks: VecDeque<usize>,
+    /// Stats handle plus phase label for the transfer source-fetch wait. The
+    /// wait lands in `transferPrepareSourceWait` or `transferPutSourceWait`
+    /// depending on which phase span drove the read. `None` for the plan-phase
+    /// embedded-catalog read, which is not a transfer reader and stays
+    /// uncounted.
+    stats: Option<TransferFetchStats>,
+    /// When the in-flight source fetch was created; consumed when it resolves.
+    fetch_started: Option<std::time::Instant>,
 }
 
 struct ReceiverBody {
@@ -267,6 +276,7 @@ struct ReceiverBodyInit {
     body_state: Arc<UploadBodyState>,
     attempts: Arc<AtomicUsize>,
     marker: Option<MarkerBodyContext>,
+    stats: Option<TransferFetchStats>,
 }
 
 #[derive(Clone)]
@@ -283,13 +293,18 @@ struct ZipEntryInputValidator<'a> {
 }
 
 impl ZipEntryAsyncReader {
-    pub(crate) fn new(store: Arc<SourceBlockStore>, plan: std::sync::Arc<ZipEntryPlan>) -> Self {
+    pub(crate) fn new(
+        store: Arc<SourceBlockStore>,
+        plan: std::sync::Arc<ZipEntryPlan>,
+        stats: Option<TransferFetchStats>,
+    ) -> Self {
         Self {
             store,
             plan,
             attempt_claim: None,
             reader: None,
             init: None,
+            stats,
         }
     }
 
@@ -297,6 +312,7 @@ impl ZipEntryAsyncReader {
         store: Arc<SourceBlockStore>,
         plan: std::sync::Arc<ZipEntryPlan>,
         attempt_claim: EntryAttemptClaim,
+        stats: Option<TransferFetchStats>,
     ) -> Self {
         Self {
             store,
@@ -304,6 +320,7 @@ impl ZipEntryAsyncReader {
             attempt_claim: Some(attempt_claim),
             reader: None,
             init: None,
+            stats,
         }
     }
 }
@@ -319,14 +336,17 @@ impl AsyncRead for ZipEntryAsyncReader {
                 let store = self.store.clone();
                 let plan = std::sync::Arc::clone(&self.plan);
                 let attempt_claim = self.attempt_claim.take();
+                let stats = self.stats.clone();
                 self.init = Some(Box::pin(async move {
                     match attempt_claim {
                         Some(attempt_claim) => {
-                            open_entry_data_reader_with_claim(store, plan, attempt_claim).await
+                            open_entry_data_reader_with_claim(store, plan, attempt_claim, stats)
+                                .await
                         }
                         None => {
                             let attempt_claim = store.claim_zip_entry_attempt(&plan);
-                            open_entry_data_reader_with_claim(store, plan, attempt_claim).await
+                            open_entry_data_reader_with_claim(store, plan, attempt_claim, stats)
+                                .await
                         }
                     }
                 }));
@@ -358,15 +378,17 @@ impl AsyncRead for ZipEntryAsyncReader {
 pub(super) async fn open_entry_data_reader(
     store: Arc<SourceBlockStore>,
     plan: ZipEntryPlan,
+    stats: Option<TransferFetchStats>,
 ) -> io::Result<EntryDataReader> {
     let attempt_claim = store.claim_zip_entry_attempt(&plan);
-    open_entry_data_reader_with_claim(store, std::sync::Arc::new(plan), attempt_claim).await
+    open_entry_data_reader_with_claim(store, std::sync::Arc::new(plan), attempt_claim, stats).await
 }
 
 async fn open_entry_data_reader_with_claim(
     store: Arc<SourceBlockStore>,
     plan: std::sync::Arc<ZipEntryPlan>,
     attempt_claim: EntryAttemptClaim,
+    stats: Option<TransferFetchStats>,
 ) -> io::Result<EntryDataReader> {
     let header_end_exclusive = plan
         .source_offset
@@ -440,7 +462,7 @@ async fn open_entry_data_reader_with_claim(
         ));
     }
 
-    EntryDataReader::new(store, attempt_claim, data_offset, data_end_exclusive)
+    EntryDataReader::new(store, attempt_claim, data_offset, data_end_exclusive, stats)
 }
 
 /// Reads the 30-byte local file header, stitching it across source blocks if it straddles
@@ -497,6 +519,7 @@ impl EntryDataReader {
         attempt_claim: EntryAttemptClaim,
         start: u64,
         end_exclusive: u64,
+        stats: Option<TransferFetchStats>,
     ) -> io::Result<Self> {
         let remaining_blocks = attempt_claim.activate()?;
         Ok(Self {
@@ -508,6 +531,8 @@ impl EntryDataReader {
             in_flight: None,
             in_flight_start: start,
             remaining_blocks,
+            stats,
+            fetch_started: None,
         })
     }
 
@@ -526,6 +551,7 @@ impl EntryDataReader {
         let end_exclusive = self.end_exclusive;
         let store = Arc::clone(&self.store);
         self.in_flight_start = start;
+        self.fetch_started = Some(std::time::Instant::now());
         self.in_flight = Some(Box::pin(async move {
             store
                 .slice_from(start, end_exclusive)
@@ -578,7 +604,29 @@ impl EntryDataReader {
         };
         let fetched = match in_flight.poll_unpin(cx) {
             Poll::Pending => return Poll::Pending,
-            Poll::Ready(result) => result?,
+            Poll::Ready(result) => {
+                // transferPrepareSourceWait / transferPutSourceWait: the fetch
+                // resolved, so the reader was blocked on source bytes for the
+                // recorded span. Accumulated on success and error alike, into
+                // the counter of whichever phase span drove the reader.
+                if let (Some(started), Some(fetch_stats)) = (self.fetch_started.take(), &self.stats)
+                {
+                    let micros = crate::util::duration_micros(started.elapsed());
+                    match fetch_stats.phase {
+                        SourceFetchPhase::Prepare => {
+                            fetch_stats
+                                .stats
+                                .add_transfer_prepare_source_wait_micros(micros);
+                        }
+                        SourceFetchPhase::Put => {
+                            fetch_stats
+                                .stats
+                                .add_transfer_put_source_wait_micros(micros);
+                        }
+                    }
+                }
+                result?
+            }
         };
 
         self.buffer_start = self.in_flight_start;
@@ -643,6 +691,7 @@ pub(crate) fn zip_entry_body(
     content_length: u64,
     body_state: Arc<UploadBodyState>,
     attempts: Arc<AtomicUsize>,
+    stats: Option<TransferFetchStats>,
 ) -> ByteStream {
     zip_entry_body_inner(
         store,
@@ -651,6 +700,7 @@ pub(crate) fn zip_entry_body(
         body_state,
         attempts,
         None,
+        stats,
     )
 }
 
@@ -661,6 +711,7 @@ pub(crate) fn marker_zip_entry_body(
     body_state: Arc<UploadBodyState>,
     attempts: Arc<AtomicUsize>,
     marker: MarkerBodyContext,
+    stats: Option<TransferFetchStats>,
 ) -> ByteStream {
     zip_entry_body_inner(
         store,
@@ -669,6 +720,7 @@ pub(crate) fn marker_zip_entry_body(
         body_state,
         attempts,
         Some(marker),
+        stats,
     )
 }
 
@@ -679,6 +731,7 @@ fn zip_entry_body_inner(
     body_state: Arc<UploadBodyState>,
     attempts: Arc<AtomicUsize>,
     marker: Option<MarkerBodyContext>,
+    stats: Option<TransferFetchStats>,
 ) -> ByteStream {
     ByteStream::new(SdkBody::retryable(move || {
         zip_entry_sdk_body(
@@ -688,6 +741,7 @@ fn zip_entry_body_inner(
                 body_state: Arc::clone(&body_state),
                 attempts: Arc::clone(&attempts),
                 marker: marker.clone(),
+                stats: stats.clone(),
             },
             content_length,
         )
@@ -725,6 +779,7 @@ pub(crate) async fn plan_marker_zip_entry(
     store: Arc<SourceBlockStore>,
     plan: ZipEntryPlan,
     marker_replacements: &MarkerReplacements,
+    stats: Option<TransferFetchStats>,
 ) -> io::Result<ReplacementResult> {
     let mut output = tokio::io::sink();
     replace_marker_zip_entry(
@@ -733,6 +788,7 @@ pub(crate) async fn plan_marker_zip_entry(
         None,
         marker_replacements,
         &mut output,
+        stats,
     )
     .await
 }
@@ -748,6 +804,7 @@ pub(crate) async fn plan_marker_zip_entry_spooled(
     plan: ZipEntryPlan,
     marker_replacements: &MarkerReplacements,
     spool_limit_bytes: u64,
+    stats: Option<TransferFetchStats>,
 ) -> io::Result<(ReplacementResult, Option<Bytes>)> {
     let mut output = CappedMarkerSpool::new(spool_limit_bytes);
     let result = replace_marker_zip_entry(
@@ -756,6 +813,7 @@ pub(crate) async fn plan_marker_zip_entry_spooled(
         None,
         marker_replacements,
         &mut output,
+        stats,
     )
     .await?;
     Ok((result, output.into_spool()))
@@ -819,8 +877,10 @@ async fn replace_marker_zip_entry<W: AsyncWrite + Unpin>(
     attempt_claim: Option<EntryAttemptClaim>,
     marker_replacements: &MarkerReplacements,
     output: &mut W,
+    stats: Option<TransferFetchStats>,
 ) -> io::Result<ReplacementResult> {
-    let mut reader = zip_entry_reader_inner(store, std::sync::Arc::clone(&plan), attempt_claim)?;
+    let mut reader =
+        zip_entry_reader_inner(store, std::sync::Arc::clone(&plan), attempt_claim, stats)?;
     let mut validator = ZipEntryInputValidator::new(&plan);
     let result = marker_replacements
         .replace_stream(
@@ -839,22 +899,25 @@ async fn replace_marker_zip_entry<W: AsyncWrite + Unpin>(
 pub(crate) fn zip_entry_reader(
     store: Arc<SourceBlockStore>,
     plan: ZipEntryPlan,
+    stats: Option<TransferFetchStats>,
 ) -> io::Result<Pin<Box<dyn AsyncRead + Send>>> {
-    zip_entry_reader_inner(store, std::sync::Arc::new(plan), None)
+    zip_entry_reader_inner(store, std::sync::Arc::new(plan), None, stats)
 }
 
 fn zip_entry_reader_inner(
     store: Arc<SourceBlockStore>,
     plan: std::sync::Arc<ZipEntryPlan>,
     attempt_claim: Option<EntryAttemptClaim>,
+    stats: Option<TransferFetchStats>,
 ) -> io::Result<Pin<Box<dyn AsyncRead + Send>>> {
     let reader = match attempt_claim {
         Some(attempt_claim) => ZipEntryAsyncReader::with_attempt_claim(
             store,
             std::sync::Arc::clone(&plan),
             attempt_claim,
+            stats,
         ),
-        None => ZipEntryAsyncReader::new(store, std::sync::Arc::clone(&plan)),
+        None => ZipEntryAsyncReader::new(store, std::sync::Arc::clone(&plan), stats),
     };
     match plan.compression_code {
         0 => Ok(Box::pin(reader)),
@@ -884,6 +947,7 @@ pub(super) async fn send_zip_entry_chunks(
     plan: ZipEntryPlan,
     sender: mpsc::Sender<std::result::Result<BodyFrame, BodyError>>,
     body_state: Arc<UploadBodyState>,
+    stats: Option<TransferFetchStats>,
 ) -> std::result::Result<(), BodyError> {
     send_zip_entry_chunks_inner(
         store,
@@ -892,6 +956,7 @@ pub(super) async fn send_zip_entry_chunks(
         sender,
         body_state,
         None,
+        stats,
     )
     .await
 }
@@ -903,9 +968,11 @@ async fn send_zip_entry_chunks_inner(
     sender: mpsc::Sender<std::result::Result<BodyFrame, BodyError>>,
     body_state: Arc<UploadBodyState>,
     attempt_number: Option<u64>,
+    stats: Option<TransferFetchStats>,
 ) -> std::result::Result<(), BodyError> {
-    let mut reader = zip_entry_reader_inner(store, std::sync::Arc::clone(&plan), attempt_claim)
-        .map_err(boxed_body_error)?;
+    let mut reader =
+        zip_entry_reader_inner(store, std::sync::Arc::clone(&plan), attempt_claim, stats)
+            .map_err(boxed_body_error)?;
     let mut md5 = Md5::new();
     let mut crc32 = Crc32Hasher::new();
     let mut bytes = 0_u64;
@@ -987,6 +1054,7 @@ pub(super) async fn send_marker_zip_entry_chunks(
     marker_replacements: Arc<MarkerReplacements>,
     sender: mpsc::Sender<std::result::Result<BodyFrame, BodyError>>,
     body_state: Arc<UploadBodyState>,
+    stats: Option<TransferFetchStats>,
 ) -> std::result::Result<(), BodyError> {
     send_marker_zip_entry_chunks_inner(
         store,
@@ -997,6 +1065,7 @@ pub(super) async fn send_marker_zip_entry_chunks(
         sender,
         body_state,
         None,
+        stats,
     )
     .await
 }
@@ -1011,6 +1080,7 @@ async fn send_marker_zip_entry_chunks_inner(
     sender: mpsc::Sender<std::result::Result<BodyFrame, BodyError>>,
     body_state: Arc<UploadBodyState>,
     attempt_number: Option<u64>,
+    stats: Option<TransferFetchStats>,
 ) -> std::result::Result<(), BodyError> {
     let pipe_capacity = ZIP_ENTRY_BODY_CHUNK_BYTES.saturating_mul(2);
     let (mut output_reader, mut output_writer) = tokio::io::duplex(pipe_capacity);
@@ -1021,6 +1091,7 @@ async fn send_marker_zip_entry_chunks_inner(
             attempt_claim,
             &marker_replacements,
             &mut output_writer,
+            stats,
         )
         .await
         .map_err(boxed_body_error)?;
@@ -1196,6 +1267,7 @@ impl Body for ReceiverBody {
                         sender.clone(),
                         Arc::clone(&init.body_state),
                         attempt_number,
+                        init.stats.clone(),
                     ))
                     .catch_unwind()
                     .await
@@ -1207,6 +1279,7 @@ impl Body for ReceiverBody {
                         sender.clone(),
                         Arc::clone(&init.body_state),
                         attempt_number,
+                        init.stats.clone(),
                     ))
                     .catch_unwind()
                     .await

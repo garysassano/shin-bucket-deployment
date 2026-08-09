@@ -163,7 +163,7 @@ async fn external_zip_local_extra_fields_stream_with_directory_bounds() {
             )
         };
         let store = ready_store_for_plan(&bytes, &plan);
-        let mut entry = zip_entry_reader(store, plan).expect("fixture entry reader");
+        let mut entry = zip_entry_reader(store, plan, None).expect("fixture entry reader");
         let mut output = Vec::new();
         entry.read_to_end(&mut output).await.unwrap();
 
@@ -206,7 +206,7 @@ async fn completed_entry_reader_drops_its_source_block_slice_before_releasing_ca
     let zip = zip_from_entry("buffer.txt", b"source buffer lifetime");
     let plan = zip_plan_from_archive(&zip, "buffer.txt");
     let store = ready_store_for_plan(&zip, &plan);
-    let mut reader = open_entry_data_reader(store, plan)
+    let mut reader = open_entry_data_reader(store, plan, None)
         .await
         .expect("entry data reader");
     let mut compressed = Vec::new();
@@ -439,7 +439,7 @@ async fn zip_entry_reader_decompresses_and_validates_crc() {
     let zip = zip_from_entry("index.txt", b"hello zipped world");
     let plan = zip_plan_from_archive(&zip, "index.txt");
     let store = ready_store_for_plan(&zip, &plan);
-    let mut reader = zip_entry_reader(store, plan).unwrap();
+    let mut reader = zip_entry_reader(store, plan, None).unwrap();
     let mut output = Vec::new();
 
     reader.read_to_end(&mut output).await.unwrap();
@@ -455,9 +455,15 @@ async fn zip_entry_reader_rejects_crc_mismatch() {
     let store = ready_store_for_plan(&zip, &plan);
     let (sender, _receiver) = tokio::sync::mpsc::channel(1);
 
-    let error = send_zip_entry_chunks(store, plan, sender, Arc::new(UploadBodyState::default()))
-        .await
-        .unwrap_err();
+    let error = send_zip_entry_chunks(
+        store,
+        plan,
+        sender,
+        Arc::new(UploadBodyState::default()),
+        None,
+    )
+    .await
+    .unwrap_err();
 
     assert!(error.to_string().contains("CRC32"));
 }
@@ -473,9 +479,15 @@ async fn direct_stream_withholds_completion_when_authenticated_md5_mismatches() 
     let store = ready_store_for_plan(&zip, &plan);
     let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
 
-    let error = send_zip_entry_chunks(store, plan, sender, Arc::new(UploadBodyState::default()))
-        .await
-        .expect_err("trusted MD5 mismatch must fail the body");
+    let error = send_zip_entry_chunks(
+        store,
+        plan,
+        sender,
+        Arc::new(UploadBodyState::default()),
+        None,
+    )
+    .await
+    .expect_err("trusted MD5 mismatch must fail the body");
 
     assert!(error.to_string().contains("authenticated catalog entry"));
     assert!(
@@ -496,7 +508,7 @@ async fn streaming_an_entry_always_records_its_md5() {
     let (sender, _receiver) = tokio::sync::mpsc::channel(2);
     let state = Arc::new(UploadBodyState::default());
 
-    send_zip_entry_chunks(store, plan, sender, Arc::clone(&state))
+    send_zip_entry_chunks(store, plan, sender, Arc::clone(&state), None)
         .await
         .expect("SSE-S3 stream");
 
@@ -520,9 +532,15 @@ async fn direct_stream_frames_preserve_body_boundaries() {
         let store = ready_store_for_plan(&zip, &plan);
         let (sender, mut receiver) = tokio::sync::mpsc::channel(expected_frames.len());
 
-        send_zip_entry_chunks(store, plan, sender, Arc::new(UploadBodyState::default()))
-            .await
-            .expect("direct stream");
+        send_zip_entry_chunks(
+            store,
+            plan,
+            sender,
+            Arc::new(UploadBodyState::default()),
+            None,
+        )
+        .await
+        .expect("direct stream");
 
         let mut actual_frames = Vec::new();
         while let Ok(frame) = receiver.try_recv() {
@@ -679,7 +697,7 @@ async fn marker_planning_streams_exact_length_and_rejects_crc_failure() {
     .expect("marker automaton");
     let store = ready_store_for_plan(&zip, &plan);
 
-    let result = plan_marker_zip_entry(store, plan.clone(), &replacements)
+    let result = plan_marker_zip_entry(store, plan.clone(), &replacements, None)
         .await
         .expect("marker planning pass");
 
@@ -692,7 +710,7 @@ async fn marker_planning_streams_exact_length_and_rejects_crc_failure() {
     let mut invalid = plan;
     invalid.crc32 ^= 1;
     let invalid_store = ready_store_for_plan(&zip, &invalid);
-    let error = plan_marker_zip_entry(invalid_store, invalid, &replacements)
+    let error = plan_marker_zip_entry(invalid_store, invalid, &replacements, None)
         .await
         .expect_err("marker planning must preserve CRC validation");
     assert!(error.to_string().contains("CRC32"));
@@ -712,7 +730,7 @@ async fn marker_spooled_planning_retains_bytes_within_the_cap() {
 
     // The cap sits exactly on the output length: the boundary is inclusive.
     let (result, spooled) =
-        plan_marker_zip_entry_spooled(store, plan, &replacements, expected.len() as u64)
+        plan_marker_zip_entry_spooled(store, plan, &replacements, expected.len() as u64, None)
             .await
             .expect("spooled marker planning pass");
 
@@ -744,7 +762,7 @@ async fn marker_spooled_planning_over_cap_drops_the_spool_but_still_hashes() {
     let expected = b"before expanded-value after";
 
     let (result, spooled) =
-        plan_marker_zip_entry_spooled(store, plan, &replacements, expected.len() as u64 - 1)
+        plan_marker_zip_entry_spooled(store, plan, &replacements, expected.len() as u64 - 1, None)
             .await
             .expect("marker planning must run to completion past the cap");
 
@@ -779,7 +797,7 @@ async fn marker_spooled_planning_enforces_the_cap_on_output_not_input() {
     .expect("marker automaton");
     let store = ready_store_for_plan(&zip, &plan);
 
-    let (result, spooled) = plan_marker_zip_entry_spooled(store, plan, &replacements, cap)
+    let (result, spooled) = plan_marker_zip_entry_spooled(store, plan, &replacements, cap, None)
         .await
         .expect("marker planning pass");
 
@@ -816,6 +834,7 @@ async fn marker_upload_stream_is_retryable_and_withholds_the_final_chunk_until_v
             replacements,
             stats: Arc::new(DeploymentStats::default()),
         },
+        None,
     );
     let sdk_body = body.into_inner();
     let replay = sdk_body.try_clone().expect("retryable marker body");
@@ -861,6 +880,7 @@ async fn marker_upload_crc_failure_releases_no_final_body_frame() {
         replacements,
         sender,
         Arc::new(UploadBodyState::default()),
+        None,
     )
     .await
     .expect_err("CRC failure must fail the marker body");
@@ -894,6 +914,7 @@ async fn marker_upload_stops_when_body_receiver_is_dropped() {
             replacements,
             sender,
             Arc::new(UploadBodyState::default()),
+            None,
         ),
     )
     .await;
@@ -911,7 +932,7 @@ async fn unpolled_retryable_body_clones_create_no_source_work() {
     let store = ready_store_for_plan(&zip, &plan);
     let body_state = Arc::new(UploadBodyState::default());
     let body_attempts = Arc::new(AtomicUsize::new(0));
-    let body = zip_entry_body(Arc::clone(&store), plan, 9, body_state, body_attempts);
+    let body = zip_entry_body(Arc::clone(&store), plan, 9, body_state, body_attempts, None);
     let sdk_body = body.into_inner();
     let unpolled_clone = sdk_body.try_clone().expect("retryable body clone");
 
@@ -947,6 +968,7 @@ async fn unpolled_retryable_clone_does_not_overwrite_consumed_attempt_state() {
         b"snapshot body".len() as u64,
         Arc::clone(&body_state),
         Arc::new(AtomicUsize::new(0)),
+        None,
     );
     let sdk_body = body.into_inner();
     let unpolled_clone = sdk_body.try_clone().expect("retryable body clone");
@@ -1020,6 +1042,7 @@ async fn abandoned_polled_upload_body_releases_claims_without_retry() {
         plan.size,
         Arc::clone(&body_state),
         Arc::new(AtomicUsize::new(0)),
+        None,
     )
     .into_inner();
 
@@ -1130,6 +1153,7 @@ async fn abandoned_polled_upload_body_captures_detailed_state_before_abort() {
         plan.size,
         Arc::clone(&body_state),
         Arc::new(AtomicUsize::new(0)),
+        None,
     )
     .into_inner();
 
@@ -1204,6 +1228,7 @@ async fn completed_upload_body_reports_end_before_terminal_poll() {
         expected.len() as u64,
         Arc::new(UploadBodyState::default()),
         Arc::new(AtomicUsize::new(0)),
+        None,
     )
     .into_inner();
 
@@ -1246,6 +1271,7 @@ async fn empty_upload_body_completes_on_terminal_poll() {
         0,
         Arc::new(UploadBodyState::default()),
         Arc::new(AtomicUsize::new(0)),
+        None,
     )
     .into_inner();
 
@@ -1300,6 +1326,7 @@ async fn dropped_upload_body_cancels_global_capacity_wait_and_replays() {
         plan.size,
         Arc::new(UploadBodyState::default()),
         Arc::new(AtomicUsize::new(0)),
+        None,
     );
     let mut first = body.into_inner();
     let mut replay_body = first.try_clone().expect("retryable ZIP body");
@@ -1398,6 +1425,7 @@ async fn dropped_upload_body_cancels_ranged_get_and_replays() {
         plan.size,
         Arc::new(UploadBodyState::default()),
         Arc::new(AtomicUsize::new(0)),
+        None,
     );
     let mut first = body.into_inner();
     let mut replay_body = first.try_clone().expect("retryable ZIP body");
@@ -1625,7 +1653,7 @@ async fn open_entry_data_reader_stitches_a_local_header_across_a_block_boundary(
     let plan = zip_plan_from_archive(&zip, "straddle.txt");
     let single_block = ready_store_for_plan(&zip, &plan);
     let mut expected = Vec::new();
-    open_entry_data_reader(single_block, plan.clone())
+    open_entry_data_reader(single_block, plan.clone(), None)
         .await
         .expect("single-block reader")
         .read_to_end(&mut expected)
@@ -1650,7 +1678,7 @@ async fn open_entry_data_reader_stitches_a_local_header_across_a_block_boundary(
         );
 
         let mut actual = Vec::new();
-        open_entry_data_reader(store, plan.clone())
+        open_entry_data_reader(store, plan.clone(), None)
             .await
             .unwrap_or_else(|error| {
                 panic!("straddling header at block size {block_bytes} must parse: {error}")
@@ -1681,7 +1709,7 @@ async fn open_entry_data_reader_rejects_header_bytes_outside_every_planned_block
     );
     let plan = ZipEntryPlan::for_test("entry.txt", 1, 0, 64);
 
-    let error = match open_entry_data_reader(store, plan).await {
+    let error = match open_entry_data_reader(store, plan, None).await {
         Ok(_) => panic!("expected unplanned local header bytes to be rejected"),
         Err(error) => error,
     };
@@ -2079,12 +2107,47 @@ fn replay_app_state(replay: StaticReplayClient) -> AppState {
 async fn head_source_rejects_a_source_without_an_etag() {
     let state = replay_app_state(StaticReplayClient::new(vec![head_replay_event(None, 128)]));
 
-    let error = head_source(&state, "bucket", "archive.zip")
+    let error = head_source(&state, "bucket", "archive.zip", &DeploymentStats::default())
         .await
         .expect_err("a source HEAD without an ETag must fail closed");
     assert!(
         error.to_string().contains("missing an ETag"),
         "unexpected error: {error}"
+    );
+}
+
+#[tokio::test]
+async fn head_source_records_the_wait_span_on_a_failed_head() {
+    // The HEAD request itself fails (500), so `.send().await` errors; the
+    // request still waited, and that span must land in `planSourceHeads` on the
+    // error path too, because failure summaries retain and log these stats.
+    let state = replay_app_state(StaticReplayClient::new(vec![ReplayEvent::new(
+        Request::builder()
+            .method("HEAD")
+            .uri("https://s3.test/bucket/archive.zip")
+            .body(SdkBody::empty())
+            .unwrap(),
+        Response::builder()
+            .status(500)
+            .body(SdkBody::empty())
+            .unwrap(),
+    )]));
+    let stats = DeploymentStats::default();
+
+    let error = head_source(&state, "bucket", "archive.zip", &stats)
+        .await
+        .expect_err("a failed source HEAD must fail closed");
+    assert!(
+        error
+            .to_string()
+            .contains("failed to read source archive metadata"),
+        "unexpected error: {error}"
+    );
+
+    let (source_heads_micros, ..) = stats.plan_parts_micros_for_test();
+    assert!(
+        source_heads_micros > 0,
+        "a failed HEAD still waited for its span, got {source_heads_micros} us"
     );
 }
 
@@ -2095,7 +2158,7 @@ async fn head_source_keeps_the_returned_etag_verbatim() {
         128,
     )]));
 
-    let head = head_source(&state, "bucket", "archive.zip")
+    let head = head_source(&state, "bucket", "archive.zip", &DeploymentStats::default())
         .await
         .expect("a source HEAD with an ETag must succeed");
     assert_eq!(head.len, 128);

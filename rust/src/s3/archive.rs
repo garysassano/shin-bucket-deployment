@@ -56,8 +56,9 @@ pub(crate) async fn prepare_source_zip(
     state: &AppState,
     bucket: &str,
     key: &str,
+    stats: &crate::types::DeploymentStats,
 ) -> Result<Arc<SourceClient>> {
-    let head = head_source(state, bucket, key).await?;
+    let head = head_source(state, bucket, key, stats).await?;
 
     Ok(Arc::new(SourceClient {
         client: state.source_s3.clone(),
@@ -69,16 +70,29 @@ pub(crate) async fn prepare_source_zip(
     }))
 }
 
-async fn head_source(state: &AppState, bucket: &str, key: &str) -> Result<SourceHead> {
+async fn head_source(
+    state: &AppState,
+    bucket: &str,
+    key: &str,
+    stats: &crate::types::DeploymentStats,
+) -> Result<SourceHead> {
     tracing::info!(bucket, key, "reading source archive metadata");
 
-    let output = state
+    // planSourceHeads: the per-source metadata await in extract mode. The await
+    // happens in the `plan_deployment` loop, outside every ZIP planning bucket,
+    // so the span is exclusive and feeds the plan parts total. The span is
+    // recorded on the error path too: a failed or timed-out HEAD still waited,
+    // and failure summaries retain and log these stats.
+    let started = std::time::Instant::now();
+    let head = state
         .source_s3
         .head_object()
         .bucket(bucket)
         .key(key)
         .send()
-        .await
+        .await;
+    stats.add_plan_source_heads_micros(crate::util::duration_micros(started.elapsed()));
+    let output = head
         .with_context(|| format!("failed to read source archive metadata s3://{bucket}/{key}"))?;
 
     let len = output
