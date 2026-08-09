@@ -16,10 +16,7 @@ test("keeps public JSDoc defaults bound to the exported source constants", () =>
     "utf8",
   );
   const providerSource = readFileSync(join(__dirname, "..", "..", "src", "provider.ts"), "utf8");
-  const rustSource = readFileSync(
-    join(__dirname, "..", "..", "rust", "src", "s3", "mod.rs"),
-    "utf8",
-  );
+  const rustSource = readFileSync(join(__dirname, "..", "..", "rust", "src", "s3.rs"), "utf8");
 
   expect(publicSource).toContain(
     `@default DEFAULT_PROVIDER_LAMBDA_MEMORY_SIZE_MIB (${DEFAULT_PROVIDER_LAMBDA_MEMORY_SIZE_MIB})`,

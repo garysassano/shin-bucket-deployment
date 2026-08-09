@@ -432,7 +432,7 @@ async fn add_archive_entries_to_manifest(
     // planValidation (per-archive half): directory-level invariants. The
     // catalog-to-ZIP half of this bucket is charged inside
     // `load_authenticated_catalog`, and the phase-level half (deployment
-    // preflight) in `s3/mod.rs`; see the accounting rules at the `PhaseMillis`
+    // preflight) in `s3.rs`; see the accounting rules at the `PhaseMillis`
     // definition site in `types.rs`.
     let started_validation = std::time::Instant::now();
     let source_offsets =
