@@ -44,7 +44,7 @@
 <text x="546" y="92" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="600" fill="#b6cedc">2048 MiB · Shin concurrency 64</text>
 <rect x="546" y="11" width="12" height="8" rx="2" fill="url(#shin)"/>
 <text x="564" y="19" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="700" fill="#8ab8d0">SHIN</text>
-<text x="546" y="37" font-family="JetBrains Mono, monospace" font-size="11" font-weight="600" fill="#6f91a8">SHA 808f2b6</text>
+<text x="546" y="37" font-family="JetBrains Mono, monospace" font-size="11" font-weight="600" fill="#6f91a8">SHA a9b04c2</text>
 <rect x="656" y="11" width="12" height="8" rx="2" fill="url(#aws)"/>
 <text x="674" y="19" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="700" fill="#8ab8d0">AWS</text>
 <text x="656" y="37" font-family="JetBrains Mono, monospace" font-size="11" font-weight="600" fill="#6f91a8">CDK v2.260.0</text>
@@ -58,50 +58,49 @@
 <rect x="0" y="133" width="790" height="1" fill="#142230"/>
 <text x="24" y="163" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="600" fill="#d8edf8">cold-create</text>
 <rect x="180" y="145" width="320" height="11" rx="5.5" fill="#12202c"/>
-<rect x="180" y="145" width="45.87412587412587" height="11" rx="5.5" fill="url(#shin)" filter="url(#gS)" opacity="0.5"/>
-<rect x="180" y="145" width="45.87412587412587" height="11" rx="5.5" fill="url(#shin)"/>
+<rect x="180" y="145" width="48.566610455311974" height="11" rx="5.5" fill="url(#shin)" filter="url(#gS)" opacity="0.5"/>
+<rect x="180" y="145" width="48.566610455311974" height="11" rx="5.5" fill="url(#shin)"/>
 <rect x="180" y="162" width="320" height="11" rx="5.5" fill="#12202c"/>
-<rect x="180" y="162" width="315.5244755244755" height="11" rx="5.5" fill="url(#aws)" filter="url(#gA)" opacity="0.35"/>
-<rect x="180" y="162" width="315.5244755244755" height="11" rx="5.5" fill="url(#aws)" opacity="0.75"/>
-<text x="520" y="163" font-family="JetBrains Mono, monospace" font-size="12" font-weight="700" fill="#6ef0d0">0.82s</text>
-<text x="610" y="163" font-family="JetBrains Mono, monospace" font-size="12" font-weight="400" fill="#5a7a94">5.64s</text>
+<rect x="180" y="162" width="312.98482293423274" height="11" rx="5.5" fill="url(#aws)" filter="url(#gA)" opacity="0.35"/>
+<rect x="180" y="162" width="312.98482293423274" height="11" rx="5.5" fill="url(#aws)" opacity="0.75"/>
+<text x="520" y="163" font-family="JetBrains Mono, monospace" font-size="12" font-weight="700" fill="#6ef0d0">0.9s</text>
+<text x="610" y="163" font-family="JetBrains Mono, monospace" font-size="12" font-weight="400" fill="#5a7a94">5.8s</text>
 <rect x="700" y="149" width="60" height="22" rx="5" fill="#082b35" stroke="#18d4f8" stroke-width="0.5" filter="url(#badgeShadow)"/>
-<text x="730" y="164" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" font-weight="800" fill="#6ef0d0">6.9×</text>
+<text x="730" y="164" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" font-weight="800" fill="#6ef0d0">6.4×</text>
 <rect x="24" y="183" width="736" height="1" fill="#142230"/>
 <text x="24" y="213" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="600" fill="#d8edf8">unchanged-update</text>
 <rect x="180" y="195" width="320" height="11" rx="5.5" fill="#12202c"/>
-<rect x="180" y="195" width="13.986013986013987" height="11" rx="5.5" fill="url(#shin)"/>
+<rect x="180" y="195" width="15.109612141652615" height="11" rx="5.5" fill="url(#shin)"/>
 <rect x="180" y="212" width="320" height="11" rx="5.5" fill="#12202c"/>
 <rect x="180" y="212" width="320" height="11" rx="5.5" fill="url(#aws)" filter="url(#gA)" opacity="0.35"/>
 <rect x="180" y="212" width="320" height="11" rx="5.5" fill="url(#aws)" opacity="0.75"/>
-<text x="520" y="213" font-family="JetBrains Mono, monospace" font-size="12" font-weight="700" fill="#6ef0d0">0.25s</text>
-<text x="610" y="213" font-family="JetBrains Mono, monospace" font-size="12" font-weight="400" fill="#5a7a94">5.72s</text>
+<text x="520" y="213" font-family="JetBrains Mono, monospace" font-size="12" font-weight="700" fill="#6ef0d0">0.28s</text>
+<text x="610" y="213" font-family="JetBrains Mono, monospace" font-size="12" font-weight="400" fill="#5a7a94">5.93s</text>
 <rect x="700" y="199" width="60" height="22" rx="5" fill="#082b35" stroke="#18d4f8" stroke-width="0.5" filter="url(#badgeShadow)"/>
-<text x="730" y="214" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" font-weight="800" fill="#6ef0d0">22.9×</text>
+<text x="730" y="214" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" font-weight="800" fill="#6ef0d0">21.2×</text>
 <rect x="24" y="233" width="736" height="1" fill="#142230"/>
 <text x="24" y="263" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="600" fill="#d8edf8">changed-update</text>
 <rect x="180" y="245" width="320" height="11" rx="5.5" fill="#12202c"/>
-<rect x="180" y="245" width="31.328671328671334" height="11" rx="5.5" fill="url(#shin)" filter="url(#gS)" opacity="0.5"/>
-<rect x="180" y="245" width="31.328671328671334" height="11" rx="5.5" fill="url(#shin)"/>
+<rect x="180" y="245" width="28.06070826306914" height="11" rx="5.5" fill="url(#shin)"/>
 <rect x="180" y="262" width="320" height="11" rx="5.5" fill="#12202c"/>
-<rect x="180" y="262" width="309.9300699300699" height="11" rx="5.5" fill="url(#aws)" filter="url(#gA)" opacity="0.35"/>
-<rect x="180" y="262" width="309.9300699300699" height="11" rx="5.5" fill="url(#aws)" opacity="0.75"/>
-<text x="520" y="263" font-family="JetBrains Mono, monospace" font-size="12" font-weight="700" fill="#6ef0d0">0.56s</text>
-<text x="610" y="263" font-family="JetBrains Mono, monospace" font-size="12" font-weight="400" fill="#5a7a94">5.54s</text>
+<rect x="180" y="262" width="317.8414839797639" height="11" rx="5.5" fill="url(#aws)" filter="url(#gA)" opacity="0.35"/>
+<rect x="180" y="262" width="317.8414839797639" height="11" rx="5.5" fill="url(#aws)" opacity="0.75"/>
+<text x="520" y="263" font-family="JetBrains Mono, monospace" font-size="12" font-weight="700" fill="#6ef0d0">0.52s</text>
+<text x="610" y="263" font-family="JetBrains Mono, monospace" font-size="12" font-weight="400" fill="#5a7a94">5.89s</text>
 <rect x="700" y="249" width="60" height="22" rx="5" fill="#082b35" stroke="#18d4f8" stroke-width="0.5" filter="url(#badgeShadow)"/>
-<text x="730" y="264" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" font-weight="800" fill="#6ef0d0">9.9×</text>
+<text x="730" y="264" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" font-weight="800" fill="#6ef0d0">11.3×</text>
 <rect x="24" y="283" width="736" height="1" fill="#142230"/>
 <text x="24" y="313" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="600" fill="#d8edf8">pruned-update</text>
 <rect x="180" y="295" width="320" height="11" rx="5.5" fill="#12202c"/>
-<rect x="180" y="295" width="67.6923076923077" height="11" rx="5.5" fill="url(#shin)" filter="url(#gS)" opacity="0.5"/>
-<rect x="180" y="295" width="67.6923076923077" height="11" rx="5.5" fill="url(#shin)"/>
+<rect x="180" y="295" width="65.29510961214166" height="11" rx="5.5" fill="url(#shin)" filter="url(#gS)" opacity="0.5"/>
+<rect x="180" y="295" width="65.29510961214166" height="11" rx="5.5" fill="url(#shin)"/>
 <rect x="180" y="312" width="320" height="11" rx="5.5" fill="#12202c"/>
-<rect x="180" y="312" width="319.44055944055947" height="11" rx="5.5" fill="url(#aws)" filter="url(#gA)" opacity="0.35"/>
-<rect x="180" y="312" width="319.44055944055947" height="11" rx="5.5" fill="url(#aws)" opacity="0.75"/>
+<rect x="180" y="312" width="300.5733558178752" height="11" rx="5.5" fill="url(#aws)" filter="url(#gA)" opacity="0.35"/>
+<rect x="180" y="312" width="300.5733558178752" height="11" rx="5.5" fill="url(#aws)" opacity="0.75"/>
 <text x="520" y="313" font-family="JetBrains Mono, monospace" font-size="12" font-weight="700" fill="#6ef0d0">1.21s</text>
-<text x="610" y="313" font-family="JetBrains Mono, monospace" font-size="12" font-weight="400" fill="#5a7a94">5.71s</text>
+<text x="610" y="313" font-family="JetBrains Mono, monospace" font-size="12" font-weight="400" fill="#5a7a94">5.57s</text>
 <rect x="700" y="299" width="60" height="22" rx="5" fill="#082b35" stroke="#18d4f8" stroke-width="0.5" filter="url(#badgeShadow)"/>
-<text x="730" y="314" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" font-weight="800" fill="#6ef0d0">4.7×</text>
+<text x="730" y="314" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" font-weight="800" fill="#6ef0d0">4.6×</text>
 <rect x="0" y="333" width="790" height="1" fill="#1a2a38"/>
 <rect y="334" width="790" height="22" fill="#0c1420"/>
 <text x="24" y="349" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="700" fill="#6f91a8" letter-spacing="0.8">MAX MEMORY</text>
@@ -111,24 +110,24 @@
 <rect x="0" y="356" width="790" height="1" fill="#142230"/>
 <text x="24" y="386" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="600" fill="#d8edf8">cold-create</text>
 <rect x="180" y="368" width="320" height="11" rx="5.5" fill="#12202c"/>
-<rect x="180" y="368" width="123.68794326241135" height="11" rx="5.5" fill="url(#shin)" filter="url(#gS)" opacity="0.5"/>
-<rect x="180" y="368" width="123.68794326241135" height="11" rx="5.5" fill="url(#shin)"/>
+<rect x="180" y="368" width="129.36170212765956" height="11" rx="5.5" fill="url(#shin)" filter="url(#gS)" opacity="0.5"/>
+<rect x="180" y="368" width="129.36170212765956" height="11" rx="5.5" fill="url(#shin)"/>
 <rect x="180" y="385" width="320" height="11" rx="5.5" fill="#12202c"/>
 <rect x="180" y="385" width="320" height="11" rx="5.5" fill="url(#aws)" filter="url(#gA)" opacity="0.35"/>
 <rect x="180" y="385" width="320" height="11" rx="5.5" fill="url(#aws)" opacity="0.75"/>
-<text x="520" y="386" font-family="JetBrains Mono, monospace" font-size="12" font-weight="700" fill="#6ef0d0">109 MiB</text>
+<text x="520" y="386" font-family="JetBrains Mono, monospace" font-size="12" font-weight="700" fill="#6ef0d0">114 MiB</text>
 <text x="610" y="386" font-family="JetBrains Mono, monospace" font-size="12" font-weight="400" fill="#5a7a94">282 MiB</text>
 <rect x="700" y="372" width="60" height="22" rx="5" fill="#082b35" stroke="#18d4f8" stroke-width="0.5" filter="url(#badgeShadow)"/>
-<text x="730" y="387" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" font-weight="800" fill="#6ef0d0">61%</text>
+<text x="730" y="387" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" font-weight="800" fill="#6ef0d0">60%</text>
 <rect x="24" y="406" width="736" height="1" fill="#142230"/>
 <text x="24" y="436" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="600" fill="#d8edf8">unchanged-update</text>
 <rect x="180" y="418" width="320" height="11" rx="5.5" fill="#12202c"/>
-<rect x="180" y="418" width="38.58156028368794" height="11" rx="5.5" fill="url(#shin)" filter="url(#gS)" opacity="0.5"/>
-<rect x="180" y="418" width="38.58156028368794" height="11" rx="5.5" fill="url(#shin)"/>
+<rect x="180" y="418" width="37.4468085106383" height="11" rx="5.5" fill="url(#shin)" filter="url(#gS)" opacity="0.5"/>
+<rect x="180" y="418" width="37.4468085106383" height="11" rx="5.5" fill="url(#shin)"/>
 <rect x="180" y="435" width="320" height="11" rx="5.5" fill="#12202c"/>
 <rect x="180" y="435" width="318.86524822695037" height="11" rx="5.5" fill="url(#aws)" filter="url(#gA)" opacity="0.35"/>
 <rect x="180" y="435" width="318.86524822695037" height="11" rx="5.5" fill="url(#aws)" opacity="0.75"/>
-<text x="520" y="436" font-family="JetBrains Mono, monospace" font-size="12" font-weight="700" fill="#6ef0d0">34 MiB</text>
+<text x="520" y="436" font-family="JetBrains Mono, monospace" font-size="12" font-weight="700" fill="#6ef0d0">33 MiB</text>
 <text x="610" y="436" font-family="JetBrains Mono, monospace" font-size="12" font-weight="400" fill="#5a7a94">281 MiB</text>
 <rect x="700" y="422" width="60" height="22" rx="5" fill="#082b35" stroke="#18d4f8" stroke-width="0.5" filter="url(#badgeShadow)"/>
 <text x="730" y="437" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" font-weight="800" fill="#6ef0d0">88%</text>
@@ -138,22 +137,22 @@
 <rect x="180" y="468" width="41.98581560283688" height="11" rx="5.5" fill="url(#shin)" filter="url(#gS)" opacity="0.5"/>
 <rect x="180" y="468" width="41.98581560283688" height="11" rx="5.5" fill="url(#shin)"/>
 <rect x="180" y="485" width="320" height="11" rx="5.5" fill="#12202c"/>
-<rect x="180" y="485" width="318.86524822695037" height="11" rx="5.5" fill="url(#aws)" filter="url(#gA)" opacity="0.35"/>
-<rect x="180" y="485" width="318.86524822695037" height="11" rx="5.5" fill="url(#aws)" opacity="0.75"/>
+<rect x="180" y="485" width="320" height="11" rx="5.5" fill="url(#aws)" filter="url(#gA)" opacity="0.35"/>
+<rect x="180" y="485" width="320" height="11" rx="5.5" fill="url(#aws)" opacity="0.75"/>
 <text x="520" y="486" font-family="JetBrains Mono, monospace" font-size="12" font-weight="700" fill="#6ef0d0">37 MiB</text>
-<text x="610" y="486" font-family="JetBrains Mono, monospace" font-size="12" font-weight="400" fill="#5a7a94">281 MiB</text>
+<text x="610" y="486" font-family="JetBrains Mono, monospace" font-size="12" font-weight="400" fill="#5a7a94">282 MiB</text>
 <rect x="700" y="472" width="60" height="22" rx="5" fill="#082b35" stroke="#18d4f8" stroke-width="0.5" filter="url(#badgeShadow)"/>
 <text x="730" y="487" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" font-weight="800" fill="#6ef0d0">87%</text>
 <rect x="24" y="506" width="736" height="1" fill="#142230"/>
 <text x="24" y="536" font-family="Inter, -apple-system, sans-serif" font-size="13" font-weight="600" fill="#d8edf8">pruned-update</text>
 <rect x="180" y="518" width="320" height="11" rx="5.5" fill="#12202c"/>
-<rect x="180" y="518" width="40.85106382978723" height="11" rx="5.5" fill="url(#shin)" filter="url(#gS)" opacity="0.5"/>
-<rect x="180" y="518" width="40.85106382978723" height="11" rx="5.5" fill="url(#shin)"/>
+<rect x="180" y="518" width="41.98581560283688" height="11" rx="5.5" fill="url(#shin)" filter="url(#gS)" opacity="0.5"/>
+<rect x="180" y="518" width="41.98581560283688" height="11" rx="5.5" fill="url(#shin)"/>
 <rect x="180" y="535" width="320" height="11" rx="5.5" fill="#12202c"/>
-<rect x="180" y="535" width="312.0567375886525" height="11" rx="5.5" fill="url(#aws)" filter="url(#gA)" opacity="0.35"/>
-<rect x="180" y="535" width="312.0567375886525" height="11" rx="5.5" fill="url(#aws)" opacity="0.75"/>
-<text x="520" y="536" font-family="JetBrains Mono, monospace" font-size="12" font-weight="700" fill="#6ef0d0">36 MiB</text>
-<text x="610" y="536" font-family="JetBrains Mono, monospace" font-size="12" font-weight="400" fill="#5a7a94">275 MiB</text>
+<rect x="180" y="535" width="310.92198581560285" height="11" rx="5.5" fill="url(#aws)" filter="url(#gA)" opacity="0.35"/>
+<rect x="180" y="535" width="310.92198581560285" height="11" rx="5.5" fill="url(#aws)" opacity="0.75"/>
+<text x="520" y="536" font-family="JetBrains Mono, monospace" font-size="12" font-weight="700" fill="#6ef0d0">37 MiB</text>
+<text x="610" y="536" font-family="JetBrains Mono, monospace" font-size="12" font-weight="400" fill="#5a7a94">274 MiB</text>
 <rect x="700" y="522" width="60" height="22" rx="5" fill="#082b35" stroke="#18d4f8" stroke-width="0.5" filter="url(#badgeShadow)"/>
-<text x="730" y="537" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" font-weight="800" fill="#6ef0d0">87%</text>
+<text x="730" y="537" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="11" font-weight="800" fill="#6ef0d0">86%</text>
 </svg>
