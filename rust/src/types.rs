@@ -986,7 +986,6 @@ impl DeploymentStats {
         self.marker_upload_passes.fetch_add(1, Ordering::Relaxed);
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn add_marker_spooled_upload(&self) {
         self.marker_spooled_uploads.fetch_add(1, Ordering::Relaxed);
     }

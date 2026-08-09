@@ -32,8 +32,8 @@ use super::directory::prepare_zip_directory_reader;
 use super::entry::{
     BodyFrame, LOCAL_FILE_HEADER_LEN, MarkerBodyContext, UploadBodyState,
     forward_replaced_body_chunks, marker_zip_entry_body, open_entry_data_reader,
-    plan_marker_zip_entry, send_marker_zip_entry_chunks, send_zip_entry_chunks, zip_entry_body,
-    zip_entry_reader,
+    plan_marker_zip_entry, plan_marker_zip_entry_spooled, send_marker_zip_entry_chunks,
+    send_zip_entry_chunks, zip_entry_body, zip_entry_reader,
 };
 use super::{
     SourceClient, head_source, range_get_request_error, source_get_retry_cap_millis,
@@ -43,6 +43,8 @@ use crate::replace::MarkerReplacements;
 use crate::s3::planner::ZipEntryPlan;
 use crate::s3::{DEFAULT_SOURCE_BLOCK_BYTES, DEFAULT_SOURCE_BLOCK_MERGE_GAP_BYTES};
 use crate::types::{AppState, DeploymentStats, MarkerConfig, TrustedEntryIntegrity};
+use crate::util::finalize_digest;
+use md5::{Digest as Md5Digest, Md5};
 
 const INFO_ZIP_FIXTURE: &str =
     include_str!("../../../test-fixtures/external-zips/info-zip.zip.b64");
@@ -694,6 +696,99 @@ async fn marker_planning_streams_exact_length_and_rejects_crc_failure() {
         .await
         .expect_err("marker planning must preserve CRC validation");
     assert!(error.to_string().contains("CRC32"));
+}
+
+#[tokio::test]
+async fn marker_spooled_planning_retains_bytes_within_the_cap() {
+    let zip = zip_from_entry("marker.txt", b"before TOKEN after");
+    let plan = zip_plan_from_archive(&zip, "marker.txt");
+    let replacements = MarkerReplacements::new(
+        &HashMap::from([("TOKEN".to_string(), "expanded-value".to_string())]),
+        &MarkerConfig::default(),
+    )
+    .expect("marker automaton");
+    let store = ready_store_for_plan(&zip, &plan);
+    let expected = b"before expanded-value after";
+
+    // The cap sits exactly on the output length: the boundary is inclusive.
+    let (result, spooled) =
+        plan_marker_zip_entry_spooled(store, plan, &replacements, expected.len() as u64)
+            .await
+            .expect("spooled marker planning pass");
+
+    assert_eq!(result.output_bytes, expected.len() as u64);
+    assert_eq!(
+        spooled.as_deref(),
+        Some(&expected[..]),
+        "the spool must be the exact replaced output, byte for byte"
+    );
+    let mut hasher = Md5::new();
+    hasher.update(expected);
+    assert_eq!(
+        result.md5,
+        finalize_digest(hasher),
+        "the planned MD5 must be the hash of the spooled bytes"
+    );
+}
+
+#[tokio::test]
+async fn marker_spooled_planning_over_cap_drops_the_spool_but_still_hashes() {
+    let zip = zip_from_entry("marker.txt", b"before TOKEN after");
+    let plan = zip_plan_from_archive(&zip, "marker.txt");
+    let replacements = MarkerReplacements::new(
+        &HashMap::from([("TOKEN".to_string(), "expanded-value".to_string())]),
+        &MarkerConfig::default(),
+    )
+    .expect("marker automaton");
+    let store = ready_store_for_plan(&zip, &plan);
+    let expected = b"before expanded-value after";
+
+    let (result, spooled) =
+        plan_marker_zip_entry_spooled(store, plan, &replacements, expected.len() as u64 - 1)
+            .await
+            .expect("marker planning must run to completion past the cap");
+
+    assert!(spooled.is_none());
+    assert_eq!(
+        result.output_bytes,
+        expected.len() as u64,
+        "the exact output length must survive the dropped spool"
+    );
+    let mut hasher = Md5::new();
+    hasher.update(expected);
+    assert_eq!(
+        result.md5,
+        finalize_digest(hasher),
+        "the MD5 must still cover the whole replaced output"
+    );
+}
+
+#[tokio::test]
+async fn marker_spooled_planning_enforces_the_cap_on_output_not_input() {
+    // The input fits the cap; only the replacement expansion crosses it, so any
+    // pre-decision from `plan.size` (the marker-free path's trick) would wrongly
+    // spool this entry.
+    let zip = zip_from_entry("marker.txt", b"TOKEN");
+    let plan = zip_plan_from_archive(&zip, "marker.txt");
+    assert_eq!(plan.size, 5);
+    let cap = plan.size;
+    let replacements = MarkerReplacements::new(
+        &HashMap::from([("TOKEN".to_string(), "0123456789".to_string())]),
+        &MarkerConfig::default(),
+    )
+    .expect("marker automaton");
+    let store = ready_store_for_plan(&zip, &plan);
+
+    let (result, spooled) = plan_marker_zip_entry_spooled(store, plan, &replacements, cap)
+        .await
+        .expect("marker planning pass");
+
+    assert!(
+        spooled.is_none(),
+        "the cap must be enforced on the replaced output (10 bytes), not the input size \
+         (5 bytes, which fits the cap)"
+    );
+    assert_eq!(result.output_bytes, 10);
 }
 
 #[tokio::test]
@@ -1713,11 +1808,11 @@ fn assert_replayed_body_released(store: &SourceBlockStore) {
     assert_eq!(diagnostics.body_replays, 1);
 }
 
-fn ready_store_for_plan(zip: &[u8], plan: &ZipEntryPlan) -> Arc<SourceBlockStore> {
+pub(crate) fn ready_store_for_plan(zip: &[u8], plan: &ZipEntryPlan) -> Arc<SourceBlockStore> {
     ready_store_for_plan_with_claims(zip, plan, 1)
 }
 
-fn ready_store_for_plan_with_claims(
+pub(crate) fn ready_store_for_plan_with_claims(
     zip: &[u8],
     plan: &ZipEntryPlan,
     claims: usize,
@@ -1812,7 +1907,7 @@ fn ready_store(
     })
 }
 
-fn zip_plan_from_archive(bytes: &[u8], name: &str) -> ZipEntryPlan {
+pub(crate) fn zip_plan_from_archive(bytes: &[u8], name: &str) -> ZipEntryPlan {
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
     let file = archive.by_name(name).unwrap();
     let data_start = file.data_start().unwrap();
@@ -1834,7 +1929,7 @@ fn zip_plan_from_archive(bytes: &[u8], name: &str) -> ZipEntryPlan {
     }
 }
 
-fn zip_from_entry(name: &str, bytes: &[u8]) -> Vec<u8> {
+pub(crate) fn zip_from_entry(name: &str, bytes: &[u8]) -> Vec<u8> {
     let cursor = std::io::Cursor::new(Vec::new());
     let mut writer = ZipWriter::new(cursor);
     let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
