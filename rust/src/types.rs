@@ -338,6 +338,25 @@ pub(crate) struct SourceArchive {
     pub(crate) source: Arc<crate::s3::archive::SourceClient>,
 }
 
+/// Which transfer-phase span contains a source block fetch. The transfer entry
+/// reader records each fetch wait into the counter of the phase that drove the
+/// read, so a streaming upload body generating its content during the PUT is
+/// attributed to the put span and a comparison-pass read to the prepare span.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SourceFetchPhase {
+    Prepare,
+    Put,
+}
+
+/// Stats handle plus the phase label for a transfer entry reader. `None` is
+/// threaded where a read must stay uncounted (the plan-phase embedded-catalog
+/// read, which is not a transfer reader).
+#[derive(Clone)]
+pub(crate) struct TransferFetchStats {
+    pub(crate) stats: Arc<DeploymentStats>,
+    pub(crate) phase: SourceFetchPhase,
+}
+
 #[derive(Default)]
 pub(crate) struct DeploymentStats {
     started: OnceInstant,
@@ -353,7 +372,8 @@ pub(crate) struct DeploymentStats {
     transfer_task_total_micros: AtomicU64,
     transfer_prepare_micros: AtomicU64,
     transfer_put_wait_micros: AtomicU64,
-    transfer_source_fetch_wait_micros: AtomicU64,
+    transfer_prepare_source_wait_micros: AtomicU64,
+    transfer_put_source_wait_micros: AtomicU64,
     delete_millis: AtomicU64,
     cloudfront_millis: AtomicU64,
     old_prefix_delete_millis: AtomicU64,
@@ -515,18 +535,23 @@ pub(crate) struct DeploymentStatsSnapshot<'a> {
 //   archive, `validate_catalog_entries` for authenticated catalogs, and the
 //   phase-level `validate_deployment_preflight`.
 //
-// The four sub-timings accumulate per archive at microsecond resolution and are
-// converted to whole milliseconds once, at snapshot time. Per-call millisecond
-// truncation made every sub-millisecond stage report a constant 0, so the
-// instrument was coarser than the ~0.5 ms-per-entry cost it exists to
-// attribute; the snapshot conversion rounds to the nearest millisecond instead
-// (see [`micros_to_millis`]).
+// The five sub-timings accumulate at microsecond resolution and are converted
+// to whole milliseconds once, at snapshot time: `planCatalog`, `planDirectory`,
+// `planEntries`, and `planValidation` accumulate per archive, while
+// `planSourceHeads` accumulates per source. Per-call millisecond truncation
+// made every sub-millisecond stage report a constant 0, so the instrument was
+// coarser than the ~0.5 ms-per-entry cost it exists to attribute; the snapshot
+// conversion rounds to the nearest millisecond instead (see
+// [`micros_to_millis`]).
 //
 // What `plan` measures beyond the five parts (the residual is exactly
 // `plan - planSourceHeads - planCatalog - planDirectory - planEntries -
-// planValidation`, all five of which are present in every summary): request
-// length checks, source-budget setup, filter compilation, manifest insertion in
-// copy mode, `collect_zip_entry_plans`, and the planned-entries accounting.
+// planValidation`, all five of which are present in every summary, at
+// microsecond resolution; the published millisecond values are rounded
+// independently, so a residual computed from them is approximate rather than
+// exact): request length checks, source-budget setup, filter compilation,
+// manifest insertion in copy mode, `collect_zip_entry_plans`, and the
+// planned-entries accounting.
 // `planSourceHeads` carries the per-source metadata `HeadObject` await in both
 // extract and copy mode; it is exclusive because those awaits happen in the
 // `plan_deployment` loop, outside the catalog/directory/entries/validation
@@ -551,22 +576,35 @@ pub(crate) struct DeploymentStatsSnapshot<'a> {
 // wall-clock span: up to `maxParallelTransfers` ZIP-entry tasks run
 // concurrently, so `transferTaskTotal`, `transferPrepare`, and
 // `transferPutWait` are sums across tasks and can legitimately exceed the
-// `transfer` wall clock, often by a large multiple. The relationships that do
-// hold are `transferPrepare + transferPutWait ≈ transferTaskTotal` (the
-// remainder is scheduler and task overhead), and `transferSourceFetchWait` is
-// an overlay rather than a sibling bucket: source fetches happen inside both
-// the prepare span (comparison and marker-planning reads) and, for streaming
-// upload bodies that generate their body during the PUT, inside the put span,
-// so it must not be added to the other three. The intended attribution is
-// destination-network-bound when `transferPutWait` dominates with a small
-// `transferSourceFetchWait`, source-network-bound when
-// `transferSourceFetchWait` dominates, and CPU-bound when
-// `transferTaskTotal - transferPutWait - transferSourceFetchWait` dominates.
-// Only ZIP-entry transfer tasks are instrumented; direct-copy tasks are a
-// separate path and are excluded from `transferTaskTotal`, so on copy-heavy
-// workloads `transferTaskTotal` is much smaller than `transfer`. These
-// counters accumulate at microsecond resolution and convert to whole
-// milliseconds exactly once at snapshot time, like the plan sub-timings.
+// `transfer` wall clock, often by a large multiple. For tasks that run to
+// completion, `transferPrepare + transferPutWait <= transferTaskTotal` holds
+// at microsecond resolution (the remainder is scheduler and task overhead). A
+// task aborted at the work deadline records `transferPrepare` but never
+// reaches the `transferPutWait` or `transferTaskTotal` accumulations, so
+// aborted tasks under-report the spans they never finished and can break that
+// containment across the summary. The published millisecond values are each
+// rounded independently, so every member can differ by up to its rounding
+// envelope; the containment must not be asserted on published values.
+//
+// Source fetches are attributed to the phase span that contains them rather
+// than accumulated in a separate overlay: the transfer entry reader carries a
+// phase label (`SourceFetchPhase`) alongside its stats handle, and a fetch
+// that resolves inside the comparison/prepare span lands in
+// `transferPrepareSourceWait` while one inside the upload/PUT span (a
+// streaming body that generates its content during the PUT) lands in
+// `transferPutSourceWait`. The plan-phase embedded-catalog read passes no
+// stats handle and is never counted. The resulting attribution:
+// source-network time = `transferPrepareSourceWait +
+// transferPutSourceWait`; prepare CPU = `transferPrepare -
+// transferPrepareSourceWait`; `transferPutWait - transferPutSourceWait` is
+// destination-network wait plus any streaming CPU done during the PUT — the
+// two are NOT separable with the current instrument, so there is no clean
+// three-way CPU/source/destination split. Only ZIP-entry transfer tasks are
+// instrumented; direct-copy tasks are a separate path and are excluded from
+// `transferTaskTotal`, so on copy-heavy workloads `transferTaskTotal` is much
+// smaller than `transfer`. These counters accumulate at microsecond
+// resolution and convert to whole milliseconds exactly once at snapshot time,
+// like the plan sub-timings.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct PhaseMillis {
@@ -581,7 +619,8 @@ pub(crate) struct PhaseMillis {
     pub(crate) transfer_task_total: u64,
     pub(crate) transfer_prepare: u64,
     pub(crate) transfer_put_wait: u64,
-    pub(crate) transfer_source_fetch_wait: u64,
+    pub(crate) transfer_prepare_source_wait: u64,
+    pub(crate) transfer_put_source_wait: u64,
     pub(crate) delete: u64,
     pub(crate) cloudfront: u64,
     pub(crate) old_prefix_delete: u64,
@@ -869,13 +908,14 @@ impl DeploymentStats {
 
     #[cfg(any(test, feature = "bench-internals"))]
     #[cfg_attr(feature = "bench-internals", allow(dead_code))]
-    pub(crate) fn transfer_subtimings_micros_for_test(&self) -> (u64, u64, u64, u64) {
+    pub(crate) fn transfer_subtimings_micros_for_test(&self) -> (u64, u64, u64, u64, u64) {
         (
             self.transfer_task_total_micros.load(Ordering::Relaxed),
             self.transfer_prepare_micros.load(Ordering::Relaxed),
             self.transfer_put_wait_micros.load(Ordering::Relaxed),
-            self.transfer_source_fetch_wait_micros
+            self.transfer_prepare_source_wait_micros
                 .load(Ordering::Relaxed),
+            self.transfer_put_source_wait_micros.load(Ordering::Relaxed),
         )
     }
 
@@ -899,8 +939,13 @@ impl DeploymentStats {
             .fetch_add(micros, Ordering::Relaxed);
     }
 
-    pub(crate) fn add_transfer_source_fetch_wait_micros(&self, micros: u64) {
-        self.transfer_source_fetch_wait_micros
+    pub(crate) fn add_transfer_prepare_source_wait_micros(&self, micros: u64) {
+        self.transfer_prepare_source_wait_micros
+            .fetch_add(micros, Ordering::Relaxed);
+    }
+
+    pub(crate) fn add_transfer_put_source_wait_micros(&self, micros: u64) {
+        self.transfer_put_source_wait_micros
             .fetch_add(micros, Ordering::Relaxed);
     }
 
@@ -1288,9 +1333,12 @@ impl DeploymentStats {
                 transfer_put_wait: micros_to_millis(
                     self.transfer_put_wait_micros.load(Ordering::Relaxed),
                 ),
-                transfer_source_fetch_wait: micros_to_millis(
-                    self.transfer_source_fetch_wait_micros
+                transfer_prepare_source_wait: micros_to_millis(
+                    self.transfer_prepare_source_wait_micros
                         .load(Ordering::Relaxed),
+                ),
+                transfer_put_source_wait: micros_to_millis(
+                    self.transfer_put_source_wait_micros.load(Ordering::Relaxed),
                 ),
                 delete: self.delete_millis.load(Ordering::Relaxed),
                 cloudfront: self.cloudfront_millis.load(Ordering::Relaxed),
