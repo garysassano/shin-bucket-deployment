@@ -1,0 +1,3 @@
+{
+  "declaration shin-bucket-deployment.d.ts": "T-8: the public API JSDoc pass rewrites doc comments across the exported interfaces and the construct class, which are emitted into the declaration file. No executable code changed, and the synthesized assemblies are byte-identical to main."
+}
