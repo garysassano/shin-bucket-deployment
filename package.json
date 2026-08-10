@@ -68,7 +68,7 @@
     "rust:clippy": "cargo clippy --manifest-path rust/Cargo.toml --all-targets --all-features -- -D warnings",
     "rust:test": "cargo test --manifest-path rust/Cargo.toml --all-features",
     "rust:audit": "cargo audit --file rust/Cargo.lock",
-    "rust:deny": "cargo deny --manifest-path rust/Cargo.toml --exclude spin@0.10.0 check",
+    "rust:deny": "cargo deny --manifest-path rust/Cargo.toml check",
     "test": "vitest run && node --test scripts/*.test.mjs",
     "test:ci": "vitest run --maxWorkers=2 && node --test scripts/*.test.mjs",
     "workflow:lint": "actionlint",

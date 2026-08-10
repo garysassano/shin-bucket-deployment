@@ -1,4 +1,1 @@
 minimumReleaseAge: 4320
-overrides:
-  vite: 8.1.3
-  nanoid: 3.3.17
