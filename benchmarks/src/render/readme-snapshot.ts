@@ -27,7 +27,14 @@ const CLI_OPTIONS = [
   "variant",
 ] as const;
 
-const cliArgs = process.argv.slice(2);
+// Importing this module must not parse argv or write files. A test that imports
+// it would otherwise parse the test runner's argv, throw on an unrelated flag,
+// and generate snapshots at import time -- the same import-time-side-effect
+// hazard fixed in verify-ledger.ts. Only read argv when run as the CLI
+// entrypoint; on import `cliArgs` is empty, so every derived option takes its
+// default and the guarded output block below does not run.
+const isCliEntrypoint = require.main === module;
+const cliArgs = isCliEntrypoint ? process.argv.slice(2) : [];
 const snapshotArgCache = new WeakMap<string[], Map<string, string>>();
 
 function parseVariant(argv: string[]): ChartVariant {
@@ -653,31 +660,40 @@ ${renderLegend(benchmarkData, legendX)}
 }
 
 // ═══ OUTPUT ═══
-const selectRecords = requestedPreview
-  ? selectValidatedBenchmarkPreview
-  : selectValidatedBenchmarkRun;
-const benchmarkDataItems = findSelections(
-  selectRecords({
-    ...readBenchmarkEvidence(inputFile),
-    runId: requestedRunId,
-    configFile: requestedConfigFile,
-    inputFile,
-    scratchRoot: requestedScratchRoot,
-  }),
-).map(buildBenchmarkData);
-if (benchmarkDataItems.length === 0) {
-  throw new Error("No complete Shin/AWS benchmark pairs matched the selected filters");
+// Reads evidence and writes snapshot files, so it runs only when this module is
+// the CLI entrypoint (see the `isCliEntrypoint` guard on `cliArgs` above). The
+// body is unchanged from when it ran at module scope.
+function main(): void {
+  const selectRecords = requestedPreview
+    ? selectValidatedBenchmarkPreview
+    : selectValidatedBenchmarkRun;
+  const benchmarkDataItems = findSelections(
+    selectRecords({
+      ...readBenchmarkEvidence(inputFile),
+      runId: requestedRunId,
+      configFile: requestedConfigFile,
+      inputFile,
+      scratchRoot: requestedScratchRoot,
+    }),
+  ).map(buildBenchmarkData);
+  if (benchmarkDataItems.length === 0) {
+    throw new Error("No complete Shin/AWS benchmark pairs matched the selected filters");
+  }
+  for (const benchmarkData of benchmarkDataItems) {
+    const outPath = resolve(
+      requestedOutputDirectory ?? resolve(process.cwd(), "benchmarks", "snapshots"),
+      snapshotFileName(benchmarkData),
+    );
+    mkdirSync(dirname(outPath), { recursive: true });
+    writeFileSync(outPath, render(benchmarkData));
+    console.log(`Written: ${outPath}`);
+  }
+  console.log(`Generated: ${benchmarkDataItems.length}`);
+  console.log(`Variant: ${chartVariant}`);
+  console.log(`Header: ${headerLayout}`);
+  console.log(`Canvas width: ${CANVAS_W}, Row height: ${ROW_H}px, Bar: ${BAR_H}px`);
 }
-for (const benchmarkData of benchmarkDataItems) {
-  const outPath = resolve(
-    requestedOutputDirectory ?? resolve(process.cwd(), "benchmarks", "snapshots"),
-    snapshotFileName(benchmarkData),
-  );
-  mkdirSync(dirname(outPath), { recursive: true });
-  writeFileSync(outPath, render(benchmarkData));
-  console.log(`Written: ${outPath}`);
+
+if (isCliEntrypoint) {
+  main();
 }
-console.log(`Generated: ${benchmarkDataItems.length}`);
-console.log(`Variant: ${chartVariant}`);
-console.log(`Header: ${headerLayout}`);
-console.log(`Canvas width: ${CANVAS_W}, Row height: ${ROW_H}px, Bar: ${BAR_H}px`);
