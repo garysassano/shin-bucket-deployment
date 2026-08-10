@@ -2,7 +2,15 @@
 
 This file holds release-note text for `ShinBucketDeployment` changes that break adopters' deployed state or in-repo contracts. Releases are published with `gh release create --generate-notes`, which lists pull request titles only; commit bodies never reach the published notes. The repository policy requires deployed-state breakage to be named in the release notes, so when a release is cut, the `## Unreleased` entries below are the text to carry into the notes.
 
-## Unreleased
+## 0.12.0
+
+### The provider Lambda default memory and transfer concurrency change
+
+`providerLambda.memorySize` now defaults to **2048 MiB** (was 1024) and `transfer.maxConcurrency` now defaults to **64** (was 32). The pairing measured 31–39% faster cold-create than 1024/32 on every canonical benchmark profile, at peak memory well under either allocation.
+
+Affected: any stack that did not set `providerLambda.memorySize` or `transfer.maxConcurrency` explicitly. On the next update after upgrading, CloudFormation applies an in-place `MemorySize` update to the provider Lambda function. The custom resource is **not** replaced and no deployed objects are deleted or recreated — this is a function-configuration update, not a destructive change. Because provider memory participates in shared-handler identity, deployments that share a handler and relied on the old default will resolve to the same new default together.
+
+Cost note: Lambda bills memory × duration, so the faster default is not automatically the cheaper one. To keep the previous behaviour, set `providerLambda.memorySize: 1024` and `transfer.maxConcurrency: 32` explicitly.
 
 ### `SourceMarkersConfig` entries are now strict
 
