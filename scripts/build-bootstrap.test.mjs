@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { join } from "node:path";
 import { test } from "node:test";
-import { bootstrapProvenanceManifest } from "./build-bootstrap.mjs";
+import { benchmarkExcludedPaths, bootstrapProvenanceManifest } from "./build-bootstrap.mjs";
 
 test("emits the build provenance manifest without the schemaVersion marker", () => {
   const manifest = bootstrapProvenanceManifest({
@@ -46,4 +47,17 @@ test("emits the build provenance manifest without the schemaVersion marker", () 
     manifest.bootstrapArchiveSha256,
     createHash("sha256").update("provider-archive").digest("hex"),
   );
+});
+
+test("benchmark exclusion covers both evidence ledgers inside the repository", () => {
+  const root = join("/repo");
+  assert.deepEqual(benchmarkExcludedPaths(root, join(root, "benchmarks/results.jsonl")), [
+    "benchmarks/results.jsonl",
+    "benchmarks/runs.jsonl",
+  ]);
+});
+
+test("benchmark exclusion omits ledgers outside the repository", () => {
+  const root = join("/repo");
+  assert.deepEqual(benchmarkExcludedPaths(root, join("/scratch/evidence/results.jsonl")), []);
 });

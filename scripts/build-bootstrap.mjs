@@ -205,6 +205,25 @@ function buildArch(
   console.log(`Staged ${arch} bootstrap archive -> ${outFile}`);
 }
 
+/**
+ * Paths a benchmark build must exclude from the source identity: the evidence
+ * output and its sibling runs ledger, but only while they live inside the
+ * repository. This must match the runner's `evidenceLedgerPaths` exclusion,
+ * otherwise a staged provenance recorded with one exclusion set fails the
+ * runner's assertion against the other.
+ */
+export function benchmarkExcludedPaths(repositoryRoot, evidenceOutput) {
+  return [evidenceOutput, join(dirname(evidenceOutput), "runs.jsonl")]
+    .map((path) => relative(repositoryRoot, resolve(repositoryRoot, path)))
+    .filter(
+      (path) =>
+        path !== "" &&
+        path !== ".." &&
+        !path.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) &&
+        !isAbsolute(path),
+    );
+}
+
 function main() {
   const benchmarkBuild = process.argv.includes("--benchmark");
   const evidenceOutputIndex = process.argv.indexOf("--evidence-output");
@@ -229,14 +248,7 @@ function main() {
   if (arches.length !== 1 || arches[0] !== "arm64") {
     throw new Error("Benchmark builds must request exactly the arm64 provider.");
   }
-  const evidenceRelative = relative(repoRoot, resolve(repoRoot, evidenceOutput));
-  const excludedPaths =
-    evidenceRelative !== "" &&
-    evidenceRelative !== ".." &&
-    !evidenceRelative.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) &&
-    !isAbsolute(evidenceRelative)
-      ? [evidenceRelative]
-      : [];
+  const excludedPaths = benchmarkExcludedPaths(repoRoot, evidenceOutput);
   const source = collectSourceIdentity(repoRoot, excludedPaths);
   if (source.dirty) {
     throw new Error("Benchmark provider builds require a clean source tree.");
