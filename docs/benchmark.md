@@ -62,6 +62,19 @@ The [complete generated report](../benchmarks/ci-report.md) includes quartiles, 
 
 <!-- benchmark-ci:end -->
 
+## Exploratory sweep: large-few memory scaling to 10240 MiB
+
+Collected 2026-08-13 from source commit `fe19000` (provider `fe19000`) as a one-repetition Shin-only sweep of the `large-few` profile at 2048 MiB / 64, 4096 MiB / 128, and 10240 MiB / 128 in `eu-central-1`. Sanitized run UUID `d6932e4a-0459-4c1a-bfbd-4a7cfaf55d32`; cleanup `destroyed`. This probes whether the 10240 MiB tier (and the account's 3000 Mbps network-bandwidth quota) changes the transfer shape.
+
+| Phase              | 2048 / 64 | 4096 / 128 | 10240 / 128 |
+| ------------------ | --------: | ---------: | ----------: |
+| `cold-create`      |  1.379 s  |  0.939 s   |  1.015 s    |
+| `unchanged-update` |  0.298 s  |  0.408 s   |  0.324 s    |
+| `changed-update`   |  0.648 s  |  0.554 s   |  0.577 s    |
+| `pruned-update`    |  0.709 s  |  0.724 s   |  0.604 s    |
+
+Cold-create transfers 144.2 MB in 32 objects; the transfer span is 1030 ms / 617 ms / 687 ms, so effective PUT throughput is ≈ 1120 Mbps / ≈ 1870 Mbps / ≈ 1680 Mbps — none of the configurations approaches 3000 Mbps, and summed `transferPutWait` is ~100% of summed `transferTaskTotal` at every tier (S3 PUT completion wait, overlapped across tasks). There is no throttling or retry evidence anywhere in the run: `putObject.throttledAttempts = 0` and `source.getThrottledAttempts = 0` in all samples. Provider peak memory stays near 200 MiB at all tiers because the source archive already fits resident at 2048 MiB; the 10240 MiB tier adds no measurable benefit over 4096 MiB on this profile.
+
 ## Methodology
 
 The canonical methodology is the only methodology. It requires five sequential repetitions, opaque UUID run and sample identities, a clean Git tree, exact package/CDK/provider identities, Lambda architecture, deployed code and Shin bootstrap SHA-256 values, phase-local execution-environment memory scope, and verified cleanup. Evidence lives in two JSONL files: `benchmarks/runs.jsonl` holds one record per (runId × implementation) with everything constant across that run's samples, grouped into `config`/`environment`/`cdk`/`provider` (including `provider.bootstrap`); `benchmarks/results.jsonl` holds one record per sample with only what varies — about 18 fields plus the provider summary. Fields that are absent are omitted, never written as null. A scratch resume manifest binds the source, normalized config, phases, destination, and exact sample matrix, while a two-phase ledger digest distinguishes runner persistence from preexisting or external evidence edits. Binary fixtures use deterministic SHA-256 counter bytes and a per-file digest manifest; retained files in stale-deletion phases are byte-identical to their baseline versions. AWS CDK samples omit `parallel`, `detailedFailureDiagnostics`, and the provider summary; comparison pairing does not treat Shin parallelism as an upstream input.
