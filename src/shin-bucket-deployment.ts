@@ -692,9 +692,12 @@ export interface ShinBucketDeploymentTransferOptions {
    *
    * Values above 64 produce a synthesis warning. Measurements found that 128
    * slowed cold-create at both 1024 MiB and 2048 MiB because the source
-   * pipeline did not feed the additional transfer tasks. Benchmark the actual
-   * workload before acknowledging the warning; 64 is guidance, not a
-   * universal optimum.
+   * pipeline did not feed the additional transfer tasks. That ceiling is
+   * memory-dependent: a later one-repetition sweep measured 128 transfers at
+   * 4096 MiB as materially faster than 64 at 2048 MiB on a large-object
+   * profile, so the warning should not be read as a ceiling at every memory
+   * size. Benchmark the actual workload before acknowledging the warning; 64
+   * is guidance, not a universal optimum.
    *
    * @default DEFAULT_TRANSFER_MAX_CONCURRENCY (64)
    */
