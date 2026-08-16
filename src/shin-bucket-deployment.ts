@@ -576,7 +576,7 @@ export interface ShinBucketDeploymentProviderLambdaOptions {
    * Must be in the inclusive range 128..10240.
    *
    * The default pairs with `transfer.maxConcurrency` of 64. That combination
-   * measured 31-39% faster cold-create than 1024 MiB with 32 transfers on
+   * measured 31-44% faster cold-create than 1024 MiB with 32 transfers on
    * every canonical benchmark profile, at a peak usage well under either
    * allocation. Lower it for cost-sensitive deployments that tolerate slower
    * deploys; Lambda bills memory x duration, and the faster configuration is

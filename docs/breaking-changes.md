@@ -6,7 +6,7 @@ This file holds release-note text for `ShinBucketDeployment` changes that break 
 
 ### The provider Lambda default memory and transfer concurrency change
 
-`providerLambda.memorySize` now defaults to **2048 MiB** (was 1024) and `transfer.maxConcurrency` now defaults to **64** (was 32). The pairing measured 31–39% faster cold-create than 1024/32 on every canonical benchmark profile, at peak memory well under either allocation.
+`providerLambda.memorySize` now defaults to **2048 MiB** (was 1024) and `transfer.maxConcurrency` now defaults to **64** (was 32). The pairing measured 31–44% faster cold-create than 1024/32 on every canonical benchmark profile, at peak memory well under either allocation. (The published 0.12.0 notes said 31–39%, taken from the since-superseded `3a1fe594` run; the range above is re-derived from the committed ledger run `62f8ad5d`. The defaults decision is unchanged.)
 
 Affected: any stack that did not set `providerLambda.memorySize` or `transfer.maxConcurrency` explicitly. On the next update after upgrading, CloudFormation applies an in-place `MemorySize` update to the provider Lambda function. The custom resource is **not** replaced and no deployed objects are deleted or recreated — this is a function-configuration update, not a destructive change. Because provider memory participates in shared-handler identity, deployments that share a handler and relied on the old default will resolve to the same new default together.
 
