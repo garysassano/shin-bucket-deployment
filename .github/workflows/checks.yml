@@ -324,6 +324,9 @@ jobs:
       - name: Verify package contract
         run: pnpm verify:package
 
+      - name: Verify wire contract schema
+        run: pnpm verify:wire-contract
+
       # actions/checkout fetches only the single checked-out commit, so the
       # pull request base SHA is not in the local object store. Fetch just
       # that commit instead of the full history (fetch-depth: 0).
@@ -420,3 +423,6 @@ jobs:
 
       - name: Synthesize benchmark applications without AWS access
         run: pnpm benchmark:synth
+
+      - name: Validate benchmark evidence ledger
+        run: pnpm verify:ledger
