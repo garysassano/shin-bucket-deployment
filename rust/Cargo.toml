@@ -18,6 +18,14 @@ name = "shin_bucket_deployment_handler"
 path = "src/lib.rs"
 test = false
 
+# The crate contains no `unsafe` and has no reason to: it is a trust-boundary parser
+# for attacker-influenceable ZIP archives, and every hot path is already expressed in
+# safe code. `forbid` rather than `deny` so the guard cannot be switched off locally by
+# an `#[allow]`. Declared here rather than as a crate attribute so it binds every target
+# in the package -- the bin, the lib, and the bench -- from one place.
+[lints.rust]
+unsafe_code = "forbid"
+
 # The criterion bench defines its own `main` via `criterion_main!`; with the default
 # test harness cargo would list it as a test target and never run the benchmarks.
 [[bench]]
