@@ -142,8 +142,15 @@ jobs:
           chmod +x "$RUNNER_TEMP/minio"
 
       - name: Download Lambda Runtime Interface Emulator
+        # Upstream publishes no checksum asset, so the release is pinned and the
+        # digest below was recorded from the pinned download. Bump both together.
+        env:
+          AWS_LAMBDA_RIE_RELEASE: v1.36
+          AWS_LAMBDA_RIE_SHA256: ba57f2683260127135ad5ba9bafea141f90492143cbaeb9312cde6dae8d1c08e
         run: |
-          curl -fsSL --retry 3 -o "$RUNNER_TEMP/aws-lambda-rie" https://github.com/aws/aws-lambda-runtime-interface-emulator/releases/latest/download/aws-lambda-rie
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/aws-lambda-rie" \
+            "https://github.com/aws/aws-lambda-runtime-interface-emulator/releases/download/${AWS_LAMBDA_RIE_RELEASE}/aws-lambda-rie"
+          echo "${AWS_LAMBDA_RIE_SHA256}  ${RUNNER_TEMP}/aws-lambda-rie" | sha256sum -c -
           chmod +x "$RUNNER_TEMP/aws-lambda-rie"
 
       - name: Run provider smoke test against a local S3 mock
