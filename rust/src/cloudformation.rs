@@ -118,7 +118,21 @@ pub(crate) async fn handle_event(
         )
         .await;
     };
-    let response_url = validate_response_url(response_url)?;
+    // A rejected callback target is the one failure that cannot be reported to
+    // CloudFormation -- there is no trustworthy URL to report it to -- so the stack
+    // waits out `ServiceTimeout` instead. Other `?` paths here either run after a
+    // failure has already been logged and reported, or are reported to CloudFormation
+    // themselves; this one leaves no record anywhere. Log the reason structurally so it
+    // is recoverable from the function's logs. `validate_response_url` deliberately does
+    // not echo the URL, and neither does this.
+    let response_url = match validate_response_url(response_url) {
+        Ok(response_url) => response_url,
+        Err(error) => {
+            let reason = sanitize_failure_reason(&format!("{error:#}"));
+            error!(error = %reason, "callback target rejected; no failure can be reported");
+            return Err(error.into());
+        }
+    };
 
     let processed = timeout_at(
         deadlines.drain(),
