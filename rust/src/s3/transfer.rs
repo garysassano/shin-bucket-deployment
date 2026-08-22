@@ -381,7 +381,7 @@ pub(super) async fn upload_zip_entries(
                     window_bytes: source_window_bytes,
                 },
                 Arc::clone(&source_budget),
-            );
+            )?;
             block_stores.push(Arc::clone(&store));
             tracing::info!(
                 archive_index,
@@ -3352,7 +3352,8 @@ mod tests {
                 window_bytes,
             },
             Arc::clone(&source_budget),
-        );
+        )
+        .expect("store constructs");
 
         // The replaced output (128 KiB plus the replacement delta) exceeds the
         // cap, so the payload stays streaming and reads the archive again

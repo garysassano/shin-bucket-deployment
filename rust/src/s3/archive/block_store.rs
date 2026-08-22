@@ -5,7 +5,7 @@ use std::pin::Pin;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use bytes::Bytes;
 use futures_util::FutureExt;
 use futures_util::stream::{FuturesUnordered, StreamExt};
@@ -149,7 +149,7 @@ impl SourceBlockStore {
         plans: &[ZipEntryPlan],
         options: SourceBlockOptions,
         budget: Arc<SourceByteBudget>,
-    ) -> Arc<Self> {
+    ) -> Result<Arc<Self>> {
         let block_bytes = options.block_bytes.max(1);
         let get_concurrency = options.get_concurrency.max(1);
         let options = SourceBlockOptions {
@@ -162,11 +162,11 @@ impl SourceBlockStore {
             plans,
             options.block_bytes,
             options.merge_gap_bytes,
-        );
+        )?;
         source
             .diagnostics
             .record_plan(options, &blocks, plans.len());
-        Arc::new(Self {
+        Ok(Arc::new(Self {
             source,
             state: Mutex::new(SourceBlockState {
                 slots: initial_claim_counts(&blocks, plans)
@@ -192,7 +192,7 @@ impl SourceBlockStore {
             window_bytes: options.window_bytes.max(options.block_bytes) as u64,
             fetch_semaphore: Semaphore::new(options.get_concurrency),
             body_tasks: Mutex::new(JoinSet::new()),
-        })
+        }))
     }
 
     pub(crate) fn start_scheduler(self: &Arc<Self>) {
@@ -879,9 +879,9 @@ pub(super) fn plan_source_blocks(
     plans: &[ZipEntryPlan],
     block_bytes: usize,
     merge_gap_bytes: usize,
-) -> Vec<SourceBlockRange> {
+) -> Result<Vec<SourceBlockRange>> {
     if source_len == 0 {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
     let block_size = block_bytes.max(1) as u64;
@@ -927,16 +927,20 @@ pub(super) fn plan_source_blocks(
     // Planning rejects archives whose entries share a local header offset, so entry
     // spans are disjoint and the blocks derived from them must be too. `block_index_at`
     // binary-searches this list and claim accounting assumes each byte belongs to at
-    // most one block.
-    assert!(
-        blocks.iter().all(|block| block.start < block.end_exclusive)
-            && blocks
-                .windows(2)
-                .all(|pair| pair[0].end_exclusive <= pair[1].start),
-        "source blocks must be strictly increasing and disjoint"
-    );
+    // most one block. The store is constructed outside the scheduler's `catch_unwind`,
+    // so a violated invariant must fail the request (and reach the CloudFormation
+    // FAILED callback) instead of panicking the process.
+    let strictly_increasing = blocks.iter().all(|block| block.start < block.end_exclusive)
+        && blocks
+            .windows(2)
+            .all(|pair| pair[0].end_exclusive <= pair[1].start);
+    if !strictly_increasing {
+        return Err(anyhow!(
+            "source blocks must be strictly increasing and disjoint"
+        ));
+    }
 
-    blocks
+    Ok(blocks)
 }
 
 pub(super) fn initial_claim_counts(

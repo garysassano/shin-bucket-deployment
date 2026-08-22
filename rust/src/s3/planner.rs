@@ -657,7 +657,7 @@ async fn load_authenticated_catalog(
             window_bytes: source_window_bytes_for_archive(&request.runtime, source.len(), 1),
         },
         source_budget,
-    );
+    )?;
     // No stats handle: this plan-phase catalog read is not a transfer reader,
     // so its fetch waits must not land in either transfer source-wait counter.
     let mut reader = zip_entry_reader(store, plan.clone(), None)?;

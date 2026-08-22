@@ -255,7 +255,8 @@ fn source_blocks_are_sorted_coalesced_and_split() {
         &plans,
         DEFAULT_SOURCE_BLOCK_BYTES,
         DEFAULT_SOURCE_BLOCK_MERGE_GAP_BYTES,
-    );
+    )
+    .expect("planning succeeds");
 
     assert_eq!(blocks[0].start, 0);
     assert_eq!(blocks[0].end_exclusive, 256 * 1024);
@@ -375,7 +376,8 @@ async fn replay_demand_borrows_global_capacity_when_the_local_window_is_full() {
             window_bytes: BLOCK_BYTES,
         },
         budget,
-    );
+    )
+    .expect("store constructs");
 
     let later = store
         .reserve_fetch(1, SourceFetchMode::Prefetch)
@@ -1036,7 +1038,8 @@ async fn abandoned_polled_upload_body_releases_claims_without_retry() {
             window_bytes: block_bytes,
         },
         budget,
-    );
+    )
+    .expect("store constructs");
     let body_state = Arc::new(UploadBodyState::default());
     let mut body = zip_entry_body(
         Arc::clone(&store),
@@ -1147,7 +1150,8 @@ async fn abandoned_polled_upload_body_captures_detailed_state_before_abort() {
             window_bytes: block_bytes,
         },
         budget,
-    );
+    )
+    .expect("store constructs");
     let body_state = Arc::new(UploadBodyState::new(true));
     let mut body = zip_entry_body(
         Arc::clone(&store),
@@ -1384,7 +1388,8 @@ async fn dropped_upload_body_cancels_ranged_get_and_replays() {
         std::slice::from_ref(&plan),
         BLOCK_BYTES,
         0,
-    );
+    )
+    .expect("planning succeeds");
     assert!(blocks.len() > 2);
     let get_started = Arc::new(AtomicBool::new(false));
     let get_dropped = Arc::new(AtomicBool::new(false));
@@ -1787,6 +1792,7 @@ fn pending_store_for_span(
         },
         budget,
     )
+    .expect("store constructs")
 }
 
 fn pending_replay_store(
@@ -1807,6 +1813,7 @@ fn pending_replay_store(
         },
         budget,
     )
+    .expect("store constructs")
 }
 
 fn poll_body_once(body: &mut SdkBody) {
@@ -1869,7 +1876,8 @@ fn ready_store_for_plan_with_block_bytes(
     block_bytes: usize,
 ) -> Arc<SourceBlockStore> {
     let plans = std::slice::from_ref(plan);
-    let blocks = plan_source_blocks(zip.len() as u64, plans, block_bytes, 0);
+    let blocks =
+        plan_source_blocks(zip.len() as u64, plans, block_bytes, 0).expect("planning succeeds");
     let claims = initial_claim_counts(&blocks, plans);
     let ready_blocks = blocks
         .iter()
