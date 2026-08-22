@@ -25,6 +25,16 @@ on:
 permissions:
   contents: read
 
+# Two dispatches of the same group deploy and destroy identically named
+# stacks against the shared test account, so serialize per group. Queue
+# instead of cancelling: cancellation gives the job only a short grace period,
+# so the `if: always()` Destroy step below may be cut short partway through or
+# not complete at all, leaving billable resources behind for a stack nothing
+# is going to clean up.
+concurrency:
+  group: deploy-smoke-${{ inputs.group }}
+  cancel-in-progress: false
+
 env:
   AWS_REGION: eu-central-1
   AWS_DEFAULT_REGION: eu-central-1
