@@ -8,6 +8,14 @@
 // Runtime Interface Emulator (RIE) with an S3-compatible mock (MinIO) behind
 // `AWS_ENDPOINT_URL_S3`.
 //
+// Three phases run through one emulator: `Create`, then `Update` against a
+// second archive (which overwrites one object, adds another, and leaves a
+// third stale for deletion), then `Delete` with `deleteCurrentObjects`
+// enabled. Stale-object deletion and the destructive delete path otherwise
+// run end-to-end only under opt-in AWS verification. Each phase asserts
+// against only the log produced after it started, so a later phase cannot
+// pass on an earlier phase's deployment summary.
+//
 // The CloudFormation callback requires HTTPS and a validated AWS callback
 // host, so the smoke test does not try to make the callback succeed. The
 // synthetic `ResponseURL` uses a non-existent region and the provider runs
@@ -56,6 +64,10 @@ const SMOKE_SECRET_KEY = "shin-smoke-secret";
 const SOURCE_BUCKET = "shin-smoke-source";
 const DESTINATION_BUCKET = "shin-smoke-destination";
 const SOURCE_OBJECT_KEY = "site.zip";
+const SOURCE_OBJECT_KEY_V2 = "site-v2.zip";
+// Update and Delete must carry a PhysicalResourceId; the provider requires one
+// for both and echoes it back unchanged, deriving an ID only on Create.
+const SMOKE_PHYSICAL_RESOURCE_ID = "shin-smoke-physical-resource-id";
 const DESTINATION_OWNER_ID = "smoke0abc";
 export const SERVICE_TOKEN = "arn:aws:lambda:us-east-1:000000000000:function:shin-provider-smoke";
 // `useast99`/`us-east-99` satisfies the provider's CloudFormation callback
@@ -79,6 +91,19 @@ const ZIP_END_OF_CENTRAL_DIRECTORY = 0x06054b50;
 export const SMOKE_ENTRIES = [
   { path: "index.html", content: "<!doctype html><title>shin smoke</title>" },
   { path: "assets/app.js", content: 'console.log("shin smoke");\n' },
+];
+
+/**
+ * Second-generation fixture for the `Update` invocation.
+ *
+ * Deliberately overlaps `SMOKE_ENTRIES` in one key, drops another, and adds a
+ * third, so a single Update exercises all three outcomes at once: `index.html`
+ * is overwritten with different bytes, `assets/app.js` becomes stale and must
+ * be deleted, and `about.html` is a new object.
+ */
+export const SMOKE_UPDATE_ENTRIES = [
+  { path: "index.html", content: "<!doctype html><title>shin smoke v2</title>" },
+  { path: "about.html", content: "<!doctype html><title>about</title>" },
 ];
 
 /**
@@ -170,7 +195,53 @@ export function buildSourceZip(entries) {
  * every build: any key outside the schema, any missing required path, or any
  * wrong-typed value throws.
  */
-export function buildCreateEvent({
+function buildResourceProperties({
+  sourceBucketNames,
+  sourceObjectKeys,
+  destinationBucketName,
+  destinationOwnerId,
+  serviceToken,
+  serviceTimeout,
+  deleteCurrentObjectsOnDelete,
+}) {
+  return {
+    SourceBucketNames: sourceBucketNames,
+    SourceObjectKeys: sourceObjectKeys,
+    Destination: {
+      BucketName: destinationBucketName,
+    },
+    DestinationOwnerId: destinationOwnerId,
+    DestinationLifecycle: {
+      OnDeploy: { DeleteStaleObjects: true },
+      OnChange: { DeletePreviousObjects: false },
+      OnDelete: { DeleteCurrentObjects: deleteCurrentObjectsOnDelete },
+    },
+    CloudfrontInvalidation: { WaitForCompletion: true },
+    SourceProcessing: {
+      Extract: true,
+      MaxUncompressedEntryBytes: 1024 * 1024 * 1024,
+      MaxCompressionRatio: 100,
+    },
+    OutputObjectKeys: false,
+    Transfer: {
+      AdvancedTuning: { DestinationWriteRetry: {} },
+    },
+    ServiceToken: serviceToken,
+    ServiceTimeout: serviceTimeout,
+  };
+}
+
+/**
+ * Builds a synthetic CloudFormation custom-resource envelope.
+ *
+ * `Update` and `Delete` carry a `PhysicalResourceId`, which the provider
+ * requires for both and echoes back unchanged; only `Create` derives one.
+ * `Update` additionally carries `OldResourceProperties`, which CloudFormation
+ * populates from the previous template and the provider decodes just as
+ * strictly as the current properties.
+ */
+export function buildEvent({
+  requestType = "Create",
   sourceBucketNames = [SOURCE_BUCKET],
   sourceObjectKeys = [SOURCE_OBJECT_KEY],
   destinationBucketName = DESTINATION_BUCKET,
@@ -181,44 +252,53 @@ export function buildCreateEvent({
   requestId = "00000000-0000-4000-8000-000000000000",
   stackId = "arn:aws:cloudformation:us-east-1:000000000000:stack/shin-provider-smoke/00000000-0000-4000-8000-000000000000",
   logicalResourceId = "ShinProviderSmoke",
+  physicalResourceId,
+  oldSourceObjectKeys,
+  deleteCurrentObjectsOnDelete = false,
 } = {}) {
+  const resourceProperties = buildResourceProperties({
+    sourceBucketNames,
+    sourceObjectKeys,
+    destinationBucketName,
+    destinationOwnerId,
+    serviceToken,
+    serviceTimeout,
+    deleteCurrentObjectsOnDelete,
+  });
   const event = {
-    RequestType: "Create",
+    RequestType: requestType,
     ServiceToken: serviceToken,
     ResponseURL: responseUrl,
     StackId: stackId,
     RequestId: requestId,
     LogicalResourceId: logicalResourceId,
     ResourceType: "AWS::CloudFormation::CustomResource",
-    ResourceProperties: {
-      SourceBucketNames: sourceBucketNames,
-      SourceObjectKeys: sourceObjectKeys,
-      Destination: {
-        BucketName: destinationBucketName,
-      },
-      DestinationOwnerId: destinationOwnerId,
-      DestinationLifecycle: {
-        OnDeploy: { DeleteStaleObjects: true },
-        OnChange: { DeletePreviousObjects: false },
-        OnDelete: { DeleteCurrentObjects: false },
-      },
-      CloudfrontInvalidation: { WaitForCompletion: true },
-      SourceProcessing: {
-        Extract: true,
-        MaxUncompressedEntryBytes: 1024 * 1024 * 1024,
-        MaxCompressionRatio: 100,
-      },
-      OutputObjectKeys: false,
-      Transfer: {
-        AdvancedTuning: { DestinationWriteRetry: {} },
-      },
-      ServiceToken: serviceToken,
-      ServiceTimeout: serviceTimeout,
-    },
+    ResourceProperties: resourceProperties,
   };
+  if (physicalResourceId !== undefined) {
+    event.PhysicalResourceId = physicalResourceId;
+  }
+  if (oldSourceObjectKeys !== undefined) {
+    event.OldResourceProperties = buildResourceProperties({
+      sourceBucketNames,
+      sourceObjectKeys: oldSourceObjectKeys,
+      destinationBucketName,
+      destinationOwnerId,
+      serviceToken,
+      serviceTimeout,
+      deleteCurrentObjectsOnDelete,
+    });
+    assertPayloadWithinSynthShape(event.OldResourceProperties);
+    assertPayloadPaths(event.OldResourceProperties);
+  }
   assertPayloadWithinSynthShape(event.ResourceProperties);
   assertPayloadPaths(event.ResourceProperties);
   return event;
+}
+
+/** Back-compatible alias for the `Create` envelope. */
+export function buildCreateEvent(options = {}) {
+  return buildEvent({ ...options, requestType: "Create" });
 }
 
 /** The destination keys a successful deployment of `entries` must contain. */
@@ -357,6 +437,13 @@ async function seedMock(s3) {
       Body: buildSourceZip(SMOKE_ENTRIES),
     }),
   );
+  await s3.send(
+    new PutObjectCommand({
+      Bucket: SOURCE_BUCKET,
+      Key: SOURCE_OBJECT_KEY_V2,
+      Body: buildSourceZip(SMOKE_UPDATE_ENTRIES),
+    }),
+  );
   // A stale object the deployment must remove, and an `index.html` the
   // deployment must overwrite with different bytes.
   await s3.send(
@@ -476,44 +563,101 @@ async function main() {
     await waitForTcp("127.0.0.1", RIE_PORT, 30_000, "Runtime Interface Emulator");
     console.log(`Runtime Interface Emulator is listening on port ${RIE_PORT}`);
 
-    const invoke = await fetch(
-      `http://127.0.0.1:${RIE_PORT}/2015-03-31/functions/function/invocations`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(buildCreateEvent()),
-        signal: AbortSignal.timeout(180_000),
-      },
+    /**
+     * Invokes the real provider once and asserts it logged a successful
+     * deployment summary for that invocation.
+     *
+     * Each phase asserts against only the log produced after it started, so a
+     * later phase cannot pass on an earlier phase's summary — the whole point
+     * of running three of them through one emulator.
+     */
+    async function invokePhase(label, event) {
+      const logMark = rieLog.length;
+      const invoke = await fetch(
+        `http://127.0.0.1:${RIE_PORT}/2015-03-31/functions/function/invocations`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(event),
+          signal: AbortSignal.timeout(180_000),
+        },
+      );
+      const invokeBody = await invoke.text();
+      console.log(`${label} invoke response: HTTP ${invoke.status}`);
+      console.log(outputTail([Buffer.from(invokeBody)], 10));
+
+      // Give the emulator a moment to flush the provider's logs.
+      await sleep(1000);
+      const phaseLog = outputTail(rieLog.slice(logMark));
+      if (!phaseLog.includes("shin deployment summary")) {
+        throw new Error(
+          `The provider did not log a deployment summary for ${label}. ` +
+            `See the RIE output:\n${phaseLog}`,
+        );
+      }
+      // The summary is emitted as a quoted tracing field, so the raw log carries the
+      // JSON with escaped quotes (\"deploymentStatus\":\"success\"). Unescape before
+      // matching rather than asserting against the unescaped shape, which never appears.
+      if (!phaseLog.replace(/\\"/g, '"').includes('"deploymentStatus":"success"')) {
+        throw new Error(
+          `The provider deployment summary for ${label} did not report success. ` +
+            `See the RIE output:\n${phaseLog}`,
+        );
+      }
+      return phaseLog;
+    }
+
+    await invokePhase("Create", buildCreateEvent());
+    const created = await deployedDestination(s3);
+    assertDeployed(SMOKE_ENTRIES, created);
+    console.log(
+      `Create: ${created.length} objects deployed with the expected keys and bytes; ` +
+        "seeded stale object deleted; overwrite replaced.",
     );
-    const invokeBody = await invoke.text();
-    console.log(`Invoke response: HTTP ${invoke.status}`);
-    console.log(outputTail([Buffer.from(invokeBody)], 10));
 
-    const objects = await deployedDestination(s3);
-    assertDeployed(SMOKE_ENTRIES, objects);
+    // Update against a second archive. `index.html` is overwritten with new
+    // bytes, `assets/app.js` becomes stale and must be deleted, and
+    // `about.html` is new. This is the stale-deletion path that previously ran
+    // only under opt-in AWS verification.
+    await invokePhase(
+      "Update",
+      buildEvent({
+        requestType: "Update",
+        sourceObjectKeys: [SOURCE_OBJECT_KEY_V2],
+        oldSourceObjectKeys: [SOURCE_OBJECT_KEY],
+        physicalResourceId: SMOKE_PHYSICAL_RESOURCE_ID,
+      }),
+    );
+    const updated = await deployedDestination(s3);
+    assertDeployed(SMOKE_UPDATE_ENTRIES, updated);
+    console.log(
+      `Update: ${updated.length} objects; "assets/app.js" deleted as stale, ` +
+        '"about.html" added, "index.html" replaced with the new bytes.',
+    );
 
-    // Give the emulator a moment to flush the provider's logs, then assert on
-    // the deployment summary before tearing the mock down.
-    await sleep(1000);
-    const providerLog = outputTail(rieLog);
-    if (!providerLog.includes("shin deployment summary")) {
+    // Delete with `OnDelete.DeleteCurrentObjects` enabled: the destructive
+    // path, which must empty the destination namespace it owns.
+    await invokePhase(
+      "Delete",
+      buildEvent({
+        requestType: "Delete",
+        sourceObjectKeys: [SOURCE_OBJECT_KEY_V2],
+        physicalResourceId: SMOKE_PHYSICAL_RESOURCE_ID,
+        deleteCurrentObjectsOnDelete: true,
+      }),
+    );
+    const remaining = await deployedDestination(s3);
+    if (remaining.length !== 0) {
       throw new Error(
-        `The provider did not log a deployment summary. See the RIE output:\n${providerLog}`,
+        "Delete with deleteCurrentObjects must empty the destination. Remaining keys: " +
+          JSON.stringify(remaining.map((object) => object.key).sort()),
       );
     }
-    // The summary is emitted as a quoted tracing field, so the raw log carries the
-    // JSON with escaped quotes (\"deploymentStatus\":\"success\"). Unescape before
-    // matching rather than asserting against the unescaped shape, which never appears.
-    const unescapedLog = providerLog.replace(/\\"/g, '"');
-    if (!unescapedLog.includes('"deploymentStatus":"success"')) {
-      throw new Error(
-        `The provider deployment summary did not report success. See the RIE output:\n${providerLog}`,
-      );
-    }
+    console.log("Delete: destination emptied as required by onDelete.deleteCurrentObjects.");
 
     console.log(
-      `PASS: ${objects.length} objects deployed with the expected keys and bytes; ` +
-        "stale object deleted; overwrite replaced; deployment summary reports success.",
+      "PASS: Create, Update, and Delete each ran through the real provider binary " +
+        "with the expected S3 side effects and a successful deployment summary.",
     );
     console.log(
       "The CloudFormation callback failed as expected (HTTPS callback host cannot be reached " +
