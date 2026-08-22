@@ -6,8 +6,18 @@ import { ValidationError } from "./errors";
 import { globSyntaxError } from "./glob";
 import type {
   ShinBucketDeploymentAdvancedTransferTuning,
+  ShinBucketDeploymentBundlingCommandHooks,
+  ShinBucketDeploymentBundlingDockerOptions,
+  ShinBucketDeploymentBundlingOptions,
+  ShinBucketDeploymentCloudFrontInvalidation,
+  ShinBucketDeploymentDestination,
+  ShinBucketDeploymentDestinationLifecycle,
   ShinBucketDeploymentDestinationWriteRetryTuning,
+  ShinBucketDeploymentLocalBuildOptions,
   ShinBucketDeploymentProps,
+  ShinBucketDeploymentProviderLambdaOptions,
+  ShinBucketDeploymentSourceProcessingOptions,
+  ShinBucketDeploymentTransferOptions,
 } from "./shin-bucket-deployment";
 
 const MIN_SOURCE_BLOCK_BYTES = 30;
@@ -50,7 +60,29 @@ const MAX_CLOUDFRONT_WILDCARD_INVALIDATION_PATHS = 15;
 // `_ . : / = + - @`): https://docs.aws.amazon.com/AmazonS3/latest/userguide/tagging.html
 const DESTINATION_OWNER_TAG_PREFIX_PATTERN = /^[\p{L}\p{Z}\p{N}_.:/=+\-@]*$/u;
 
-const ROOT_KEYS = [
+/**
+ * Compile-time proof that a strict-props key list names every key of its
+ * interface.
+ *
+ * `rejectUnknownKeys` fails a request carrying a key the list does not
+ * declare, so the lists below are part of the public contract: a property
+ * added to an interface but not to its list type-checks, synthesizes, and then
+ * rejects the caller's own documented property at runtime. Binding each list
+ * to its interface turns that into a build failure naming the missing key.
+ *
+ * A misspelled or removed key fails on the `keyof T` constraint; a missing key
+ * fails because the parameter type collapses to `__missingPropKeys`, whose
+ * value names the keys still unaccounted for.
+ */
+function propKeys<T>() {
+  return <const K extends readonly (keyof T & string)[]>(
+    keys: [Exclude<keyof T, K[number]>] extends [never]
+      ? K
+      : { readonly __missingPropKeys: Exclude<keyof T, K[number]> },
+  ): K => keys as K;
+}
+
+const ROOT_KEYS = propKeys<ShinBucketDeploymentProps>()([
   "sources",
   "destination",
   "sourceProcessing",
@@ -58,9 +90,9 @@ const ROOT_KEYS = [
   "transfer",
   "cloudfrontInvalidation",
   "destinationLifecycle",
-] as const;
+]);
 
-const PROVIDER_LAMBDA_KEYS = [
+const PROVIDER_LAMBDA_KEYS = propKeys<ShinBucketDeploymentProviderLambdaOptions>()([
   "sharing",
   "architecture",
   "memorySize",
@@ -71,7 +103,7 @@ const PROVIDER_LAMBDA_KEYS = [
   "vpcSubnets",
   "securityGroups",
   "localBuild",
-] as const;
+]);
 
 export function destinationOwnerPrefix(prefix: string | undefined): string {
   return prefix === "/" ? "" : (prefix ?? "");
@@ -90,10 +122,12 @@ export function validateDeploymentProps(scope: Construct, props: ShinBucketDeplo
   }
   validateSources(scope, rawProps.sources);
 
-  const destination = requireObjectGroup(scope, rawProps.destination, "destination", [
-    "bucket",
-    "keyPrefix",
-  ]);
+  const destination = requireObjectGroup(
+    scope,
+    rawProps.destination,
+    "destination",
+    propKeys<ShinBucketDeploymentDestination>()(["bucket", "keyPrefix"]),
+  );
   if (destination.bucket === undefined || destination.bucket === null) {
     throw new ValidationError(
       "ShinBucketDeploymentDestinationBucketRequired",
@@ -107,7 +141,13 @@ export function validateDeploymentProps(scope: Construct, props: ShinBucketDeplo
     scope,
     rawProps.sourceProcessing,
     "sourceProcessing",
-    ["extract", "maxUncompressedEntryBytes", "maxCompressionRatio", "include", "exclude"],
+    propKeys<ShinBucketDeploymentSourceProcessingOptions>()([
+      "extract",
+      "maxUncompressedEntryBytes",
+      "maxCompressionRatio",
+      "include",
+      "exclude",
+    ]),
   );
   const providerLambda = optionalObjectGroup(
     scope,
@@ -119,13 +159,13 @@ export function validateDeploymentProps(scope: Construct, props: ShinBucketDeplo
     scope,
     providerLambda?.localBuild,
     "providerLambda.localBuild",
-    ["projectPath", "bundling"],
+    propKeys<ShinBucketDeploymentLocalBuildOptions>()(["projectPath", "bundling"]),
   );
   const bundling = optionalObjectGroup(
     scope,
     localBuild?.bundling,
     "providerLambda.localBuild.bundling",
-    [
+    propKeys<ShinBucketDeploymentBundlingOptions>()([
       "environment",
       "forcedDockerBundling",
       "dockerImage",
@@ -135,13 +175,13 @@ export function validateDeploymentProps(scope: Construct, props: ShinBucketDeplo
       "commandHooks",
       "cargoLambdaFlags",
       "profile",
-    ],
+    ]),
   );
   const dockerOptions = optionalObjectGroup(
     scope,
     bundling?.dockerOptions,
     "providerLambda.localBuild.bundling.dockerOptions",
-    [
+    propKeys<ShinBucketDeploymentBundlingDockerOptions>()([
       "entrypoint",
       "command",
       "volumes",
@@ -153,75 +193,89 @@ export function validateDeploymentProps(scope: Construct, props: ShinBucketDeplo
       "securityOpt",
       "network",
       "bundlingFileAccess",
-    ],
+    ]),
   );
   const commandHooks = optionalObjectGroup(
     scope,
     bundling?.commandHooks,
     "providerLambda.localBuild.bundling.commandHooks",
-    ["beforeBundling", "afterBundling"],
+    propKeys<ShinBucketDeploymentBundlingCommandHooks>()(["beforeBundling", "afterBundling"]),
   );
 
-  const transfer = optionalObjectGroup(scope, rawProps.transfer, "transfer", [
-    "maxConcurrency",
-    "advancedTuning",
-  ]);
+  const transfer = optionalObjectGroup(
+    scope,
+    rawProps.transfer,
+    "transfer",
+    propKeys<ShinBucketDeploymentTransferOptions>()(["maxConcurrency", "advancedTuning"]),
+  );
   const advancedTuning = optionalObjectGroup(
     scope,
     transfer?.advancedTuning,
     "transfer.advancedTuning",
-    [
+    propKeys<ShinBucketDeploymentAdvancedTransferTuning>()([
       "sourceBlockBytes",
       "sourceBlockMergeGapBytes",
       "sourceGetConcurrency",
       "sourceWindowBytes",
       "sourceWindowMemoryBudgetMiB",
       "destinationWriteRetry",
-    ],
+    ]),
   );
   optionalObjectGroup(
     scope,
     advancedTuning?.destinationWriteRetry,
     "transfer.advancedTuning.destinationWriteRetry",
-    [
+    propKeys<ShinBucketDeploymentDestinationWriteRetryTuning>()([
       "maxAttempts",
       "baseDelayMs",
       "maxDelayMs",
       "slowdownBaseDelayMs",
       "slowdownMaxDelayMs",
       "jitter",
-    ],
+    ]),
   );
 
   const cloudfrontInvalidation = optionalObjectGroup(
     scope,
     rawProps.cloudfrontInvalidation,
     "cloudfrontInvalidation",
-    ["distribution", "paths", "waitForCompletion"],
+    propKeys<ShinBucketDeploymentCloudFrontInvalidation>()([
+      "distribution",
+      "paths",
+      "waitForCompletion",
+    ]),
   );
   const destinationLifecycle = optionalObjectGroup(
     scope,
     rawProps.destinationLifecycle,
     "destinationLifecycle",
-    ["onDeploy", "onChange", "onDelete"],
+    propKeys<ShinBucketDeploymentDestinationLifecycle>()(["onDeploy", "onChange", "onDelete"]),
   );
   const onDeploy = optionalObjectGroup(
     scope,
     destinationLifecycle?.onDeploy,
     "destinationLifecycle.onDeploy",
-    ["deleteStaleObjects"],
+    propKeys<NonNullable<ShinBucketDeploymentDestinationLifecycle["onDeploy"]>>()([
+      "deleteStaleObjects",
+    ]),
   );
   const onChange = optionalObjectGroup(
     scope,
     destinationLifecycle?.onChange,
     "destinationLifecycle.onChange",
-    ["deletePreviousObjects", "previousBucket", "invalidatePreviousDistribution"],
+    propKeys<NonNullable<ShinBucketDeploymentDestinationLifecycle["onChange"]>>()([
+      "deletePreviousObjects",
+      "previousBucket",
+      "invalidatePreviousDistribution",
+    ]),
   );
   const onDelete = optionalObjectGroup(
     scope,
     destinationLifecycle?.onDelete,
     "destinationLifecycle.onDelete",
-    ["deleteCurrentObjects"],
+    propKeys<NonNullable<ShinBucketDeploymentDestinationLifecycle["onDelete"]>>()([
+      "deleteCurrentObjects",
+    ]),
   );
 
   validateOptionalBoolean(scope, sourceProcessing?.extract, "sourceProcessing.extract");
