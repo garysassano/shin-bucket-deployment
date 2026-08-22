@@ -96,6 +96,20 @@ impl DeletionCandidates {
     }
 }
 
+/// Which stale-cleanup legs were measured, and for how long.
+///
+/// Attribution is decided where the work happens rather than in one window around
+/// both legs: a shared listing scan cannot be split, but two retained-key deletes
+/// can, and collapsing them lost the previous-namespace span entirely. Returning the
+/// spans instead of recording them inline keeps the split assertable in tests, where
+/// a replayed delete completes in well under a millisecond and every duration would
+/// otherwise round to zero.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct StaleDeletionTimings {
+    current: Option<Duration>,
+    previous: Option<Duration>,
+}
+
 struct UnplannedDeletionContext<'a> {
     bucket: &'a str,
     list_prefix: Option<&'a str>,
@@ -325,10 +339,14 @@ pub(super) async fn delete_stale_objects(
         return Ok(());
     }
 
-    let started = std::time::Instant::now();
+    // Timing is recorded inside `delete_stale_objects_with_retry`, which is the only
+    // place that knows whether the two cleanup legs ran as separable deletes or as one
+    // shared listing scan. A single window here attributed both legs to whichever
+    // counter matched `current_cleanup_authorized`, so a prefix move that deleted from
+    // both namespaces reported `oldPrefixDelete: 0`.
     let retry_coordinator = DeleteRetryCoordinator::new();
     let retry = &request.runtime.put_object_retry;
-    delete_stale_objects_with_retry(
+    let (_, timings) = delete_stale_objects_with_retry(
         state,
         request,
         protected_prefix,
@@ -344,11 +362,11 @@ pub(super) async fn delete_stale_objects(
         work_deadline,
     )
     .await?;
-    let elapsed = crate::util::duration_ms(started.elapsed());
-    if current_cleanup_authorized {
-        stats.add_delete_millis(elapsed);
-    } else {
-        stats.add_old_prefix_delete_millis(elapsed);
+    if let Some(elapsed) = timings.current {
+        stats.add_delete_millis(crate::util::duration_ms(elapsed));
+    }
+    if let Some(elapsed) = timings.previous {
+        stats.add_old_prefix_delete_millis(crate::util::duration_ms(elapsed));
     }
     Ok(())
 }
@@ -368,7 +386,8 @@ async fn delete_stale_objects_with_retry(
     retry: &PutObjectRetryOptions,
     retry_coordinator: &DeleteRetryCoordinator,
     work_deadline: Instant,
-) -> Result<u64> {
+) -> Result<(u64, StaleDeletionTimings)> {
+    let mut timings = StaleDeletionTimings::default();
     let list_prefix = namespace_list_prefix(&request.dest_bucket_prefix);
     let strip_prefix = list_prefix.as_deref().unwrap_or("");
     let protected_namespace = protected_prefix.and_then(namespace_list_prefix);
@@ -383,8 +402,11 @@ async fn delete_stale_objects_with_retry(
     if (!delete_current_stale || retained_current.is_some())
         && (!delete_previous_stale || retained_previous.is_some())
     {
+        // Each leg deletes its own retained key list, so the two spans are separable
+        // and each is attributed to its own phase counter.
         let mut deleted = 0_u64;
         if let Some(keys) = retained_current {
+            let started = std::time::Instant::now();
             deleted = deleted.saturating_add(
                 delete_keys_optional_stats(
                     state,
@@ -397,8 +419,10 @@ async fn delete_stale_objects_with_retry(
                 )
                 .await?,
             );
+            timings.current = Some(started.elapsed());
         }
         if let Some(keys) = retained_previous {
+            let started = std::time::Instant::now();
             deleted = deleted.saturating_add(
                 delete_keys_optional_stats(
                     state,
@@ -411,11 +435,17 @@ async fn delete_stale_objects_with_retry(
                 )
                 .await?,
             );
+            timings.previous = Some(started.elapsed());
         }
-        return Ok(deleted);
+        return Ok((deleted, timings));
     }
 
-    delete_unplanned_objects(
+    // The fallback is one listing pass whose predicate evaluates both namespaces
+    // together (`unplanned_cleanup_key`), so its cost is genuinely shared and cannot be
+    // split between the legs. Attribute the whole scan to the leg that caused it, and
+    // to current cleanup when both legs ran.
+    let started = std::time::Instant::now();
+    let deleted = delete_unplanned_objects(
         state,
         UnplannedDeletionContext {
             bucket: &request.dest_bucket_name,
@@ -434,7 +464,14 @@ async fn delete_stale_objects_with_retry(
         retry_coordinator,
         work_deadline,
     )
-    .await
+    .await?;
+    let elapsed = started.elapsed();
+    if delete_current_stale {
+        timings.current = Some(elapsed);
+    } else {
+        timings.previous = Some(elapsed);
+    }
+    Ok((deleted, timings))
 }
 
 async fn delete_unplanned_objects(
@@ -1177,16 +1214,18 @@ mod tests {
     use tracing_subscriber::layer::SubscriberExt;
 
     use super::{
-        DeleteRetryCoordinator, DeletionCandidates, DestinationObject, DestinationRecordContext,
-        GuardedDeleteContext, GuardedDeleteOutcome, UnplannedDeletionContext, delete_key_chunk,
-        delete_listed_objects, guarded_delete_namespace, inferred_delete_counts, normalize_etag,
+        DeleteRetryCoordinator, DeletionCandidates, DestinationObject, DestinationPlan,
+        DestinationRecordContext, GuardedDeleteContext, GuardedDeleteOutcome,
+        UnplannedDeletionContext, delete_key_chunk, delete_listed_objects,
+        guarded_delete_namespace, inferred_delete_counts, normalize_etag,
         record_destination_object, record_destination_object_original, stale_destination_key,
         unplanned_cleanup_key, unplanned_destination_key,
     };
     use crate::deployment::{
-        DeploymentManifest, PlannedAction, PlannedObject, PutObjectRetryJitter,
-        PutObjectRetryOptions,
+        DeploymentManifest, DeploymentRequest, Filters, PlannedAction, PlannedObject,
+        PutObjectRetryJitter, PutObjectRetryOptions,
     };
+    use crate::diagnostics::DeploymentStats;
     use crate::request::{compile_filters, strip_destination_prefix};
     use crate::state::AppState;
 
@@ -1518,6 +1557,71 @@ mod tests {
                 .map(|request| request.method().to_string())
                 .collect::<Vec<_>>(),
             ["POST"]
+        );
+    }
+
+    #[tokio::test]
+    async fn both_cleanup_legs_are_timed_separately_when_each_deletes_its_own_keys() {
+        // A same-bucket prefix move with `deletePreviousObjects` deletes from the
+        // current namespace and the previous one. Both spans used to sit inside a
+        // single window attributed to whichever counter matched the current-cleanup
+        // flag, so the previous-namespace work reported `oldPrefixDelete: 0`.
+        let replay = StaticReplayClient::new(vec![delete_success_event(), delete_success_event()]);
+        let state = replay_app_state(replay.clone());
+        let request = DeploymentRequest::for_test();
+        let stats = DeploymentStats::default();
+        let filters = Filters {
+            exclude: Vec::new(),
+            include: Vec::new(),
+        };
+        let manifest = DeploymentManifest::new();
+
+        let mut current_stale = DeletionCandidates::default();
+        current_stale.retain("site/current-stale.txt");
+        let mut previous_stale = DeletionCandidates::default();
+        previous_stale.retain("site/initial/previous-stale.txt");
+        let plan = DestinationPlan {
+            objects: HashMap::new(),
+            current_stale,
+            previous_stale,
+        };
+
+        let (deleted, timings) = super::delete_stale_objects_with_retry(
+            &state,
+            &request,
+            None,
+            Some("site/initial"),
+            true,
+            true,
+            &filters,
+            &manifest,
+            &plan,
+            &stats,
+            &retry_options(1, 0),
+            &DeleteRetryCoordinator::new(),
+            tokio::time::Instant::now() + Duration::from_secs(10),
+        )
+        .await
+        .expect("both retained key lists should delete");
+
+        assert_eq!(deleted, 2);
+        // Each leg deletes its own key list, so each is measured on its own. The
+        // durations themselves are sub-millisecond against the replay client and would
+        // both round to zero, so the assertion is on which legs were measured.
+        assert!(
+            timings.current.is_some(),
+            "current-namespace deletion should be timed"
+        );
+        assert!(
+            timings.previous.is_some(),
+            "previous-namespace deletion should be timed, not folded into the current leg"
+        );
+        assert_eq!(
+            replay
+                .actual_requests()
+                .map(|request| request.method().to_string())
+                .collect::<Vec<_>>(),
+            ["POST", "POST"]
         );
     }
 
