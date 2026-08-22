@@ -1089,14 +1089,31 @@ export class ShinBucketDeployment extends Construct {
     }
     this.handlerRole = handlerRole;
 
-    // Track the original source objects as they are bound. `addSource` uses this
-    // to skip binding an identical source object again: binding materializes
-    // catalogs and creates `Asset` constructs, so a duplicate that is later
-    // dropped by the config-equality dedup would leave orphan staged assets.
-    this.boundSources = [...props.sources];
-    this.sources = props.sources.map((source: ISource) =>
-      source.bind(this, { handlerRole: this.handlerRole }),
-    );
+    // Track the original source objects as they are bound, so an identical source
+    // object is never bound twice: binding materializes catalogs and creates `Asset`
+    // constructs, and a duplicate later dropped by the config-equality dedup would
+    // leave an orphan staged asset behind.
+    //
+    // The constructor applies the same two stages as `addSource` -- skip a repeated
+    // source object before binding, then drop a bound config equal to one already
+    // held. Previously it applied neither, so `sources: [a, a]` bound twice and sent
+    // two identical entries while `addSource(a)` twice sent one.
+    //
+    // Two *distinct* objects that bind to equal configs still stage an asset before
+    // the equality check can see them; config equality is only knowable after
+    // binding, so that case is inherent rather than an oversight.
+    this.boundSources = [];
+    this.sources = [];
+    for (const source of props.sources) {
+      if (this.boundSources.includes(source)) {
+        continue;
+      }
+      const config = source.bind(this, { handlerRole: this.handlerRole });
+      this.boundSources.push(source);
+      if (!this.sources.some((held) => sourceConfigEqual(Stack.of(this), held, config))) {
+        this.sources.push(config);
+      }
+    }
 
     const providerPolicyDependables = grantDestinationPermissions(this, this.handlerFunction, {
       destinationBucket: this.destinationBucket,
