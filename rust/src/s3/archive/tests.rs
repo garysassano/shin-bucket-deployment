@@ -451,6 +451,66 @@ async fn zip_entry_reader_decompresses_and_validates_crc() {
     assert_eq!(output, b"hello zipped world");
 }
 
+/// Entry names are attacker-influenceable UTF-8 from the archive's central
+/// directory, and the planner carries them through to destination keys. The
+/// suite only ever used ASCII names, so a mishandled multi-byte or astral name
+/// -- a byte-vs-char offset slip, or a lossy decode -- would not have failed
+/// anything.
+#[tokio::test]
+async fn zip_entry_reader_round_trips_non_ascii_entry_names() {
+    for name in [
+        "café/menú.txt",
+        "\u{65e5}\u{672c}\u{8a9e}/\u{30d5}\u{30a1}\u{30a4}\u{30eb}.txt",
+        "emoji/\u{1F600}.txt",
+        "\u{0440}\u{0443}\u{0441}/\u{0444}\u{0430}\u{0439}\u{043b}.txt",
+    ] {
+        let body = format!("contents of {name}").into_bytes();
+        let zip = zip_from_entry(name, &body);
+        let plan = zip_plan_from_archive(&zip, name);
+        assert_eq!(
+            plan.relative_key, name,
+            "planner must preserve the exact name"
+        );
+
+        let store = ready_store_for_plan(&zip, &plan);
+        let mut reader = zip_entry_reader(store, plan, None).unwrap();
+        let mut output = Vec::new();
+        reader.read_to_end(&mut output).await.unwrap();
+
+        assert_eq!(output, body, "round trip failed for {name:?}");
+    }
+}
+
+/// A ZIP with a valid end-of-central-directory record and no entries at all.
+/// Planning must treat it as an empty archive rather than failing or producing
+/// a block for a zero-length span.
+#[tokio::test]
+async fn zero_entry_archive_plans_no_entries_and_no_blocks() {
+    let cursor = std::io::Cursor::new(Vec::new());
+    let zip = ZipWriter::new(cursor).finish().unwrap().into_inner();
+
+    let reader =
+        async_zip::base::read::seek::ZipFileReader::with_tokio(std::io::Cursor::new(zip.clone()))
+            .await
+            .expect("an empty archive still has a readable central directory");
+    assert!(
+        reader.file().entries().is_empty(),
+        "fixture should contain no entries"
+    );
+
+    let blocks = plan_source_blocks(
+        zip.len() as u64,
+        &[],
+        DEFAULT_SOURCE_BLOCK_BYTES,
+        DEFAULT_SOURCE_BLOCK_MERGE_GAP_BYTES,
+    )
+    .expect("planning an entry-less archive succeeds");
+    assert!(
+        blocks.is_empty(),
+        "no entries means no source blocks to fetch, got {blocks:?}"
+    );
+}
+
 #[tokio::test]
 async fn zip_entry_reader_rejects_crc_mismatch() {
     let zip = zip_from_entry("bad.txt", b"hello zipped world");

@@ -1,0 +1,38 @@
+{
+  "$comment": "Shared glob acceptance corpus. The TypeScript validator (src/glob.ts, globSyntaxError) rejects a pattern at synthesis; the Rust provider (globset::Glob::new, via compile_globs in rust/src/request.rs) rejects it at request time. Both sides run this file, so a divergence is a test failure rather than a deployment that synthesizes and then fails in the Lambda. This mirrors contract/wire-acceptance-matrix.json, which solved the same drift problem for wire property names. Add a case here whenever either validator's syntax handling changes.",
+  "cases": [
+    { "pattern": "", "accepted": true, "note": "empty pattern matches nothing but is syntactically valid" },
+    { "pattern": "index.html", "accepted": true, "note": "plain literal" },
+    { "pattern": "assets/app.js", "accepted": true, "note": "literal with separator" },
+    { "pattern": "with space.txt", "accepted": true, "note": "spaces are literal" },
+    { "pattern": "*", "accepted": true, "note": "single-segment wildcard" },
+    { "pattern": "**", "accepted": true, "note": "recursive wildcard" },
+    { "pattern": "**/*", "accepted": true, "note": "recursive wildcard with segment" },
+    { "pattern": "a/**/b", "accepted": true, "note": "interior recursive wildcard" },
+    { "pattern": "?.txt", "accepted": true, "note": "single-character wildcard" },
+    { "pattern": "a*b?c", "accepted": true, "note": "mixed wildcards" },
+    { "pattern": "{a,b}", "accepted": true, "note": "balanced alternates" },
+    { "pattern": "a{b,c}d", "accepted": true, "note": "alternates inside a literal" },
+    { "pattern": "{a,{b,c}}", "accepted": true, "note": "nested alternates" },
+    { "pattern": "{}", "accepted": true, "note": "empty alternate list" },
+    { "pattern": "[{a,b}]", "accepted": true, "note": "braces inside a class are literal members" },
+    { "pattern": "{a\\,b,c}", "accepted": true, "note": "escaped comma inside alternates" },
+    { "pattern": "\\{a,b\\}", "accepted": true, "note": "escaped braces are literal" },
+    { "pattern": "a,b", "accepted": true, "note": "comma outside alternates is literal" },
+    { "pattern": "[a-z].txt", "accepted": true, "note": "ascending character range" },
+    { "pattern": "[!a-z].txt", "accepted": true, "note": "negated class" },
+    { "pattern": "[]].txt", "accepted": true, "note": "leading ] is a literal class member" },
+    { "pattern": "é*.txt", "accepted": true, "note": "non-ASCII BMP literal" },
+    { "pattern": "😀*.txt", "accepted": true, "note": "astral literal" },
+
+    { "pattern": "{a,b", "accepted": false, "note": "unclosed alternates" },
+    { "pattern": "{a,{b,c}", "accepted": false, "note": "unclosed nested alternates" },
+    { "pattern": "a,b}", "accepted": false, "note": "unopened alternates" },
+    { "pattern": "{a,b}}", "accepted": false, "note": "trailing unopened alternate" },
+    { "pattern": "[{]}", "accepted": false, "note": "the } after a closed class is an unopened alternate" },
+    { "pattern": "[z-a]", "accepted": false, "note": "descending character range" },
+    { "pattern": "{a,[z-a]}", "accepted": false, "note": "invalid range inside alternates" },
+    { "pattern": "[a-", "accepted": false, "note": "unclosed class with a pending range" },
+    { "pattern": "[abc", "accepted": false, "note": "unclosed character class" }
+  ]
+}
