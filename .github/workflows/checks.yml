@@ -192,14 +192,38 @@ jobs:
       # `high` rather than `moderate` is deliberate: npm dependencies here are
       # almost entirely development-time and are not part of the published
       # runtime. See the supply chain section of SECURITY.md.
+      # Each scanner runs even when an earlier one fails, and the job's result is
+      # decided at the end. Sequential `run` steps short-circuit: while npm audit
+      # was failing, the two cargo scanners below never executed in CI at all, so
+      # a Rust advisory could have landed unnoticed behind an unrelated npm one.
       - name: npm audit
+        id: npm_audit
+        if: always()
         run: pnpm audit --audit-level high
 
       - name: cargo audit
+        id: cargo_audit
+        if: always()
         run: cargo audit --file rust/Cargo.lock
 
       - name: cargo deny
+        id: cargo_deny
+        if: always()
         run: pnpm rust:deny
+
+      - name: Supply-chain result
+        if: always()
+        run: |
+          failed=0
+          for scanner in npm_audit:'${{ steps.npm_audit.outcome }}' \
+                         cargo_audit:'${{ steps.cargo_audit.outcome }}' \
+                         cargo_deny:'${{ steps.cargo_deny.outcome }}'; do
+            name=${scanner%%:*}
+            outcome=${scanner#*:}
+            printf '%-12s %s\n' "$name" "$outcome"
+            [ "$outcome" = "success" ] || failed=1
+          done
+          exit "$failed"
 
   workflow-quality:
     name: Workflow and TOML quality
