@@ -23,6 +23,14 @@ test = false
 # safe code. `forbid` rather than `deny` so the guard cannot be switched off locally by
 # an `#[allow]`. Declared here rather than as a crate attribute so it binds every target
 # in the package -- the bin, the lib, and the bench -- from one place.
+# cargo-machete resolves usage by the Cargo package name and does not follow the
+# hyphen-to-underscore rename, so it reports `md-5` as unused even though
+# `src/replace.rs` imports it as `md5::{Digest as Md5Digest, Md5}`. Ignore it here
+# rather than leaving a standing false positive that trains the reader to skip the
+# tool's output.
+[package.metadata.cargo-machete]
+ignored = ["md-5"]
+
 [lints.rust]
 unsafe_code = "forbid"
 
@@ -46,7 +54,7 @@ default = []
 bench-internals = []
 
 [dependencies]
-aho-corasick = "1.1.4"
+aho-corasick = "1.1.5"
 anyhow = "1"
 async-compression = { version = "0.4", default-features = false, features = [
   "tokio",
@@ -79,7 +87,7 @@ aws-sdk-s3 = { version = "1", default-features = false, features = [
   "rt-tokio",
   "sigv4a",
 ] }
-base64 = "0.22"
+base64 = "0.23"
 bytes = "1"
 crc32fast = "1"
 fastrand = "2"
@@ -106,7 +114,7 @@ urlencoding = "2"
 
 [dev-dependencies]
 aws-smithy-http-client = { version = "1", features = ["test-util"] }
-criterion = "0.5"
+criterion = "0.8"
 http = "1"
 proptest = "1.11.0"
 tokio = { version = "1", features = ["test-util"] }
