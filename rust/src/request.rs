@@ -996,6 +996,59 @@ fn compile_globs(patterns: &[String]) -> Result<Vec<GlobMatcher>> {
 }
 
 #[cfg(test)]
+mod glob_acceptance {
+    //! Rust half of the cross-implementation glob corpus.
+    //!
+    //! `contract/glob-acceptance-matrix.json` is run by both validators: the
+    //! TypeScript one at synthesis (`test/glob-acceptance.test.ts`) and
+    //! `globset::Glob::new` here at request time. A pattern the two disagree on
+    //! either synthesizes and then fails inside the Lambda, or is refused at
+    //! synthesis when the provider would have accepted it. Running one corpus on
+    //! both sides turns that drift into a test failure.
+
+    use globset::Glob;
+
+    const GLOB_ACCEPTANCE_MATRIX_PATH: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../contract/glob-acceptance-matrix.json"
+    );
+
+    #[test]
+    fn globset_matches_the_shared_acceptance_corpus() {
+        let raw = std::fs::read_to_string(GLOB_ACCEPTANCE_MATRIX_PATH)
+            .expect("glob acceptance matrix is readable");
+        let matrix: serde_json::Value =
+            serde_json::from_str(&raw).expect("glob acceptance matrix is valid JSON");
+        let cases = matrix["cases"]
+            .as_array()
+            .expect("glob acceptance matrix has a cases array");
+        assert!(
+            cases.len() >= 25,
+            "the shared corpus should be non-trivial; found {}",
+            cases.len()
+        );
+
+        let mut divergences = Vec::new();
+        for case in cases {
+            let pattern = case["pattern"].as_str().expect("case has a pattern");
+            let expected = case["accepted"].as_bool().expect("case has accepted");
+            let actual = Glob::new(pattern).is_ok();
+            if actual != expected {
+                divergences.push(format!(
+                    "{pattern:?}: matrix says accepted={expected}, globset says {actual}"
+                ));
+            }
+        }
+        assert!(
+            divergences.is_empty(),
+            "globset diverges from the shared corpus (the TypeScript validator is pinned to \
+             the same file, so this is a synthesis-vs-runtime split):\n{}",
+            divergences.join("\n")
+        );
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use serde_json::json;
 
