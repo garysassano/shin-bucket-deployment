@@ -26,7 +26,6 @@
       "benchmarks/configs/**/*.json",
       "benchmarks/schemas/**/*.json",
       "package.json",
-      "tsconfig.json",
       "vitest.config.ts"
     ]
   },

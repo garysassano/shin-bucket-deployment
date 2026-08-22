@@ -42,7 +42,7 @@ env:
 jobs:
   deploy-smoke:
     name: Deploy smoke (${{ inputs.group }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     # The existing benchmark OIDC role's trust is bound to this environment, so
     # the job runs here rather than widening that trust. No new IAM is needed:
