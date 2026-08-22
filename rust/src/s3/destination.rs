@@ -819,6 +819,7 @@ async fn delete_key_chunk(
                         attempt,
                         throttled,
                         work_deadline,
+                        stats,
                     )
                     .await
                     {
@@ -864,6 +865,7 @@ async fn delete_key_chunk(
                         attempt,
                         throttled,
                         work_deadline,
+                        stats,
                     )
                     .await
                     {
@@ -955,13 +957,26 @@ async fn wait_for_delete_retry_before_deadline(
     attempt: usize,
     throttled: bool,
     work_deadline: Instant,
+    stats: Option<&DeploymentStats>,
 ) -> bool {
+    // The write side has always reported its retry and throttle counters; the delete
+    // side honoured throttle cooldowns but reported none of them, so a deployment
+    // throttled on `DeleteObjects` was indistinguishable in the ledger from one that
+    // was not. Record the same shape here.
+    if let Some(stats) = stats {
+        stats.record_delete_retry(throttled);
+    }
     let delay = coordinator.retry_delay(attempt, throttled, retry);
     if throttled {
         coordinator.extend_throttle_cooldown(delay);
-        coordinator
+        let started = Instant::now();
+        let proceeded = coordinator
             .wait_for_throttle_cooldown_before_deadline(work_deadline)
-            .await
+            .await;
+        if let Some(stats) = stats {
+            stats.record_delete_throttle_cooldown_wait(crate::util::duration_ms(started.elapsed()));
+        }
+        proceeded
     } else {
         let now = Instant::now();
         let Some(wake) = now.checked_add(delay) else {
@@ -1655,6 +1670,46 @@ mod tests {
                 .map(|request| request.method().to_string())
                 .collect::<Vec<_>>(),
             ["POST", "POST"]
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_retries_and_throttling_reach_the_deployment_summary() {
+        // A throttled failure then a success: the delete coordinator has always waited
+        // out the cooldown, but reported nothing, so a throttled deployment looked
+        // identical in the ledger to an unthrottled one. Drive a real replayed retry
+        // and assert the counters land on the summary's deleteObject section.
+        let replay =
+            StaticReplayClient::new(vec![error_event(503, "SlowDown"), delete_success_event()]);
+        let state = replay_app_state(replay.clone());
+        let stats = DeploymentStats::default();
+        let keys = vec!["site/a.txt".to_string()];
+
+        let deleted = delete_key_chunk(
+            &state,
+            "destination",
+            &keys,
+            Some(&stats),
+            &retry_options(2, 0),
+            &DeleteRetryCoordinator::new(),
+            tokio::time::Instant::now() + Duration::from_secs(10),
+        )
+        .await
+        .expect("a throttled DeleteObjects should be retried");
+
+        assert_eq!(deleted, (1, false));
+        let summary = stats.snapshot("Update", "success", &DeploymentRequest::for_test());
+        assert_eq!(
+            summary.delete_object.retry_attempts, 1,
+            "the throttled attempt should be counted as a retry"
+        );
+        assert_eq!(
+            summary.delete_object.throttled_attempts, 1,
+            "a SlowDown response should be attributed to throttling, not a plain retry"
+        );
+        assert_eq!(
+            summary.delete_object.throttle_cooldown_waits, 1,
+            "the throttle path should record that it waited out a cooldown"
         );
     }
 

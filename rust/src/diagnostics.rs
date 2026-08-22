@@ -67,6 +67,10 @@ pub(crate) struct DeploymentStats {
     delete_requested_objects: AtomicU64,
     delete_unconfirmed_objects: AtomicU64,
     delete_no_such_bucket_requested_identifiers: AtomicU64,
+    delete_retry_attempts: AtomicU64,
+    delete_throttled_attempts: AtomicU64,
+    delete_throttle_cooldown_waits: AtomicU64,
+    delete_throttle_cooldown_wait_millis: AtomicU64,
     uploaded_objects: AtomicU64,
     uploaded_bytes: AtomicU64,
     skipped_objects: AtomicU64,
@@ -499,6 +503,14 @@ pub(crate) struct DeleteObjectStats {
     pub(crate) inferred_deleted_objects: u64,
     pub(crate) unconfirmed_objects: u64,
     pub(crate) no_such_bucket_requested_identifiers: u64,
+    /// Retry and throttle counters mirroring `CopyObjectStats`/`PutObjectStats`.
+    /// The delete coordinator has always honoured throttle cooldowns; it simply
+    /// reported none of it, so a deployment throttled on `DeleteObjects` looked
+    /// identical in the ledger to one that was not.
+    pub(crate) retry_attempts: u64,
+    pub(crate) throttled_attempts: u64,
+    pub(crate) throttle_cooldown_waits: u64,
+    pub(crate) throttle_cooldown_wait_ms: u64,
 }
 
 #[derive(Serialize)]
@@ -686,6 +698,23 @@ impl DeploymentStats {
         self.delete_failed_calls.fetch_add(1, Ordering::Relaxed);
         self.delete_unconfirmed_objects
             .fetch_add(unconfirmed, Ordering::Relaxed);
+    }
+
+    /// Records one delete retry, and whether the service asked us to slow down.
+    pub(crate) fn record_delete_retry(&self, throttled: bool) {
+        self.delete_retry_attempts.fetch_add(1, Ordering::Relaxed);
+        if throttled {
+            self.delete_throttled_attempts
+                .fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Records a delete retry that waited out a throttle cooldown.
+    pub(crate) fn record_delete_throttle_cooldown_wait(&self, millis: u64) {
+        self.delete_throttle_cooldown_waits
+            .fetch_add(1, Ordering::Relaxed);
+        self.delete_throttle_cooldown_wait_millis
+            .fetch_add(millis, Ordering::Relaxed);
     }
 
     pub(crate) fn record_delete_no_such_bucket(&self, requested_identifiers: u64) {
@@ -1181,6 +1210,14 @@ impl DeploymentStats {
                 unconfirmed_objects: self.delete_unconfirmed_objects.load(Ordering::Relaxed),
                 no_such_bucket_requested_identifiers: self
                     .delete_no_such_bucket_requested_identifiers
+                    .load(Ordering::Relaxed),
+                retry_attempts: self.delete_retry_attempts.load(Ordering::Relaxed),
+                throttled_attempts: self.delete_throttled_attempts.load(Ordering::Relaxed),
+                throttle_cooldown_waits: self
+                    .delete_throttle_cooldown_waits
+                    .load(Ordering::Relaxed),
+                throttle_cooldown_wait_ms: self
+                    .delete_throttle_cooldown_wait_millis
                     .load(Ordering::Relaxed),
             },
             callback: CallbackStats {
