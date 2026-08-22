@@ -607,10 +607,13 @@ fn should_compare_marker_free_entry(
 }
 
 async fn copy_source_object(context: CopyContext<'_>, plan: &CopyPlan) -> Result<CopyOutcome> {
+    // `urlencoding::encode` percent-encodes every byte outside the unreserved set, so
+    // a space becomes `%20` and a literal `+` becomes `%2B`. It never emits a bare `+`,
+    // which is why no form-encoding fixup is applied here.
     let copy_source = format!(
         "{}/{}",
         plan.source_bucket,
-        urlencoding::encode(&plan.source_key).replace('+', "%20")
+        urlencoding::encode(&plan.source_key)
     );
     let reconciliation_identity = copy_reconciliation_identity(context.destination_bucket, plan);
 
@@ -3741,6 +3744,60 @@ mod tests {
             size: 5,
             identity_probe: false,
         }
+    }
+
+    /// Pins the `x-amz-copy-source` encoding for the two characters that a
+    /// form-encoding fixup would have mattered for. `urlencoding::encode` emits `%20`
+    /// for a space and `%2B` for a literal `+`, never a bare `+`, so no post-encode
+    /// `+`-to-`%20` replacement is needed. A regression to a form encoder would send
+    /// `a+b` for `a b` and S3 would resolve a different source key.
+    #[tokio::test]
+    async fn copy_source_percent_encodes_spaces_and_plus_signs() {
+        let replay = StaticReplayClient::new(vec![copy_success_event()]);
+        let client = replay_s3_client(replay.clone());
+        let plan = CopyPlan {
+            source_key: "dir/a b+c.zip".to_string(),
+            ..test_copy_plan(None)
+        };
+
+        copy_source_object(
+            CopyContext {
+                destination_s3: &client,
+                destination_bucket: "destination",
+                retry: &PutObjectRetryOptions {
+                    max_attempts: 1,
+                    retry_base_delay_ms: 0,
+                    retry_max_delay_ms: 0,
+                    slowdown_retry_base_delay_ms: 0,
+                    slowdown_retry_max_delay_ms: 0,
+                    jitter: PutObjectRetryJitter::None,
+                },
+                retry_coordinator: &WriteRetryCoordinator::new(),
+                diagnostics: &WriteDiagnostics::default(),
+                stats: &DeploymentStats::default(),
+                work_deadline: test_work_deadline(),
+            },
+            &plan,
+        )
+        .await
+        .expect("copy should succeed");
+
+        let copy_source = replay
+            .actual_requests()
+            .next()
+            .expect("one copy request")
+            .headers()
+            .get("x-amz-copy-source")
+            .expect("copy source header")
+            .to_string();
+        // `encode` also percent-encodes the key separator, so the header carries
+        // `%2F` rather than `/`. S3 URL-decodes `CopySource`, so this resolves to the
+        // same object; the behaviour predates this test and is pinned, not endorsed.
+        assert_eq!(copy_source, "source/dir%2Fa%20b%2Bc.zip");
+        assert!(
+            !copy_source.contains('+'),
+            "a bare `+` would name a different source key"
+        );
     }
 
     fn test_copy_plan_with_identity_probe() -> CopyPlan {
