@@ -106,6 +106,33 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     ).toThrow(new RegExp(`${property}.*inclusive range`));
   });
 
+  test("binds a repeated source object once and sends one entry", () => {
+    // `addSource(a)` twice has always sent one entry. The constructor applied no
+    // dedup at all, so `sources: [a, a]` bound twice -- staging the asset twice --
+    // and sent two identical wire entries.
+    const stack = new Stack();
+    const destinationBucket = new Bucket(stack, "Dest");
+    const source = Source.data("index.html", "ok");
+
+    const deployment = new ShinBucketDeployment(stack, "Deploy", {
+      sources: [source, source],
+      destination: { bucket: destinationBucket },
+      providerLambda: { localBuild: testLocalProviderBuild() },
+    });
+
+    const resources = Template.fromStack(stack).toJSON().Resources as Record<
+      string,
+      { Type: string; Properties: Record<string, unknown> }
+    >;
+    const entry = Object.values(resources).find(
+      (resource) => resource.Type === "AWS::CloudFormation::CustomResource",
+    );
+    expect(entry).toBeDefined();
+    expect(entry?.Properties.SourceObjectKeys).toHaveLength(1);
+    expect(entry?.Properties.SourceBucketNames).toHaveLength(1);
+    expect(deployment).toBeDefined();
+  });
+
   test("rejects unknown archive expansion option names", () => {
     const stack = new Stack();
     const destinationBucket = new Bucket(stack, "Dest");
