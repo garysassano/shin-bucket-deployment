@@ -14,7 +14,7 @@ than being kept readable by version-branching code. Git history and GitHub relea
 the record of how things used to work; this directory is only for artifacts that are
 awkward to reconstruct from either.
 
-Current evidence lives in `docs/benchmark.md`, `benchmarks/`, and `docs/verification.md`. The active benchmark ledger holds only the AWS CDK `BucketDeployment` baseline rows until a new shin run is collected.
+Current evidence lives in `docs/benchmark.md`, `benchmarks/`, and `docs/verification.md`.
 
 ## Contents
 

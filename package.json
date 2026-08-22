@@ -53,7 +53,6 @@
   "engines": {
     "node": ">=22.0.0"
   },
-  "//": "rust:deny excludes spin@0.10.0 because crc-fast still resolves that yanked version; removal is tracked at https://github.com/garysassano/shin-bucket-deployment/issues/75 and explained in rust/deny.toml",
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "build:package": "tsc -p tsconfig.package.json",

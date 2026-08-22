@@ -214,7 +214,7 @@ For destination identity changes, include transferred/skipped object counts, MD5
 
 ## Benchmark Human Page
 
-After updating JSONL records, update `docs/benchmark.md` `Current Results` for humans.
+After updating JSONL records, update `docs/benchmark.md` `Latest CI benchmark` for humans.
 
 The human page should include:
 

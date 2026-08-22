@@ -1151,7 +1151,7 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     Annotations.fromStack(stack).hasWarning(
       "/HighConcurrency/Deploy",
       Match.stringLikeRegexp(
-        "transfer\\.maxConcurrency=65 is above the current measured guidance ceiling of 64.*128 slowed cold-create by 18%.*benchmarking your workload",
+        "transfer\\.maxConcurrency=65 is above the current measured guidance ceiling of 64.*128 slowed cold-create.*memory-dependent.*benchmarking your workload",
       ),
     );
   });

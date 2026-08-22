@@ -345,7 +345,7 @@ export function validateDeploymentProps(scope: Construct, props: ShinBucketDeplo
   if (maxConcurrency !== undefined && maxConcurrency > MEASURED_CONCURRENCY_GUIDANCE_MAX) {
     Validations.of(scope).addWarning(
       "ShinBucketDeploymentHighTransferConcurrency",
-      `transfer.maxConcurrency=${maxConcurrency} is above the current measured guidance ceiling of 64. A value of 128 slowed cold-create by 18% at both 1024 MiB and 2048 MiB on the measured workload. Keep a higher value only after benchmarking your workload and comparing inFlightHighWater, source.activeGetsHighWater, and destination retry/throttle telemetry.`,
+      `transfer.maxConcurrency=${maxConcurrency} is above the current measured guidance ceiling of 64. A value of 128 slowed cold-create at both 1024 MiB and 2048 MiB on the workload measured at the time, but that ceiling is memory-dependent and the figure is no longer reproducible from the committed ledger: a later one-repetition sweep measured 128 transfers at 4096 MiB as ~32% faster than 64 at 2048 MiB by provider duration, though end-to-end deploy time moved only ~4%. Keep a higher value only after benchmarking your workload and comparing inFlightHighWater, source.activeGetsHighWater, and destination retry/throttle telemetry.`,
     );
   }
   validateIntegerProps(
