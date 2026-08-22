@@ -2,6 +2,16 @@
 
 This file holds release-note text for `ShinBucketDeployment` changes that break adopters' deployed state or in-repo contracts. Releases are published with `gh release create --generate-notes`, which lists pull request titles only; commit bodies never reach the published notes. The repository policy requires deployed-state breakage to be named in the release notes, so when a release is cut, the `## Unreleased` entries below are the text to carry into the notes.
 
+## Unreleased
+
+### Handler-identity key ordering no longer depends on the runtime's ICU collation
+
+Object keys in the shared-handler identity hash are now ordered by UTF-16 code unit instead of by `localeCompare`. The previous form made a value that decides custom-resource identity depend on the Node build's ICU collation, so the same configuration could hash differently on different runtimes.
+
+Affected: only deployments whose `providerLambda.localBuild.bundling.environment` (or another caller-supplied key map reaching the hash) mixes upper- and lower-case initial letters in a way the two orderings disagree on — ICU sorts case-insensitively at the primary level, so it places `cargoHome` before `RUSTFLAGS` where code-unit order places `RUSTFLAGS` first. Conventional all-caps environment variable names are unaffected, as are all-lowercase key sets and every fixed key set the construct itself contributes.
+
+For an affected deployment the handler identity changes once on upgrade, which replaces the custom resource under the default `ProviderSharing.STACK`. That replacement is the same safe path described for the 0.12.0 memory default below: each generation carries a distinct destination owner, the ownership tag moves before the previous generation is deleted, and deployed objects are neither deleted nor recreated. There is no action to take and no way to opt out; the ordering is now fixed by construction rather than by the host's ICU data.
+
 ## 0.12.0
 
 ### The provider Lambda default memory and transfer concurrency change
