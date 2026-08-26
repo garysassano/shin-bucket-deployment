@@ -3,15 +3,16 @@
  * All positions derived from layout constants — change one value and everything adapts.
  */
 
-import { mkdirSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { summarize } from "../aggregate";
 import { parseCliOptions } from "../cli";
 import { type BenchmarkRunSample, phaseRank, readBenchmarkEvidence } from "../model";
 import { selectValidatedBenchmarkPreview, selectValidatedBenchmarkRun } from "../validation";
 
-type ChartVariant = "default" | "aws";
-type HeaderLayout = "two-line" | "three-line";
+export type HeaderLayout = "two-line" | "three-line";
+type ManifestMode = "merge" | "replace";
 const CLI_OPTIONS = [
   "asset-profile",
   "config",
@@ -20,11 +21,12 @@ const CLI_OPTIONS = [
   "input-file",
   "transfer-max-concurrency",
   "lambda-memory-mb",
+  "manifest-file",
+  "manifest-mode",
   "output-directory",
   "preview",
   "run-id",
   "scratch-root",
-  "variant",
 ] as const;
 
 // Importing this module must not parse argv or write files. A test that imports
@@ -36,21 +38,6 @@ const CLI_OPTIONS = [
 const isCliEntrypoint = require.main === module;
 const cliArgs = isCliEntrypoint ? process.argv.slice(2) : [];
 const snapshotArgCache = new WeakMap<string[], Map<string, string>>();
-
-function parseVariant(argv: string[]): ChartVariant {
-  const values = parseSnapshotArgs(argv);
-  const requestedVariant = values.get("variant");
-  if (requestedVariant === undefined || requestedVariant === "default") {
-    return "default";
-  }
-  if (requestedVariant === "aws") {
-    return requestedVariant;
-  }
-
-  throw new Error(`Unknown chart variant "${requestedVariant}". Use "default" or "aws".`);
-}
-
-const chartVariant = parseVariant(cliArgs);
 
 function parseStringArg(argv: string[], name: string): string | undefined {
   return parseSnapshotArgs(argv).get(name.slice(2));
@@ -89,6 +76,13 @@ function parseHeaderLayout(argv: string[]): HeaderLayout {
   throw new Error(`Unknown header layout "${requestedHeader}". Use "two-line" or "three-line".`);
 }
 
+function parseManifestMode(argv: string[]): ManifestMode {
+  const requestedMode = parseStringArg(argv, "--manifest-mode");
+  if (requestedMode === undefined || requestedMode === "merge") return "merge";
+  if (requestedMode === "replace") return requestedMode;
+  throw new Error(`Unknown manifest mode "${requestedMode}". Use "merge" or "replace".`);
+}
+
 const headerLayout = parseHeaderLayout(cliArgs);
 const requestedProfile = parseStringArg(cliArgs, "--asset-profile");
 const requestedMemoryMb = parseNumberArg(cliArgs, "--lambda-memory-mb");
@@ -97,6 +91,8 @@ const requestedRunId = parseStringArg(cliArgs, "--run-id");
 const requestedConfigFile = parseStringArg(cliArgs, "--config");
 const requestedScratchRoot = parseStringArg(cliArgs, "--scratch-root");
 const requestedOutputDirectory = parseStringArg(cliArgs, "--output-directory");
+const requestedManifestFile = parseStringArg(cliArgs, "--manifest-file");
+const requestedManifestMode = parseManifestMode(cliArgs);
 const requestedFilenamePrefix = parseStringArg(cliArgs, "--filename-prefix") ?? "";
 const requestedPreview = parseBooleanArg(cliArgs, "--preview") ?? false;
 if (!/^[a-z0-9-]*$/.test(requestedFilenamePrefix)) {
@@ -111,7 +107,6 @@ const inputFile = resolve(
 const CANVAS_PAD_LEFT = 24;
 const CANVAS_PAD_RIGHT = 30;
 
-const HEADER_H = headerLayout === "three-line" ? 111 : 60; // header band height
 const SECTION_HDR_H = 22; // section column-header band
 const SECTION_HDR_PAD_TOP = 15; // text baseline within section header
 
@@ -155,7 +150,7 @@ const COLOR_BADGE_AWS_FILL = "#341821";
 const COLOR_BADGE_AWS_STROKE = "#ff6a2b";
 const COLOR_BADGE_AWS_TEXT = "#ffa033";
 
-interface Row {
+export interface BenchmarkChartRow {
   label: string;
   shin: number;
   aws: number;
@@ -163,18 +158,20 @@ interface Row {
 
 type BenchmarkRecord = BenchmarkRunSample;
 
-interface BenchmarkData {
+export interface BenchmarkChartData {
   assets: string;
   awsIdentity: string;
-  duration: Row[];
-  memory: Row[];
+  duration: BenchmarkChartRow[];
+  memory: BenchmarkChartRow[];
   profileSummary: string;
   providerConfiguration: string;
   region: string;
+  runId: string;
   shinIdentity: string;
   profile: string;
   memoryMb: number;
   parallel: number;
+  phases: string[];
 }
 
 interface DataSelection {
@@ -186,20 +183,47 @@ interface DataSelection {
   parallel: number;
 }
 
+export interface BenchmarkSnapshotManifestEntry {
+  runId: string;
+  profile: string;
+  memoryMb: number;
+  transferMaxConcurrency: number;
+  phases: string[];
+  contentSha256: string;
+}
+
+export interface BenchmarkSnapshotManifest {
+  schemaVersion: 1;
+  snapshots: Record<string, BenchmarkSnapshotManifestEntry>;
+}
+
+export interface RenderedBenchmarkSnapshot {
+  fileName: string;
+  svg: string;
+  provenance: BenchmarkSnapshotManifestEntry;
+}
+
+export interface SnapshotRenderOptions {
+  profile?: string;
+  memoryMb?: number;
+  maxConcurrency?: number;
+  filenamePrefix?: string;
+  headerLayout?: HeaderLayout;
+}
+
 function parseSnapshotArgs(argv: string[]): Map<string, string> {
   const cached = snapshotArgCache.get(argv);
   if (cached !== undefined) {
     return cached;
   }
-  const normalizedArgs = argv.flatMap((arg) => (arg === "--aws" ? ["--variant", "aws"] : [arg]));
-  const values = parseCliOptions(normalizedArgs, CLI_OPTIONS, usage);
+  const values = parseCliOptions(argv, CLI_OPTIONS, usage);
   snapshotArgCache.set(argv, values);
   return values;
 }
 
 function usage(): never {
   console.error(
-    "Usage: node dist/benchmarks/src/render/readme-snapshot.js [--input-file benchmarks/results.jsonl] [--output-directory <path>] [--filename-prefix <prefix>] [--asset-profile <name>] [--lambda-memory-mb <n>] [--transfer-max-concurrency <n>] [--variant default|aws] [--header three-line|two-line] [--preview true|false]",
+    "Usage: node dist/benchmarks/src/render/readme-snapshot.js [--input-file benchmarks/results.jsonl] [--output-directory <path>] [--filename-prefix <prefix>] [--asset-profile <name>] [--lambda-memory-mb <n>] [--transfer-max-concurrency <n>] [--header three-line|two-line] [--manifest-file <path>] [--manifest-mode merge|replace] [--preview true|false]",
   );
   process.exit(1);
 }
@@ -263,7 +287,10 @@ function formatBytes(value: number): string {
     : `${amount.toFixed(1).replace(/\.0$/, "")} ${units[unitIndex]}`;
 }
 
-function findSelections(records: BenchmarkRecord[]): DataSelection[] {
+function findSelections(
+  records: BenchmarkRecord[],
+  filters: Pick<SnapshotRenderOptions, "profile" | "memoryMb" | "maxConcurrency"> = {},
+): DataSelection[] {
   const shinGroups = new Map<string, BenchmarkRecord[]>();
   for (const record of records.filter((record) => record.implementation === "shin")) {
     if (
@@ -277,16 +304,13 @@ function findSelections(records: BenchmarkRecord[]): DataSelection[] {
     ) {
       continue;
     }
-    if (requestedProfile !== undefined && record.profile !== requestedProfile) {
+    if (filters.profile !== undefined && record.profile !== filters.profile) {
       continue;
     }
-    if (requestedMemoryMb !== undefined && record.memoryMb !== requestedMemoryMb) {
+    if (filters.memoryMb !== undefined && record.memoryMb !== filters.memoryMb) {
       continue;
     }
-    if (
-      requestedShinMaxConcurrency !== undefined &&
-      record.parallel !== requestedShinMaxConcurrency
-    ) {
+    if (filters.maxConcurrency !== undefined && record.parallel !== filters.maxConcurrency) {
       continue;
     }
     const key = [record.profile, record.memoryMb, record.parallel].join("\u0000");
@@ -344,7 +368,7 @@ function findSelections(records: BenchmarkRecord[]): DataSelection[] {
   );
 }
 
-function buildBenchmarkData(selection: DataSelection): BenchmarkData {
+function buildBenchmarkData(selection: DataSelection): BenchmarkChartData {
   const phases = [...selection.shinRecords.keys()]
     .filter((phase) => selection.awsRecords.has(phase))
     .sort((left, right) => phaseRank(left) - phaseRank(right));
@@ -385,7 +409,13 @@ function buildBenchmarkData(selection: DataSelection): BenchmarkData {
   const awsMetadataRecord = selection.awsRecords.values().next().value;
   const shinCommit = metadataRecord.provider?.implementationCommit;
   const awsCdkLibVersion = awsMetadataRecord?.cdk?.libVersion;
-  if (shinCommit === null || shinCommit === undefined || awsCdkLibVersion === undefined) {
+  if (
+    metadataRecord.runId === null ||
+    metadataRecord.runId === undefined ||
+    shinCommit === null ||
+    shinCommit === undefined ||
+    awsCdkLibVersion === undefined
+  ) {
     throw new Error(
       `Missing implementation identity for profile=${selection.profile}, memory=${selection.memoryMb}, maxConcurrency=${selection.parallel}`,
     );
@@ -408,25 +438,22 @@ function buildBenchmarkData(selection: DataSelection): BenchmarkData {
     profileSummary: profile,
     providerConfiguration: `${selection.memoryMb} MiB · Shin concurrency ${selection.parallel}`,
     region,
+    runId: metadataRecord.runId,
     shinIdentity: `SHA ${shinCommit.slice(0, 7)}`,
     profile: selection.profile,
     memoryMb: selection.memoryMb,
     parallel: selection.parallel,
+    phases,
   };
 }
 
-function simulateAwsWins(rows: Row[]): Row[] {
-  return rows.map((row) => ({
-    ...row,
-    shin: row.aws,
-    aws: row.shin,
-  }));
-}
-
-const outFileSuffix = `${chartVariant === "aws" ? "-aws" : ""}${headerLayout === "two-line" ? "-two-line" : ""}`;
-
-function snapshotFileName(benchmarkData: BenchmarkData): string {
-  return `${requestedFilenamePrefix}${safeFileToken(benchmarkData.profile)}-${benchmarkData.memoryMb}mib-${benchmarkData.parallel}${outFileSuffix}.svg`;
+function snapshotFileName(
+  benchmarkData: BenchmarkChartData,
+  filenamePrefix: string,
+  layout: HeaderLayout,
+): string {
+  const suffix = layout === "two-line" ? "-two-line" : "";
+  return `${filenamePrefix}${safeFileToken(benchmarkData.profile)}-${benchmarkData.memoryMb}mib-${benchmarkData.parallel}${suffix}.svg`;
 }
 
 function safeFileToken(value: string): string {
@@ -448,7 +475,7 @@ function formatMultiplier(value: number): string {
   return `${value.toFixed(decimals).replace(/\.?0+$/, "")}×`;
 }
 
-function formatBadgeText(row: Row, isMem: boolean): string {
+function formatBadgeText(row: BenchmarkChartRow, isMem: boolean): string {
   const winner = Math.min(row.shin, row.aws);
   const loser = Math.max(row.shin, row.aws);
   if (winner === loser) {
@@ -471,7 +498,7 @@ function rowY(sectionRowsTop: number, index: number) {
 }
 
 function renderRow(
-  row: Row,
+  row: BenchmarkChartRow,
   index: number,
   sectionRowsTop: number,
   max: number,
@@ -543,8 +570,8 @@ function renderSectionHeader(y: number, title: string, deltaLabel: string): stri
   return s;
 }
 
-function renderHeader(benchmarkData: BenchmarkData): string {
-  if (headerLayout === "three-line") {
+function renderHeader(benchmarkData: BenchmarkChartData, layout: HeaderLayout): string {
+  if (layout === "three-line") {
     return `<text x="${CANVAS_PAD_LEFT}" y="23" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_TITLE}" font-weight="800" fill="#f0f8ff" letter-spacing="-0.3">ShinBucketDeployment</text>
 <text x="${CANVAS_PAD_LEFT}" y="43" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_SUBTITLE + 1}" font-weight="600" fill="${COLOR_SECTION_HEADER_TEXT}">vs BucketDeployment</text>
 ${renderMetadataCard(24, 57, 136, "PROFILE", benchmarkData.profileSummary)}
@@ -569,8 +596,12 @@ function renderMetadataCard(
 <text x="${x + 10}" y="${y + 35}" font-family="Inter, -apple-system, sans-serif" font-size="11" font-weight="600" fill="#b6cedc">${value}</text>`;
 }
 
-function renderLegend(benchmarkData: BenchmarkData, legendX: number): string {
-  if (headerLayout === "two-line") {
+function renderLegend(
+  benchmarkData: BenchmarkChartData,
+  legendX: number,
+  layout: HeaderLayout,
+): string {
+  if (layout === "two-line") {
     return `<rect x="${legendX}" y="12" width="12" height="8" rx="2" fill="url(#shin)"/>
 <text x="${legendX + 18}" y="20" font-family="Inter, -apple-system, sans-serif" font-size="${FONT_SIZE_HEADER_LEGEND}" font-weight="700" fill="#8ab8d0">SHIN</text>
 <rect x="${legendX + 110}" y="12" width="12" height="8" rx="2" fill="url(#aws)"/>
@@ -587,15 +618,17 @@ function renderLegend(benchmarkData: BenchmarkData, legendX: number): string {
 }
 
 // ═══ RENDER ═══
-function render(benchmarkData: BenchmarkData): string {
-  const chartDuration =
-    chartVariant === "aws" ? simulateAwsWins(benchmarkData.duration) : benchmarkData.duration;
-  const chartMemory =
-    chartVariant === "aws" ? simulateAwsWins(benchmarkData.memory) : benchmarkData.memory;
+export function renderReadmeSnapshot(
+  benchmarkData: BenchmarkChartData,
+  layout: HeaderLayout = "three-line",
+): string {
+  const chartDuration = benchmarkData.duration;
+  const chartMemory = benchmarkData.memory;
+  const headerHeight = layout === "three-line" ? 111 : 60;
   const maxDuration = Math.max(...chartDuration.flatMap((row) => [row.shin, row.aws]));
   const maxMemory = Math.max(...chartMemory.flatMap((row) => [row.shin, row.aws]));
   const legendX = CANVAS_W - CANVAS_PAD_LEFT - LEGEND_W;
-  const sectionATop = HEADER_H;
+  const sectionATop = headerHeight;
   const sectionARowsTop = sectionATop + SECTION_HDR_H + 1;
   const sectionABottom = sectionARowsTop + ROW_H * chartDuration.length - 1;
   const dividerY = sectionABottom;
@@ -634,9 +667,9 @@ function render(benchmarkData: BenchmarkData): string {
 <rect width="${CANVAS_W}" height="${canvasHeight}" fill="url(#bgGrad)"/>
 
 <!-- Header -->
-${renderHeader(benchmarkData)}
-${renderLegend(benchmarkData, legendX)}
-<rect x="0" y="${HEADER_H - 1}" width="${CANVAS_W}" height="1" fill="#1a2a38"/>
+${renderHeader(benchmarkData, layout)}
+${renderLegend(benchmarkData, legendX, layout)}
+<rect x="0" y="${headerHeight - 1}" width="${CANVAS_W}" height="1" fill="#1a2a38"/>
 
 `;
 
@@ -659,15 +692,71 @@ ${renderLegend(benchmarkData, legendX)}
   return svg;
 }
 
+export function renderBenchmarkSnapshots(
+  records: BenchmarkRecord[],
+  options: SnapshotRenderOptions = {},
+): RenderedBenchmarkSnapshot[] {
+  const layout = options.headerLayout ?? "three-line";
+  const filenamePrefix = options.filenamePrefix ?? "";
+  return findSelections(records, options).map((selection) => {
+    const benchmarkData = buildBenchmarkData(selection);
+    const svg = renderReadmeSnapshot(benchmarkData, layout);
+    return {
+      fileName: snapshotFileName(benchmarkData, filenamePrefix, layout),
+      svg,
+      provenance: {
+        runId: benchmarkData.runId,
+        profile: benchmarkData.profile,
+        memoryMb: benchmarkData.memoryMb,
+        transferMaxConcurrency: benchmarkData.parallel,
+        phases: benchmarkData.phases,
+        contentSha256: createHash("sha256").update(svg).digest("hex"),
+      },
+    };
+  });
+}
+
+export function writeBenchmarkSnapshotManifest(
+  manifestFile: string,
+  renderedSnapshots: readonly RenderedBenchmarkSnapshot[],
+  mode: ManifestMode = "merge",
+): void {
+  const existing = mode === "merge" && existsSync(manifestFile) ? readManifest(manifestFile) : null;
+  const snapshots = { ...(existing?.snapshots ?? {}) };
+  for (const snapshot of renderedSnapshots) snapshots[snapshot.fileName] = snapshot.provenance;
+  const manifest: BenchmarkSnapshotManifest = {
+    schemaVersion: 1,
+    snapshots: Object.fromEntries(
+      Object.entries(snapshots).sort(([left], [right]) => left.localeCompare(right)),
+    ),
+  };
+  mkdirSync(dirname(manifestFile), { recursive: true });
+  writeFileSync(manifestFile, `${JSON.stringify(manifest, null, 2)}\n`);
+}
+
+function readManifest(manifestFile: string): BenchmarkSnapshotManifest {
+  const manifest = JSON.parse(
+    readFileSync(manifestFile, "utf8"),
+  ) as Partial<BenchmarkSnapshotManifest>;
+  if (
+    manifest.schemaVersion !== 1 ||
+    manifest.snapshots === null ||
+    typeof manifest.snapshots !== "object" ||
+    Array.isArray(manifest.snapshots)
+  ) {
+    throw new Error(`Invalid benchmark snapshot manifest: ${manifestFile}`);
+  }
+  return manifest as BenchmarkSnapshotManifest;
+}
+
 // ═══ OUTPUT ═══
 // Reads evidence and writes snapshot files, so it runs only when this module is
-// the CLI entrypoint (see the `isCliEntrypoint` guard on `cliArgs` above). The
-// body is unchanged from when it ran at module scope.
+// the CLI entrypoint (see the `isCliEntrypoint` guard on `cliArgs` above).
 function main(): void {
   const selectRecords = requestedPreview
     ? selectValidatedBenchmarkPreview
     : selectValidatedBenchmarkRun;
-  const benchmarkDataItems = findSelections(
+  const renderedSnapshots = renderBenchmarkSnapshots(
     selectRecords({
       ...readBenchmarkEvidence(inputFile),
       runId: requestedRunId,
@@ -675,21 +764,34 @@ function main(): void {
       inputFile,
       scratchRoot: requestedScratchRoot,
     }),
-  ).map(buildBenchmarkData);
-  if (benchmarkDataItems.length === 0) {
+    {
+      profile: requestedProfile,
+      memoryMb: requestedMemoryMb,
+      maxConcurrency: requestedShinMaxConcurrency,
+      filenamePrefix: requestedFilenamePrefix,
+      headerLayout,
+    },
+  );
+  if (renderedSnapshots.length === 0) {
     throw new Error("No complete Shin/AWS benchmark pairs matched the selected filters");
   }
-  for (const benchmarkData of benchmarkDataItems) {
+  for (const snapshot of renderedSnapshots) {
     const outPath = resolve(
       requestedOutputDirectory ?? resolve(process.cwd(), "benchmarks", "snapshots"),
-      snapshotFileName(benchmarkData),
+      snapshot.fileName,
     );
     mkdirSync(dirname(outPath), { recursive: true });
-    writeFileSync(outPath, render(benchmarkData));
+    writeFileSync(outPath, snapshot.svg);
     console.log(`Written: ${outPath}`);
   }
-  console.log(`Generated: ${benchmarkDataItems.length}`);
-  console.log(`Variant: ${chartVariant}`);
+  if (requestedManifestFile !== undefined) {
+    writeBenchmarkSnapshotManifest(
+      resolve(process.cwd(), requestedManifestFile),
+      renderedSnapshots,
+      requestedManifestMode,
+    );
+  }
+  console.log(`Generated: ${renderedSnapshots.length}`);
   console.log(`Header: ${headerLayout}`);
   console.log(`Canvas width: ${CANVAS_W}, Row height: ${ROW_H}px, Bar: ${BAR_H}px`);
 }
