@@ -79,6 +79,26 @@ The accepted 2026-08-26 comparison used Node.js 24.19.0 and `aws-cdk-lib` 2.260.
 
 The read-byte reduction is approximately one included-tree pass in both profiles: Shin now computes the catalog MD5 and collision-resistant asset SHA-256 during the same file read and no longer asks CDK to source-fingerprint the materialized tree. CDK still performs its staging copy, so this is not a zero-copy path. The cache probe changed from `catalogIdentityChanged=true, unrelatedCacheRetained=false` on the baseline to both values `true` on the candidate, proving changed catalog content gets a fresh asset identity without the previous process-global cache clear. Upstream remains faster because it does not generate or authenticate Shin's catalog and does not perform Shin's materialization and stability checks; this change removes the redundant fingerprint work rather than that required feature cost.
 
+## Local destination-key allocation
+
+The planner's normal 442-entry Criterion fixture remains the regression guard for canonical workloads. The `plan_entries/key_lifecycle_100000` group adds a fixed-width 100,000-key profile that builds the real deployment manifest and derives the real ZIP transfer plans. `pnpm rust:bench:allocations` runs the same lifecycle for five samples under the dev-only `allocation-counter` allocator and reports median allocation count, total allocated bytes, peak live bytes, and Linux process high-water RSS. Fixture construction and one warm-up run are outside the measured allocation samples; RSS is the deliberately conservative whole-process high-water mark.
+
+The acceptance threshold was fixed before changing the key representation: the 100,000-key candidate must reduce both total allocated bytes and peak live bytes by at least 10%, reduce process peak RSS by at least 5%, and avoid a timing regression greater than 3% in either the 100,000-key group or the existing 442-entry groups. A candidate that misses those bounds is rejected as benchmark noise; a candidate that passes still requires the plan's comparable upstream and exact-main AWS evidence before it is performance-accepted.
+
+The 2026-08-26 comparison measured clean baseline commit `bcff5b4` against unmerged candidate commit `18936b1`. The candidate stored each relative key only as the manifest map key; it did not introduce `Arc`, `Rc`, `Cow`, or a compatibility path.
+
+| Local metric                       |   Baseline |  Candidate |  Delta |
+| ---------------------------------- | ---------: | ---------: | -----: |
+| 100,000-key total allocations      |    816,188 |    616,188 | -24.5% |
+| 100,000-key peak live allocations  |    616,173 |    516,173 | -16.2% |
+| 100,000-key total allocated bytes  | 95,680,528 | 84,411,648 | -11.8% |
+| 100,000-key peak live bytes        | 74,603,824 | 66,834,944 | -10.4% |
+| 100,000-key process peak RSS       | 91,044 KiB | 82,124 KiB |  -9.8% |
+| 100,000-key Criterion mean         |  90.065 ms |  85.152 ms |  -5.5% |
+| 442-entry untrusted Criterion mean |   3.777 ms |   3.978 ms |  +5.3% |
+
+The allocation and large-fixture targets passed, but the candidate was rejected because the existing 442-entry untrusted group exceeded the timing guard. A 200-sample focused rerun measured a statistically significant `+4.38%` to `+6.25%` change, so the implementation was removed instead of adding representation complexity or accepting a normal-workload regression. No provider change survived and therefore no AWS comparison or exact-main runtime evidence was warranted.
+
 ## Exploratory sweep: large-few memory scaling to 10240 MiB
 
 Collected 2026-08-13 from source commit `fe19000` (provider `fe19000`) as a one-repetition Shin-only sweep of the `large-few` profile at 2048 MiB / 64, 4096 MiB / 128, and 10240 MiB / 128 in `eu-central-1`. Sanitized run UUID `d6932e4a-0459-4c1a-bfbd-4a7cfaf55d32`; cleanup `destroyed`. This probes whether the 10240 MiB tier (and the account's 3000 Mbps network-bandwidth quota) changes the transfer shape.

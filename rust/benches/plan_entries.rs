@@ -335,12 +335,14 @@ fn bench_planning_run(c: &mut Criterion, group: &str, trusted: bool) {
             total
         });
     });
-    let mean_run = entries_micros_total as f64 / runs as f64;
-    let mean_per_entry = mean_run / 442.0;
-    println!(
-        "[{group}] internal planEntries timer over {runs} runs: \
-         mean {mean_run:.1} µs per 442-entry archive, {mean_per_entry:.3} µs per entry"
-    );
+    if runs > 0 {
+        let mean_run = entries_micros_total as f64 / runs as f64;
+        let mean_per_entry = mean_run / 442.0;
+        println!(
+            "[{group}] internal planEntries timer over {runs} runs: \
+             mean {mean_run:.1} µs per 442-entry archive, {mean_per_entry:.3} µs per entry"
+        );
+    }
 }
 
 fn bench_planning_run_untrusted(c: &mut Criterion) {
@@ -366,10 +368,23 @@ fn bench_collect_zip_entry_plans(c: &mut Criterion) {
     );
 }
 
+fn bench_key_lifecycle_100_000(c: &mut Criterion) {
+    let lifecycle = bench_internals::KeyLifecycleBench::large();
+    let mut group = c.benchmark_group("plan_entries/key_lifecycle_100000");
+    group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(10));
+    group.bench_function("build_manifest_and_transfer_plans", |bencher| {
+        bencher.iter(|| black_box(lifecycle.run(DESTINATION_PREFIX)));
+    });
+    group.finish();
+}
+
 criterion_group!(
     plan_entries_benches,
     bench_planning_run_untrusted,
     bench_planning_run_trusted,
-    bench_collect_zip_entry_plans
+    bench_collect_zip_entry_plans,
+    bench_key_lifecycle_100_000
 );
 criterion_main!(plan_entries_benches);

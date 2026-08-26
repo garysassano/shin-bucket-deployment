@@ -564,7 +564,7 @@ async fn add_archive_entries_to_manifest(
     Ok(())
 }
 
-fn insert_manifest_object(manifest: &mut DeploymentManifest, planned: PlannedObject) {
+pub(super) fn insert_manifest_object(manifest: &mut DeploymentManifest, planned: PlannedObject) {
     let relative_key = planned.relative_key.clone();
     let replacement_source_index = planned_action_source_index(&planned.action);
     if let Some(previous) = manifest.insert(relative_key.clone(), planned) {
