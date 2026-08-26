@@ -20,7 +20,7 @@ const ELF_MACHINE_BY_ARCH = { arm64: 183, x86_64: 62 };
 // A fixed digest standing in for the current build toolchain. The real
 // derivation spawns cargo/rustc/cargo-lambda/zig/rustup, and this Node-level
 // suite must run without a Rust toolchain; the derivation itself is exercised
-// by the real build (`pnpm prebuild:bootstrap`) and deploy (`pnpm verify`)
+// by the real build (`pnpm build:bootstrap`) and deploy (`pnpm verify`)
 // paths, not by `pnpm test`.
 const FIXTURE_BUILD_TOOLCHAIN_SHA256 = "b".repeat(64);
 
@@ -228,7 +228,7 @@ test("refuses a provider-input mismatch and names the architecture, both digests
       `current provider inputs hash to ${currentIdentity(root).providerInputSha256.slice(0, 12)}`,
     ),
   );
-  assert.match(error.message, /pnpm prebuild:bootstrap/);
+  assert.match(error.message, /pnpm build:bootstrap/);
   assert.match(error.message, new RegExp(`${STALE_BOOTSTRAP_ESCAPE_HATCH}=1`));
 });
 
@@ -294,7 +294,7 @@ test("refuses a staged archive whose build provenance is missing", (t) => {
     }),
   );
   assert.match(error.message, /build-provenance\.json is missing/);
-  assert.match(error.message, /pnpm prebuild:bootstrap/);
+  assert.match(error.message, /pnpm build:bootstrap/);
 });
 
 test("refuses an archive whose provenance predates provider-input digests", (t) => {
@@ -431,7 +431,7 @@ test("refuses an archive built with a different build environment", (t) => {
   );
   assert.match(error.message, /build environment hashing to /);
   assert.match(error.message, /current build environment hash to /);
-  assert.match(error.message, /pnpm prebuild:bootstrap/);
+  assert.match(error.message, /pnpm build:bootstrap/);
 });
 
 test("refuses an archive whose recorded build toolchain differs from the current one", (t) => {

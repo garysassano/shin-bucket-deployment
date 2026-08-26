@@ -101,7 +101,7 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Build provider archives
-        run: pnpm prebuild:bootstrap
+        run: pnpm build:bootstrap
 
       - name: Deploy
         run: pnpm verify deploy "${{ inputs.group }}"

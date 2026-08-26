@@ -15,7 +15,7 @@
 //   `build-bootstrap.mjs` records as `providerInputSha256`. A README edit or
 //   uncommitted benchmark row does not change it, so a byte-identical archive
 //   stays deployable from a dirty tree; changing rust/ does change it, so the
-//   archive is refused until `pnpm prebuild:bootstrap` reruns.
+//   archive is refused until `pnpm build:bootstrap` reruns.
 // - the build-toolchain digest (`collectBuildToolchainIdentity`) covers the
 //   resolved compiler/tool identities and cargo configuration, and the
 //   build-environment digest (`buildEnvironmentSha256`) covers the bounded
@@ -239,7 +239,7 @@ function staleBootstrapError(architecture, reason) {
   return new Error(
     `Refusing to deploy a stale prebuilt provider bootstrap (${architecture}).\n` +
       `${reason}\n` +
-      `Run \`pnpm prebuild:bootstrap\` to rebuild the staged archives from the ` +
+      `Run \`pnpm build:bootstrap\` to rebuild the staged archives from the ` +
       `current source, or set ${STALE_BOOTSTRAP_ESCAPE_HATCH}=1 to deploy the staged ` +
       `archives as-is (not recommended).`,
   );

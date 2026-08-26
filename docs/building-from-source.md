@@ -21,15 +21,15 @@ From a source checkout:
 
 ```sh
 pnpm install
-pnpm prebuild:bootstrap
+pnpm build:bootstrap
 pnpm verify:package
 ```
 
-`pnpm prebuild:bootstrap` stages the archives at `assets/bootstrap-arm64/bootstrap.zip` and `assets/bootstrap-x86_64/bootstrap.zip`. Each archive contains one executable root `bootstrap`. To build only one architecture, pass it through to the script:
+`pnpm build:bootstrap` stages the archives at `assets/bootstrap-arm64/bootstrap.zip` and `assets/bootstrap-x86_64/bootstrap.zip`. Each archive contains one executable root `bootstrap`. To build only one architecture, pass it through to the script:
 
 ```sh
-pnpm prebuild:bootstrap -- arm64
-pnpm prebuild:bootstrap -- x86_64
+pnpm build:bootstrap -- arm64
+pnpm build:bootstrap -- x86_64
 ```
 
 `pnpm verify:package` rebuilds the package output, creates one tarball, verifies that both archives contain an executable architecture-correct `bootstrap`, and smoke-tests CommonJS and ESM consumers without `cargo-lambda-cdk`.
@@ -43,6 +43,8 @@ pnpm check
 ```
 
 The aggregate check covers TypeScript build, package output, strict type checking, Biome, unit tests, Rust formatting, Clippy, Rust tests, npm and Cargo audits, cargo-deny, actionlint, Taplo, the package contract, and verification scenario synthesis. Individual scripts remain available when iterating on one area.
+
+The check starts with `pnpm verify:bootstrap-assets` and stops before the longer gates when either required archive or its `build-provenance.json` is missing. Run `pnpm build:bootstrap` to prepare both architectures.
 
 ## Compile a local provider from a CDK app
 
