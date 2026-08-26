@@ -1026,12 +1026,7 @@ async fn upload_payload(
                 context.stats.add_uploaded_object(payload.content_length());
                 return Ok(());
             }
-            Err(error)
-                if !is_conditional_write_conflict(&error)
-                    && payload.body_state().validation_error().is_none()
-                    && is_retryable_write_error(&error)
-                    && attempt < max_attempts =>
-            {
+            Err(error) => {
                 let code = write_error_code(&error);
                 let throttled = code
                     .as_deref()
@@ -1042,50 +1037,8 @@ async fn upload_payload(
                     attempt_elapsed,
                     &payload,
                 );
-                if !wait_for_write_retry_before_deadline(
-                    context.retry_coordinator,
-                    context.diagnostics,
-                    context.retry,
-                    attempt,
-                    throttled,
-                    context.work_deadline,
-                )
-                .await
-                {
-                    return Err(error).with_context(|| {
-                        format!(
-                            "not retrying destination PutObject for {} because its retry wait reaches or exceeds the deployment work deadline",
-                            sanitize_diagnostic(destination_key, MAX_DIAGNOSTIC_VALUE_BYTES)
-                        )
-                    });
-                }
-                context
-                    .diagnostics
-                    .retry_attempts
-                    .fetch_add(1, Ordering::Relaxed);
-                let diagnostic =
-                    sanitize_diagnostic(&write_error_message(&error), MAX_DIAGNOSTIC_VALUE_BYTES);
-                tracing::warn!(
-                    destination_key,
-                    attempt,
-                    max_attempts,
-                    error_code = ?code.as_deref(),
-                    error = %diagnostic,
-                    "destination PutObject attempt failed; retrying"
-                );
-                last_error = Some(error);
-            }
-            Err(error) => {
-                let throttled = write_error_code(&error)
-                    .as_deref()
-                    .is_some_and(crate::util::is_throttle_error_code);
-                context.diagnostics.record_put_failure(
-                    &error,
-                    throttled,
-                    attempt_elapsed,
-                    &payload,
-                );
-                if is_conditional_write_conflict(&error) {
+                let conditional_conflict = is_conditional_write_conflict(&error);
+                if conditional_conflict {
                     context.stats.add_conditional_conflict();
                     if reconcile_conditional_put(&context, destination_key, &payload).await {
                         context.stats.add_uploaded_object(payload.content_length());
@@ -1099,6 +1052,48 @@ async fn upload_payload(
                             sanitize_diagnostic(destination_key, MAX_DIAGNOSTIC_VALUE_BYTES)
                         )
                     });
+                }
+                let retryable = if conditional_conflict {
+                    is_retryable_conditional_write_conflict(&error)
+                } else {
+                    is_retryable_write_error(&error)
+                };
+                if retryable && attempt < max_attempts {
+                    if !wait_for_write_retry_before_deadline(
+                        context.retry_coordinator,
+                        context.diagnostics,
+                        context.retry,
+                        attempt,
+                        throttled,
+                        context.work_deadline,
+                    )
+                    .await
+                    {
+                        return Err(error).with_context(|| {
+                            format!(
+                                "not retrying destination PutObject for {} because its retry wait reaches or exceeds the deployment work deadline",
+                                sanitize_diagnostic(destination_key, MAX_DIAGNOSTIC_VALUE_BYTES)
+                            )
+                        });
+                    }
+                    context
+                        .diagnostics
+                        .retry_attempts
+                        .fetch_add(1, Ordering::Relaxed);
+                    let diagnostic = sanitize_diagnostic(
+                        &write_error_message(&error),
+                        MAX_DIAGNOSTIC_VALUE_BYTES,
+                    );
+                    tracing::warn!(
+                        destination_key,
+                        attempt,
+                        max_attempts,
+                        error_code = ?code.as_deref(),
+                        error = %diagnostic,
+                        "destination PutObject attempt failed; retrying"
+                    );
+                    last_error = Some(error);
+                    continue;
                 }
                 return Err(error).with_context(|| {
                     format!(
@@ -1202,11 +1197,14 @@ async fn reconcile_conditional_put(
     let Some(expected_identity) = payload.body_state().etag_md5() else {
         return false;
     };
+    // The PUT loop owns the retry budget, so reconciliation is one wire attempt.
     let head = match context
         .destination_s3
         .head_object()
         .bucket(context.destination_bucket)
         .key(destination_key)
+        .customize()
+        .config_override(aws_sdk_s3::config::Builder::new().retry_config(RetryConfig::disabled()))
         .send()
         .await
     {
@@ -2189,6 +2187,171 @@ mod tests {
             assert!(result.is_err());
             assert_eq!(requests, vec!["PUT", "PUT", "HEAD"]);
         }
+    }
+
+    #[tokio::test]
+    async fn conditional_put_retries_an_unmatched_409() {
+        let (result, replay, diagnostics, stats) = run_conditional_put(
+            vec![
+                error_event(409, "ConditionalRequestConflict"),
+                error_event(404, "NoSuchKey"),
+                put_success_event(),
+            ],
+            test_retry_options(),
+            test_work_deadline(),
+        )
+        .await;
+
+        result.expect("an unmatched 409 should retry the conditional PutObject");
+        let requests = replay.actual_requests().collect::<Vec<_>>();
+        assert_eq!(
+            requests
+                .iter()
+                .map(|request| request.method().to_string())
+                .collect::<Vec<_>>(),
+            vec!["PUT", "HEAD", "PUT"]
+        );
+        for request in [requests[0], requests[2]] {
+            assert_eq!(request.headers().get("if-none-match"), Some("*"));
+            assert_eq!(request.body().bytes(), Some(b"hello".as_slice()));
+        }
+        let diagnostic = diagnostics.snapshot();
+        assert_eq!(diagnostic.wire_attempts, 2);
+        assert_eq!(diagnostic.failed_attempts, 1);
+        assert_eq!(diagnostic.retry_attempts, 1);
+        let summary = stats.snapshot("Update", "success", &DeploymentRequest::for_test());
+        assert_eq!(summary.counts.conditional_conflicts, 1);
+        assert_eq!(summary.counts.uploaded_objects, 1);
+        assert_eq!(summary.bytes.uploaded, 5);
+    }
+
+    #[tokio::test]
+    async fn conditional_put_accepts_a_matching_object_after_409() {
+        let (result, replay, diagnostics, stats) = run_conditional_put(
+            vec![
+                error_event(409, "ConditionalRequestConflict"),
+                matching_put_head_event(),
+            ],
+            test_retry_options(),
+            test_work_deadline(),
+        )
+        .await;
+
+        result.expect("a matching object should reconcile the conditional PUT");
+        assert_eq!(
+            replay
+                .actual_requests()
+                .map(|request| request.method().to_string())
+                .collect::<Vec<_>>(),
+            vec!["PUT", "HEAD"]
+        );
+        let diagnostic = diagnostics.snapshot();
+        assert_eq!(diagnostic.wire_attempts, 1);
+        assert_eq!(diagnostic.failed_attempts, 1);
+        assert_eq!(diagnostic.retry_attempts, 0);
+        let summary = stats.snapshot("Update", "success", &DeploymentRequest::for_test());
+        assert_eq!(summary.counts.conditional_conflicts, 1);
+        assert_eq!(summary.counts.uploaded_objects, 1);
+    }
+
+    #[tokio::test]
+    async fn conditional_put_fails_closed_on_an_unmatched_412() {
+        let (result, replay, diagnostics, stats) = run_conditional_put(
+            vec![
+                error_event(412, "PreconditionFailed"),
+                head_event(vec![
+                    ("content-length", "5"),
+                    ("etag", "\"00000000000000000000000000000000\""),
+                ]),
+            ],
+            test_retry_options(),
+            test_work_deadline(),
+        )
+        .await;
+
+        let error = result.expect_err("an unmatched 412 must not retry the PUT");
+        assert!(format!("{error:#}").contains("PreconditionFailed"));
+        assert_eq!(
+            replay
+                .actual_requests()
+                .map(|request| request.method().to_string())
+                .collect::<Vec<_>>(),
+            vec!["PUT", "HEAD"]
+        );
+        let diagnostic = diagnostics.snapshot();
+        assert_eq!(diagnostic.wire_attempts, 1);
+        assert_eq!(diagnostic.failed_attempts, 1);
+        assert_eq!(diagnostic.retry_attempts, 0);
+        let summary = stats.snapshot("Update", "failed", &DeploymentRequest::for_test());
+        assert_eq!(summary.counts.conditional_conflicts, 1);
+        assert_eq!(summary.counts.uploaded_objects, 0);
+    }
+
+    #[tokio::test]
+    async fn conditional_put_stops_after_unmatched_409_attempts_are_exhausted() {
+        let (result, replay, diagnostics, stats) = run_conditional_put(
+            vec![
+                error_event(409, "ConditionalRequestConflict"),
+                error_event(404, "NoSuchKey"),
+                error_event(409, "ConditionalRequestConflict"),
+                error_event(404, "NoSuchKey"),
+            ],
+            test_retry_options(),
+            test_work_deadline(),
+        )
+        .await;
+
+        let error = result.expect_err("the conditional PUT retry budget must stay bounded");
+        assert!(format!("{error:#}").contains("ConditionalRequestConflict"));
+        assert_eq!(
+            replay
+                .actual_requests()
+                .map(|request| request.method().to_string())
+                .collect::<Vec<_>>(),
+            vec!["PUT", "HEAD", "PUT", "HEAD"]
+        );
+        let diagnostic = diagnostics.snapshot();
+        assert_eq!(diagnostic.wire_attempts, 2);
+        assert_eq!(diagnostic.failed_attempts, 2);
+        assert_eq!(diagnostic.retry_attempts, 1);
+        let summary = stats.snapshot("Update", "failed", &DeploymentRequest::for_test());
+        assert_eq!(summary.counts.conditional_conflicts, 2);
+        assert_eq!(summary.counts.uploaded_objects, 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn conditional_put_409_retry_does_not_wait_past_the_work_deadline() {
+        let mut retry = test_retry_options();
+        retry.retry_base_delay_ms = 30_000;
+        retry.retry_max_delay_ms = 30_000;
+        let (result, replay, diagnostics, stats) = run_conditional_put(
+            vec![
+                error_event(409, "ConditionalRequestConflict"),
+                error_event(404, "NoSuchKey"),
+            ],
+            retry,
+            tokio::time::Instant::now() + Duration::from_secs(1),
+        )
+        .await;
+
+        let error = result.expect_err("a conditional PUT retry must respect the work deadline");
+        let message = format!("{error:#}");
+        assert!(message.contains("not retrying destination PutObject"));
+        assert!(message.contains("ConditionalRequestConflict"));
+        assert_eq!(
+            replay
+                .actual_requests()
+                .map(|request| request.method().to_string())
+                .collect::<Vec<_>>(),
+            vec!["PUT", "HEAD"]
+        );
+        let diagnostic = diagnostics.snapshot();
+        assert_eq!(diagnostic.wire_attempts, 1);
+        assert_eq!(diagnostic.failed_attempts, 1);
+        assert_eq!(diagnostic.retry_attempts, 0);
+        let summary = stats.snapshot("Update", "failed", &DeploymentRequest::for_test());
+        assert_eq!(summary.counts.conditional_conflicts, 1);
+        assert_eq!(summary.counts.uploaded_objects, 0);
     }
 
     #[tokio::test]
@@ -3702,6 +3865,39 @@ mod tests {
         (result, requests, checksum_mode_requested)
     }
 
+    async fn run_conditional_put(
+        events: Vec<ReplayEvent>,
+        retry: PutObjectRetryOptions,
+        work_deadline: TokioInstant,
+    ) -> (
+        Result<()>,
+        StaticReplayClient,
+        WriteDiagnostics,
+        DeploymentStats,
+    ) {
+        let replay = StaticReplayClient::new(events);
+        let client = replay_s3_client(replay.clone());
+        let diagnostics = WriteDiagnostics::default();
+        let stats = DeploymentStats::default();
+        let retry_coordinator = WriteRetryCoordinator::new();
+        let result = upload_payload(
+            PutContext {
+                destination_s3: &client,
+                destination_bucket: "destination",
+                retry: &retry,
+                retry_coordinator: &retry_coordinator,
+                diagnostics: &diagnostics,
+                stats: &stats,
+                work_deadline,
+            },
+            "file.txt",
+            test_payload(),
+            Some(DestinationWritePrecondition::IfNoneMatch),
+        )
+        .await;
+        (result, replay, diagnostics, stats)
+    }
+
     async fn run_test_copy(
         events: Vec<ReplayEvent>,
         plan: CopyPlan,
@@ -3855,6 +4051,13 @@ mod tests {
                 .unwrap(),
             response.body(SdkBody::empty()).unwrap(),
         )
+    }
+
+    fn matching_put_head_event() -> ReplayEvent {
+        head_event(vec![
+            ("content-length", "5"),
+            ("etag", "\"5d41402abc4b2a76b9719d911017c592\""),
+        ])
     }
 
     fn copy_success_event() -> ReplayEvent {
