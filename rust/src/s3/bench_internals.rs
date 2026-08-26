@@ -368,6 +368,7 @@ impl CollectPlansBench {
             // cataloged), so the per-entry `Option<TrustedEntryIntegrity>` clone
             // allocates its MD5 string exactly as for a real authenticated deployment.
             let planned = PlannedObject {
+                relative_key: entry.relative_key.clone(),
                 expected_etag: None,
                 action: PlannedAction::ZipEntry {
                     archive_index: 0,
@@ -421,6 +422,7 @@ impl KeyLifecycleBench {
         let mut source_offset = 0_u64;
         for entry in &self.entries {
             let planned = PlannedObject {
+                relative_key: entry.relative_key.clone(),
                 expected_etag: None,
                 action: PlannedAction::ZipEntry {
                     archive_index: 0,
@@ -438,11 +440,7 @@ impl KeyLifecycleBench {
                 },
             };
             source_offset += entry.size + 30;
-            super::planner::insert_manifest_object(
-                &mut manifest,
-                entry.relative_key.clone(),
-                planned,
-            );
+            super::planner::insert_manifest_object(&mut manifest, planned);
         }
 
         let transfer_plans = super::planner::collect_zip_entry_plans(&manifest, destination_prefix);

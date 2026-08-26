@@ -1248,6 +1248,7 @@ mod tests {
             manifest.insert(
                 relative_key.to_string(),
                 PlannedObject {
+                    relative_key: relative_key.to_string(),
                     expected_etag: None,
                     action: PlannedAction::CopyObject {
                         source_index: 0,
@@ -1363,6 +1364,7 @@ mod tests {
                 (
                     relative_key,
                     PlannedObject {
+                        relative_key: String::new(),
                         expected_etag: None,
                         action: PlannedAction::CopyObject {
                             source_index: 0,
@@ -1968,6 +1970,7 @@ mod tests {
         manifest.insert(
             "index.html".to_string(),
             PlannedObject {
+                relative_key: "index.html".to_string(),
                 expected_etag: None,
                 action: PlannedAction::CopyObject {
                     source_index: 0,
@@ -2008,6 +2011,7 @@ mod tests {
         manifest.insert(
             "initial/current.txt".to_string(),
             PlannedObject {
+                relative_key: "initial/current.txt".to_string(),
                 expected_etag: None,
                 action: PlannedAction::CopyObject {
                     source_index: 0,
@@ -2046,6 +2050,7 @@ mod tests {
         manifest.insert(
             "keep.txt".to_string(),
             PlannedObject {
+                relative_key: "keep.txt".to_string(),
                 expected_etag: None,
                 action: PlannedAction::CopyObject {
                     source_index: 0,
