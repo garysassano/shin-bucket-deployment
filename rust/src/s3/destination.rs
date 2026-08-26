@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::mem::size_of;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -749,7 +749,7 @@ async fn delete_key_chunk(
     retry_coordinator: &DeleteRetryCoordinator,
     work_deadline: Instant,
 ) -> Result<(u64, bool)> {
-    let mut pending = keys.to_vec();
+    let mut pending = keys.iter().map(String::as_str).collect::<Vec<_>>();
     let mut deleted = 0_u64;
     let max_attempts = retry.max_attempts.max(1);
 
@@ -763,16 +763,16 @@ async fn delete_key_chunk(
             ));
         }
 
-        // Consume the pending keys by value: the ObjectIdentifier builder takes the
-        // key string without cloning it, and the retry path rebuilds `pending` from
-        // the response errors anyway.
+        // Keep the immediate attempt set available until the request resolves. The
+        // SDK request still owns its key strings, while `pending` borrows the chunk so
+        // a request-level retry cannot accidentally restore already-deleted keys.
         let requested = pending.len();
         if let Some(stats) = stats {
             stats.record_delete_sdk_call(requested as u64);
         }
-        let objects = std::mem::take(&mut pending)
-            .into_iter()
-            .map(|key| ObjectIdentifier::builder().key(key).build())
+        let objects = pending
+            .iter()
+            .map(|key| ObjectIdentifier::builder().key(*key).build())
             .collect::<std::result::Result<Vec<_>, _>>()?;
         let delete = Delete::builder()
             .set_objects(Some(objects))
@@ -827,11 +827,12 @@ async fn delete_key_chunk(
                             "not retrying destination DeleteObjects because its retry wait reaches or exceeds the deployment work deadline",
                         );
                     }
-                    pending = response
+                    let failed_keys = response
                         .errors()
                         .iter()
-                        .filter_map(|error| error.key().map(ToOwned::to_owned))
-                        .collect();
+                        .filter_map(|error| error.key())
+                        .collect::<HashSet<_>>();
+                    pending.retain(|key| failed_keys.contains(*key));
                     warn!(
                         attempt,
                         max_attempts,
@@ -879,9 +880,6 @@ async fn delete_key_chunk(
                         error_code = ?service_error_code(&error),
                         "destination DeleteObjects attempt failed; retrying"
                     );
-                    // The request-level retry replays the same chunk, which the
-                    // by-value request build consumed; restore it from the chunk slice.
-                    pending = keys.to_vec();
                     continue;
                 }
                 return Err(error)
@@ -1744,6 +1742,49 @@ mod tests {
         assert!(first_body.contains("site/retry.txt"));
         assert!(!second_body.contains("site/done.txt"));
         assert!(second_body.contains("site/retry.txt"));
+    }
+
+    #[tokio::test]
+    async fn request_retry_preserves_the_narrowed_object_error_set() {
+        let replay = StaticReplayClient::new(vec![
+            delete_partial_error_event("site/retry.txt", "SlowDown"),
+            error_event(500, "InternalError"),
+            delete_success_event(),
+        ]);
+        let state = replay_app_state(replay.clone());
+        let stats = DeploymentStats::default();
+        let keys = vec!["site/done.txt".to_string(), "site/retry.txt".to_string()];
+
+        let deleted = delete_key_chunk(
+            &state,
+            "destination",
+            &keys,
+            Some(&stats),
+            &retry_options(3, 0),
+            &DeleteRetryCoordinator::new(),
+            tokio::time::Instant::now() + Duration::from_secs(10),
+        )
+        .await
+        .expect("the narrowed request set should survive a request-level retry");
+
+        assert_eq!(deleted, (2, false));
+        let request_bodies = replay
+            .actual_requests()
+            .map(request_body)
+            .collect::<Vec<_>>();
+        assert_eq!(request_bodies.len(), 3);
+        assert!(request_bodies[0].contains("site/done.txt"));
+        assert!(request_bodies[0].contains("site/retry.txt"));
+        for body in &request_bodies[1..] {
+            assert!(!body.contains("site/done.txt"));
+            assert!(body.contains("site/retry.txt"));
+        }
+
+        let summary = stats.snapshot("Update", "success", &DeploymentRequest::for_test());
+        assert_eq!(summary.delete_object.sdk_calls, 3);
+        assert_eq!(summary.delete_object.requested_objects, 4);
+        assert_eq!(summary.delete_object.inferred_deleted_objects, 2);
+        assert_eq!(summary.delete_object.retry_attempts, 2);
     }
 
     #[tokio::test(start_paused = true)]
