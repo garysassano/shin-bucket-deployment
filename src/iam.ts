@@ -39,14 +39,24 @@ export function grantDestinationPermissions(
   // (extract:false copies and marker entries), and S3 authorizes `HeadObject`
   // via `s3:GetObject`, so trimming this grant would fail deployments with
   // AccessDenied.
-  destinationGrants.actionsOnObjectKeys(
-    handler,
-    destinationObjectKeyPattern,
-    "s3:GetObject",
-    "s3:PutObject",
+  // Grant is itself an IDependable. Keep the public result so the custom
+  // resource can wait for the policy without reaching into Grant internals.
+  dependables.push(
+    destinationGrants.actionsOnObjectKeys(
+      handler,
+      destinationObjectKeyPattern,
+      "s3:GetObject",
+      "s3:PutObject",
+    ),
   );
   if (permissions.deleteCurrentObjects) {
-    destinationGrants.actionsOnObjectKeys(handler, destinationObjectKeyPattern, "s3:DeleteObject");
+    dependables.push(
+      destinationGrants.actionsOnObjectKeys(
+        handler,
+        destinationObjectKeyPattern,
+        "s3:DeleteObject",
+      ),
+    );
   }
   addHandlerPolicy(
     handler,
@@ -65,7 +75,7 @@ export function grantDestinationPermissions(
   }
   if (permissions.previousBucket) {
     const previousGrants = BucketGrants.fromBucket(permissions.previousBucket);
-    previousGrants.actionsOnObjectKeys(handler, "*", "s3:DeleteObject");
+    dependables.push(previousGrants.actionsOnObjectKeys(handler, "*", "s3:DeleteObject"));
     addHandlerPolicy(
       handler,
       dependables,
