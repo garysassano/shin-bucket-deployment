@@ -109,16 +109,20 @@ export function renderComparisonTable(records: readonly BenchmarkRunSample[]): s
     .sort(
       (left, right) =>
         left.shin.profile.localeCompare(right.shin.profile) ||
+        (left.shin.memoryMb ?? 0) - (right.shin.memoryMb ?? 0) ||
+        (left.shin.parallel ?? 0) - (right.shin.parallel ?? 0) ||
         phaseRank(left.shin.phase) - phaseRank(right.shin.phase),
     );
 
   if (rows.length === 0) return "No paired Shin/AWS cells were available.";
   return [
-    "| Profile | Phase | n | Provider s, Shin / AWS | AWS/Shin | Local wall s, Shin / AWS | Max MiB, Shin / AWS |",
-    "| --- | --- | ---: | ---: | ---: | ---: | ---: |",
+    "| Profile | MiB | Max concurrency | Phase | n | Provider s, Shin / AWS | AWS/Shin | Local wall s, Shin / AWS | Max MiB, Shin / AWS |",
+    "| --- | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: |",
     ...rows.map(({ shin, aws, shinWall, awsWall, shinMemory, awsMemory }) =>
       [
         `| \`${shin.profile}\``,
+        `${shin.memoryMb ?? "unknown"}`,
+        `${shin.parallel ?? "unknown"}`,
         `\`${shin.phase}\``,
         `${shin.count}`,
         `${format(shin.median)} / ${format(aws.median)}`,

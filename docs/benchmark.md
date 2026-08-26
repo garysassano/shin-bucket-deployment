@@ -10,7 +10,55 @@ Provider-summary schema-5 result rows, their generated reports, and their chart 
 
 ## Latest CI benchmark
 
-The active ledger currently retains 384 sanitized upstream AWS CDK baseline rows. The 136 Shin rows and their generated reports and snapshots were archived on 2026-08-26 because the current provider adds four required `DeleteObjects` retry and throttle fields that cannot be reconstructed for older runs without inventing evidence. A fresh paired five-repetition run using AWS CDK 2.266.0 is pending; no current paired performance claim is published until it completes.
+The latest complete canonical five-repetition run was collected by GitHub Actions on 2026-08-26 from source commit `a1ab4fd`. It contains five sequential repetitions of all canonical profiles across all four phases. The sanitized run UUID is `673c7141-7632-4cc4-866f-3e5a2dea1ccf`; raw AWS output remains outside git.
+
+| Field                 | Value                                                      |
+| --------------------- | ---------------------------------------------------------- |
+| Region                | `eu-central-1`                                             |
+| Lambda configurations | 1024 MiB / 32 Shin transfers, 2048 MiB / 64 Shin transfers |
+| Sanitized rows        | 240                                                        |
+| Cleanup               | destroyed                                                  |
+
+| Profile     |  MiB | Max concurrency | Phase              |   n | Provider s, Shin / AWS | AWS/Shin | Local wall s, Shin / AWS | Max MiB, Shin / AWS |
+| ----------- | ---: | --------------: | ------------------ | --: | ---------------------: | -------: | -----------------------: | ------------------: |
+| `large-few` | 1024 |              32 | `cold-create`      |   5 |          2.258 / 9.226 |   4.086x |          86.506 / 79.242 |           120 / 448 |
+| `large-few` | 1024 |              32 | `unchanged-update` |   5 |          0.315 / 9.231 |  29.305x |            35.444 / 46.7 |            32 / 448 |
+| `large-few` | 1024 |              32 | `changed-update`   |   5 |           0.606 / 9.35 |  15.429x |          42.133 / 52.905 |            39 / 447 |
+| `large-few` | 1024 |              32 | `pruned-update`    |   5 |           0.63 / 8.873 |  14.084x |          42.344 / 52.749 |            39 / 417 |
+| `large-few` | 2048 |              64 | `cold-create`      |   5 |          1.249 / 5.165 |   4.135x |           74.915 / 73.71 |           181 / 448 |
+| `large-few` | 2048 |              64 | `unchanged-update` |   5 |           0.24 / 5.151 |  21.462x |           35.64 / 40.905 |            32 / 447 |
+| `large-few` | 2048 |              64 | `changed-update`   |   5 |          0.546 / 5.183 |   9.493x |          41.983 / 47.129 |            38 / 448 |
+| `large-few` | 2048 |              64 | `pruned-update`    |   5 |          0.569 / 4.998 |   8.784x |          48.647 / 47.423 |            39 / 418 |
+| `mixed`     | 1024 |              32 | `cold-create`      |   5 |          1.394 / 9.656 |   6.927x |          72.828 / 82.798 |           102 / 282 |
+| `mixed`     | 1024 |              32 | `unchanged-update` |   5 |           0.3 / 10.138 |  33.793x |          35.555 / 46.049 |            33 / 281 |
+| `mixed`     | 1024 |              32 | `changed-update`   |   5 |          0.503 / 9.973 |  19.827x |          41.584 / 52.061 |            38 / 281 |
+| `mixed`     | 1024 |              32 | `pruned-update`    |   5 |          1.203 / 9.538 |   7.929x |           41.62 / 52.048 |            37 / 273 |
+| `mixed`     | 2048 |              64 | `cold-create`      |   5 |          0.846 / 5.685 |    6.72x |          70.397 / 73.582 |           111 / 282 |
+| `mixed`     | 2048 |              64 | `unchanged-update` |   5 |           0.28 / 5.846 |  20.879x |           35.65 / 40.739 |            33 / 282 |
+| `mixed`     | 2048 |              64 | `changed-update`   |   5 |          0.442 / 5.823 |  13.174x |          42.473 / 46.516 |            36 / 283 |
+| `mixed`     | 2048 |              64 | `pruned-update`    |   5 |          1.154 / 5.864 |   5.081x |          45.488 / 46.679 |            39 / 275 |
+| `tiny-many` | 1024 |              32 | `cold-create`      |   5 |         2.647 / 25.172 |    9.51x |           74.31 / 95.526 |            57 / 219 |
+| `tiny-many` | 1024 |              32 | `unchanged-update` |   5 |         0.521 / 26.026 |  49.954x |          35.501 / 67.519 |            35 / 212 |
+| `tiny-many` | 1024 |              32 | `changed-update`   |   5 |         0.631 / 26.078 |  41.328x |          41.628 / 72.065 |            35 / 212 |
+| `tiny-many` | 1024 |              32 | `pruned-update`    |   5 |         1.424 / 25.211 |  17.704x |          46.129 / 68.724 |            35 / 208 |
+| `tiny-many` | 2048 |              64 | `cold-create`      |   5 |         1.529 / 14.849 |   9.712x |           73.92 / 84.138 |            70 / 223 |
+| `tiny-many` | 2048 |              64 | `unchanged-update` |   5 |           0.5 / 15.225 |   30.45x |          35.429 / 53.546 |            35 / 221 |
+| `tiny-many` | 2048 |              64 | `changed-update`   |   5 |          0.594 / 15.31 |  25.774x |          41.502 / 57.564 |            35 / 221 |
+| `tiny-many` | 2048 |              64 | `pruned-update`    |   5 |         1.349 / 14.607 |  10.828x |          43.517 / 57.947 |            35 / 219 |
+
+The [complete generated report](../benchmarks/ci-report.md) includes quartiles, end-to-end timings, and per-phase deltas. [Provider telemetry](../benchmarks/ci-telemetry.md) contains the sanitized Shin diagnostic tables.
+
+![Latest large-few CI benchmark](../benchmarks/snapshots/ci-large-few-1024mib-32.svg)
+
+![Latest large-few CI benchmark](../benchmarks/snapshots/ci-large-few-2048mib-64.svg)
+
+![Latest mixed CI benchmark](../benchmarks/snapshots/ci-mixed-1024mib-32.svg)
+
+![Latest mixed CI benchmark](../benchmarks/snapshots/ci-mixed-2048mib-64.svg)
+
+![Latest tiny-many CI benchmark](../benchmarks/snapshots/ci-tiny-many-1024mib-32.svg)
+
+![Latest tiny-many CI benchmark](../benchmarks/snapshots/ci-tiny-many-2048mib-64.svg)
 
 <!-- benchmark-ci:end -->
 

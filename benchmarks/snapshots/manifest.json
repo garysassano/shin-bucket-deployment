@@ -1,4 +1,122 @@
 {
   "schemaVersion": 1,
-  "snapshots": {}
+  "snapshots": {
+    "ci-large-few-1024mib-32.svg": {
+      "runId": "673c7141-7632-4cc4-866f-3e5a2dea1ccf",
+      "profile": "large-few",
+      "memoryMb": 1024,
+      "transferMaxConcurrency": 32,
+      "phases": [
+        "cold-create",
+        "unchanged-update",
+        "changed-update",
+        "pruned-update"
+      ],
+      "contentSha256": "bb7a8380c53175167da4355947d228ff63f6d3ce4bf895d21fafd121ddba98f0"
+    },
+    "ci-large-few-2048mib-64.svg": {
+      "runId": "673c7141-7632-4cc4-866f-3e5a2dea1ccf",
+      "profile": "large-few",
+      "memoryMb": 2048,
+      "transferMaxConcurrency": 64,
+      "phases": [
+        "cold-create",
+        "unchanged-update",
+        "changed-update",
+        "pruned-update"
+      ],
+      "contentSha256": "c766620e2f4da2c794ab96ab5de672a2f6bb91e62aaf01eed2ff953b40ebe050"
+    },
+    "ci-mixed-1024mib-32.svg": {
+      "runId": "673c7141-7632-4cc4-866f-3e5a2dea1ccf",
+      "profile": "mixed",
+      "memoryMb": 1024,
+      "transferMaxConcurrency": 32,
+      "phases": [
+        "cold-create",
+        "unchanged-update",
+        "changed-update",
+        "pruned-update"
+      ],
+      "contentSha256": "24230e1dcd79c4804d667dc0d3319bd7a674eb08bf9ab69a206ff108685a0064"
+    },
+    "ci-mixed-2048mib-64.svg": {
+      "runId": "673c7141-7632-4cc4-866f-3e5a2dea1ccf",
+      "profile": "mixed",
+      "memoryMb": 2048,
+      "transferMaxConcurrency": 64,
+      "phases": [
+        "cold-create",
+        "unchanged-update",
+        "changed-update",
+        "pruned-update"
+      ],
+      "contentSha256": "978fadbe0c1048d342cd80f5af4f5e410835812c8d186e1ca7c0da524588cd80"
+    },
+    "ci-tiny-many-1024mib-32.svg": {
+      "runId": "673c7141-7632-4cc4-866f-3e5a2dea1ccf",
+      "profile": "tiny-many",
+      "memoryMb": 1024,
+      "transferMaxConcurrency": 32,
+      "phases": [
+        "cold-create",
+        "unchanged-update",
+        "changed-update",
+        "pruned-update"
+      ],
+      "contentSha256": "4055653fb8bb3df89469ad01668a21b11fb54c312522768c2640c72f9d1e1495"
+    },
+    "ci-tiny-many-2048mib-64.svg": {
+      "runId": "673c7141-7632-4cc4-866f-3e5a2dea1ccf",
+      "profile": "tiny-many",
+      "memoryMb": 2048,
+      "transferMaxConcurrency": 64,
+      "phases": [
+        "cold-create",
+        "unchanged-update",
+        "changed-update",
+        "pruned-update"
+      ],
+      "contentSha256": "7c058b145cbb810d26739d75ce186cb059ae36ca8603815508b31d154d118e00"
+    },
+    "large-few-2048mib-64.svg": {
+      "runId": "673c7141-7632-4cc4-866f-3e5a2dea1ccf",
+      "profile": "large-few",
+      "memoryMb": 2048,
+      "transferMaxConcurrency": 64,
+      "phases": [
+        "cold-create",
+        "unchanged-update",
+        "changed-update",
+        "pruned-update"
+      ],
+      "contentSha256": "c766620e2f4da2c794ab96ab5de672a2f6bb91e62aaf01eed2ff953b40ebe050"
+    },
+    "mixed-2048mib-64.svg": {
+      "runId": "673c7141-7632-4cc4-866f-3e5a2dea1ccf",
+      "profile": "mixed",
+      "memoryMb": 2048,
+      "transferMaxConcurrency": 64,
+      "phases": [
+        "cold-create",
+        "unchanged-update",
+        "changed-update",
+        "pruned-update"
+      ],
+      "contentSha256": "978fadbe0c1048d342cd80f5af4f5e410835812c8d186e1ca7c0da524588cd80"
+    },
+    "tiny-many-2048mib-64.svg": {
+      "runId": "673c7141-7632-4cc4-866f-3e5a2dea1ccf",
+      "profile": "tiny-many",
+      "memoryMb": 2048,
+      "transferMaxConcurrency": 64,
+      "phases": [
+        "cold-create",
+        "unchanged-update",
+        "changed-update",
+        "pruned-update"
+      ],
+      "contentSha256": "7c058b145cbb810d26739d75ce186cb059ae36ca8603815508b31d154d118e00"
+    }
+  }
 }
