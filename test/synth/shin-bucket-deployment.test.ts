@@ -1538,9 +1538,9 @@ test("orders the custom resource after the provider role's default policy", () =
 
 // `@aws-cdk/aws-lambda:createNewPoliciesWithAddToRolePolicy` makes
 // `Function.addToRolePolicy` emit standalone policies instead of extending the
-// role's default policy. Those are not covered by the handler's `DependsOn`, so
-// routing the provider grants through the role's `addToPrincipalPolicy` and
-// registering the returned dependable is what keeps ordering correct.
+// role's default policy. Exercise current Get/Put/Delete, previous Delete,
+// list/tag, and CloudFront permissions together and require every resulting
+// policy to precede the custom resource under either feature-flag value.
 test.each([
   false,
   true,
@@ -1552,6 +1552,7 @@ test.each([
   });
   const stack = new Stack(app, "S");
   const destinationBucket = new Bucket(stack, "Dest");
+  const previousBucket = new Bucket(stack, "PreviousDest");
   const distribution = new Distribution(stack, "Distribution", {
     defaultBehavior: {
       origin: S3BucketOrigin.withOriginAccessControl(destinationBucket),
@@ -1563,7 +1564,10 @@ test.each([
     sources: [Source.data("index.html", "ok")],
     destination: { bucket: destinationBucket },
     cloudfrontInvalidation: { distribution, paths: ["/*"] },
-    destinationLifecycle: { onDelete: { deleteCurrentObjects: true } },
+    destinationLifecycle: {
+      onChange: { deletePreviousObjects: true, previousBucket },
+      onDelete: { deleteCurrentObjects: true },
+    },
     providerLambda: { localBuild: testLocalProviderBuild() },
   });
 
@@ -1578,17 +1582,18 @@ test.each([
   )?.[0];
   if (!customResource) throw new Error("no custom resource in template");
 
-  const policies = Object.entries(template.Resources)
-    .filter(([, resource]) => resource.Type === "AWS::IAM::Policy")
-    .map(([id]) => id);
+  const policyEntries = Object.entries(template.Resources).filter(
+    ([, resource]) => resource.Type === "AWS::IAM::Policy",
+  );
   // Routing grants through the role collapses them into the default policy, so
   // the flag no longer splits them out. The invariant that matters either way is
   // that every synthesized policy precedes the custom resource.
-  expect(policies.length).toBeGreaterThan(0);
+  expect(policyEntries.length).toBeGreaterThan(0);
+  expect(JSON.stringify(policyEntries)).toContain("PreviousDest");
 
   const dependencies = transitiveDependencies(template.Resources, customResource);
-  for (const policy of policies) {
-    expect(dependencies).toContain(policy);
+  for (const [policyId] of policyEntries) {
+    expect(dependencies).toContain(policyId);
   }
 });
 
