@@ -63,7 +63,7 @@ export function renderBenchmarkCiSummary(options: SummaryOptions): string {
     ...(options.preview
       ? [
           "> [!WARNING]",
-          "> Preliminary repetition-1 data. The canonical methodology requires five sequential repetitions before publication.",
+          "> Preliminary single-repetition data. Canonical publication requires five independently completed repetition shards.",
           "",
         ]
       : []),

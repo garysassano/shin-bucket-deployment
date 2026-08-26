@@ -81,7 +81,10 @@ async function main(signal: AbortSignal): Promise<void> {
   console.log(`benchmark scratch root: ${options.scratchRoot}`);
   mkdirSync(options.scratchRoot, { recursive: true });
   const resumeManifestExists = existsSync(join(options.scratchRoot, "benchmark-run-manifest.json"));
-  if (options.startRepetition === 1 && !resumeManifestExists) {
+  const providerBootstrapExists =
+    existsSync(join("assets", "bootstrap-arm64", "bootstrap.zip")) &&
+    existsSync(join("assets", "bootstrap-arm64", "build-provenance.json"));
+  if (!resumeManifestExists && !providerBootstrapExists) {
     await runCommand({
       command: "node",
       args: benchmarkProviderBuildArgs(options),
@@ -114,20 +117,6 @@ async function main(signal: AbortSignal): Promise<void> {
     if (completed.size > 0) {
       console.log(`resuming with ${completed.size} completed sample(s)`);
     }
-    if (options.startRepetition === 2) {
-      for (const sample of createBenchmarkPlan({
-        ...options,
-        startRepetition: 1,
-        repetitions: 1,
-      })) {
-        if (!completed.has(sample.sampleId)) {
-          throw new Error(
-            "Repetitions 2-5 require a complete cleanup-qualified repetition-1 smoke.",
-          );
-        }
-      }
-    }
-
     const startedAtMs = Date.now();
     // Samples sharing a memory configuration reuse the same stack shape and must stay
     // ordered; different memory configurations are independent stacks and can overlap.
@@ -370,6 +359,7 @@ async function runBenchmarkStack(args: {
           providerCodeSha256: runtimeMetadata.codeSha256,
           executionEnvironmentFresh: runtimeMetadata.executionEnvironmentFresh,
           memoryMeasurementScope: "phase-local",
+          repetitionParallelism: options.repetitionParallelism,
           region: options.region,
           implementation: run.implementation,
           assetProfile: run.assetProfile,

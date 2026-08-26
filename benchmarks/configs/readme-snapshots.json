@@ -3,6 +3,7 @@
   "repetitions": 5,
   "region": "eu-central-1",
   "concurrency": 3,
+  "repetitionParallelism": 5,
   "assetProfiles": ["mixed", "tiny-many", "large-few"],
   "implementations": ["shin", "aws"],
   "lambdaConfigs": [

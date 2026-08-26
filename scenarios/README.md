@@ -21,7 +21,7 @@ pnpm verify deploy --concurrency 4
 pnpm verify destroy --concurrency 4
 ```
 
-`pnpm verify list` shows phase names and group aliases. A group alias expands to every ordered phase; destroy selects the terminal phase. Deploy runs ordered phases serially within each group and can run independent groups concurrently. Use the same selector for deploy and destroy, and use `--concurrency 1` when debugging. Canonical benchmarks remain sequential so concurrent resource contention does not distort comparisons.
+`pnpm verify list` shows phase names and group aliases. A group alias expands to every ordered phase; destroy selects the terminal phase. Deploy runs ordered phases serially within each group and can run independent groups concurrently. Use the same selector for deploy and destroy, and use `--concurrency 1` when debugging. Canonical benchmark phases remain ordered within each stack, while the five independent repetitions run as parallel workflow jobs.
 
 The `handler-isolation` scenario deploys two constructs through the default shared provider and two through deployment-scoped providers. Synthesis proves three distinct Lambda/role policy boundaries, while AWS assertions prove all four namespaces are written through their intended boundary.
 

@@ -64,6 +64,7 @@ function selectValidatedRecords(
     }
     const decisionRunId = selectedRuns[0]?.decisionRunId ?? null;
     const comparisonVariant = selectedRuns[0]?.comparisonVariant ?? null;
+    const repetitionParallelism = selectedRuns[0]?.config?.repetitionParallelism ?? 1;
     const options = parseBenchmarkRunOptions([
       "--config",
       args.configFile ?? CANONICAL_BENCHMARK_CONFIG,
@@ -75,6 +76,8 @@ function selectValidatedRecords(
       "1",
       "--repetitions",
       "5",
+      "--repetition-parallelism",
+      String(repetitionParallelism),
       "--implementations",
       implementations.join(","),
       ...(decisionRunId ? ["--decision-run-id", decisionRunId] : []),
@@ -210,7 +213,11 @@ function validateCanonicalRecords(
       errors.push(`inconsistent run metadata field ${field}`);
     }
   }
-  for (const field of ["benchmarkConfigSha256", "memoryMeasurementScope"] as const) {
+  for (const field of [
+    "benchmarkConfigSha256",
+    "memoryMeasurementScope",
+    "repetitionParallelism",
+  ] as const) {
     if (new Set(runs.map((run) => run.config?.[field])).size !== 1) {
       errors.push(`inconsistent run metadata field ${field}`);
     }
