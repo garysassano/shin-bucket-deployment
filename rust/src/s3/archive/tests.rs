@@ -1,6 +1,6 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::future::pending;
-use std::io::{self, Write};
+use std::io::{self, SeekFrom, Write};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -16,7 +16,7 @@ use futures_util::task::AtomicWaker;
 use http::{Request, Response};
 use http_body::{Body as _, Frame, SizeHint};
 use proptest::prelude::*;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::Semaphore;
 use tokio::time::Instant;
 use zip::write::{SimpleFileOptions, ZipWriter};
@@ -35,6 +35,7 @@ use super::entry::{
     plan_marker_zip_entry, plan_marker_zip_entry_spooled, send_marker_zip_entry_chunks,
     send_zip_entry_chunks, zip_entry_body, zip_entry_reader,
 };
+use super::range_reader::S3RangeReader;
 use super::{
     SourceClient, head_source, range_get_request_error, source_get_retry_cap_millis,
     source_get_retry_delay,
@@ -201,6 +202,115 @@ async fn directory_preflight_reuses_its_single_source_request_and_accounts_memor
         drop(planning_permit);
         assert_eq!(stats.source_global_memory_for_test().1, 0);
     }
+}
+
+#[tokio::test]
+async fn range_reader_consumes_preload_then_fetches_across_blocks_and_stops_at_eof() {
+    let replay = StaticReplayClient::new(vec![
+        get_range_success_bytes(b"efgh".to_vec(), 4, 10),
+        get_range_success_bytes(b"ij".to_vec(), 8, 10),
+    ]);
+    let source = replay_source_client(replay.clone(), 10);
+    let preloaded = BTreeMap::from([(0, Bytes::from_static(b"abcd"))]);
+    let mut reader = S3RangeReader::with_preloaded(source, 4, preloaded);
+    let mut output = Vec::new();
+
+    reader.read_to_end(&mut output).await.unwrap();
+
+    assert_eq!(output, b"abcdefghij");
+    let ranges = replay
+        .actual_requests()
+        .map(|request| {
+            request
+                .headers()
+                .get("range")
+                .expect("ranged GET header")
+                .to_string()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(ranges, ["bytes=4-7", "bytes=8-9"]);
+
+    let mut byte = [0_u8; 1];
+    assert_eq!(reader.read(&mut byte).await.unwrap(), 0);
+    assert_eq!(replay.actual_requests().count(), 2);
+}
+
+#[tokio::test]
+async fn range_reader_empty_read_before_eof_does_not_fetch_or_advance() {
+    let replay = StaticReplayClient::new(vec![get_range_success_bytes(b"abcd".to_vec(), 0, 4)]);
+    let source = replay_source_client(replay.clone(), 4);
+    let mut reader = S3RangeReader::with_preloaded(source, 4, BTreeMap::new());
+    let mut empty = [];
+
+    assert_eq!(reader.read(&mut empty).await.unwrap(), 0);
+    assert_eq!(replay.actual_requests().count(), 0);
+
+    let mut byte = [0_u8; 1];
+    assert_eq!(reader.read(&mut byte).await.unwrap(), 1);
+    assert_eq!(byte, [b'a']);
+    assert_eq!(replay.actual_requests().count(), 1);
+}
+
+#[tokio::test]
+async fn range_reader_supports_all_seek_origins_and_bounds() {
+    let replay = StaticReplayClient::new(vec![]);
+    let source = replay_source_client(replay.clone(), 10);
+    let preloaded = BTreeMap::from([(0, Bytes::from_static(b"abcdefghij"))]);
+    let mut reader = S3RangeReader::with_preloaded(source, 10, preloaded);
+
+    let error = reader
+        .seek(SeekFrom::Current(-1))
+        .await
+        .expect_err("seeking before zero must fail");
+    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+
+    assert_eq!(reader.seek(SeekFrom::Start(3)).await.unwrap(), 3);
+    let mut byte = [0_u8; 1];
+    reader.read_exact(&mut byte).await.unwrap();
+    assert_eq!(byte, [b'd']);
+
+    assert_eq!(reader.seek(SeekFrom::Current(2)).await.unwrap(), 6);
+    reader.read_exact(&mut byte).await.unwrap();
+    assert_eq!(byte, [b'g']);
+
+    assert_eq!(reader.seek(SeekFrom::End(-2)).await.unwrap(), 8);
+    let mut tail = Vec::new();
+    reader.read_to_end(&mut tail).await.unwrap();
+    assert_eq!(tail, b"ij");
+
+    assert_eq!(reader.seek(SeekFrom::End(2)).await.unwrap(), 12);
+    assert_eq!(reader.read(&mut byte).await.unwrap(), 0);
+    assert_eq!(replay.actual_requests().count(), 0);
+}
+
+#[tokio::test]
+async fn range_reader_seek_cancels_an_in_flight_fetch() {
+    let started = Arc::new(AtomicBool::new(false));
+    let dropped = Arc::new(AtomicBool::new(false));
+    let replay = StaticReplayClient::new(vec![
+        get_pending_range_event(4, 0, 8, Arc::clone(&started), Arc::clone(&dropped)),
+        get_range_success_bytes(b"efgh".to_vec(), 4, 8),
+    ]);
+    let source = replay_source_client(replay.clone(), 8);
+    let mut reader = S3RangeReader::with_preloaded(source, 4, BTreeMap::new());
+
+    {
+        let mut byte = [0_u8; 1];
+        let mut read = Box::pin(reader.read(&mut byte));
+        tokio::select! {
+            result = &mut read => panic!("pending ranged read completed unexpectedly: {result:?}"),
+            _ = wait_for_test_condition(|| started.load(Ordering::Acquire)) => {}
+        }
+    }
+    assert!(!dropped.load(Ordering::Acquire));
+
+    assert_eq!(reader.seek(SeekFrom::Start(4)).await.unwrap(), 4);
+    wait_for_test_condition(|| dropped.load(Ordering::Acquire)).await;
+
+    let mut output = Vec::new();
+    reader.read_to_end(&mut output).await.unwrap();
+    assert_eq!(output, b"efgh");
+    assert_eq!(replay.actual_requests().count(), 2);
 }
 
 #[tokio::test]
