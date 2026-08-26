@@ -474,7 +474,7 @@ Marker replacement diagnostics field reference:
 | `uploadPasses`           | Marker upload body instances actually polled, including consumed retries.                                                               | Distinguish skipped entries from uploads and replay work.         |
 | `spooledUploads`         | Marker entries whose replaced output fit the spool budget and was uploaded from the retained bytes; each records planning 1 / upload 0. | Confirm entries that skipped the second source pass.              |
 
-Source diagnostics field reference:
+Deployment-summary source diagnostics field reference (`shin_deployment_summary.source`):
 
 | Field                          | Meaning                                                                                                                                             | Use when debugging                                                                                                           |
 | ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
@@ -496,7 +496,6 @@ Source diagnostics field reference:
 | `blockWaits`                   | Total reader waits for a planned source block.                                                                                                      | High-level source block contention signal.                                                                                   |
 | `blockWaitsFetching`           | Reader waits because another task is fetching the block.                                                                                            | Distinguish normal fetch sharing from memory pressure.                                                                       |
 | `blockWaitsCapacity`           | Reader waits because the source block window is full.                                                                                               | Diagnose source-window capacity pressure.                                                                                    |
-| `blockReleases`                | Blocks released from the resident source window.                                                                                                    | Correlate memory pressure with replay/refetch behavior.                                                                      |
 | `blockRefetches`               | Replay claims that needed a block after it was released.                                                                                            | Identify local replay-after-release duplicate reads.                                                                         |
 | `replayClaims`                 | Source block replay claims added for payload replay.                                                                                                | Measure replay demand.                                                                                                       |
 | `replayClaimsAfterRelease`     | Replay claims added after a block was released.                                                                                                     | Explain `blockRefetches` without blaming S3 throttling.                                                                      |
@@ -510,6 +509,12 @@ Source diagnostics field reference:
 | `globalResidentBytesCurrent`   | Globally admitted source block bytes still held when the summary is emitted.                                                                        | Detect leaked permits; successful requests should report zero.                                                               |
 | `globalResidentBytesHighWater` | Peak source block bytes admitted across all archives in the invocation.                                                                             | Prove aggregate use stayed at or below `globalBudgetBytes`.                                                                  |
 | `globalReleaseAnomalies`       | Source-budget releases that exceeded the currently accounted resident bytes and were saturated at zero.                                             | Detect internal claim-accounting defects without wrapping the resident-byte counter. Successful requests should report zero. |
+
+Per-archive source tracing snapshot fields (`source block diagnostics`):
+
+| Field            | Meaning                                           | Use when debugging                                                |
+| ---------------- | ------------------------------------------------- | ----------------------------------------------------------------- |
+| `block_releases` | Blocks released from that archive's local window. | Correlate local memory pressure with replay and refetch behavior. |
 
 Correlated `PutObject` failure source fields are instantaneous observations, unlike the cumulative and high-water source fields above:
 
