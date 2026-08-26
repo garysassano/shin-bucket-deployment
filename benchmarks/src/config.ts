@@ -50,20 +50,22 @@ export type BenchmarkRunOptions = {
   readonly comparisonVariant?: string;
 };
 
-const MAX_BENCHMARK_CONCURRENCY = 4;
+export const MAX_BENCHMARK_CONCURRENCY = 4;
 
-const positiveIntegerSchema = z.number().int().positive();
+const positiveIntegerSchema = z.number().int().min(1);
 const nonEmptyStringSchema = z.string().min(1);
 const uuidSchema = z.string().uuid();
-const snapshotDateSchema = z.string().refine(isIsoDate, "must be a valid YYYY-MM-DD date");
+const snapshotDateSchema = z.iso.date();
 const evidenceLabelSchema = z.string().regex(/^[A-Za-z0-9._-]+$/);
-const phaseSchema = z.object({
-  assetState: z.enum(BENCHMARK_ASSET_STATES),
-  cloudfrontWait: z.boolean().optional(),
-  name: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
-  deleteStaleObjects: z.boolean().optional(),
-  deleteCurrentObjectsOnDelete: z.boolean().optional(),
-});
+const phaseSchema = z
+  .object({
+    assetState: z.enum(BENCHMARK_ASSET_STATES),
+    cloudfrontWait: z.boolean().optional(),
+    name: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+    deleteStaleObjects: z.boolean().optional(),
+    deleteCurrentObjectsOnDelete: z.boolean().optional(),
+  })
+  .strict();
 export const benchmarkConfigSchema = z
   .object({
     $schema: nonEmptyStringSchema.optional(),
@@ -78,7 +80,7 @@ export const benchmarkConfigSchema = z
     region: nonEmptyStringSchema.optional(),
     outputFile: nonEmptyStringSchema.optional(),
     scratchRoot: nonEmptyStringSchema.optional(),
-    concurrency: positiveIntegerSchema.optional(),
+    concurrency: positiveIntegerSchema.max(MAX_BENCHMARK_CONCURRENCY).optional(),
     destinationPrefix: nonEmptyStringSchema.optional(),
     assetProfiles: z.array(z.enum(BENCHMARK_ASSET_PROFILES)).nonempty().optional(),
     lambdaConfigs: z
@@ -98,7 +100,8 @@ export const benchmarkConfigSchema = z
     decisionRunId: evidenceLabelSchema.optional(),
     comparisonVariant: evidenceLabelSchema.optional(),
   })
-  .strict();
+  .strict()
+  .meta({ title: "ShinBucketDeployment Asset Benchmark Config" });
 
 type ConfigInput = z.infer<typeof benchmarkConfigSchema>;
 
@@ -358,11 +361,6 @@ function booleanValue(value: string | boolean, name: string): boolean {
 }
 function today(): string {
   return new Date().toISOString().slice(0, 10);
-}
-function isIsoDate(value: string): boolean {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
-  const timestamp = Date.parse(`${value}T00:00:00.000Z`);
-  return Number.isFinite(timestamp) && new Date(timestamp).toISOString().slice(0, 10) === value;
 }
 function usage(): never {
   throw new Error(
