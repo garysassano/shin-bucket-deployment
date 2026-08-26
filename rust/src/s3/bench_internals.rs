@@ -35,6 +35,7 @@ use crate::state::AppState;
 
 const MIXED_PROFILE_ENTRY_COUNT: usize = 442;
 const MIXED_PROFILE_TOTAL_BYTES: u64 = 52_904_649;
+pub const LARGE_KEY_PROFILE_ENTRY_COUNT: usize = 100_000;
 
 /// How the bench's fixture archive renders an entry's payload bytes: text-like series
 /// get high-entropy identifier lines (deflate ~3-4:1, like real minified bundles);
@@ -182,6 +183,19 @@ pub fn mixed_entries() -> Vec<BenchEntry> {
         }
     }
     entries
+}
+
+/// A deterministic 100,000-object profile for measuring planner key ownership.
+/// Every path has the same length, so before/after byte deltas reflect representation
+/// changes rather than a changed fixture distribution.
+pub fn large_key_entries() -> Vec<BenchEntry> {
+    (0..LARGE_KEY_PROFILE_ENTRY_COUNT)
+        .map(|index| BenchEntry {
+            relative_key: format!("assets/routes/{:03}/chunk-{index:06}.json", index % 1_000),
+            size: 4_096,
+            kind: BenchPayloadKind::Text,
+        })
+        .collect()
 }
 
 /// FNV-1a byte-for-byte the `hashName`/`hash` pair in `assets.ts`: each step is a
@@ -383,6 +397,60 @@ impl CollectPlansBench {
     }
 }
 
+/// Result kept alive by the large key-lifecycle benchmark.
+#[derive(Clone, Copy, Debug)]
+pub struct KeyLifecycleOutcome {
+    pub manifest_len: usize,
+    pub transfer_plan_len: usize,
+}
+
+/// Builds the provider's real manifest representation and then derives the real ZIP
+/// transfer plans. Fixture construction stays outside each measured run.
+pub struct KeyLifecycleBench {
+    entries: Vec<BenchEntry>,
+}
+
+impl KeyLifecycleBench {
+    pub fn large() -> Self {
+        KeyLifecycleBench {
+            entries: large_key_entries(),
+        }
+    }
+
+    pub fn run(&self, destination_prefix: &str) -> KeyLifecycleOutcome {
+        let mut manifest = DeploymentManifest::new();
+        let mut source_offset = 0_u64;
+        for entry in &self.entries {
+            let planned = PlannedObject {
+                relative_key: entry.relative_key.clone(),
+                expected_etag: None,
+                action: PlannedAction::ZipEntry {
+                    archive_index: 0,
+                    source_index: 0,
+                    size: entry.size,
+                    compressed_size: entry.size,
+                    compression_code: 0,
+                    crc32: 0,
+                    trusted_integrity: Some(TrustedEntryIntegrity {
+                        size: entry.size,
+                        md5: "0".repeat(32),
+                    }),
+                    source_offset,
+                    source_span_end_exclusive: source_offset + entry.size,
+                },
+            };
+            source_offset += entry.size + 30;
+            super::planner::insert_manifest_object(&mut manifest, planned);
+        }
+
+        let transfer_plans = super::planner::collect_zip_entry_plans(&manifest, destination_prefix);
+        KeyLifecycleOutcome {
+            manifest_len: manifest.len(),
+            transfer_plan_len: transfer_plans.values().map(Vec::len).sum(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -425,5 +493,19 @@ mod tests {
             entries.len(),
             "all fixture names must be distinct"
         );
+    }
+
+    #[test]
+    fn large_key_fixture_is_fixed_width_and_unique() {
+        let entries = large_key_entries();
+        assert_eq!(entries.len(), LARGE_KEY_PROFILE_ENTRY_COUNT);
+        assert!(
+            entries
+                .iter()
+                .all(|entry| entry.relative_key.len() == entries[0].relative_key.len())
+        );
+        let names: std::collections::HashSet<_> =
+            entries.iter().map(|entry| &entry.relative_key).collect();
+        assert_eq!(names.len(), LARGE_KEY_PROFILE_ENTRY_COUNT);
     }
 }

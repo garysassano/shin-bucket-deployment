@@ -41,6 +41,15 @@ name = "plan_entries"
 path = "benches/plan_entries.rs"
 harness = false
 
+# One-shot allocation and resident-memory companion to the Criterion planner bench.
+# It is skipped by normal `cargo bench` / `pnpm rust:bench` runs unless its dedicated
+# off-by-default feature is selected.
+[[bench]]
+name = "plan_key_allocations"
+path = "benches/plan_key_allocations.rs"
+harness = false
+required-features = ["bench-key-allocations"]
+
 # Off-by-default surface for the `plan-entries` criterion bench
 # (`pnpm rust:bench`). The bench is a separate crate and cannot see `pub(crate)` /
 # `pub(super)` items, and Rust forbids re-exporting those from a `pub` module, so
@@ -52,6 +61,7 @@ harness = false
 [features]
 default = []
 bench-internals = []
+bench-key-allocations = ["bench-internals"]
 
 [dependencies]
 aho-corasick = "1.1.5"
@@ -112,6 +122,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 urlencoding = "2"
 
 [dev-dependencies]
+allocation-counter = "0.8.1"
 aws-smithy-http-client = { version = "1", features = ["test-util"] }
 # Test-only: decodes the Info-ZIP / Python ZIP64 fixtures in
 # `src/s3/archive/tests.rs`. Held at 0.22 to match what `aws_lambda_events`,
