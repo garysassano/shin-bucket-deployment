@@ -82,7 +82,7 @@ describe("benchmark methodology", () => {
     expect(() => parseCliOptions(["--known="], ["known"], usage)).toThrow("usage");
   });
 
-  test("defaults to five sequential canonical repetitions", () => {
+  test("defaults to the five-repetition canonical plan", () => {
     const options = parseBenchmarkRunOptions([]);
     expect(options).toMatchObject({
       repetitions: 5,
@@ -240,7 +240,7 @@ describe("benchmark methodology", () => {
     );
   });
 
-  test("requires explicit approval for the smoke and repetitions 2-5", () => {
+  test("requires explicit approval for one repetition shard per invocation", () => {
     const base = [
       "--run-id",
       "00000000-0000-4000-a000-000000000010",
@@ -262,6 +262,19 @@ describe("benchmark methodology", () => {
         parseBenchmarkRunOptions([
           ...base,
           "--start-repetition",
+          "5",
+          "--repetitions",
+          "1",
+          "--approved-through-repetition",
+          "5",
+        ]),
+      ),
+    ).not.toThrow();
+    expect(() =>
+      assertBenchmarkExecutionAuthorized(
+        parseBenchmarkRunOptions([
+          ...base,
+          "--start-repetition",
           "2",
           "--repetitions",
           "4",
@@ -269,7 +282,7 @@ describe("benchmark methodology", () => {
           "5",
         ]),
       ),
-    ).not.toThrow();
+    ).toThrow("exactly one repetition shard");
   });
 
   test("configuration identity covers measurement inputs but not execution controls", () => {
@@ -303,6 +316,7 @@ describe("benchmark methodology", () => {
         lambdaConfigs: [{ memoryMb: 1024, parallel: 32, sourceWindowBytes: null }],
       }),
     ).not.toBe(digest);
+    expect(benchmarkConfigurationSha256({ ...base, repetitionParallelism: 5 })).not.toBe(digest);
     expect(
       benchmarkConfigurationSha256({
         ...base,

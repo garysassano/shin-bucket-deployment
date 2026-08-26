@@ -88,6 +88,7 @@
     "benchmark:collect": "pnpm build && node dist/benchmarks/src/collect-results.js",
     "benchmark:catalog-synth": "pnpm build && node scripts/benchmark-catalog-synthesis.mjs",
     "benchmark:comparison-report": "pnpm build && node dist/benchmarks/src/render/comparison-report.js",
+    "benchmark:merge-shards": "pnpm build && node dist/benchmarks/src/merge-shards.js",
     "benchmark:publish-results": "pnpm build && node dist/benchmarks/src/publish-results.js",
     "benchmark:telemetry-table": "pnpm build && node dist/benchmarks/src/render/telemetry-table.js",
     "benchmark:run-assets": "pnpm build && node dist/benchmarks/src/run-assets-comparison.js",

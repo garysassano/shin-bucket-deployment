@@ -26,6 +26,7 @@ export function canonicalRunRecord(
     config: {
       benchmarkConfigSha256: benchmarkConfigurationSha256(options),
       memoryMeasurementScope: "phase-local",
+      repetitionParallelism: options.repetitionParallelism,
     },
     environment: {
       nodeVersion: "v24.0.0",

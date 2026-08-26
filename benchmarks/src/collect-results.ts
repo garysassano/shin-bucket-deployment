@@ -61,6 +61,7 @@ export type CollectBenchmarkOptions = {
   readonly constructsInstalledSha256?: string;
   readonly executionEnvironmentFresh?: boolean;
   readonly memoryMeasurementScope?: "phase-local";
+  readonly repetitionParallelism?: number;
   readonly decisionRunId?: string;
   readonly fileCount?: number;
   readonly implementation?: string;
@@ -133,6 +134,7 @@ const CLI_OPTIONS = [
   "phase",
   "region",
   "repetition",
+  "repetition-parallelism",
   "report-file",
   "snapshot-date",
   "summary-file",
@@ -345,6 +347,7 @@ function buildRunRecordSource(
     cleanup: cleanupStatusFrom(options.cleanup),
     benchmarkConfigSha256: options.benchmarkConfigSha256 ?? null,
     memoryMeasurementScope: options.memoryMeasurementScope ?? null,
+    repetitionParallelism: options.repetitionParallelism ?? null,
     nodeVersion: options.nodeVersion ?? null,
     pnpmVersion: options.pnpmVersion ?? null,
     executionEnvironmentSha256: options.executionEnvironmentSha256 ?? null,
@@ -424,6 +427,7 @@ function parseArgs(args: string[]): CollectBenchmarkOptions {
     phase,
     region: values.get("region"),
     repetition: optionalPositiveInteger(values, "repetition"),
+    repetitionParallelism: optionalPositiveInteger(values, "repetition-parallelism"),
     reportFile: values.get("report-file"),
     snapshotDate: values.get("snapshot-date"),
     state: values.get("asset-state"),

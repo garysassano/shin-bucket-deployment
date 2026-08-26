@@ -76,7 +76,7 @@ function renderDocsBlock(records: BenchmarkRunSample[], runId: string): string {
     START,
     "## Latest CI benchmark",
     "",
-    `The latest complete canonical five-repetition run was collected by GitHub Actions on ${first?.snapshotDate ?? "unknown"} from source commit \`${source?.provider?.implementationCommit?.slice(0, 7) ?? "unknown"}\`. It contains five sequential repetitions of all canonical profiles across all four phases. The sanitized run UUID is \`${runId}\`; raw AWS output remains outside git.`,
+    `The latest complete canonical five-repetition run was collected by GitHub Actions on ${first?.snapshotDate ?? "unknown"} from source commit \`${source?.provider?.implementationCommit?.slice(0, 7) ?? "unknown"}\`. It contains five independently collected parallel repetitions of all canonical profiles across all four phases. The sanitized run UUID is \`${runId}\`; raw AWS output remains outside git.`,
     "",
     "| Field | Value |",
     "| --- | --- |",

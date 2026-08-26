@@ -55,6 +55,7 @@ export type BenchmarkCleanupStatus = "destroyed" | "partial" | "failed";
 export type BenchmarkRunConfig = {
   readonly benchmarkConfigSha256?: string | null;
   readonly memoryMeasurementScope?: "phase-local" | null;
+  readonly repetitionParallelism?: number | null;
 };
 
 export type BenchmarkRunEnvironment = {
@@ -241,6 +242,7 @@ export type BenchmarkRunRecordSource = {
   readonly comparisonVariant?: string | null;
   readonly benchmarkConfigSha256?: string | null;
   readonly memoryMeasurementScope?: "phase-local" | null;
+  readonly repetitionParallelism?: number | null;
   readonly nodeVersion?: string | null;
   readonly pnpmVersion?: string | null;
   readonly executionEnvironmentSha256?: string | null;
@@ -305,6 +307,9 @@ export function benchmarkRunRecordFrom(source: BenchmarkRunRecordSource): Benchm
     config: {
       benchmarkConfigSha256: source.benchmarkConfigSha256 ?? null,
       memoryMeasurementScope: source.memoryMeasurementScope ?? null,
+      ...(source.repetitionParallelism !== undefined && source.repetitionParallelism !== null
+        ? { repetitionParallelism: source.repetitionParallelism }
+        : {}),
     },
     environment: {
       nodeVersion: source.nodeVersion ?? null,
@@ -418,7 +423,11 @@ export function benchmarkRunRecordErrors(run: BenchmarkRunRecord): string[] {
     }
   }
   const config = run.config;
-  const configFields = new Set(["benchmarkConfigSha256", "memoryMeasurementScope"]);
+  const configFields = new Set([
+    "benchmarkConfigSha256",
+    "memoryMeasurementScope",
+    "repetitionParallelism",
+  ]);
   if (isObject(config)) {
     for (const name of Object.keys(config)) {
       if (!configFields.has(name)) errors.push(`${label}: unexpected config field ${name}`);
@@ -429,6 +438,15 @@ export function benchmarkRunRecordErrors(run: BenchmarkRunRecord): string[] {
   }
   if (config?.memoryMeasurementScope !== "phase-local") {
     errors.push(`${label}: memoryMeasurementScope must be phase-local`);
+  }
+  if (
+    config?.repetitionParallelism !== undefined &&
+    config.repetitionParallelism !== null &&
+    (!Number.isInteger(config.repetitionParallelism) ||
+      config.repetitionParallelism < 1 ||
+      config.repetitionParallelism > 5)
+  ) {
+    errors.push(`${label}: repetitionParallelism must be an integer from 1 through 5`);
   }
   const environment = run.environment;
   const environmentFields = new Set([

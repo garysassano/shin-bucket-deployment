@@ -27,7 +27,7 @@ import {
 import { previewBenchmarkRuns, previewBenchmarkSamples, writeBenchmarkLedger } from "./persistence";
 import { createBenchmarkPlan } from "./plan";
 
-type ResumeIdentity = {
+export type ResumeIdentity = {
   readonly version: 2;
   readonly runId: string;
   readonly source: Omit<BenchmarkSourceMetadata, "gitDirty" | "changedPaths">;
@@ -38,7 +38,10 @@ type ResumeIdentity = {
     readonly lambdaConfigs: BenchmarkRunOptions["lambdaConfigs"];
     readonly implementations: BenchmarkRunOptions["implementations"];
     readonly phases: BenchmarkRunOptions["phases"];
+    readonly concurrency: number;
+    readonly detailedFailureDiagnostics: boolean;
     readonly expectedRepetitions: number;
+    readonly repetitionParallelism: number;
     readonly snapshotDate: string;
     readonly decisionRunId?: string;
     readonly comparisonVariant?: string;
@@ -46,7 +49,7 @@ type ResumeIdentity = {
   readonly plannedSamples: ReturnType<typeof createBenchmarkPlan>;
 };
 
-type ResumeManifest = {
+export type ResumeManifest = {
   readonly identity: ResumeIdentity;
   readonly identitySha256: string;
   readonly evidenceFile: string;
@@ -95,7 +98,7 @@ export function openResumeSession(args: {
     let manifest: ResumeManifest;
 
     if (existsSync(manifestFile)) {
-      manifest = JSON.parse(readFileSync(manifestFile, "utf8")) as ResumeManifest;
+      manifest = readResumeManifest(manifestFile);
       if (
         manifest.identitySha256 !== identitySha256 ||
         stableJson(manifest.identity) !== stableJson(identity)
@@ -225,7 +228,10 @@ export function resumeIdentity(
       lambdaConfigs: options.lambdaConfigs,
       implementations: options.implementations,
       phases: options.phases,
+      concurrency: options.concurrency,
+      detailedFailureDiagnostics: options.detailedFailureDiagnostics,
       expectedRepetitions,
+      repetitionParallelism: options.repetitionParallelism,
       snapshotDate: options.snapshotDate,
       decisionRunId: options.decisionRunId,
       comparisonVariant: options.comparisonVariant,
@@ -239,14 +245,25 @@ export function assertBenchmarkLedgerMatchesManifest(args: {
   readonly evidenceFile: string;
 }): void {
   const manifestFile = join(args.scratchRoot, "benchmark-run-manifest.json");
-  if (!existsSync(manifestFile)) {
-    throw new Error("Canonical publication requires its external benchmark run manifest.");
-  }
-  const manifest = JSON.parse(readFileSync(manifestFile, "utf8")) as ResumeManifest;
+  const manifest = assertBenchmarkShardMatchesManifest({
+    manifestFile,
+    evidenceFile: args.evidenceFile,
+  });
   const evidenceFile = resolve(args.evidenceFile);
   if (resolve(manifest.evidenceFile) !== evidenceFile) {
     throw new Error("Benchmark publication evidence destination does not match its manifest.");
   }
+}
+
+export function assertBenchmarkShardMatchesManifest(args: {
+  readonly manifestFile: string;
+  readonly evidenceFile: string;
+}): ResumeManifest {
+  if (!existsSync(args.manifestFile)) {
+    throw new Error("Canonical publication requires its external benchmark run manifest.");
+  }
+  const manifest = readResumeManifest(args.manifestFile);
+  const evidenceFile = resolve(args.evidenceFile);
   if (
     manifest.pendingLedgerSha256 !== undefined ||
     manifest.pendingRunsLedgerSha256 !== undefined
@@ -259,6 +276,34 @@ export function assertBenchmarkLedgerMatchesManifest(args: {
   if (fileDigest(runsFileFor(evidenceFile)) !== manifest.runsLedgerSha256) {
     throw new Error("Benchmark runs ledger changed after its recorded run session.");
   }
+  if (manifest.initiallyDirty) {
+    throw new Error("Benchmark evidence manifest records a dirty source tree.");
+  }
+  if (digest(stableJson(manifest.identity)) !== manifest.identitySha256) {
+    throw new Error("Benchmark evidence manifest identity digest is invalid.");
+  }
+  return manifest;
+}
+
+export function writeBenchmarkRunManifest(args: {
+  readonly manifestFile: string;
+  readonly evidenceFile: string;
+  readonly identity: ResumeIdentity;
+}): void {
+  const evidenceFile = resolve(args.evidenceFile);
+  const ledgerSha256 = fileDigest(evidenceFile);
+  const runsLedgerSha256 = fileDigest(runsFileFor(evidenceFile));
+  if (ledgerSha256 === null || runsLedgerSha256 === null) {
+    throw new Error("Benchmark manifest requires both completed evidence ledgers.");
+  }
+  writeManifest(args.manifestFile, {
+    identity: args.identity,
+    identitySha256: digest(stableJson(args.identity)),
+    evidenceFile,
+    initiallyDirty: false,
+    ledgerSha256,
+    runsLedgerSha256,
+  });
 }
 
 function buildRunRecords(
@@ -306,6 +351,7 @@ function runRecordSource(
     cleanup,
     benchmarkConfigSha256: benchmarkConfigurationSha256(options),
     memoryMeasurementScope: "phase-local",
+    repetitionParallelism: options.repetitionParallelism,
     nodeVersion: source.nodeVersion,
     pnpmVersion: source.pnpmVersion,
     executionEnvironmentSha256: source.executionEnvironmentSha256,
@@ -361,6 +407,31 @@ function ledgerContainsRun(path: string, runId: string): boolean {
     .split(/\r?\n/)
     .filter(Boolean)
     .some((line) => (JSON.parse(line) as BenchmarkSampleRecord).runId === runId);
+}
+
+function readResumeManifest(path: string): ResumeManifest {
+  const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+  if (
+    typeof parsed !== "object" ||
+    parsed === null ||
+    Array.isArray(parsed) ||
+    !("identity" in parsed) ||
+    typeof parsed.identity !== "object" ||
+    parsed.identity === null ||
+    !("identitySha256" in parsed) ||
+    typeof parsed.identitySha256 !== "string" ||
+    !("evidenceFile" in parsed) ||
+    typeof parsed.evidenceFile !== "string" ||
+    !("initiallyDirty" in parsed) ||
+    typeof parsed.initiallyDirty !== "boolean" ||
+    !("ledgerSha256" in parsed) ||
+    !(typeof parsed.ledgerSha256 === "string" || parsed.ledgerSha256 === null) ||
+    !("runsLedgerSha256" in parsed) ||
+    !(typeof parsed.runsLedgerSha256 === "string" || parsed.runsLedgerSha256 === null)
+  ) {
+    throw new Error(`Invalid benchmark run manifest at ${path}.`);
+  }
+  return parsed as ResumeManifest;
 }
 
 function writeManifest(path: string, manifest: ResumeManifest): void {

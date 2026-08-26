@@ -44,6 +44,7 @@ export type BenchmarkRunOptions = {
   readonly runToken: string;
   readonly snapshotDate: string;
   readonly concurrency: number;
+  readonly repetitionParallelism: number;
   readonly destinationPrefix: string;
   readonly phases: PhaseConfig[];
   readonly decisionRunId?: string;
@@ -81,6 +82,7 @@ export const benchmarkConfigSchema = z
     outputFile: nonEmptyStringSchema.optional(),
     scratchRoot: nonEmptyStringSchema.optional(),
     concurrency: positiveIntegerSchema.max(MAX_BENCHMARK_CONCURRENCY).optional(),
+    repetitionParallelism: positiveIntegerSchema.max(5).optional(),
     destinationPrefix: nonEmptyStringSchema.optional(),
     assetProfiles: z.array(z.enum(BENCHMARK_ASSET_PROFILES)).nonempty().optional(),
     lambdaConfigs: z
@@ -123,6 +125,7 @@ const CLI_OPTIONS = [
   "snapshot-date",
   "scratch-root",
   "concurrency",
+  "repetition-parallelism",
   "destination-prefix",
   "decision-run-id",
   "comparison-variant",
@@ -164,6 +167,13 @@ export function parseBenchmarkRunOptions(args: string[]): BenchmarkRunOptions {
     throw new Error(
       `concurrency must not exceed ${MAX_BENCHMARK_CONCURRENCY}; each unit deploys its own stack.`,
     );
+  }
+  const repetitionParallelism = positiveInteger(
+    values.get("repetition-parallelism") ?? String(config.repetitionParallelism ?? 1),
+    "repetition-parallelism",
+  );
+  if (repetitionParallelism > 5) {
+    throw new Error("repetition-parallelism must not exceed the five canonical repetitions.");
   }
   const repetitions = positiveInteger(
     values.get("repetitions") ?? String(config.repetitions ?? 5),
@@ -236,6 +246,7 @@ export function parseBenchmarkRunOptions(args: string[]): BenchmarkRunOptions {
     runToken,
     snapshotDate,
     concurrency,
+    repetitionParallelism,
     destinationPrefix:
       values.get("destination-prefix") ?? config.destinationPrefix ?? "benchmark-site",
     phases,
@@ -252,18 +263,8 @@ export function assertBenchmarkExecutionAuthorized(options: BenchmarkRunOptions)
   if (lastRepetition > 5 || lastRepetition > options.approvedThroughRepetition) {
     throw new Error("Requested repetitions exceed the explicitly approved range.");
   }
-  const smoke =
-    options.startRepetition === 1 &&
-    options.repetitions === 1 &&
-    options.approvedThroughRepetition === 1;
-  const continuation =
-    options.startRepetition === 2 &&
-    options.repetitions === 4 &&
-    options.approvedThroughRepetition === 5;
-  if (!smoke && !continuation) {
-    throw new Error(
-      "Benchmark execution must be either the approved repetition-1 smoke or repetitions 2-5 continuation.",
-    );
+  if (options.repetitions !== 1) {
+    throw new Error("Each benchmark runner invocation must execute exactly one repetition shard.");
   }
 }
 
@@ -276,6 +277,9 @@ export function benchmarkConfigurationSha256(options: BenchmarkRunOptions): stri
         methodologyVersion: 2,
         expectedRepetitions: 5,
         concurrency: options.concurrency,
+        ...(options.repetitionParallelism === 1
+          ? {}
+          : { repetitionParallelism: options.repetitionParallelism }),
         region: options.region,
         destinationPrefix: options.destinationPrefix,
         assetProfiles: options.assetProfiles,
@@ -364,6 +368,6 @@ function today(): string {
 }
 function usage(): never {
   throw new Error(
-    "Usage: benchmark:run-assets --config <file> [--run-id <uuid>] [--repetitions 5] [--start-repetition 1] [--approved-through-repetition <n>] [--max-wall-clock-minutes <minutes>] [--preserve-on-failure true|false] [--detailed-failure-diagnostics true|false] [--concurrency <1-4>]",
+    "Usage: benchmark:run-assets --config <file> [--run-id <uuid>] --repetitions 1 [--start-repetition <1-5>] [--approved-through-repetition <n>] [--max-wall-clock-minutes <minutes>] [--preserve-on-failure true|false] [--detailed-failure-diagnostics true|false] [--concurrency <1-4>] [--repetition-parallelism <1-5>]",
   );
 }
