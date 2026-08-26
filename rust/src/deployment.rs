@@ -164,7 +164,6 @@ pub(crate) struct Filters {
 }
 
 pub(crate) struct PlannedObject {
-    pub(crate) relative_key: String,
     pub(crate) expected_etag: Option<String>,
     pub(crate) action: PlannedAction,
 }

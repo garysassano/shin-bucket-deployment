@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io;
 
@@ -226,8 +227,8 @@ pub(super) async fn plan_deployment(
 
             insert_manifest_object(
                 &mut manifest,
+                relative_key,
                 PlannedObject {
-                    relative_key,
                     expected_etag: Some(expected_etag),
                     action: PlannedAction::CopyObject {
                         source_index,
@@ -248,31 +249,30 @@ pub(super) fn collect_copy_plans(
 ) -> Result<Vec<CopyPlan>> {
     let mut plans = Vec::new();
 
-    for planned in manifest.values() {
+    for (relative_key, planned) in manifest {
         match planned.action {
             PlannedAction::CopyObject { source_index, size } => {
-                let destination_key =
-                    join_s3_key(&request.dest_bucket_prefix, &planned.relative_key);
+                let destination_key = join_s3_key(&request.dest_bucket_prefix, relative_key);
                 let content_changed = planned.expected_etag.as_deref().is_none_or(|etag| {
-                    !destination_etag_matches(destination_objects, &planned.relative_key, etag)
+                    !destination_etag_matches(destination_objects, relative_key, etag)
                 });
                 if !content_changed {
                     continue;
                 }
-                validate_copy_object_size(&planned.relative_key, size)?;
+                validate_copy_object_size(relative_key, size)?;
                 let expected_etag = planned.expected_etag.clone().ok_or_else(|| {
                     anyhow!(
                         "source metadata for `{}` did not contain a usable ETag",
-                        sanitize_diagnostic(&planned.relative_key, MAX_DIAGNOSTIC_VALUE_BYTES)
+                        sanitize_diagnostic(relative_key, MAX_DIAGNOSTIC_VALUE_BYTES)
                     )
                 })?;
                 let size = size.ok_or_else(|| {
                     anyhow!(
                         "source metadata for `{}` did not contain a valid content length",
-                        sanitize_diagnostic(&planned.relative_key, MAX_DIAGNOSTIC_VALUE_BYTES)
+                        sanitize_diagnostic(relative_key, MAX_DIAGNOSTIC_VALUE_BYTES)
                     )
                 })?;
-                let destination_object = destination_objects.get(&planned.relative_key);
+                let destination_object = destination_objects.get(relative_key);
                 plans.push(CopyPlan {
                     source_bucket: request.source_bucket_names[source_index].clone(),
                     source_key: request.source_object_keys[source_index].clone(),
@@ -300,7 +300,7 @@ pub(super) fn collect_zip_entry_plans(
 ) -> BTreeMap<usize, Vec<ZipEntryPlan>> {
     let mut grouped = BTreeMap::<usize, Vec<ZipEntryPlan>>::new();
 
-    for planned in manifest.values() {
+    for (relative_key, planned) in manifest {
         if let PlannedAction::ZipEntry {
             archive_index,
             source_index,
@@ -318,8 +318,8 @@ pub(super) fn collect_zip_entry_plans(
                 .or_default()
                 .push(ZipEntryPlan {
                     source_index: *source_index,
-                    relative_key: planned.relative_key.clone(),
-                    destination_key: join_s3_key(destination_prefix, &planned.relative_key),
+                    relative_key: relative_key.clone(),
+                    destination_key: join_s3_key(destination_prefix, relative_key),
                     size: *size,
                     compressed_size: *compressed_size,
                     compression_code: *compression_code,
@@ -538,12 +538,10 @@ async fn add_archive_entries_to_manifest(
         }
 
         let trusted_integrity = catalog.get(relative_key.as_ref()).cloned();
-        // The map key and `PlannedObject::relative_key` hold the same string. Build the
-        // planned object from one clone and move the original into the map, rather than
-        // allocating twice per entry.
+        // The manifest map key is the canonical relative key. Move the normalized path
+        // directly into the map instead of duplicating it in the value.
         let relative_key = relative_key.into_owned();
         let planned = PlannedObject {
-            relative_key: relative_key.clone(),
             expected_etag: None,
             action: PlannedAction::ZipEntry {
                 archive_index,
@@ -557,25 +555,34 @@ async fn add_archive_entries_to_manifest(
                 source_span_end_exclusive,
             },
         };
-        insert_manifest_object(manifest, planned);
+        insert_manifest_object(manifest, relative_key, planned);
     }
     stats.add_plan_entries_micros(crate::util::duration_micros(started_entries.elapsed()));
 
     Ok(())
 }
 
-pub(super) fn insert_manifest_object(manifest: &mut DeploymentManifest, planned: PlannedObject) {
-    let relative_key = planned.relative_key.clone();
+pub(super) fn insert_manifest_object(
+    manifest: &mut DeploymentManifest,
+    relative_key: String,
+    planned: PlannedObject,
+) {
     let replacement_source_index = planned_action_source_index(&planned.action);
-    if let Some(previous) = manifest.insert(relative_key.clone(), planned) {
-        let destination_relative_key =
-            sanitize_diagnostic(&relative_key, MAX_DIAGNOSTIC_VALUE_BYTES);
-        tracing::warn!(
-            destination_relative_key = %destination_relative_key,
-            previous_source_index = planned_action_source_index(&previous.action),
-            replacement_source_index,
-            "later source replaces an earlier source destination key"
-        );
+    match manifest.entry(relative_key) {
+        Entry::Vacant(entry) => {
+            entry.insert(planned);
+        }
+        Entry::Occupied(mut entry) => {
+            let destination_relative_key =
+                sanitize_diagnostic(entry.key(), MAX_DIAGNOSTIC_VALUE_BYTES);
+            let previous = entry.insert(planned);
+            tracing::warn!(
+                destination_relative_key = %destination_relative_key,
+                previous_source_index = planned_action_source_index(&previous.action),
+                replacement_source_index,
+                "later source replaces an earlier source destination key"
+            );
+        }
     }
 }
 
@@ -996,13 +1003,13 @@ pub(super) fn validate_deployment_preflight(
     request: &DeploymentRequest,
     manifest: &DeploymentManifest,
 ) -> Result<()> {
-    for planned in manifest.values() {
-        let destination_key = join_s3_key(&request.dest_bucket_prefix, &planned.relative_key);
+    for (relative_key, planned) in manifest {
+        let destination_key = join_s3_key(&request.dest_bucket_prefix, relative_key);
         let key_bytes = destination_key.len();
         if key_bytes > S3_OBJECT_KEY_MAX_BYTES {
             return Err(anyhow!(
                 "destination key for `{}` is {key_bytes} UTF-8 bytes, larger than the S3 1024-byte limit",
-                sanitize_diagnostic(&planned.relative_key, MAX_DIAGNOSTIC_VALUE_BYTES)
+                sanitize_diagnostic(relative_key, MAX_DIAGNOSTIC_VALUE_BYTES)
             ));
         }
 
@@ -1020,7 +1027,7 @@ pub(super) fn validate_deployment_preflight(
                     .ok_or_else(|| {
                         anyhow!("copy plan references missing source index {source_index}")
                     })?;
-                validate_copy_object_size(&planned.relative_key, size)?;
+                validate_copy_object_size(relative_key, size)?;
             }
             PlannedAction::ZipEntry {
                 size,
@@ -1028,7 +1035,7 @@ pub(super) fn validate_deployment_preflight(
                 ..
             } => {
                 validate_archive_expansion(
-                    &planned.relative_key,
+                    relative_key,
                     size,
                     compressed_size,
                     request.archive_expansion,
@@ -1210,8 +1217,8 @@ mod tests {
             for source_index in [2, 7] {
                 insert_manifest_object(
                     &mut manifest,
+                    "shared/index.html".to_string(),
                     PlannedObject {
-                        relative_key: "shared/index.html".to_string(),
                         expected_etag: Some(format!("etag-{source_index}")),
                         action: PlannedAction::CopyObject {
                             source_index,
@@ -1256,8 +1263,8 @@ mod tests {
             for source_index in [0, 1] {
                 insert_manifest_object(
                     &mut manifest,
+                    hostile_key.clone(),
                     PlannedObject {
-                        relative_key: hostile_key.clone(),
                         expected_etag: None,
                         action: PlannedAction::CopyObject {
                             source_index,
@@ -1283,7 +1290,6 @@ mod tests {
         manifest.insert(
             "b.txt".to_string(),
             PlannedObject {
-                relative_key: "b.txt".to_string(),
                 expected_etag: None,
                 action: PlannedAction::ZipEntry {
                     archive_index: 0,
@@ -1301,7 +1307,6 @@ mod tests {
         manifest.insert(
             "a.txt".to_string(),
             PlannedObject {
-                relative_key: "a.txt".to_string(),
                 expected_etag: None,
                 action: PlannedAction::ZipEntry {
                     archive_index: 0,
@@ -1334,7 +1339,6 @@ mod tests {
         manifest.insert(
             "archive.zip".to_string(),
             PlannedObject {
-                relative_key: "archive.zip".to_string(),
                 expected_etag: Some("abc123".to_string()),
                 action: PlannedAction::CopyObject {
                     source_index: 0,
@@ -1367,7 +1371,6 @@ mod tests {
             manifest.insert(
                 "archive.zip".to_string(),
                 PlannedObject {
-                    relative_key: "archive.zip".to_string(),
                     expected_etag: Some(source_etag.to_string()),
                     action: PlannedAction::CopyObject {
                         source_index: 0,
@@ -1411,7 +1414,6 @@ mod tests {
         manifest.insert(
             "archive.zip".to_string(),
             PlannedObject {
-                relative_key: "archive.zip".to_string(),
                 expected_etag: Some("abc123".to_string()),
                 action: PlannedAction::CopyObject {
                     source_index: 0,
@@ -1445,7 +1447,6 @@ mod tests {
             let manifest = DeploymentManifest::from([(
                 "archive.zip".to_string(),
                 PlannedObject {
-                    relative_key: "archive.zip".to_string(),
                     expected_etag,
                     action: PlannedAction::CopyObject {
                         source_index: 0,
@@ -1560,7 +1561,6 @@ mod tests {
         let manifest = DeploymentManifest::from([(
             "dense.bin".to_string(),
             PlannedObject {
-                relative_key: "dense.bin".to_string(),
                 expected_etag: None,
                 action: PlannedAction::ZipEntry {
                     archive_index: 0,
@@ -1588,7 +1588,6 @@ mod tests {
         let manifest = DeploymentManifest::from([(
             "large.bin".to_string(),
             PlannedObject {
-                relative_key: "large.bin".to_string(),
                 expected_etag: None,
                 action: PlannedAction::ZipEntry {
                     archive_index: 0,
@@ -1613,7 +1612,6 @@ mod tests {
         manifest.insert(
             "large.bin".to_string(),
             PlannedObject {
-                relative_key: "large.bin".to_string(),
                 expected_etag: Some("abc123".to_string()),
                 action: PlannedAction::CopyObject {
                     source_index: 0,
@@ -2129,7 +2127,6 @@ mod tests {
         DeploymentManifest::from([(
             key.to_string(),
             PlannedObject {
-                relative_key: key.to_string(),
                 expected_etag: None,
                 action: PlannedAction::CopyObject {
                     source_index: 0,
