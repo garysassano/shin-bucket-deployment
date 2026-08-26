@@ -1,8 +1,8 @@
-import { createHash } from "node:crypto";
+import { type Hash, createHash } from "node:crypto";
 import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
-import { AssetHashType, AssetStaging, IgnoreStrategy } from "aws-cdk-lib";
+import { AssetHashType, IgnoreMode, IgnoreStrategy } from "aws-cdk-lib";
 import type { IBucket } from "aws-cdk-lib/aws-s3";
 import { Asset, type AssetOptions } from "aws-cdk-lib/aws-s3-assets";
 import {
@@ -23,6 +23,7 @@ const CATALOG_VERSION = 1;
 const CATALOG_MAX_BYTES = 64 * 1024 * 1024;
 const FILE_READ_BYTES = 64 * 1024;
 const TEMP_DIRECTORY_PREFIX = "shin-bucket-deployment-catalog-";
+const ASSET_HASH_SALT_CONTEXT_KEY = "@aws-cdk/core:assetHashSalt";
 const LINK_COPY_FALLBACK_ERRORS = new Set([
   "EACCES",
   "EMLINK",
@@ -34,23 +35,14 @@ const LINK_COPY_FALLBACK_ERRORS = new Set([
 ]);
 
 // CDK's `AssetStaging` keeps a process-global cache keyed by the staged source
-// path (plus hash options). Cataloged materialization must therefore stage at a
-// *deterministic* path per source directory, or every bind would miss that
-// cache and re-walk, re-hash, and re-copy the tree. The path is keyed by the
-// resolved source path and the options that change the materialized tree
-// (`exclude` / `ignoreMode`), and is scoped to this process so concurrent
-// processes (test workers, parallel synthesizers) cannot interleave wipes of
+// path and hash options. Cataloged materialization therefore uses a
+// deterministic path per source directory and a content-derived custom hash:
+// unchanged binds hit that exact cache entry, while changed binds get a new
+// entry without evicting unrelated assets. The path includes the resolved
+// source path and materialization options (`exclude` / `ignoreMode`), and is
+// scoped to this process so concurrent synthesizers cannot interleave wipes of
 // the same directory.
 const nextCatalogedAssetIds = new WeakMap<Construct, number>();
-
-// CDK's `AssetStaging` cache is keyed by staged path + options only, not by
-// content. The deterministic staging directory makes that cache hit across
-// binds of an unchanged tree (the TS-P1 win), but a tree that changed between
-// binds in one process would otherwise serve the previous bind's stale hash
-// and staged ZIP. The catalog SHA-256 covers every materialized byte, so a
-// change is detected by comparing it with the last bind's value; on change,
-// the process-global asset cache is dropped before staging.
-const lastCatalogShaByStagingDirectory = new Map<string, string>();
 
 interface CatalogedSourceFileSystem {
   readonly linkSync: typeof fs.linkSync;
@@ -135,11 +127,15 @@ export class Source {
    * Local directories include an authenticated `.shin/catalog.v1.json` by
    * default. Cataloged packaging requires CDK asset staging, rejects symlinks
    * and non-regular files, does not run CDK bundling, and changes the staged
-   * ZIP bytes compared with upstream packaging. Pass `embeddedCatalog:false`
-   * to delegate packaging to CDK when bundling or symlink handling is needed;
-   * that fallback remains deployable but cannot use trusted catalog skips.
-   * Local ZIP files always delegate to CDK and must come from a trusted
-   * producer.
+   * ZIP bytes compared with upstream packaging. By default Shin derives a
+   * collision-resistant custom asset identity during the catalog file read,
+   * avoiding a second content fingerprint pass. A caller-supplied `assetHash`
+   * remains supported with an omitted `assetHashType` or
+   * `AssetHashType.CUSTOM`; other hash modes are rejected for cataloged
+   * directories. Pass `embeddedCatalog:false` to delegate packaging and hash
+   * modes to CDK when bundling or symlink handling is needed; that fallback
+   * remains deployable but cannot use trusted catalog skips. Local ZIP files
+   * always delegate to CDK and must come from a trusted producer.
    *
    * @param path Path to a local directory or ZIP archive.
    * @param options Asset and authenticated-catalog options.
@@ -198,25 +194,23 @@ export class Source {
           );
         }
 
+        validateCatalogedDirectoryHashOptions(scope, options);
         const stagingDirectory = catalogedSourceStagingDirectory(sourcePath, options);
         // Wipe the previous materialization first so files removed or renamed in
         // the source tree cannot linger in the staged directory. The directory
         // itself is deliberately kept (it is the AssetStaging cache key); only
         // its contents are refreshed per bind.
         catalogedSourceFileSystem.rmSync(stagingDirectory, { recursive: true, force: true });
-        const materialized = materializeCatalogedDirectory(sourcePath, stagingDirectory, options);
-        const previousCatalogSha = lastCatalogShaByStagingDirectory.get(stagingDirectory);
-        if (previousCatalogSha !== undefined && previousCatalogSha !== materialized.catalogSha256) {
-          // The tree changed since the last bind of this staging directory;
-          // drop CDK's process-global asset cache so the Asset below cannot
-          // reuse the stale hash and staged ZIP.
-          AssetStaging.clearAssetHashCache();
-        }
-        lastCatalogShaByStagingDirectory.set(stagingDirectory, materialized.catalogSha256);
+        const materialized = materializeCatalogedDirectory(
+          sourcePath,
+          stagingDirectory,
+          options,
+          scope.node.tryGetContext(ASSET_HASH_SALT_CONTEXT_KEY),
+        );
         const asset = new Asset(scope, `CatalogedAsset${nextCatalogedAssetId(scope)}`, {
           path: materialized.directory,
-          assetHash: options?.assetHash,
-          assetHashType: options?.assetHashType,
+          assetHash: options?.assetHash ?? materialized.assetIdentity,
+          assetHashType: AssetHashType.CUSTOM,
           readers: options?.readers,
           deployTime: options?.deployTime,
           sourceKMSKey: options?.sourceKMSKey,
@@ -308,6 +302,7 @@ interface FileSnapshot {
 interface MaterializedDirectory {
   readonly directory: string;
   readonly catalogSha256: string;
+  readonly assetIdentity?: string;
   readonly snapshots: FileSnapshot[];
 }
 
@@ -327,10 +322,27 @@ function validateCatalogedOptions(scope: Construct, options?: CatalogedOptions):
       scope,
     );
   }
-  if (runtimeOptions?.assetHashType === AssetHashType.OUTPUT) {
+}
+
+function validateCatalogedDirectoryHashOptions(scope: Construct, options?: CatalogedOptions): void {
+  const runtimeOptions = options as AssetOptions | undefined;
+  if (
+    runtimeOptions?.assetHashType !== undefined &&
+    runtimeOptions.assetHashType !== AssetHashType.CUSTOM
+  ) {
     throw new ValidationError(
-      "ShinBucketDeploymentCatalogedSourceOutputHash",
-      "Cataloged Source.asset does not support AssetHashType.OUTPUT because cataloged assets are not bundled.",
+      "ShinBucketDeploymentCatalogedSourceHashType",
+      "Cataloged directory assets derive a collision-resistant custom identity; omit assetHashType, provide assetHash with AssetHashType.CUSTOM, or pass embeddedCatalog:false to use another CDK hash mode.",
+      scope,
+    );
+  }
+  if (
+    runtimeOptions?.assetHashType === AssetHashType.CUSTOM &&
+    runtimeOptions.assetHash === undefined
+  ) {
+    throw new ValidationError(
+      "ShinBucketDeploymentCatalogedSourceHashType",
+      "Cataloged Source.asset requires assetHash when assetHashType is AssetHashType.CUSTOM.",
       scope,
     );
   }
@@ -340,6 +352,7 @@ function materializeCatalogedDirectory(
   sourcePath: string,
   tempDir: string,
   options?: CatalogedOptions,
+  assetHashSalt?: unknown,
 ): MaterializedDirectory {
   const directory = join(tempDir, "asset");
   // The deterministic staging parent is kept across binds but wiped at the
@@ -355,6 +368,10 @@ function materializeCatalogedDirectory(
   const readBuffer = Buffer.allocUnsafe(FILE_READ_BYTES);
   const catalogEntries: CatalogEntry[] = [];
   const snapshots: FileSnapshot[] = [];
+  const assetIdentity =
+    options?.assetHash === undefined
+      ? createCatalogedAssetIdentity(options, assetHashSalt)
+      : undefined;
 
   for (const file of files) {
     const destinationPath = join(directory, ...file.catalogPath.split("/"));
@@ -362,7 +379,11 @@ function materializeCatalogedDirectory(
     const sourceBefore = requireRegularFile(file.absolutePath, "source");
     materializeFile(file.absolutePath, destinationPath);
     const materializedBefore = requireRegularFile(destinationPath, "materialized");
-    const { bytes, md5 } = hashFile(destinationPath, readBuffer);
+    const { bytes, md5, sha256 } = hashFile(
+      destinationPath,
+      readBuffer,
+      assetIdentity !== undefined,
+    );
     const sourceAfter = requireRegularFile(file.absolutePath, "source");
     const materializedAfter = requireRegularFile(destinationPath, "materialized");
 
@@ -379,6 +400,9 @@ function materializeCatalogedDirectory(
       );
     }
 
+    if (assetIdentity !== undefined && sha256 !== undefined) {
+      updateCatalogedAssetIdentityFile(assetIdentity, file.catalogPath, bytes, sha256);
+    }
     catalogEntries.push({ path: file.catalogPath, size: Number(bytes), md5 });
     snapshots.push({
       sourcePath: file.absolutePath,
@@ -388,8 +412,13 @@ function materializeCatalogedDirectory(
     });
   }
 
-  const catalogSha256 = writeCatalog(directory, catalogEntries);
-  return { directory, catalogSha256, snapshots };
+  const catalogSha256 = writeCatalog(directory, catalogEntries, assetIdentity);
+  return {
+    directory,
+    catalogSha256,
+    assetIdentity: assetIdentity?.digest("hex"),
+    snapshots,
+  };
 }
 
 function collectAssetFiles(sourcePath: string, options?: CatalogedOptions): SourceFile[] {
@@ -480,8 +509,13 @@ function isLinkFallbackError(error: unknown): boolean {
   );
 }
 
-function hashFile(path: string, buffer: Buffer): { bytes: bigint; md5: string } {
+function hashFile(
+  path: string,
+  buffer: Buffer,
+  includeSha256: boolean,
+): { bytes: bigint; md5: string; sha256?: Buffer } {
   const md5 = createHash("md5");
+  const sha256 = includeSha256 ? createHash("sha256") : undefined;
   const fd = fs.openSync(path, fs.constants.O_RDONLY);
   let bytes = 0n;
   try {
@@ -490,16 +524,18 @@ function hashFile(path: string, buffer: Buffer): { bytes: bigint; md5: string } 
       if (read === 0) {
         break;
       }
-      md5.update(buffer.subarray(0, read));
+      const bytesRead = buffer.subarray(0, read);
+      md5.update(bytesRead);
+      sha256?.update(bytesRead);
       bytes += BigInt(read);
     }
   } finally {
     fs.closeSync(fd);
   }
-  return { bytes, md5: md5.digest("hex") };
+  return { bytes, md5: md5.digest("hex"), sha256: sha256?.digest() };
 }
 
-function writeCatalog(directory: string, entries: CatalogEntry[]): string {
+function writeCatalog(directory: string, entries: CatalogEntry[], assetIdentity?: Hash): string {
   const catalogDirectory = join(directory, ".shin");
   fs.mkdirSync(catalogDirectory, { recursive: true, mode: 0o700 });
   const catalogPath = join(directory, ...CATALOG_PATH.split("/"));
@@ -510,6 +546,7 @@ function writeCatalog(directory: string, entries: CatalogEntry[]): string {
   );
   const sha256 = createHash("sha256");
   let catalogBytes = 0;
+  assetIdentity?.update("catalog\0");
 
   const append = (value: string): void => {
     const bytes = Buffer.from(value, "utf8");
@@ -521,6 +558,7 @@ function writeCatalog(directory: string, entries: CatalogEntry[]): string {
       offset += fs.writeSync(fd, bytes, offset, bytes.length - offset);
     }
     sha256.update(bytes);
+    assetIdentity?.update(bytes);
     catalogBytes += bytes.length;
   };
 
@@ -538,6 +576,45 @@ function writeCatalog(directory: string, entries: CatalogEntry[]): string {
   }
 
   return sha256.digest("hex");
+}
+
+function createCatalogedAssetIdentity(options: CatalogedOptions | undefined, salt: unknown): Hash {
+  const identity = createHash("sha256");
+  identity.update("shin-bucket-deployment/cataloged-asset/v1\0");
+  updateLengthPrefixedIdentityBytes(
+    identity,
+    Buffer.from(
+      JSON.stringify({
+        catalogVersion: CATALOG_VERSION,
+        exclude: options?.exclude ?? [],
+        ignoreMode: options?.ignoreMode ?? IgnoreMode.GLOB,
+        assetHashSalt: salt ? String(salt) : null,
+      }),
+      "utf8",
+    ),
+  );
+  return identity;
+}
+
+function updateCatalogedAssetIdentityFile(
+  identity: Hash,
+  path: string,
+  bytes: bigint,
+  sha256: Buffer,
+): void {
+  identity.update("file\0");
+  updateLengthPrefixedIdentityBytes(identity, Buffer.from(path, "utf8"));
+  const size = Buffer.allocUnsafe(8);
+  size.writeBigUInt64BE(bytes);
+  identity.update(size);
+  identity.update(sha256);
+}
+
+function updateLengthPrefixedIdentityBytes(identity: Hash, bytes: Buffer): void {
+  const length = Buffer.allocUnsafe(8);
+  length.writeBigUInt64BE(BigInt(bytes.length));
+  identity.update(length);
+  identity.update(bytes);
 }
 
 function requireRegularFile(path: string, label: string): StableFileMetadata {
@@ -606,8 +683,8 @@ export function catalogedSourceStagingDirectory(
 ): string {
   const key = JSON.stringify({
     sourcePath,
-    exclude: [...(options?.exclude ?? [])].sort(),
-    ignoreMode: options?.ignoreMode,
+    exclude: options?.exclude ?? [],
+    ignoreMode: options?.ignoreMode ?? IgnoreMode.GLOB,
   });
   const digest = createHash("sha256").update(key).digest("hex").slice(0, 16);
   return join(tmpdir(), `${TEMP_DIRECTORY_PREFIX}${process.pid}-${digest}`);

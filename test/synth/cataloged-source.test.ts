@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   appendFileSync,
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -28,7 +29,7 @@ import { Template } from "aws-cdk-lib/assertions";
 import { Role, ServicePrincipal } from "aws-cdk-lib/aws-iam";
 import { Key } from "aws-cdk-lib/aws-kms";
 import { Bucket } from "aws-cdk-lib/aws-s3";
-import type { AssetOptions } from "aws-cdk-lib/aws-s3-assets";
+import { Asset, type AssetOptions } from "aws-cdk-lib/aws-s3-assets";
 import { afterEach, describe, expect, test } from "vitest";
 import { type CatalogedAssetOptions, ShinBucketDeployment, Source } from "../../src";
 import {
@@ -56,6 +57,7 @@ interface SynthesizedCatalog {
   readonly catalogDirectory: string;
   readonly catalog: string;
   readonly catalogSha256: string;
+  readonly assetHash: string;
   readonly manifestAsset: ManifestAsset;
 }
 
@@ -117,9 +119,10 @@ function synthesizeCatalog(
   sourceDirectory: string,
   options?: CatalogedAssetOptions,
   deploymentProps: Partial<ConstructorParameters<typeof ShinBucketDeployment>[2]> = {},
+  appContext?: Record<string, unknown>,
 ): SynthesizedCatalog {
   const outdir = tempDirectory("shin-catalog-out-");
-  const app = new App({ outdir });
+  const app = new App({ outdir, context: appContext });
   const stack = new Stack(app, "CatalogStack");
   const destinationBucket = new Bucket(stack, "Destination");
   new ShinBucketDeployment(stack, "Deploy", {
@@ -136,7 +139,7 @@ function synthesizeCatalog(
   const manifest = JSON.parse(
     readFileSync(join(assembly.directory, "CatalogStack.assets.json"), "utf8"),
   ) as { files?: Record<string, ManifestAsset> };
-  const manifestAsset = Object.values(manifest.files ?? {}).find((asset) => {
+  const manifestAssetEntry = Object.entries(manifest.files ?? {}).find(([, asset]) => {
     const path = asset.source?.path;
     return (
       asset.source?.packaging === "zip" &&
@@ -144,7 +147,8 @@ function synthesizeCatalog(
       existsSync(join(assembly.directory, path, ".shin", "catalog.v1.json"))
     );
   });
-  if (!manifestAsset?.source?.path) {
+  const [assetHash, manifestAsset] = manifestAssetEntry ?? [];
+  if (!assetHash || !manifestAsset?.source?.path) {
     throw new Error("Cataloged directory asset not found");
   }
   const catalogDirectory = join(assembly.directory, manifestAsset.source.path);
@@ -157,6 +161,7 @@ function synthesizeCatalog(
     catalogDirectory,
     catalog,
     catalogSha256: createHash("sha256").update(catalog).digest("hex"),
+    assetHash,
     manifestAsset,
   };
 }
@@ -233,6 +238,62 @@ describe("cataloged directory assets", () => {
     const changedPath = synthesizeCatalog(writeFixture({ "nested/file.txt": "one" })).catalogSha256;
 
     expect(new Set([content, changedContent, changedSize, changedPath])).toHaveLength(4);
+  });
+
+  test("derives a stable collision-resistant asset identity from content, paths, and options", () => {
+    const source = writeFixture({ "file.txt": "line one\n" });
+    const initial = synthesizeCatalog(source).assetHash;
+    expect(synthesizeCatalog(source).assetHash).toBe(initial);
+
+    writeFileSync(join(source, "file.txt"), "line one\r\n");
+    expect(synthesizeCatalog(source).assetHash).not.toBe(initial);
+
+    const changedPath = synthesizeCatalog(writeFixture({ "nested/file.txt": "line one\n" }));
+    expect(changedPath.assetHash).not.toBe(initial);
+
+    const exclusions = writeFixture({ "keep.txt": "keep", "drop.txt": "drop" });
+    const included = synthesizeCatalog(exclusions).assetHash;
+    const excluded = synthesizeCatalog(exclusions, { exclude: ["drop.txt"] }).assetHash;
+    expect(excluded).not.toBe(included);
+    writeFileSync(join(exclusions, "drop.txt"), "changed but still excluded");
+    expect(synthesizeCatalog(exclusions, { exclude: ["drop.txt"] }).assetHash).toBe(excluded);
+
+    const glob = synthesizeCatalog(exclusions, {
+      exclude: ["drop.txt"],
+      ignoreMode: IgnoreMode.GLOB,
+    }).assetHash;
+    const git = synthesizeCatalog(exclusions, {
+      exclude: ["drop.txt"],
+      ignoreMode: IgnoreMode.GIT,
+    }).assetHash;
+    expect(git).not.toBe(glob);
+
+    const salted = synthesizeCatalog(
+      source,
+      undefined,
+      {},
+      {
+        "@aws-cdk/core:assetHashSalt": "different application salt",
+      },
+    ).assetHash;
+    const unsalted = synthesizeCatalog(source).assetHash;
+    expect(salted).not.toBe(unsalted);
+    expect(
+      synthesizeCatalog(source, undefined, {}, { "@aws-cdk/core:assetHashSalt": "" }).assetHash,
+    ).toBe(unsalted);
+  });
+
+  test("keeps chmod-only changes out of the cataloged asset identity", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const source = writeFixture({ "file.txt": "same bytes" });
+    const file = join(source, "file.txt");
+    const before = synthesizeCatalog(source).assetHash;
+
+    chmodSync(file, 0o755);
+
+    expect(synthesizeCatalog(source).assetHash).toBe(before);
   });
 
   test("applies glob, Git, and Docker ignores once while always adding the generated catalog", () => {
@@ -411,10 +472,9 @@ describe("cataloged directory assets", () => {
     }
   });
 
-  test("re-fingerprints a tree changed between two binds in one app", () => {
-    // CDK's AssetStaging cache is keyed by staged path + options, so a
-    // same-path bind of changed content must drop the process-global cache or
-    // the second deployment would deploy the first tree's stale ZIP.
+  test("uses a new custom identity for a tree changed between two binds in one app", () => {
+    // The generated identity participates in CDK's cache key, so changed
+    // content gets a fresh staged ZIP without clearing unrelated cache entries.
     const source = writeFixture({ "index.html": "one" });
     const outdir = tempDirectory("shin-catalog-change-out-");
     const app = new App({ outdir });
@@ -450,6 +510,30 @@ describe("cataloged directory assets", () => {
     expect(secondHash).not.toBe(firstHash);
   });
 
+  test("does not evict an unrelated asset when a catalog source changes", () => {
+    const source = writeFixture({ "index.html": "one" });
+    const unrelated = writeFixture({ "unrelated.txt": "one" });
+    const outdir = tempDirectory("shin-catalog-cache-out-");
+    const app = new App({ outdir });
+    const stack = new Stack(app, "CatalogCacheStack");
+    const handlerRole = new Role(stack, "HandlerRole", {
+      assumedBy: new ServicePrincipal("lambda.amazonaws.com"),
+    });
+    const firstUnrelated = new Asset(stack, "UnrelatedOne", { path: unrelated });
+    const firstCatalog = Source.asset(source).bind(stack, { handlerRole });
+
+    writeFileSync(join(source, "index.html"), "two");
+    const secondCatalog = Source.asset(source).bind(stack, { handlerRole });
+    writeFileSync(join(unrelated, "unrelated.txt"), "two");
+    const secondUnrelated = new Asset(stack, "UnrelatedTwo", { path: unrelated });
+
+    expect(secondCatalog.zipObjectKey).not.toBe(firstCatalog.zipObjectKey);
+    // CDK assumes one source path is immutable during a synthesis process.
+    // Reusing the first hash after this deliberate probe proves Shin did not
+    // clear the process-global cache while updating the catalog source.
+    expect(secondUnrelated.assetHash).toBe(firstUnrelated.assetHash);
+  });
+
   test("derives one staging directory per source path and option set", () => {
     const source = writeFixture({ "index.html": "ok" });
     const other = writeFixture({ "index.html": "ok" });
@@ -458,6 +542,9 @@ describe("cataloged directory assets", () => {
     expect(first).toContain(SCRATCH_PREFIX);
     expect(catalogedSourceStagingDirectory(source)).toBe(first);
     expect(catalogedSourceStagingDirectory(source, { exclude: ["*.map"] })).not.toBe(first);
+    expect(catalogedSourceStagingDirectory(source, { exclude: ["*.map", "*.tmp"] })).not.toBe(
+      catalogedSourceStagingDirectory(source, { exclude: ["*.tmp", "*.map"] }),
+    );
     expect(catalogedSourceStagingDirectory(other)).not.toBe(first);
   });
 
@@ -537,8 +624,11 @@ describe("cataloged directory assets", () => {
     expect(() =>
       destination({ followSymlinks: SymlinkFollowMode.NEVER } as unknown as CatalogedAssetOptions),
     ).toThrow(/does not support followSymlinks/);
-    expect(() => destination({ assetHashType: AssetHashType.OUTPUT })).toThrow(
-      /does not support AssetHashType\.OUTPUT/,
+    for (const assetHashType of [AssetHashType.SOURCE, AssetHashType.OUTPUT]) {
+      expect(() => destination({ assetHashType })).toThrow(/collision-resistant custom identity/);
+    }
+    expect(() => destination({ assetHashType: AssetHashType.CUSTOM })).toThrow(
+      /requires assetHash/,
     );
   });
 
@@ -676,6 +766,19 @@ describe("cataloged directory assets", () => {
       }),
     );
     Template.fromStack(stack).resourceCountIs("AWS::IAM::Policy", 2);
+  });
+
+  test("accepts the upstream shorthand for a caller-controlled custom hash", () => {
+    const source = writeFixture({ "index.html": "ok" });
+    const explicitType = synthesizeCatalog(source, {
+      assetHash: "consumer-controlled-hash",
+      assetHashType: AssetHashType.CUSTOM,
+    });
+    const inferredType = synthesizeCatalog(source, {
+      assetHash: "consumer-controlled-hash",
+    });
+
+    expect(inferredType.assetHash).toBe(explicitType.assetHash);
   });
 });
 
