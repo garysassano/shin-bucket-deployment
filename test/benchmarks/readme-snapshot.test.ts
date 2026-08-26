@@ -14,6 +14,7 @@ import {
 import {
   type BenchmarkChartData,
   type BenchmarkSnapshotManifest,
+  type RenderedBenchmarkSnapshot,
   renderBenchmarkSnapshots,
   renderReadmeSnapshot,
   writeBenchmarkSnapshotManifest,
@@ -144,26 +145,30 @@ describe("README benchmark snapshots", () => {
   });
 
   it("replaces and merges manifest entries deterministically", () => {
-    const evidence = readBenchmarkEvidence(
-      join(__dirname, "..", "..", "benchmarks", "results.jsonl"),
-    );
-    const runId = "62f8ad5d-81d9-47a4-ab7e-a5ee35ad16ce";
-    const records = joinBenchmarkSamples(
-      selectBenchmarkRuns(evidence.runs, runId),
-      selectBenchmarkSamples(evidence.samples, runId),
-    );
-    const [first] = renderBenchmarkSnapshots(records, {
-      profile: "large-few",
-      memoryMb: 1024,
-      maxConcurrency: 32,
-      filenamePrefix: "ci-",
-    });
-    const [second] = renderBenchmarkSnapshots(records, {
-      profile: "tiny-many",
-      memoryMb: 2048,
-      maxConcurrency: 64,
-    });
-    if (first === undefined || second === undefined) throw new Error("Missing fixture snapshot");
+    const first: RenderedBenchmarkSnapshot = {
+      fileName: "ci-large-few-1024mib-32.svg",
+      svg: "<svg/>",
+      provenance: {
+        runId: "00000000-0000-4000-8000-000000000001",
+        profile: "large-few",
+        memoryMb: 1024,
+        transferMaxConcurrency: 32,
+        phases: ["cold-create"],
+        contentSha256: "1".repeat(64),
+      },
+    };
+    const second: RenderedBenchmarkSnapshot = {
+      fileName: "tiny-many-2048mib-64.svg",
+      svg: "<svg/>",
+      provenance: {
+        runId: "00000000-0000-4000-8000-000000000002",
+        profile: "tiny-many",
+        memoryMb: 2048,
+        transferMaxConcurrency: 64,
+        phases: ["cold-create", "unchanged-update"],
+        contentSha256: "2".repeat(64),
+      },
+    };
     const manifestFile = join(scratchRoot, "writer-manifest.json");
 
     writeBenchmarkSnapshotManifest(manifestFile, [second], "replace");

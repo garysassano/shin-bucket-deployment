@@ -288,6 +288,19 @@ const DELETE_COLUMNS: Array<Column<TelemetryRow>> = [
     header: "NoSuchBucket requested identifiers",
     value: (row) => nested(row, "deleteObject", "noSuchBucketRequestedIdentifiers"),
   },
+  { header: "Retry attempts", value: (row) => nested(row, "deleteObject", "retryAttempts") },
+  {
+    header: "Throttled attempts",
+    value: (row) => nested(row, "deleteObject", "throttledAttempts"),
+  },
+  {
+    header: "Throttle cooldown waits",
+    value: (row) => nested(row, "deleteObject", "throttleCooldownWaits"),
+  },
+  {
+    header: "Throttle cooldown ms",
+    value: (row) => nested(row, "deleteObject", "throttleCooldownWaitMs"),
+  },
 ];
 
 const CALLBACK_COLUMNS: Array<Column<TelemetryRow>> = [

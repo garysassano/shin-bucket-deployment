@@ -485,6 +485,44 @@ describe("benchmark result collector", () => {
     expect(providerSummaryErrors(summary)).toEqual([]);
   });
 
+  test("accepts strict current-schema DeleteObjects retry diagnostics", () => {
+    const summary = summaryFixture();
+    Object.assign(summary.deleteObject, {
+      sdkCalls: 2,
+      failedCalls: 1,
+      requestedObjects: 2,
+      inferredDeletedObjects: 1,
+      unconfirmedObjects: 1,
+      retryAttempts: 1,
+      throttledAttempts: 1,
+      throttleCooldownWaits: 1,
+      throttleCooldownWaitMs: 25,
+    });
+
+    expect(sanitizeProviderSummary(summary)).toEqual(summary);
+    expect(providerSummaryErrors(summary)).toEqual([]);
+  });
+
+  test("rejects internally impossible current-schema DeleteObjects retry diagnostics", () => {
+    const moreRetriesThanCalls = summaryFixture();
+    moreRetriesThanCalls.deleteObject.retryAttempts = 1;
+    expect(providerSummaryErrors(moreRetriesThanCalls).join("; ")).toContain(
+      "DeleteObjects retryAttempts exceeds sdkCalls",
+    );
+
+    const moreThrottlesThanRetries = summaryFixture();
+    moreThrottlesThanRetries.deleteObject.throttledAttempts = 1;
+    expect(providerSummaryErrors(moreThrottlesThanRetries).join("; ")).toContain(
+      "DeleteObjects throttledAttempts exceeds retryAttempts",
+    );
+
+    const moreCooldownsThanThrottles = summaryFixture();
+    moreCooldownsThanThrottles.deleteObject.throttleCooldownWaits = 1;
+    expect(providerSummaryErrors(moreCooldownsThanThrottles).join("; ")).toContain(
+      "DeleteObjects throttleCooldownWaits exceeds throttledAttempts",
+    );
+  });
+
   test("requires an exact current-schema copyObject section", () => {
     const missing = summaryFixture();
     delete (missing.copyObject as Partial<typeof missing.copyObject>).retryAttempts;
@@ -953,6 +991,10 @@ function summaryBaseFixture() {
       "inferredDeletedObjects",
       "unconfirmedObjects",
       "noSuchBucketRequestedIdentifiers",
+      "retryAttempts",
+      "throttledAttempts",
+      "throttleCooldownWaits",
+      "throttleCooldownWaitMs",
     ]),
     callback: {
       wireAttempts: 1,
