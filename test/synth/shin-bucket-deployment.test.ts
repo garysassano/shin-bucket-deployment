@@ -21,7 +21,11 @@ import {
   ShinBucketDeployment,
   Source,
 } from "../../src";
-import { validateDestinationEncryption } from "../../src/destination";
+import {
+  destinationVersioningWarnings,
+  inspectDestinationBucket,
+  validateDestinationEncryption,
+} from "../../src/destination";
 import { renderHandlerConfigHashInput } from "../../src/provider";
 import { stableStringify } from "../../src/stable-json";
 import { testLocalProviderBuild } from "../support/bundling";
@@ -1064,12 +1068,35 @@ test("preserves the original failure when CDK rendering throws", () => {
   // would hit the broken method first and raise its own error.
   let thrown: unknown;
   try {
-    validateDestinationEncryption(stack, resource);
+    inspectDestinationBucket(stack, resource);
   } catch (error) {
     thrown = error;
   }
   expect(thrown).toMatchObject({ code: "ShinBucketDeploymentCdkRenderingUnsupported" });
   expect((thrown as { cause?: unknown }).cause).toBe(cause);
+});
+
+test("shares one explicit destination render across inspection consumers", () => {
+  const stack = new Stack();
+  const destinationBucket = new Bucket(stack, "Dest", {
+    encryption: BucketEncryption.S3_MANAGED,
+    versioned: true,
+  });
+  const resource = destinationBucket.node.defaultChild;
+  if (!CfnBucket.isCfnBucket(resource)) {
+    throw new Error("expected destination CfnBucket");
+  }
+  const originalRender = resource._toCloudFormation.bind(resource);
+  let renderCount = 0;
+  (resource as unknown as Record<string, unknown>)._toCloudFormation = () => {
+    renderCount += 1;
+    return originalRender();
+  };
+
+  const inspection = inspectDestinationBucket(stack, resource);
+  validateDestinationEncryption(stack, inspection);
+  expect(destinationVersioningWarnings(inspection)).toHaveLength(1);
+  expect(renderCount).toBe(1);
 });
 
 // A retyped resource is something a consumer can do with the public `addOverride`,
@@ -1662,6 +1689,27 @@ test("addSource skips binding for a source object already in the deployment", ()
   // the re-added duplicate was skipped before binding, so no third source ZIP
   // was created or staged.
   expect(customResource?.Properties?.SourceObjectKeys).toHaveLength(2);
+});
+
+test("constructor and incremental source binding synthesize the same template", () => {
+  const synthesize = (incremental: boolean): Record<string, unknown> => {
+    const app = new App();
+    const stack = new Stack(app, "Stack");
+    const destinationBucket = new Bucket(stack, "Dest");
+    const first = Source.data("first.txt", "first");
+    const second = Source.data("second.txt", "second");
+    const deployment = new ShinBucketDeployment(stack, "Deploy", {
+      sources: incremental ? [first] : [first, second],
+      destination: { bucket: destinationBucket },
+      providerLambda: { localBuild: testLocalProviderBuild() },
+    });
+    if (incremental) {
+      deployment.addSource(second);
+    }
+    return Template.fromStack(stack).toJSON() as Record<string, unknown>;
+  };
+
+  expect(synthesize(true)).toEqual(synthesize(false));
 });
 
 test("addSource skips binding for a source object already passed in sources", () => {

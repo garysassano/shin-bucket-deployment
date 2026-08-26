@@ -34,7 +34,7 @@ export function inspectableDestinationBucketResource(scope: Construct, bucket: B
  * still change this method and its internal caller together, which would break
  * this direct call while CDK kept working.
  */
-function renderedBucketResource(
+export function inspectDestinationBucket(
   scope: Construct,
   bucketResource: CfnBucket,
 ): Record<string, unknown> {
@@ -77,8 +77,10 @@ function renderedBucketResource(
  * outcome. SSE-S3 is on by default on every S3 bucket, so this costs nothing to
  * satisfy.
  */
-export function validateDestinationEncryption(scope: Construct, bucketResource: CfnBucket): void {
-  const resource = renderedBucketResource(scope, bucketResource);
+export function validateDestinationEncryption(
+  scope: Construct,
+  resource: Record<string, unknown>,
+): void {
   // A consumer can publicly retype the resource with `addOverride("Type", ...)`,
   // so this is a bucket-configuration problem rather than CDK contract drift.
   if (resource.Type !== "AWS::S3::Bucket") {
@@ -118,16 +120,13 @@ export function validateDestinationEncryption(scope: Construct, bucketResource: 
  * enabled, where deletion only adds delete markers and stale content persists
  * as noncurrent versions (cost and surprise).
  *
- * Reads the rendered resource like {@link validateDestinationEncryption} so an
- * escape-hatch `VersioningConfiguration` override is seen too. The warning is
- * a warning, not an error: versioned destinations deploy and update correctly;
- * only the cleanup outcome is weaker than the lifecycle options imply.
+ * Reads the same inspected resource as {@link validateDestinationEncryption} so
+ * an escape-hatch `VersioningConfiguration` override is seen too. The warning
+ * is a warning, not an error: versioned destinations deploy and update
+ * correctly; only the cleanup outcome is weaker than the lifecycle options
+ * imply.
  */
-export function destinationVersioningWarnings(
-  scope: Construct,
-  bucketResource: CfnBucket,
-): string[] {
-  const resource = renderedBucketResource(scope, bucketResource);
+export function destinationVersioningWarnings(resource: Record<string, unknown>): string[] {
   if (resource.Type !== "AWS::S3::Bucket") {
     return [];
   }
