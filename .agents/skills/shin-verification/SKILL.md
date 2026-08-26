@@ -85,12 +85,12 @@ Do not include benchmark configs in correctness verification unless the task is 
 
 ## AWS End-To-End Verification
 
-> **Any change under `rust/` requires `pnpm prebuild:bootstrap` before `pnpm verify deploy`.**
+> **Any change under `rust/` requires `pnpm build:bootstrap` before `pnpm verify deploy`.**
 >
 > The construct prefers a prebuilt provider archive (`assets/bootstrap-<arch>/bootstrap.zip`) and only compiles the Rust provider when no archive exists (`src/provider.ts`).
-> `pnpm verify` does not rebuild that archive — only `pnpm prebuild:bootstrap` does — and a stale archive is selected silently, with no freshness warning.
+> `pnpm verify` does not rebuild that archive — only `pnpm build:bootstrap` does — and a stale archive is selected silently, with no freshness warning.
 > Deploying after a `rust/` change without rebuilding therefore runs the previous provider binary: on the PR-B run every stack failed with `unknown field CloudfrontInvalidation, expected one of …`, which looked like a provider bug when it was actually a build that predated the new wire schema.
-> Run `pnpm prebuild:bootstrap` (it stages both arm64 and x86_64 archives) after any `rust/` change, before the first `pnpm verify deploy` of a session.
+> Run `pnpm build:bootstrap` (it stages both arm64 and x86_64 archives) after any `rust/` change, before the first `pnpm verify deploy` of a session.
 >
 > Since F-7, `pnpm verify deploy` refuses to start when a staged archive's
 > `build-provenance.json` does not match the current provider build recipe —

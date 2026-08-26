@@ -483,7 +483,7 @@ describe("scenario executor", () => {
     const gatedArchitectures: string[][] = [];
     const expected =
       "Refusing to deploy a stale prebuilt provider bootstrap (arm64).\n" +
-      "Run `pnpm prebuild:bootstrap`";
+      "Run `pnpm build:bootstrap`";
 
     const status = await executeScenarioPlan(
       { concurrency: 1, groups: [{ runs: [verifiedRun("stale")] }] },
@@ -493,7 +493,7 @@ describe("scenario executor", () => {
           gatedArchitectures.push([...architectures]);
           throw new Error(
             "Refusing to deploy a stale prebuilt provider bootstrap (arm64).\n" +
-              "Run `pnpm prebuild:bootstrap` to rebuild the staged archives.",
+              "Run `pnpm build:bootstrap` to rebuild the staged archives.",
           );
         },
         pathExists: () => true,
@@ -666,7 +666,7 @@ describe("scenario executor", () => {
     expect(logs.join("\n")).toContain(
       "Refusing to deploy a stale prebuilt provider bootstrap (x86_64)",
     );
-    expect(logs.join("\n")).toContain("Run `pnpm prebuild:bootstrap`");
+    expect(logs.join("\n")).toContain("Run `pnpm build:bootstrap`");
   });
 
   it("logs a visible notice when every deploy run declares no prebuilt architecture", async () => {
