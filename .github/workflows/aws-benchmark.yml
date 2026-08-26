@@ -432,6 +432,18 @@ jobs:
             --input-file "$RESULTS_FILE" \
             --output-directory benchmarks/snapshots \
             --filename-prefix ci- \
+            --manifest-file benchmarks/snapshots/manifest.json \
+            --manifest-mode replace \
+            --run-id "${{ inputs.run_id }}" \
+            --scratch-root "$SCRATCH_ROOT"
+          node dist/benchmarks/src/render/readme-snapshot.js \
+            --config benchmarks/configs/readme-snapshots.json \
+            --input-file "$RESULTS_FILE" \
+            --output-directory benchmarks/snapshots \
+            --lambda-memory-mb 2048 \
+            --transfer-max-concurrency 64 \
+            --manifest-file benchmarks/snapshots/manifest.json \
+            --manifest-mode merge \
             --run-id "${{ inputs.run_id }}" \
             --scratch-root "$SCRATCH_ROOT"
 
@@ -448,6 +460,9 @@ jobs:
       - name: Format generated markdown
         run: pnpm exec prettier --write benchmarks/ci-report.md benchmarks/ci-telemetry.md benchmarks/README.md docs/benchmark.md
 
+      - name: Verify published benchmark snapshots
+        run: pnpm exec vitest run test/benchmarks/readme-snapshot.test.ts test/benchmarks/assets.test.ts
+
       - name: Validate publication diff
         run: |
           test -s benchmarks/ci-report.md
@@ -459,6 +474,10 @@ jobs:
           test -s benchmarks/snapshots/ci-mixed-2048mib-64.svg
           test -s benchmarks/snapshots/ci-tiny-many-1024mib-32.svg
           test -s benchmarks/snapshots/ci-tiny-many-2048mib-64.svg
+          test -s benchmarks/snapshots/large-few-2048mib-64.svg
+          test -s benchmarks/snapshots/mixed-2048mib-64.svg
+          test -s benchmarks/snapshots/tiny-many-2048mib-64.svg
+          test -s benchmarks/snapshots/manifest.json
           git add \
             benchmarks/results.jsonl \
             benchmarks/runs.jsonl \
@@ -470,11 +489,15 @@ jobs:
             benchmarks/snapshots/ci-mixed-2048mib-64.svg \
             benchmarks/snapshots/ci-tiny-many-1024mib-32.svg \
             benchmarks/snapshots/ci-tiny-many-2048mib-64.svg \
+            benchmarks/snapshots/large-few-2048mib-64.svg \
+            benchmarks/snapshots/mixed-2048mib-64.svg \
+            benchmarks/snapshots/tiny-many-2048mib-64.svg \
+            benchmarks/snapshots/manifest.json \
             benchmarks/README.md \
             docs/benchmark.md
           git diff --cached --check
           git diff --check
-          unexpected="$(git status --porcelain --untracked-files=all | sed -E 's/^.. //;' | rg -v '^(benchmarks/results\.jsonl|benchmarks/runs\.jsonl|benchmarks/ci-report\.md|benchmarks/ci-telemetry\.md|benchmarks/snapshots/ci-(large-few|mixed|tiny-many)-(1024mib-32|2048mib-64)\.svg|benchmarks/README\.md|docs/benchmark\.md)$' || true)"
+          unexpected="$(git status --porcelain --untracked-files=all | sed -E 's/^.. //;' | rg -v '^(benchmarks/results\.jsonl|benchmarks/runs\.jsonl|benchmarks/ci-report\.md|benchmarks/ci-telemetry\.md|benchmarks/snapshots/(ci-(large-few|mixed|tiny-many)-(1024mib-32|2048mib-64)|(large-few|mixed|tiny-many)-2048mib-64)\.svg|benchmarks/snapshots/manifest\.json|benchmarks/README\.md|docs/benchmark\.md)$' || true)"
           test -z "$unexpected"
 
       - name: Commit and push benchmark publication
