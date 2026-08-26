@@ -24,6 +24,7 @@ import { Construct } from "constructs";
 import { DEFAULT_MAX_COMPRESSION_RATIO, DEFAULT_MAX_UNCOMPRESSED_ENTRY_BYTES } from "./defaults";
 import {
   destinationVersioningWarnings,
+  inspectDestinationBucket,
   inspectableDestinationBucketResource,
   validateDestinationEncryption,
 } from "./destination";
@@ -1092,12 +1093,8 @@ export class ShinBucketDeployment extends Construct {
     // Track the original source objects as they are bound, so an identical source
     // object is never bound twice: binding materializes catalogs and creates `Asset`
     // constructs, and a duplicate later dropped by the config-equality dedup would
-    // leave an orphan staged asset behind.
-    //
-    // The constructor applies the same two stages as `addSource` -- skip a repeated
-    // source object before binding, then drop a bound config equal to one already
-    // held. Previously it applied neither, so `sources: [a, a]` bound twice and sent
-    // two identical entries while `addSource(a)` twice sent one.
+    // leave an orphan staged asset behind. Constructor and incremental sources share
+    // `addSource` so both paths retain the same binding and deduplication behavior.
     //
     // Two *distinct* objects that bind to equal configs still stage an asset before
     // the equality check can see them; config equality is only knowable after
@@ -1105,14 +1102,7 @@ export class ShinBucketDeployment extends Construct {
     this.boundSources = [];
     this.sources = [];
     for (const source of props.sources) {
-      if (this.boundSources.includes(source)) {
-        continue;
-      }
-      const config = source.bind(this, { handlerRole: this.handlerRole });
-      this.boundSources.push(source);
-      if (!this.sources.some((held) => sourceConfigEqual(Stack.of(this), held, config))) {
-        this.sources.push(config);
-      }
+      this.addSource(source);
     }
 
     const providerPolicyDependables = grantDestinationPermissions(this, this.handlerFunction, {
@@ -1292,8 +1282,9 @@ export class ShinBucketDeployment extends Construct {
     // and only the rendered resource reflects it.
     this.node.addValidation({
       validate: () => {
-        validateDestinationEncryption(this, destinationBucketResource);
-        for (const warning of destinationVersioningWarnings(this, destinationBucketResource)) {
+        const destinationInspection = inspectDestinationBucket(this, destinationBucketResource);
+        validateDestinationEncryption(this, destinationInspection);
+        for (const warning of destinationVersioningWarnings(destinationInspection)) {
           Validations.of(this).addWarning("ShinBucketDeploymentVersionedDestination", warning);
         }
         return [];
