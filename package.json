@@ -85,6 +85,7 @@
     "benchmark": "pnpm build && node dist/scenarios/runner.js benchmark",
     "benchmark:config-schema": "pnpm build && node scripts/generate-benchmark-config-schema.mjs",
     "benchmark:collect": "pnpm build && node dist/benchmarks/src/collect-results.js",
+    "benchmark:catalog-synth": "pnpm build && node scripts/benchmark-catalog-synthesis.mjs",
     "benchmark:comparison-report": "pnpm build && node dist/benchmarks/src/render/comparison-report.js",
     "benchmark:publish-results": "pnpm build && node dist/benchmarks/src/publish-results.js",
     "benchmark:telemetry-table": "pnpm build && node dist/benchmarks/src/render/telemetry-table.js",
