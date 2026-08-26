@@ -62,6 +62,23 @@ The [complete generated report](../benchmarks/ci-report.md) includes quartiles, 
 
 <!-- benchmark-ci:end -->
 
+## Local catalog synthesis
+
+The repeatable `pnpm benchmark:catalog-synth` harness measures synthesis-time directory asset preparation without AWS. It generates the canonical `large-few` input (144,167,470 bytes across 32 files) and `tiny-many` input (8,178,618 bytes across 2,584 files), applies one exclusion to each (`assets/maps/**` and `assets/css/**` respectively), stages one unrelated asset, warms each profile/implementation pair once, alternates Shin/upstream order, and records five measured child processes per pair. Wall time covers unrelated asset construction, source binding, and `app.synth()`. On Linux, process `rchar` from `/proc/self/io` records bytes returned by reads, including cache-served reads rather than only physical storage I/O; peak RSS comes from Node process resource usage.
+
+The accepted 2026-08-26 comparison used Node.js 24.19.0 and `aws-cdk-lib` 2.260.0 on clean commits. `94bf295` is the measured baseline with the harness but before the implementation; `e7f9d98` is the candidate. Upstream AWS CDK `Source.asset` was measured in both runs to expose run-to-run drift. Values are medians of five repetitions.
+
+| Profile     | Metric                | Baseline Shin | Candidate Shin | Shin delta | Upstream, baseline / candidate |
+| ----------- | --------------------- | ------------: | -------------: | ---------: | -----------------------------: |
+| `large-few` | wall time             |      394.9 ms |       337.1 ms |     -14.6% |               147.3 / 146.0 ms |
+| `large-few` | Linux process `rchar` |     370.92 MB |      247.86 MB |     -33.2% |             124.80 / 124.80 MB |
+| `large-few` | peak RSS              |    129.77 MiB |     125.00 MiB |      -3.7% |            129.77 / 125.00 MiB |
+| `tiny-many` | wall time             |      717.1 ms |       675.8 ms |      -5.8% |               446.7 / 436.4 ms |
+| `tiny-many` | Linux process `rchar` |      25.64 MB |       17.59 MB |     -31.4% |                 9.80 / 9.79 MB |
+| `tiny-many` | peak RSS              |    150.78 MiB |     133.64 MiB |     -11.4% |            129.77 / 127.98 MiB |
+
+The read-byte reduction is approximately one included-tree pass in both profiles: Shin now computes the catalog MD5 and collision-resistant asset SHA-256 during the same file read and no longer asks CDK to source-fingerprint the materialized tree. CDK still performs its staging copy, so this is not a zero-copy path. The cache probe changed from `catalogIdentityChanged=true, unrelatedCacheRetained=false` on the baseline to both values `true` on the candidate, proving changed catalog content gets a fresh asset identity without the previous process-global cache clear. Upstream remains faster because it does not generate or authenticate Shin's catalog and does not perform Shin's materialization and stability checks; this change removes the redundant fingerprint work rather than that required feature cost.
+
 ## Exploratory sweep: large-few memory scaling to 10240 MiB
 
 Collected 2026-08-13 from source commit `fe19000` (provider `fe19000`) as a one-repetition Shin-only sweep of the `large-few` profile at 2048 MiB / 64, 4096 MiB / 128, and 10240 MiB / 128 in `eu-central-1`. Sanitized run UUID `d6932e4a-0459-4c1a-bfbd-4a7cfaf55d32`; cleanup `destroyed`. This probes whether the 10240 MiB tier (and the account's 3000 Mbps network-bandwidth quota) changes the transfer shape.

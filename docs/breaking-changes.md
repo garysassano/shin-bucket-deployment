@@ -4,6 +4,16 @@ This file holds release-note text for `ShinBucketDeployment` changes that break 
 
 ## Unreleased
 
+### Default cataloged directory asset identities change once
+
+Cataloged local directories now derive a collision-resistant custom asset identity while Shin reads each file to generate `.shin/catalog.v1.json`. The identity binds normalized paths, byte lengths, per-file SHA-256 digests, exact catalog bytes, and identity-affecting options, removing the separate CDK source-fingerprint pass without relying on the catalog's MD5 values for collision resistance.
+
+Affected: `Source.asset(directory)` with the default `embeddedCatalog:true` behavior and no caller-supplied `assetHash`. On the first synthesis and deployment after upgrading, an unchanged directory receives a new source asset hash and S3 asset key, so CDK publishes that ZIP once under the new key. The deployment custom resource keeps the same logical ID, destination owner, bucket, and prefix, so its destination-derived physical resource ID is unchanged and CloudFormation sends an in-place Update. Destination objects remain in the same namespace and ownership domain; the provider's normal comparison decides whether any object content needs uploading.
+
+Unaffected: an explicit custom `assetHash`, `embeddedCatalog:false`, local ZIP files, `Source.bucket`, and other upstream `ISource` implementations.
+
+Cataloged directories now reject caller-supplied `AssetHashType.SOURCE` and `AssetHashType.OUTPUT`. Omit `assetHashType` to use Shin's generated identity, provide `assetHash` with an omitted type or `AssetHashType.CUSTOM` to retain a caller-controlled identity, or pass `embeddedCatalog:false` to use another CDK hash mode. A caller-controlled hash must still change whenever its content changes.
+
 ### Handler-identity key ordering no longer depends on the runtime's ICU collation
 
 Object keys in the shared-handler identity hash are now ordered by UTF-16 code unit instead of by `localeCompare`. The previous form made a value that decides custom-resource identity depend on the Node build's ICU collation, so the same configuration could hash differently on different runtimes.
