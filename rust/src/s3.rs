@@ -16,6 +16,7 @@ pub mod bench_internals;
 mod content_type;
 mod destination;
 mod planner;
+mod retry;
 mod transfer;
 
 pub(crate) use destination::{

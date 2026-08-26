@@ -1,6 +1,5 @@
 use std::io;
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use aws_sdk_s3::Client;
@@ -10,6 +9,10 @@ use aws_sdk_s3::operation::get_object::GetObjectError;
 use bytes::Bytes;
 
 use crate::state::AppState;
+
+use super::retry::{
+    capped_exponential_backoff_millis, full_jitter_delay, is_retryable_http_status,
+};
 
 pub(super) mod block_store;
 pub(super) mod budget;
@@ -303,18 +306,12 @@ fn range_get_request_error(error: SdkError<GetObjectError>) -> RangeGetError {
                 .err()
                 .code()
                 .is_some_and(crate::util::is_throttle_error_code);
-            (
-                status == 408 || status == 429 || status >= 500 || throttled,
-                throttled,
-            )
+            (is_retryable_http_status(status) || throttled, throttled)
         }
         SdkError::TimeoutError(_) | SdkError::DispatchFailure(_) => (true, false),
         SdkError::ResponseError(response) => {
             let status = response.raw().status().as_u16();
-            (
-                status == 408 || status == 429 || status >= 500,
-                status == 429,
-            )
+            (is_retryable_http_status(status), status == 429)
         }
         SdkError::ConstructionFailure(_) => (false, false),
         _ => (false, false),
@@ -341,20 +338,15 @@ fn source_get_retry_cap_millis(attempt: usize, throttled: bool) -> u64 {
             SOURCE_GET_RETRY_MAX_DELAY_MS,
         )
     };
-    let shift = u32::try_from(attempt.saturating_sub(1)).unwrap_or(u32::MAX);
-    let multiplier = 1_u64.checked_shl(shift).unwrap_or(u64::MAX);
-    base.saturating_mul(multiplier).min(max)
+    capped_exponential_backoff_millis(attempt, base, max)
 }
 
-/// Full jitter: sample uniformly from `0..=cap` so concurrent readers spread out
-/// instead of retrying together. `jitter` is supplied by the caller so the delay
-/// computation stays a pure function and can be tested without timing races.
-fn source_get_retry_delay(attempt: usize, throttled: bool, jitter: u64) -> Duration {
+/// Full jitter: map a random sample into `0..=cap` so concurrent readers spread
+/// out instead of retrying together. `jitter` is supplied by the caller so the
+/// delay computation stays a pure function and can be tested without timing races.
+fn source_get_retry_delay(attempt: usize, throttled: bool, jitter: u64) -> std::time::Duration {
     let cap_millis = source_get_retry_cap_millis(attempt, throttled);
-    if cap_millis == 0 {
-        return Duration::ZERO;
-    }
-    Duration::from_millis(jitter % cap_millis.saturating_add(1))
+    full_jitter_delay(cap_millis, jitter)
 }
 
 #[cfg(test)]

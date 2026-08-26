@@ -18,6 +18,10 @@ use crate::diagnostics::{
 use crate::util::{MAX_DIAGNOSTIC_VALUE_BYTES, duration_ms, lock_telemetry, sanitize_diagnostic};
 
 use super::super::archive::SourceClient;
+use super::super::retry::{
+    capped_exponential_backoff_millis, full_jitter_delay, is_retryable_http_status,
+    retry_wake_before_deadline,
+};
 use super::upload::UploadPayload;
 
 pub(super) struct WriteDiagnostics {
@@ -105,18 +109,14 @@ pub(super) fn write_retry_cap_millis(
     retry: &PutObjectRetryOptions,
 ) -> u64 {
     let (base, max) = write_retry_delay_bounds(throttled, retry);
-    let shift = u32::try_from(attempt.saturating_sub(1)).unwrap_or(u32::MAX);
-    let multiplier = 1_u64.checked_shl(shift).unwrap_or(u64::MAX);
-    base.saturating_mul(multiplier).min(max)
+    capped_exponential_backoff_millis(attempt, base, max)
 }
 
 pub(super) fn is_retryable_write_error<E: ProvideErrorMetadata>(error: &SdkError<E>) -> bool {
     match error {
         SdkError::ServiceError(service) => {
             let status = service.raw().status().as_u16();
-            status == 408
-                || status == 429
-                || status >= 500
+            is_retryable_http_status(status)
                 || service.err().code().is_some_and(|code| {
                     crate::util::is_throttle_error_code(code)
                         || matches!(
@@ -128,7 +128,7 @@ pub(super) fn is_retryable_write_error<E: ProvideErrorMetadata>(error: &SdkError
         SdkError::TimeoutError(_) | SdkError::DispatchFailure(_) => true,
         SdkError::ResponseError(response) => {
             let status = response.raw().status().as_u16();
-            status == 408 || status == 429 || status >= 500
+            is_retryable_http_status(status)
         }
         SdkError::ConstructionFailure(_) => false,
         _ => false,
@@ -146,13 +146,6 @@ fn write_retry_delay_bounds(throttled: bool, retry: &PutObjectRetryOptions) -> (
     }
 }
 
-fn full_jitter_delay(cap_millis: u64, jitter: u64) -> Duration {
-    if cap_millis == 0 {
-        return Duration::ZERO;
-    }
-    Duration::from_millis(jitter % cap_millis.saturating_add(1))
-}
-
 pub(super) async fn wait_for_write_retry_before_deadline(
     coordinator: &WriteRetryCoordinator,
     diagnostics: &WriteDiagnostics,
@@ -168,13 +161,9 @@ pub(super) async fn wait_for_write_retry_before_deadline(
             .wait_for_throttle_cooldown_before_deadline(diagnostics, work_deadline)
             .await
     } else {
-        let now = Instant::now();
-        let Some(wake) = now.checked_add(delay) else {
+        let Some(wake) = retry_wake_before_deadline(Instant::now(), delay, work_deadline) else {
             return false;
         };
-        if wake >= work_deadline {
-            return false;
-        }
         sleep_until(wake).await;
         diagnostics
             .retry_wait_millis

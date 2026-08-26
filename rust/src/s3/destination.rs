@@ -20,6 +20,11 @@ use crate::namespace::{key_is_excluded, namespace_list_prefix, read_bucket_owner
 use crate::request::strip_destination_prefix;
 use crate::state::AppState;
 
+use super::retry::{
+    capped_exponential_backoff_millis, full_jitter_delay, is_retryable_http_status,
+    retry_wake_before_deadline,
+};
+
 const MAX_RETAINED_DELETION_KEY_BYTES: usize = 4 * 1024 * 1024;
 
 pub(super) struct DestinationPlan {
@@ -917,9 +922,7 @@ fn is_retryable_delete_error<E: ProvideErrorMetadata>(error: &SdkError<E>) -> bo
     match error {
         SdkError::ServiceError(service) => {
             let status = service.raw().status().as_u16();
-            status == 408
-                || status == 429
-                || status >= 500
+            is_retryable_http_status(status)
                 || service
                     .err()
                     .code()
@@ -928,7 +931,7 @@ fn is_retryable_delete_error<E: ProvideErrorMetadata>(error: &SdkError<E>) -> bo
         SdkError::TimeoutError(_) | SdkError::DispatchFailure(_) => true,
         SdkError::ResponseError(response) => {
             let status = response.raw().status().as_u16();
-            status == 408 || status == 429 || status >= 500
+            is_retryable_http_status(status)
         }
         SdkError::ConstructionFailure(_) => false,
         _ => false,
@@ -944,9 +947,7 @@ fn delete_retry_cap_millis(attempt: usize, throttled: bool, retry: &PutObjectRet
     } else {
         (retry.retry_base_delay_ms, retry.retry_max_delay_ms)
     };
-    let shift = u32::try_from(attempt.saturating_sub(1)).unwrap_or(u32::MAX);
-    base.saturating_mul(1_u64.checked_shl(shift).unwrap_or(u64::MAX))
-        .min(max)
+    capped_exponential_backoff_millis(attempt, base, max)
 }
 
 async fn wait_for_delete_retry_before_deadline(
@@ -976,13 +977,9 @@ async fn wait_for_delete_retry_before_deadline(
         }
         proceeded
     } else {
-        let now = Instant::now();
-        let Some(wake) = now.checked_add(delay) else {
+        let Some(wake) = retry_wake_before_deadline(Instant::now(), delay, work_deadline) else {
             return false;
         };
-        if wake >= work_deadline {
-            return false;
-        }
         sleep_until(wake).await;
         true
     }
@@ -1030,10 +1027,7 @@ impl DeleteRetryCoordinator {
     ) -> Duration {
         let cap_millis = delete_retry_cap_millis(attempt, throttled, retry);
         match retry.jitter {
-            PutObjectRetryJitter::Full if cap_millis > 0 => {
-                Duration::from_millis(self.next_jitter() % cap_millis.saturating_add(1))
-            }
-            PutObjectRetryJitter::Full => Duration::ZERO,
+            PutObjectRetryJitter::Full => full_jitter_delay(cap_millis, self.next_jitter()),
             PutObjectRetryJitter::None => Duration::from_millis(cap_millis),
         }
     }
