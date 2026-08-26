@@ -308,6 +308,10 @@ export function providerSummary(memoryMb: number, parallel: number, create: bool
       "inferredDeletedObjects",
       "unconfirmedObjects",
       "noSuchBucketRequestedIdentifiers",
+      "retryAttempts",
+      "throttledAttempts",
+      "throttleCooldownWaits",
+      "throttleCooldownWaitMs",
     ]),
     callback: {
       wireAttempts: 1,

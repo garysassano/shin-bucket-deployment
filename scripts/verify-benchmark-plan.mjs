@@ -278,6 +278,10 @@ function providerSummary(memoryMb, parallel, create) {
       "inferredDeletedObjects",
       "unconfirmedObjects",
       "noSuchBucketRequestedIdentifiers",
+      "retryAttempts",
+      "throttledAttempts",
+      "throttleCooldownWaits",
+      "throttleCooldownWaitMs",
     ]),
     callback: {
       wireAttempts: 1,

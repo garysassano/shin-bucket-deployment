@@ -10,55 +10,7 @@ Provider-summary schema-5 result rows, their generated reports, and their chart 
 
 ## Latest CI benchmark
 
-The latest complete canonical five-repetition run was collected by GitHub Actions on 2026-08-10 from source commit `cd8953b`. It contains five sequential repetitions of all canonical profiles across all four phases. The sanitized run UUID is `62f8ad5d-81d9-47a4-ab7e-a5ee35ad16ce`; raw AWS output remains outside git.
-
-| Field                 | Value                                                      |
-| --------------------- | ---------------------------------------------------------- |
-| Region                | `eu-central-1`                                             |
-| Lambda configurations | 1024 MiB / 32 Shin transfers, 2048 MiB / 64 Shin transfers |
-| Sanitized rows        | 240                                                        |
-| Cleanup               | destroyed                                                  |
-
-| Profile     | Phase              |   n | Provider s, Shin / AWS | AWS/Shin | Local wall s, Shin / AWS | Max MiB, Shin / AWS |
-| ----------- | ------------------ | --: | ---------------------: | -------: | -----------------------: | ------------------: |
-| `large-few` | `cold-create`      |   5 |          1.338 / 5.102 |   3.813x |          69.448 / 69.374 |           182 / 447 |
-| `large-few` | `cold-create`      |   5 |          2.084 / 9.587 |     4.6x |          69.766 / 74.608 |           116 / 447 |
-| `large-few` | `unchanged-update` |   5 |           0.238 / 5.12 |  21.513x |          32.398 / 37.757 |            33 / 447 |
-| `large-few` | `unchanged-update` |   5 |           0.266 / 9.33 |  35.075x |          36.774 / 42.996 |            33 / 447 |
-| `large-few` | `changed-update`   |   5 |          0.539 / 5.227 |   9.698x |          37.972 / 43.247 |            39 / 447 |
-| `large-few` | `changed-update`   |   5 |          0.536 / 9.347 |  17.438x |          36.835 / 47.876 |            39 / 447 |
-| `large-few` | `pruned-update`    |   5 |          0.634 / 5.024 |   7.924x |          38.405 / 43.253 |            40 / 417 |
-| `large-few` | `pruned-update`    |   5 |          0.562 / 8.964 |   15.95x |          37.083 / 48.855 |            40 / 416 |
-| `mixed`     | `cold-create`      |   5 |          0.925 / 5.794 |   6.264x |          70.002 / 74.709 |           117 / 282 |
-| `mixed`     | `cold-create`      |   5 |          1.347 / 9.798 |   7.274x |          68.408 / 74.911 |           106 / 281 |
-| `mixed`     | `unchanged-update` |   5 |           0.284 / 5.81 |  20.458x |          32.497 / 37.764 |            33 / 282 |
-| `mixed`     | `unchanged-update` |   5 |          0.288 / 9.909 |  34.406x |          32.679 / 43.156 |            34 / 280 |
-| `mixed`     | `changed-update`   |   5 |          0.503 / 5.907 |  11.744x |          36.732 / 42.147 |            37 / 282 |
-| `mixed`     | `changed-update`   |   5 |         0.452 / 10.033 |  22.197x |          36.744 / 48.418 |            37 / 280 |
-| `mixed`     | `pruned-update`    |   5 |          1.113 / 5.677 |   5.101x |           37.77 / 42.196 |            39 / 274 |
-| `mixed`     | `pruned-update`    |   5 |          1.134 / 9.877 |    8.71x |           36.75 / 47.474 |            37 / 272 |
-| `tiny-many` | `cold-create`      |   5 |         1.528 / 14.831 |   9.706x |          69.864 / 80.432 |            65 / 222 |
-| `tiny-many` | `cold-create`      |   5 |         2.705 / 25.446 |   9.407x |          70.054 / 96.453 |            57 / 218 |
-| `tiny-many` | `unchanged-update` |   5 |         0.474 / 15.146 |  31.954x |          32.614 / 48.675 |            35 / 221 |
-| `tiny-many` | `unchanged-update` |   5 |         0.481 / 26.074 |  54.208x |          32.562 / 59.682 |            35 / 211 |
-| `tiny-many` | `changed-update`   |   5 |         0.597 / 15.186 |  25.437x |          38.445 / 54.101 |            36 / 221 |
-| `tiny-many` | `changed-update`   |   5 |          0.595 / 27.52 |  46.252x |          37.856 / 70.442 |            36 / 210 |
-| `tiny-many` | `pruned-update`    |   5 |         1.399 / 14.448 |  10.327x |           38.491 / 49.22 |            36 / 218 |
-| `tiny-many` | `pruned-update`    |   5 |          1.33 / 25.947 |  19.509x |          37.563 / 65.085 |            36 / 210 |
-
-The [complete generated report](../benchmarks/ci-report.md) includes quartiles, end-to-end timings, and per-phase deltas. [Provider telemetry](../benchmarks/ci-telemetry.md) contains the sanitized Shin diagnostic tables.
-
-![Latest large-few CI benchmark](../benchmarks/snapshots/ci-large-few-1024mib-32.svg)
-
-![Latest large-few CI benchmark](../benchmarks/snapshots/ci-large-few-2048mib-64.svg)
-
-![Latest mixed CI benchmark](../benchmarks/snapshots/ci-mixed-1024mib-32.svg)
-
-![Latest mixed CI benchmark](../benchmarks/snapshots/ci-mixed-2048mib-64.svg)
-
-![Latest tiny-many CI benchmark](../benchmarks/snapshots/ci-tiny-many-1024mib-32.svg)
-
-![Latest tiny-many CI benchmark](../benchmarks/snapshots/ci-tiny-many-2048mib-64.svg)
+The active ledger currently retains 384 sanitized upstream AWS CDK baseline rows. The 136 Shin rows and their generated reports and snapshots were archived on 2026-08-26 because the current provider adds four required `DeleteObjects` retry and throttle fields that cannot be reconstructed for older runs without inventing evidence. A fresh paired five-repetition run using AWS CDK 2.266.0 is pending; no current paired performance claim is published until it completes.
 
 <!-- benchmark-ci:end -->
 

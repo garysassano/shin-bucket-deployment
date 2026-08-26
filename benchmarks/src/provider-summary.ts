@@ -206,6 +206,10 @@ const PROVIDER_SUMMARY_SECTIONS = {
     inferredDeletedObjects: "number",
     unconfirmedObjects: "number",
     noSuchBucketRequestedIdentifiers: "number",
+    retryAttempts: "number",
+    throttledAttempts: "number",
+    throttleCooldownWaits: "number",
+    throttleCooldownWaitMs: "number",
   },
   callback: {
     wireAttempts: "number",
@@ -512,6 +516,16 @@ function summaryShapeErrors(summary: ProviderSummary): string[] {
 
   if ((summary.deleteObject?.failedCalls ?? 0) > (summary.deleteObject?.sdkCalls ?? 0))
     errors.push("summary DeleteObjects failedCalls exceeds sdkCalls");
+  if ((summary.deleteObject?.retryAttempts ?? 0) > (summary.deleteObject?.sdkCalls ?? 0))
+    errors.push("summary DeleteObjects retryAttempts exceeds sdkCalls");
+  if ((summary.deleteObject?.throttledAttempts ?? 0) > (summary.deleteObject?.retryAttempts ?? 0))
+    errors.push("summary DeleteObjects throttledAttempts exceeds retryAttempts");
+  if (
+    (summary.deleteObject?.throttleCooldownWaits ?? 0) >
+    (summary.deleteObject?.throttledAttempts ?? 0)
+  ) {
+    errors.push("summary DeleteObjects throttleCooldownWaits exceeds throttledAttempts");
+  }
   if (
     (summary.deleteObject?.inferredDeletedObjects ?? 0) +
       (summary.deleteObject?.unconfirmedObjects ?? 0) +
