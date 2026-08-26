@@ -67,6 +67,12 @@ The official `BucketDeployment` is a good default for many stacks, but its provi
 > [!CAUTION]
 > These charts are illustrative, not performance guarantees or guidance for production defaults. See [Benchmark](docs/benchmark.md) for the supporting evidence.
 
+<img src="https://raw.githubusercontent.com/garysassano/shin-bucket-deployment/main/benchmarks/snapshots/mixed-2048mib-64.svg" alt="ShinBucketDeployment mixed 2048 MiB max concurrency 64 benchmark" width="100%">
+
+<img src="https://raw.githubusercontent.com/garysassano/shin-bucket-deployment/main/benchmarks/snapshots/tiny-many-2048mib-64.svg" alt="ShinBucketDeployment tiny-many 2048 MiB max concurrency 64 benchmark" width="100%">
+
+<img src="https://raw.githubusercontent.com/garysassano/shin-bucket-deployment/main/benchmarks/snapshots/large-few-2048mib-64.svg" alt="ShinBucketDeployment large-few 2048 MiB max concurrency 64 benchmark" width="100%">
+
 ## Construct API
 
 Only `sources` and `destination` are required. Sources accept any upstream CDK `ISource`; Shin also provides `Source.asset`, `Source.bucket`, `Source.data`, `Source.jsonData`, and `Source.yamlData` helpers.

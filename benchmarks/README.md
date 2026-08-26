@@ -38,21 +38,47 @@ Resume the printed smoke UUID with `--run-id <uuid> --start-repetition 2 --repet
 
 README benchmark snapshots use sanitized records from `benchmarks/results.jsonl`. Snapshot filenames follow `<profile>-<memory>mib-<max-concurrency>.svg`, for example `tiny-many-1024mib-32.svg`.
 
-Only README-linked snapshot SVGs are committed under `benchmarks/snapshots`. The active set is temporarily empty while the current paired run is pending; publication will restore `mixed`, `tiny-many`, and `large-few` at 2048 MiB / max concurrency 64 from the completed evidence. Temporary alternate layouts can be regenerated locally with `benchmarks/src/render/readme-snapshot.ts`, but should not be kept as committed design history.
+Only README-linked snapshot SVGs are committed under `benchmarks/snapshots`. The current README-linked set is `mixed`, `tiny-many`, and `large-few` at 2048 MiB / max concurrency 64 from the latest completed canonical run. Temporary alternate layouts can be regenerated locally with `benchmarks/src/render/readme-snapshot.ts`, but should not be kept as committed design history.
 
 <!-- benchmark-ci:start -->
 
 ## Latest Canonical CI Benchmark
 
-The active ledger currently contains only the retained upstream AWS CDK baselines. The previous Shin rows and generated reports and snapshots were archived when four `DeleteObjects` retry and throttle fields became required; a fresh paired AWS CDK 2.266.0 run is pending.
+GitHub Actions last published a complete five-repetition canonical run dated 2026-08-26 (run `673c7141-7632-4cc4-866f-3e5a2dea1ccf`).
 
+- [Comparison report](ci-report.md)
+- [Shin provider telemetry](ci-telemetry.md)
 - [Sanitized structured results](results.jsonl)
 - [Run provenance records](runs.jsonl)
+
+### large-few / 1024 MiB / max concurrency 32
+
+![Latest large-few CI benchmark](snapshots/ci-large-few-1024mib-32.svg)
+
+### large-few / 2048 MiB / max concurrency 64
+
+![Latest large-few CI benchmark](snapshots/ci-large-few-2048mib-64.svg)
+
+### mixed / 1024 MiB / max concurrency 32
+
+![Latest mixed CI benchmark](snapshots/ci-mixed-1024mib-32.svg)
+
+### mixed / 2048 MiB / max concurrency 64
+
+![Latest mixed CI benchmark](snapshots/ci-mixed-2048mib-64.svg)
+
+### tiny-many / 1024 MiB / max concurrency 32
+
+![Latest tiny-many CI benchmark](snapshots/ci-tiny-many-1024mib-32.svg)
+
+### tiny-many / 2048 MiB / max concurrency 64
+
+![Latest tiny-many CI benchmark](snapshots/ci-tiny-many-2048mib-64.svg)
 
 <!-- benchmark-ci:end -->
 
 ## Shin Provider Telemetry
 
-Structured JSONL sources: [`results.jsonl`](results.jsonl) sample rows and [`runs.jsonl`](runs.jsonl) run provenance. The active ledger currently holds four upstream AWS CDK run records and 384 samples. The three Shin run records and 136 samples were archived because their provider summaries predate the required `DeleteObjects` retry and throttle fields; those values cannot be reconstructed without inventing evidence. A fresh paired run will restore the current Shin telemetry table. Provider summaries follow the current diagnostics contract, including the invocation-global source release anomaly counter alongside deployment/callback, scheduler, source, deletion, replay, marker, `PutObject`, and `CopyObject` diagnostics. The exact fields and interpretation are documented in [`docs/architecture.md`](../docs/architecture.md#diagnostics).
+Structured JSONL sources: [`results.jsonl`](results.jsonl) sample rows and [`runs.jsonl`](runs.jsonl) run provenance. The active ledger currently holds six run records and 624 samples: four retained upstream AWS CDK run records with 384 samples plus the current paired run's two records and 240 samples. The three older Shin run records and 136 samples remain archived because their provider summaries predate the required `DeleteObjects` retry and throttle fields; those values cannot be reconstructed without inventing evidence. Provider summaries follow the current diagnostics contract, including the invocation-global source release anomaly counter alongside deployment/callback, scheduler, source, deletion, replay, marker, `PutObject`, and `CopyObject` diagnostics. The exact fields and interpretation are documented in [`docs/architecture.md`](../docs/architecture.md#diagnostics).
 
 For failed deploys, the runner waits until the phase's Lambda `REPORT` event is visible and then writes three independent CloudWatch captures under the external scratch sample directory: an unfiltered phase-scoped raw event export, `shin_put_object_attempt_failure` events, and `shin_deployment_summary` events when present. The immediate failure event is emitted before provider retry/backoff or transfer cleanup and does not depend on the final summary. Abruptly terminated invocations may have no summary; that absence must not discard an immediate attempt event. Raw CloudWatch exports, resource descriptions, log metadata, preservation manifests, and any identifiers remain outside git. A preserved stack/log group also permits later recapture when log ingestion is delayed.
