@@ -1,7 +1,9 @@
 import { existsSync, readFileSync } from "node:fs";
 import { basename } from "node:path";
 import { parseCliOptions } from "./cli";
+import { type BenchmarkSourceMetadata, collectBenchmarkSourceMetadata } from "./metadata";
 import {
+  type BenchmarkImplementation,
   type BenchmarkRunRecord,
   type BenchmarkRunRecordSource,
   type BenchmarkSampleRecord,
@@ -9,6 +11,7 @@ import {
   benchmarkEvidenceSanitizationErrors,
   benchmarkRunRecordFrom,
   cleanupStatusFrom,
+  isBenchmarkImplementation,
   normalizeImplementation,
   runsFileFor,
 } from "./model";
@@ -109,28 +112,16 @@ const CLI_OPTIONS = [
   "asset-state",
   "cleanup",
   "comparison-variant",
-  "commit",
   "run-id",
   "sample-id",
-  "provider-package-version",
   "provider-architecture",
   "provider-runtime",
   "provider-handler",
   "provider-code-sha256",
-  "provider-bootstrap-sha256",
-  "provider-bootstrap-archive-sha256",
-  "git-dirty",
-  "cdk-cli-version",
-  "cdk-cli-installed-sha256",
-  "aws-cdk-lib-version",
-  "aws-cdk-lib-installed-sha256",
-  "constructs-installed-sha256",
   "benchmark-config-sha256",
   "asset-manifest-sha256",
-  "dependency-lock-sha256",
-  "application-build-sha256",
   "execution-environment-fresh",
-  "memory-measurement-scope",
+  "cleanup-verified",
   "decision-run-id",
   "file-count",
   "implementation",
@@ -149,12 +140,97 @@ const CLI_OPTIONS = [
   "total-bytes",
 ] as const;
 
-function main(): void {
-  const options = parseArgs(process.argv.slice(2));
+type CollectBenchmarkCliDependencies = {
+  readonly collectSourceMetadata?: typeof collectBenchmarkSourceMetadata;
+  readonly repositoryRoot?: string;
+};
+
+async function main(): Promise<void> {
+  const options = await collectBenchmarkOptionsFromCli(process.argv.slice(2));
   collectBenchmarkResult(options);
   console.log(
     `upserted ${options.phase} from ${basename(options.logFile)} to ${options.outputFile}`,
   );
+}
+
+export async function collectBenchmarkResultFromCli(
+  args: string[],
+  dependencies: CollectBenchmarkCliDependencies = {},
+): Promise<{
+  readonly sample: BenchmarkSampleRecord;
+  readonly run: BenchmarkRunRecord;
+}> {
+  return collectBenchmarkResult(await collectBenchmarkOptionsFromCli(args, dependencies));
+}
+
+async function collectBenchmarkOptionsFromCli(
+  args: string[],
+  dependencies: CollectBenchmarkCliDependencies = {},
+): Promise<CollectBenchmarkOptions> {
+  const options = parseArgs(args);
+  const logText = readFileSync(options.logFile, "utf8");
+  const implementation = normalizeImplementation(
+    options.implementation ?? outputString(logText, "BenchmarkImplementation"),
+  );
+  if (!isBenchmarkImplementation(implementation)) {
+    throw new Error("Canonical collection requires implementation shin or aws.");
+  }
+  const sourceMetadata = await (
+    dependencies.collectSourceMetadata ?? collectBenchmarkSourceMetadata
+  )(dependencies.repositoryRoot ?? process.cwd(), options.outputFile);
+  return mergeBenchmarkSourceMetadata(options, sourceMetadata, implementation);
+}
+
+export function mergeBenchmarkSourceMetadata(
+  options: CollectBenchmarkOptions,
+  sourceMetadata: BenchmarkSourceMetadata,
+  implementation: BenchmarkImplementation,
+): CollectBenchmarkOptions {
+  const hasChangedPaths = sourceMetadata.changedPaths.length > 0;
+  if (sourceMetadata.gitDirty !== hasChangedPaths) {
+    throw new Error("Benchmark source metadata has inconsistent dirty provenance.");
+  }
+  if (sourceMetadata.gitDirty || sourceMetadata.providerBootstrapBuildDirty) {
+    throw new Error("Benchmark evidence requires clean source and bootstrap build provenance.");
+  }
+  return {
+    ...options,
+    implementation,
+    ...(implementation === "shin" ? { commit: sourceMetadata.commit } : {}),
+    providerPackageVersion:
+      implementation === "shin"
+        ? sourceMetadata.providerPackageVersion
+        : sourceMetadata.awsCdkLibVersion,
+    ...(implementation === "shin"
+      ? {
+          providerBootstrapSha256: sourceMetadata.providerBootstrapSha256,
+          providerBootstrapArchiveSha256: sourceMetadata.providerBootstrapArchiveSha256,
+          providerBootstrapProvenanceSha256: sourceMetadata.providerBootstrapProvenanceSha256,
+          providerBootstrapBuildDirty: sourceMetadata.providerBootstrapBuildDirty,
+          providerBootstrapCargoVersion: sourceMetadata.providerBootstrapCargoVersion,
+          providerBootstrapRustcVersion: sourceMetadata.providerBootstrapRustcVersion,
+          providerBootstrapCargoLambdaVersion: sourceMetadata.providerBootstrapCargoLambdaVersion,
+          providerBootstrapZigVersion: sourceMetadata.providerBootstrapZigVersion,
+          providerBootstrapBuildToolchainSha256:
+            sourceMetadata.providerBootstrapBuildToolchainSha256,
+          providerBootstrapBuildEnvironmentSha256:
+            sourceMetadata.providerBootstrapBuildEnvironmentSha256,
+        }
+      : {}),
+    gitDirty: sourceMetadata.gitDirty,
+    cdkCliVersion: sourceMetadata.cdkCliVersion,
+    cdkCliInstalledSha256: sourceMetadata.cdkCliInstalledSha256,
+    awsCdkLibVersion: sourceMetadata.awsCdkLibVersion,
+    awsCdkLibInstalledSha256: sourceMetadata.awsCdkLibInstalledSha256,
+    constructsInstalledSha256: sourceMetadata.constructsInstalledSha256,
+    dependencyLockSha256: sourceMetadata.dependencyLockSha256,
+    applicationBuildSha256: sourceMetadata.applicationBuildSha256,
+    installedDependenciesSha256: sourceMetadata.installedDependenciesSha256,
+    nodeVersion: sourceMetadata.nodeVersion,
+    pnpmVersion: sourceMetadata.pnpmVersion,
+    executionEnvironmentSha256: sourceMetadata.executionEnvironmentSha256,
+    sourceTreeSha256: sourceMetadata.sourceTreeSha256,
+  };
 }
 
 const COLD_START_PHASE = "cold-create";
@@ -194,7 +270,7 @@ export function collectBenchmarkResult(options: CollectBenchmarkOptions): {
     );
   }
   if (options.cleanup === "all benchmark stacks destroyed" && options.cleanupVerified !== true) {
-    throw new Error("Canonical cleanup can only be qualified by the automated runner.");
+    throw new Error("Destroyed cleanup requires independently verified stack absence.");
   }
   const run = benchmarkRunRecordFrom(buildRunRecordSource(options, implementation));
   const sample: BenchmarkSampleRecord = {
@@ -327,28 +403,16 @@ function parseArgs(args: string[]): CollectBenchmarkOptions {
     runId: values.get("run-id"),
     sampleId: values.get("sample-id"),
     assetProfile: values.get("asset-profile"),
-    cleanup: values.get("cleanup"),
+    cleanup: optionalCleanup(values.get("cleanup")),
     comparisonVariant: values.get("comparison-variant"),
-    commit: values.get("commit"),
-    providerPackageVersion: values.get("provider-package-version"),
     providerArchitecture: values.get("provider-architecture"),
     providerRuntime: values.get("provider-runtime"),
     providerHandler: values.get("provider-handler"),
     providerCodeSha256: values.get("provider-code-sha256"),
-    providerBootstrapSha256: values.get("provider-bootstrap-sha256"),
-    providerBootstrapArchiveSha256: values.get("provider-bootstrap-archive-sha256"),
-    gitDirty: optionalBoolean(values, "git-dirty"),
-    cdkCliVersion: values.get("cdk-cli-version"),
-    cdkCliInstalledSha256: values.get("cdk-cli-installed-sha256"),
-    awsCdkLibVersion: values.get("aws-cdk-lib-version"),
-    awsCdkLibInstalledSha256: values.get("aws-cdk-lib-installed-sha256"),
-    constructsInstalledSha256: values.get("constructs-installed-sha256"),
     benchmarkConfigSha256: values.get("benchmark-config-sha256"),
     assetManifestSha256: values.get("asset-manifest-sha256"),
-    dependencyLockSha256: values.get("dependency-lock-sha256"),
-    applicationBuildSha256: values.get("application-build-sha256"),
     executionEnvironmentFresh: optionalBoolean(values, "execution-environment-fresh"),
-    memoryMeasurementScope: optionalMemoryScope(values.get("memory-measurement-scope")),
+    memoryMeasurementScope: "phase-local",
     decisionRunId: values.get("decision-run-id"),
     fileCount: optionalNumber(values, "file-count"),
     implementation: values.get("implementation"),
@@ -366,6 +430,7 @@ function parseArgs(args: string[]): CollectBenchmarkOptions {
     summaryFile: values.get("summary-file"),
     sourceCount: optionalNumber(values, "source-count"),
     totalBytes: optionalNumber(values, "total-bytes"),
+    cleanupVerified: optionalBoolean(values, "cleanup-verified"),
   };
 }
 
@@ -377,9 +442,10 @@ function optionalBoolean(values: ReadonlyMap<string, string>, name: string): boo
   usage();
 }
 
-function optionalMemoryScope(value: string | undefined): "phase-local" | undefined {
+function optionalCleanup(value: string | undefined): string | undefined {
   if (value === undefined) return undefined;
-  if (value === "phase-local") return value;
+  if (value === "destroyed") return "all benchmark stacks destroyed";
+  if (value === "partial") return "benchmark cleanup pending";
   usage();
 }
 
@@ -413,7 +479,7 @@ function optionalPositiveInteger(values: Map<string, string>, name: string): num
 
 function usage(): never {
   console.error(
-    "Usage: node dist/benchmarks/src/collect-results.js --log-file <path> --phase <name> [--snapshot-date <YYYY-MM-DD>] [--decision-run-id <id>] [--comparison-variant <name>] [--repetition <n>] [--report-file <path>] [--summary-file <path>] [--output-file benchmarks/results.jsonl] [--asset-profile <name>] [--asset-state <name>] [--implementation <shin|aws>] [--transfer-max-concurrency <n>] [--lambda-memory-mb <n>]",
+    "Usage: node dist/benchmarks/src/collect-results.js --log-file <path> --phase <name> [--snapshot-date <YYYY-MM-DD>] [--decision-run-id <id>] [--comparison-variant <name>] [--repetition <n>] [--report-file <path>] [--summary-file <path>] [--output-file benchmarks/results.jsonl] [--asset-profile <name>] [--asset-state <name>] [--implementation <shin|aws>] [--transfer-max-concurrency <n>] [--lambda-memory-mb <n>] [--cleanup <partial|destroyed>] [--cleanup-verified <true|false>]",
   );
   process.exit(1);
 }
@@ -729,5 +795,8 @@ function escapeRegExp(value: string): string {
 }
 
 if (require.main === module) {
-  main();
+  void main().catch((error: unknown) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  });
 }

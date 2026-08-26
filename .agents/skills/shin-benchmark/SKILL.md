@@ -157,7 +157,7 @@ aws logs filter-log-events \
   --output json > <scratch>/summary.json
 ```
 
-Then upsert result rows with:
+Then upsert result rows from the same clean checkout and configured AWS credential context used for the run. Recover run-specific identities and measured provider metadata from the external run manifest and captured runtime metadata; do not invent them. The collector derives the source commit, package, dependency, Node, pnpm, CDK, source-tree, execution-environment, and provider-bootstrap provenance from the checkout through the same metadata path as the automated runner.
 
 ```bash
 pnpm benchmark:collect -- \
@@ -165,17 +165,33 @@ pnpm benchmark:collect -- \
   --report-file <scratch>/report.json \
   --summary-file <scratch>/summary.json \
   --output-file benchmarks/results.jsonl \
+  --run-id <run-uuid> \
+  --sample-id <sample-uuid> \
   --snapshot-date <YYYY-MM-DD> \
   --phase <phase> \
-  --commit <short-sha> \
   --region <region> \
   --implementation shin \
   --asset-profile <benchmark-profile> \
   --asset-state <state> \
   --transfer-max-concurrency <parallel> \
+  --source-window-bytes <bytes-or-adaptive> \
   --lambda-memory-mb <memory> \
-  --cleanup destroyed
+  --benchmark-config-sha256 <sha256> \
+  --asset-manifest-sha256 <sha256> \
+  --file-count <count> \
+  --source-count <count> \
+  --total-bytes <bytes> \
+  --provider-architecture <architecture> \
+  --provider-runtime <runtime> \
+  --provider-handler <handler> \
+  --provider-code-sha256 <base64-sha256> \
+  --execution-environment-fresh true \
+  --repetition <n> \
+  --cleanup destroyed \
+  --cleanup-verified true
 ```
+
+Pass `--cleanup destroyed --cleanup-verified true` only after independently verifying that the benchmark stack is absent. Use `--cleanup partial` while cleanup remains pending; partial records are schema-valid recovery evidence but are not publishable completed runs.
 
 Do not parse `summary=...` tracing lines by hand. If parsing fails, fix `benchmarks/src/collect-results.ts` and add a test in `test/benchmarks/collector.test.ts`.
 
