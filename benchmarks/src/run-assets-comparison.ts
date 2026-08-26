@@ -3,7 +3,11 @@ import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { type GeneratedBundle, ensureBenchmarkAssets, verifyBenchmarkAssets } from "./assets";
-import { type CollectBenchmarkOptions, collectBenchmarkResult } from "./collect-results";
+import {
+  type CollectBenchmarkOptions,
+  collectBenchmarkResult,
+  mergeBenchmarkSourceMetadata,
+} from "./collect-results";
 import {
   type BenchmarkRunOptions,
   type PhaseConfig,
@@ -352,76 +356,45 @@ async function runBenchmarkStack(args: {
       }
       assertAssetsUnchanged(bundle);
 
-      const collectOptions: CollectBenchmarkOptions = {
-        logFile: deployLog,
-        reportFile,
-        ...(run.implementation === "shin" ? { summaryFile } : {}),
-        outputFile: options.outputFile,
-        runId: options.runId,
-        sampleId: run.sampleId,
-        snapshotDate: options.snapshotDate,
-        phase: phase.name,
-        ...(run.implementation === "shin" ? { commit: sourceMetadata.commit } : {}),
-        providerPackageVersion:
-          run.implementation === "shin"
-            ? sourceMetadata.providerPackageVersion
-            : sourceMetadata.awsCdkLibVersion,
-        providerArchitecture: runtimeMetadata.architecture,
-        providerCodeSha256: runtimeMetadata.codeSha256,
-        ...(run.implementation === "shin"
-          ? {
-              providerBootstrapSha256: sourceMetadata.providerBootstrapSha256,
-              providerBootstrapArchiveSha256: sourceMetadata.providerBootstrapArchiveSha256,
-              providerBootstrapProvenanceSha256: sourceMetadata.providerBootstrapProvenanceSha256,
-              providerBootstrapBuildDirty: sourceMetadata.providerBootstrapBuildDirty,
-              providerBootstrapCargoVersion: sourceMetadata.providerBootstrapCargoVersion,
-              providerBootstrapRustcVersion: sourceMetadata.providerBootstrapRustcVersion,
-              providerBootstrapCargoLambdaVersion:
-                sourceMetadata.providerBootstrapCargoLambdaVersion,
-              providerBootstrapZigVersion: sourceMetadata.providerBootstrapZigVersion,
-              providerBootstrapBuildToolchainSha256:
-                sourceMetadata.providerBootstrapBuildToolchainSha256,
-              providerBootstrapBuildEnvironmentSha256:
-                sourceMetadata.providerBootstrapBuildEnvironmentSha256,
-            }
-          : {}),
-        gitDirty: resumeSession.gitDirty,
-        cdkCliVersion: sourceMetadata.cdkCliVersion,
-        cdkCliInstalledSha256: sourceMetadata.cdkCliInstalledSha256,
-        awsCdkLibVersion: sourceMetadata.awsCdkLibVersion,
-        awsCdkLibInstalledSha256: sourceMetadata.awsCdkLibInstalledSha256,
-        constructsInstalledSha256: sourceMetadata.constructsInstalledSha256,
-        executionEnvironmentFresh: runtimeMetadata.executionEnvironmentFresh,
-        memoryMeasurementScope: "phase-local",
-        region: options.region,
-        implementation: run.implementation,
-        assetProfile: run.assetProfile,
-        memoryMb: run.memoryMb,
-        parallel: run.parallel,
-        sourceWindowBytes: run.sourceWindowBytes ?? null,
-        detailedFailureDiagnostics:
-          run.implementation === "shin" ? options.detailedFailureDiagnostics : null,
-        state: phase.assetState,
-        cleanup: "benchmark cleanup pending",
-        decisionRunId: options.decisionRunId,
-        comparisonVariant: options.comparisonVariant,
-        repetition: run.repetition,
-        benchmarkConfigSha256: benchmarkConfigurationSha256(options),
-        assetManifestSha256: bundle.assetManifestSha256,
-        sourceCount: bundle.sourceCount,
-        dependencyLockSha256: sourceMetadata.dependencyLockSha256,
-        applicationBuildSha256: sourceMetadata.applicationBuildSha256,
-        installedDependenciesSha256: sourceMetadata.installedDependenciesSha256,
-        nodeVersion: sourceMetadata.nodeVersion,
-        pnpmVersion: sourceMetadata.pnpmVersion,
-        executionEnvironmentSha256: sourceMetadata.executionEnvironmentSha256,
-        sourceTreeSha256: sourceMetadata.sourceTreeSha256,
-        fileCount: bundle.fileCount,
-        totalBytes: bundle.totalBytes,
-        providerRuntime: runtimeMetadata.runtime,
-        providerHandler: runtimeMetadata.handler,
-        persist: false,
-      };
+      const collectOptions = mergeBenchmarkSourceMetadata(
+        {
+          logFile: deployLog,
+          reportFile,
+          ...(run.implementation === "shin" ? { summaryFile } : {}),
+          outputFile: options.outputFile,
+          runId: options.runId,
+          sampleId: run.sampleId,
+          snapshotDate: options.snapshotDate,
+          phase: phase.name,
+          providerArchitecture: runtimeMetadata.architecture,
+          providerCodeSha256: runtimeMetadata.codeSha256,
+          executionEnvironmentFresh: runtimeMetadata.executionEnvironmentFresh,
+          memoryMeasurementScope: "phase-local",
+          region: options.region,
+          implementation: run.implementation,
+          assetProfile: run.assetProfile,
+          memoryMb: run.memoryMb,
+          parallel: run.parallel,
+          sourceWindowBytes: run.sourceWindowBytes ?? null,
+          detailedFailureDiagnostics:
+            run.implementation === "shin" ? options.detailedFailureDiagnostics : null,
+          state: phase.assetState,
+          cleanup: "benchmark cleanup pending",
+          decisionRunId: options.decisionRunId,
+          comparisonVariant: options.comparisonVariant,
+          repetition: run.repetition,
+          benchmarkConfigSha256: benchmarkConfigurationSha256(options),
+          assetManifestSha256: bundle.assetManifestSha256,
+          sourceCount: bundle.sourceCount,
+          fileCount: bundle.fileCount,
+          totalBytes: bundle.totalBytes,
+          providerRuntime: runtimeMetadata.runtime,
+          providerHandler: runtimeMetadata.handler,
+          persist: false,
+        },
+        sourceMetadata,
+        run.implementation,
+      );
       const collected = collectBenchmarkResult(collectOptions);
       evidence.push({ options: collectOptions, record: collected.sample, run: collected.run });
       resumeSession.persist([collected.sample], undefined, [collected.run]);

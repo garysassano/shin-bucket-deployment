@@ -1,10 +1,15 @@
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, test } from "vitest";
-import { collectBenchmarkResult } from "../../benchmarks/src/collect-results";
+import { describe, expect, test, vi } from "vitest";
+import {
+  type CollectBenchmarkOptions,
+  collectBenchmarkResult,
+  collectBenchmarkResultFromCli,
+} from "../../benchmarks/src/collect-results";
 import { parseBenchmarkRunOptions } from "../../benchmarks/src/config";
-import { benchmarkEvidenceErrors } from "../../benchmarks/src/model";
+import type { BenchmarkSourceMetadata } from "../../benchmarks/src/metadata";
+import { benchmarkEvidenceErrors, runsFileFor } from "../../benchmarks/src/model";
 import { createBenchmarkPlan } from "../../benchmarks/src/plan";
 import {
   providerSummaryErrors,
@@ -275,6 +280,124 @@ describe("benchmark result collector", () => {
       providerInvoked: true,
     });
     expect(collected.providerSummary).toEqual(summaryFixture());
+  });
+
+  test("manual collection derives immutable metadata and upserts canonical ledgers", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "shin-bench-collector-cli-"));
+    const outputFile = join(dir, "results.jsonl");
+    const options = currentRecordOptions(dir, outputFile);
+    const sourceMetadata = sourceMetadataFixture(options);
+    const collectSourceMetadata = vi.fn(async () => sourceMetadata);
+    const args = manualCollectorArgs(options);
+
+    await collectBenchmarkResultFromCli(args, {
+      collectSourceMetadata,
+      repositoryRoot: "/clean/benchmark-checkout",
+    });
+    const collected = await collectBenchmarkResultFromCli(args, {
+      collectSourceMetadata,
+      repositoryRoot: "/clean/benchmark-checkout",
+    });
+
+    expect(collectSourceMetadata).toHaveBeenCalledTimes(2);
+    expect(collectSourceMetadata).toHaveBeenLastCalledWith("/clean/benchmark-checkout", outputFile);
+    const samples = readJsonLines(outputFile);
+    const runs = readJsonLines(runsFileFor(outputFile));
+    expect(samples).toHaveLength(1);
+    expect(runs).toHaveLength(1);
+    expect(samples[0]).toEqual(collected.sample);
+    expect(runs[0]).toEqual(collected.run);
+    expect(collected.run).toMatchObject({
+      cleanup: "destroyed",
+      environment: {
+        nodeVersion: sourceMetadata.nodeVersion,
+        pnpmVersion: sourceMetadata.pnpmVersion,
+        installedDependenciesSha256: sourceMetadata.installedDependenciesSha256,
+        sourceTreeSha256: sourceMetadata.sourceTreeSha256,
+        gitDirty: false,
+      },
+      cdk: {
+        cliVersion: sourceMetadata.cdkCliVersion,
+        libVersion: sourceMetadata.awsCdkLibVersion,
+      },
+      provider: {
+        implementationCommit: sourceMetadata.commit,
+        packageVersion: sourceMetadata.providerPackageVersion,
+        bootstrap: {
+          archiveSha256: sourceMetadata.providerBootstrapArchiveSha256,
+          buildDirty: false,
+        },
+      },
+    });
+    expect(benchmarkEvidenceErrors({ runs: [collected.run], samples: [collected.sample] })).toEqual(
+      [],
+    );
+    expect(Object.hasOwn(runs[0] ?? {}, "decisionRunId")).toBe(false);
+    expect(Object.hasOwn(runs[0] ?? {}, "comparisonVariant")).toBe(false);
+    expect(Object.hasOwn(samples[0] ?? {}, "sourceWindowBytes")).toBe(false);
+  });
+
+  test("manual collection rejects dirty or inconsistent source provenance", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "shin-bench-collector-cli-dirty-"));
+    const options = currentRecordOptions(dir, join(dir, "results.jsonl"));
+    const args = manualCollectorArgs(options);
+    const clean = sourceMetadataFixture(options);
+
+    await expect(
+      collectBenchmarkResultFromCli(args, {
+        collectSourceMetadata: async () => ({
+          ...clean,
+          gitDirty: true,
+          changedPaths: ["src/changed.ts"],
+        }),
+      }),
+    ).rejects.toThrow("requires clean source and bootstrap build provenance");
+    await expect(
+      collectBenchmarkResultFromCli(args, {
+        collectSourceMetadata: async () => ({
+          ...clean,
+          changedPaths: ["src/changed.ts"],
+        }),
+      }),
+    ).rejects.toThrow("inconsistent dirty provenance");
+  });
+
+  test("manual collection rejects incomplete records and missing provider telemetry", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "shin-bench-collector-cli-invalid-"));
+    const options = currentRecordOptions(dir, join(dir, "results.jsonl"));
+    const args = manualCollectorArgs(options);
+    const collectSourceMetadata = async () => sourceMetadataFixture(options);
+
+    await expect(
+      collectBenchmarkResultFromCli(withoutCliOption(args, "summary-file"), {
+        collectSourceMetadata,
+      }),
+    ).rejects.toThrow("requires one provider summary event");
+    await expect(
+      collectBenchmarkResultFromCli(withoutCliOption(args, "provider-architecture"), {
+        collectSourceMetadata,
+      }),
+    ).rejects.toThrow("provider.architecture must be arm64");
+    await expect(
+      collectBenchmarkResultFromCli(withoutCliOption(args, "cleanup-verified"), {
+        collectSourceMetadata,
+      }),
+    ).rejects.toThrow("requires independently verified stack absence");
+  });
+
+  test("manual collection rejects malformed REPORT telemetry", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "shin-bench-collector-cli-report-"));
+    const options = currentRecordOptions(dir, join(dir, "results.jsonl"));
+    writeFileSync(
+      options.reportFile as string,
+      JSON.stringify({ events: [{ message: "truncated REPORT" }] }),
+    );
+
+    await expect(
+      collectBenchmarkResultFromCli(manualCollectorArgs(options), {
+        collectSourceMetadata: async () => sourceMetadataFixture(options),
+      }),
+    ).rejects.toThrow("Expected exactly one complete REPORT event");
   });
 
   test("preserves complete decision-run repetitions in the JSONL key", () => {
@@ -845,6 +968,14 @@ function collectCurrentRecord(
   outputFile: string,
   overrides: Record<string, unknown> = {},
 ) {
+  return collectBenchmarkResult(currentRecordOptions(dir, outputFile, overrides)).sample;
+}
+
+function currentRecordOptions(
+  dir: string,
+  outputFile: string,
+  overrides: Record<string, unknown> = {},
+): CollectBenchmarkOptions {
   const decisionRunId = overrides.decisionRunId as string | undefined;
   const comparisonVariant = overrides.comparisonVariant as string | undefined;
   const {
@@ -926,7 +1057,7 @@ function collectCurrentRecord(
     }),
   );
 
-  return collectBenchmarkResult({
+  return {
     runId: record.runId as string,
     sampleId,
     snapshotDate: run.snapshotDate as string,
@@ -983,7 +1114,119 @@ function collectCurrentRecord(
     reportFile,
     summaryFile,
     outputFile,
-  }).sample;
+  };
+}
+
+function sourceMetadataFixture(options: CollectBenchmarkOptions): BenchmarkSourceMetadata {
+  return {
+    commit: options.commit as string,
+    subject: "benchmark collector fixture",
+    gitDirty: false,
+    sourceTreeSha256: options.sourceTreeSha256 as string,
+    providerPackageName: "@shin-bucket-deployment/core",
+    providerPackageVersion: options.providerPackageVersion as string,
+    cdkCliVersion: options.cdkCliVersion as string,
+    cdkCliInstalledSha256: options.cdkCliInstalledSha256 as string,
+    awsCdkLibVersion: options.awsCdkLibVersion as string,
+    awsCdkLibIntegrity: "sha512-fixture",
+    awsCdkLibInstalledSha256: options.awsCdkLibInstalledSha256 as string,
+    constructsInstalledSha256: options.constructsInstalledSha256 as string,
+    dependencyLockSha256: options.dependencyLockSha256 as string,
+    applicationBuildSha256: options.applicationBuildSha256 as string,
+    installedDependenciesSha256: options.installedDependenciesSha256 as string,
+    nodeVersion: options.nodeVersion as string,
+    pnpmVersion: options.pnpmVersion as string,
+    executionEnvironmentSha256: options.executionEnvironmentSha256 as string,
+    providerBootstrapSha256: options.providerBootstrapSha256 as string,
+    providerBootstrapArchiveSha256: options.providerBootstrapArchiveSha256 as string,
+    providerBootstrapProvenanceSha256: options.providerBootstrapProvenanceSha256 as string,
+    providerBootstrapBuildDirty: false,
+    providerBootstrapCargoVersion: options.providerBootstrapCargoVersion as string,
+    providerBootstrapRustcVersion: options.providerBootstrapRustcVersion as string,
+    providerBootstrapCargoLambdaVersion: options.providerBootstrapCargoLambdaVersion as string,
+    providerBootstrapZigVersion: options.providerBootstrapZigVersion as string,
+    providerBootstrapBuildToolchainSha256: options.providerBootstrapBuildToolchainSha256 as string,
+    providerBootstrapBuildEnvironmentSha256:
+      options.providerBootstrapBuildEnvironmentSha256 as string,
+    credentialAccountSha256: "a".repeat(64),
+    credentialIdentitySha256: "b".repeat(64),
+    changedPaths: [],
+  };
+}
+
+function manualCollectorArgs(options: CollectBenchmarkOptions): string[] {
+  return [
+    "--log-file",
+    options.logFile,
+    "--report-file",
+    options.reportFile as string,
+    "--summary-file",
+    options.summaryFile as string,
+    "--output-file",
+    options.outputFile,
+    "--run-id",
+    options.runId as string,
+    "--sample-id",
+    options.sampleId as string,
+    "--snapshot-date",
+    options.snapshotDate as string,
+    "--phase",
+    options.phase,
+    "--region",
+    options.region as string,
+    "--implementation",
+    options.implementation as string,
+    "--asset-profile",
+    options.assetProfile as string,
+    "--asset-state",
+    options.state as string,
+    "--transfer-max-concurrency",
+    String(options.parallel),
+    "--source-window-bytes",
+    "adaptive",
+    "--lambda-memory-mb",
+    String(options.memoryMb),
+    "--benchmark-config-sha256",
+    options.benchmarkConfigSha256 as string,
+    "--asset-manifest-sha256",
+    options.assetManifestSha256 as string,
+    "--file-count",
+    String(options.fileCount),
+    "--source-count",
+    String(options.sourceCount),
+    "--total-bytes",
+    String(options.totalBytes),
+    "--provider-architecture",
+    options.providerArchitecture as string,
+    "--provider-runtime",
+    options.providerRuntime as string,
+    "--provider-handler",
+    options.providerHandler as string,
+    "--provider-code-sha256",
+    options.providerCodeSha256 as string,
+    "--execution-environment-fresh",
+    "true",
+    "--repetition",
+    String(options.repetition),
+    "--cleanup",
+    "destroyed",
+    "--cleanup-verified",
+    "true",
+  ];
+}
+
+function withoutCliOption(args: readonly string[], option: string): string[] {
+  const key = `--${option}`;
+  const index = args.indexOf(key);
+  if (index === -1) return [...args];
+  return [...args.slice(0, index), ...args.slice(index + 2)];
+}
+
+function readJsonLines(path: string): Array<Record<string, unknown>> {
+  return readFileSync(path, "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
 }
 
 function firstFailureState(summary: ReturnType<typeof summaryBaseFixture>) {
