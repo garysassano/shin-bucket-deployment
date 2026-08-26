@@ -4,6 +4,14 @@ This file holds release-note text for `ShinBucketDeployment` changes that break 
 
 ## Unreleased
 
+## 0.13.0
+
+### Stack-shared handlers advance to the 0.13.0 provider identity
+
+The package version is part of the provider source identity so different installed Shin versions cannot silently share a handler that implements a different request contract. Upgrading to `0.13.0` therefore changes the handler logical ID for every deployment using the default `ProviderSharing.STACK`, and CloudFormation replaces the custom resource because its service token changes.
+
+The replacement preserves deployed objects: the new generation moves the destination ownership tag before the previous generation is deleted, and the previous handler detects the overlapping owner and retains the live namespace even when `onDelete.deleteCurrentObjects` is enabled. Deployments using `ProviderSharing.DEPLOYMENT` keep their stable deployment-scoped handler and custom-resource identities; the package version bump alone changes neither their handler logical ID nor service token.
+
 ### Default cataloged directory asset identities change once
 
 Cataloged local directories now derive a collision-resistant custom asset identity while Shin reads each file to generate `.shin/catalog.v1.json`. The identity binds normalized paths, byte lengths, per-file SHA-256 digests, exact catalog bytes, and identity-affecting options, removing the separate CDK source-fingerprint pass without relying on the catalog's MD5 values for collision resistance.

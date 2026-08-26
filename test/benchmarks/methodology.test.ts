@@ -806,7 +806,7 @@ describe("benchmark methodology", () => {
 
   test("binds the upstream package to its exact lockfile integrity", () => {
     const lockfile = readFileSync(join(process.cwd(), "pnpm-lock.yaml"), "utf8");
-    expect(packageIntegrity(lockfile, "aws-cdk-lib", "2.260.0")).toMatch(/^sha512-/);
+    expect(packageIntegrity(lockfile, "aws-cdk-lib", "2.266.0")).toMatch(/^sha512-/);
   });
 
   test("does not mark a resumed run dirty only because its sanitized output changed", () => {

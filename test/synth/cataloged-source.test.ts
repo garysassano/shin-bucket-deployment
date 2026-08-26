@@ -197,7 +197,9 @@ function childMaxRssKb(sourceDirectory: string): number {
     ],
     {
       encoding: "utf8",
-      env: { ...process.env, NODE_OPTIONS: "" },
+      // Isolate Shin's catalog and asset-staging memory from CDK's independent
+      // post-synthesis CloudFormation validation engine.
+      env: { ...process.env, CDK_VALIDATION: "false", NODE_OPTIONS: "" },
       maxBuffer: 1024 * 1024,
     },
   );
