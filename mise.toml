@@ -5,7 +5,7 @@
 [tools]
 actionlint = "1.7.12"
 node = "24"
-pnpm = "11"
+pnpm = "12"
 ripgrep = "15.1.0"
 rust = "1.97.1"
 taplo = "0.10.0"

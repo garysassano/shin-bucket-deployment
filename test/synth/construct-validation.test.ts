@@ -354,27 +354,26 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     Template.fromStack(stack);
   });
 
-  test.each([
-    "site?draft",
-    "site#draft",
-    "site[preview]",
-  ])("rejects destination prefix %s that cannot form an ownership tag key", (keyPrefix) => {
-    const stack = new Stack();
-    const destinationBucket = new Bucket(stack, "Dest");
+  test.each(["site?draft", "site#draft", "site[preview]"])(
+    "rejects destination prefix %s that cannot form an ownership tag key",
+    (keyPrefix) => {
+      const stack = new Stack();
+      const destinationBucket = new Bucket(stack, "Dest");
 
-    expect(
-      () =>
-        new ShinBucketDeployment(stack, "Deploy", {
-          sources: [Source.data("index.html", "ok")],
-          destination: { bucket: destinationBucket, keyPrefix },
-          providerLambda: { localBuild: testLocalProviderBuild() },
-        }),
-    ).toThrowError(
-      expect.objectContaining({
-        code: "ShinBucketDeploymentDestinationKeyPrefixTagCharacters",
-      }) as ValidationError,
-    );
-  });
+      expect(
+        () =>
+          new ShinBucketDeployment(stack, "Deploy", {
+            sources: [Source.data("index.html", "ok")],
+            destination: { bucket: destinationBucket, keyPrefix },
+            providerLambda: { localBuild: testLocalProviderBuild() },
+          }),
+      ).toThrowError(
+        expect.objectContaining({
+          code: "ShinBucketDeploymentDestinationKeyPrefixTagCharacters",
+        }) as ValidationError,
+      );
+    },
+  );
 
   test("accepts the CloudFormation ownership-tag character boundary including Unicode", () => {
     const stack = new Stack();
@@ -1201,28 +1200,28 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     );
   });
 
-  test.each([
-    undefined,
-    "/",
-  ])("warns when Delete cleanup selects the whole bucket for root prefix %s", (keyPrefix) => {
-    const app = new App();
-    const stack = new Stack(app, "RootDelete");
-    const destinationBucket = new Bucket(stack, "Dest");
+  test.each([undefined, "/"])(
+    "warns when Delete cleanup selects the whole bucket for root prefix %s",
+    (keyPrefix) => {
+      const app = new App();
+      const stack = new Stack(app, "RootDelete");
+      const destinationBucket = new Bucket(stack, "Dest");
 
-    new ShinBucketDeployment(stack, "Deploy", {
-      sources: [Source.data("index.html", "ok")],
-      destination: { bucket: destinationBucket, keyPrefix },
-      destinationLifecycle: { onDelete: { deleteCurrentObjects: true } },
-      providerLambda: { localBuild: testLocalProviderBuild() },
-    });
+      new ShinBucketDeployment(stack, "Deploy", {
+        sources: [Source.data("index.html", "ok")],
+        destination: { bucket: destinationBucket, keyPrefix },
+        destinationLifecycle: { onDelete: { deleteCurrentObjects: true } },
+        providerLambda: { localBuild: testLocalProviderBuild() },
+      });
 
-    Annotations.fromStack(stack).hasWarning(
-      "/RootDelete/Deploy",
-      Match.stringLikeRegexp(
-        "deleteCurrentObjects=true with a root destination selects the entire bucket namespace",
-      ),
-    );
-  });
+      Annotations.fromStack(stack).hasWarning(
+        "/RootDelete/Deploy",
+        Match.stringLikeRegexp(
+          "deleteCurrentObjects=true with a root destination selects the entire bucket namespace",
+        ),
+      );
+    },
+  );
 
   test("does not warn about Delete cleanup for a bounded prefix", () => {
     const app = new App();
@@ -1508,18 +1507,21 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     ["dangling escape", ["assets\\"], /dangling escape/],
     ["unclosed alternates", ["{a,b"], /unclosed alternates/],
     ["unopened alternates", ["a,b}"], /unopened alternates/],
-  ] as const)("rejects an include/exclude glob with an %s at synthesis", (_label, patterns, message) => {
-    const stack = new Stack();
-    const destinationBucket = new Bucket(stack, "Dest");
+  ] as const)(
+    "rejects an include/exclude glob with an %s at synthesis",
+    (_label, patterns, message) => {
+      const stack = new Stack();
+      const destinationBucket = new Bucket(stack, "Dest");
 
-    expect(() => {
-      new ShinBucketDeployment(stack, "Deploy", {
-        sources: [Source.data("index.html", "ok")],
-        destination: { bucket: destinationBucket },
-        sourceProcessing: { include: patterns as unknown as string[] },
-      });
-    }).toThrow(message);
-  });
+      expect(() => {
+        new ShinBucketDeployment(stack, "Deploy", {
+          sources: [Source.data("index.html", "ok")],
+          destination: { bucket: destinationBucket },
+          sourceProcessing: { include: patterns as unknown as string[] },
+        });
+      }).toThrow(message);
+    },
+  );
 
   test("accepts globs the provider's globset parser accepts", () => {
     const stack = new Stack();

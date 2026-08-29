@@ -1196,43 +1196,45 @@ test("rejects unknown and uninspectable destination encryption", () => {
   ).toThrow(/CDK-created Bucket/);
 });
 
-test.each([
-  "multiple rules",
-  "tokenized algorithm",
-] as const)("rejects %s in destination encryption", (configuration) => {
-  const stack = new Stack();
-  const destinationBucket = new Bucket(stack, "Dest");
-  new ShinBucketDeployment(stack, "Deploy", {
-    sources: [Source.data("index.html", "ok")],
-    destination: {
-      bucket: destinationBucket,
-    },
-    providerLambda: {
-      localBuild: testLocalProviderBuild(),
-    },
-  });
-  const resource = destinationBucket.node.defaultChild;
-  if (!CfnBucket.isCfnBucket(resource)) {
-    throw new Error("expected destination CfnBucket");
-  }
-  resource.bucketEncryption = {
-    serverSideEncryptionConfiguration:
-      configuration === "multiple rules"
-        ? [
-            { serverSideEncryptionByDefault: { sseAlgorithm: "AES256" } },
-            { serverSideEncryptionByDefault: { sseAlgorithm: "aws:kms" } },
-          ]
-        : [
-            {
-              serverSideEncryptionByDefault: {
-                sseAlgorithm: new CfnParameter(stack, "Algorithm").valueAsString,
+test.each(["multiple rules", "tokenized algorithm"] as const)(
+  "rejects %s in destination encryption",
+  (configuration) => {
+    const stack = new Stack();
+    const destinationBucket = new Bucket(stack, "Dest");
+    new ShinBucketDeployment(stack, "Deploy", {
+      sources: [Source.data("index.html", "ok")],
+      destination: {
+        bucket: destinationBucket,
+      },
+      providerLambda: {
+        localBuild: testLocalProviderBuild(),
+      },
+    });
+    const resource = destinationBucket.node.defaultChild;
+    if (!CfnBucket.isCfnBucket(resource)) {
+      throw new Error("expected destination CfnBucket");
+    }
+    resource.bucketEncryption = {
+      serverSideEncryptionConfiguration:
+        configuration === "multiple rules"
+          ? [
+              { serverSideEncryptionByDefault: { sseAlgorithm: "AES256" } },
+              { serverSideEncryptionByDefault: { sseAlgorithm: "aws:kms" } },
+            ]
+          : [
+              {
+                serverSideEncryptionByDefault: {
+                  sseAlgorithm: new CfnParameter(stack, "Algorithm").valueAsString,
+                },
               },
-            },
-          ],
-  };
+            ],
+    };
 
-  expect(() => customResourceProperties(stack)).toThrow(/one inspectable default encryption rule/);
-});
+    expect(() => customResourceProperties(stack)).toThrow(
+      /one inspectable default encryption rule/,
+    );
+  },
+);
 
 test("refuses an L1-injected customer KMS key", () => {
   const stack = new Stack();
@@ -1568,61 +1570,61 @@ test("orders the custom resource after the provider role's default policy", () =
 // role's default policy. Exercise current Get/Put/Delete, previous Delete,
 // list/tag, and CloudFront permissions together and require every resulting
 // policy to precede the custom resource under either feature-flag value.
-test.each([
-  false,
-  true,
-])("orders the custom resource after every provider policy (createNewPolicies=%s)", (createNewPolicies) => {
-  const app = new App({
-    context: {
-      "@aws-cdk/aws-lambda:createNewPoliciesWithAddToRolePolicy": createNewPolicies,
-    },
-  });
-  const stack = new Stack(app, "S");
-  const destinationBucket = new Bucket(stack, "Dest");
-  const previousBucket = new Bucket(stack, "PreviousDest");
-  const distribution = new Distribution(stack, "Distribution", {
-    defaultBehavior: {
-      origin: S3BucketOrigin.withOriginAccessControl(destinationBucket),
-      allowedMethods: AllowedMethods.ALLOW_GET_HEAD_OPTIONS,
-      viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-    },
-  });
-  new ShinBucketDeployment(stack, "Deploy", {
-    sources: [Source.data("index.html", "ok")],
-    destination: { bucket: destinationBucket },
-    cloudfrontInvalidation: { distribution, paths: ["/*"] },
-    destinationLifecycle: {
-      onChange: { deletePreviousObjects: true, previousBucket },
-      onDelete: { deleteCurrentObjects: true },
-    },
-    providerLambda: { localBuild: testLocalProviderBuild() },
-  });
+test.each([false, true])(
+  "orders the custom resource after every provider policy (createNewPolicies=%s)",
+  (createNewPolicies) => {
+    const app = new App({
+      context: {
+        "@aws-cdk/aws-lambda:createNewPoliciesWithAddToRolePolicy": createNewPolicies,
+      },
+    });
+    const stack = new Stack(app, "S");
+    const destinationBucket = new Bucket(stack, "Dest");
+    const previousBucket = new Bucket(stack, "PreviousDest");
+    const distribution = new Distribution(stack, "Distribution", {
+      defaultBehavior: {
+        origin: S3BucketOrigin.withOriginAccessControl(destinationBucket),
+        allowedMethods: AllowedMethods.ALLOW_GET_HEAD_OPTIONS,
+        viewerProtocolPolicy: ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+      },
+    });
+    new ShinBucketDeployment(stack, "Deploy", {
+      sources: [Source.data("index.html", "ok")],
+      destination: { bucket: destinationBucket },
+      cloudfrontInvalidation: { distribution, paths: ["/*"] },
+      destinationLifecycle: {
+        onChange: { deletePreviousObjects: true, previousBucket },
+        onDelete: { deleteCurrentObjects: true },
+      },
+      providerLambda: { localBuild: testLocalProviderBuild() },
+    });
 
-  const template = Template.fromStack(stack).toJSON() as {
-    Resources: Record<
-      string,
-      { Type: string; DependsOn?: string | string[]; Properties?: unknown }
-    >;
-  };
-  const customResource = Object.entries(template.Resources).find(
-    ([, resource]) => resource.Type === "AWS::CloudFormation::CustomResource",
-  )?.[0];
-  if (!customResource) throw new Error("no custom resource in template");
+    const template = Template.fromStack(stack).toJSON() as {
+      Resources: Record<
+        string,
+        { Type: string; DependsOn?: string | string[]; Properties?: unknown }
+      >;
+    };
+    const customResource = Object.entries(template.Resources).find(
+      ([, resource]) => resource.Type === "AWS::CloudFormation::CustomResource",
+    )?.[0];
+    if (!customResource) throw new Error("no custom resource in template");
 
-  const policyEntries = Object.entries(template.Resources).filter(
-    ([, resource]) => resource.Type === "AWS::IAM::Policy",
-  );
-  // Routing grants through the role collapses them into the default policy, so
-  // the flag no longer splits them out. The invariant that matters either way is
-  // that every synthesized policy precedes the custom resource.
-  expect(policyEntries.length).toBeGreaterThan(0);
-  expect(JSON.stringify(policyEntries)).toContain("PreviousDest");
+    const policyEntries = Object.entries(template.Resources).filter(
+      ([, resource]) => resource.Type === "AWS::IAM::Policy",
+    );
+    // Routing grants through the role collapses them into the default policy, so
+    // the flag no longer splits them out. The invariant that matters either way is
+    // that every synthesized policy precedes the custom resource.
+    expect(policyEntries.length).toBeGreaterThan(0);
+    expect(JSON.stringify(policyEntries)).toContain("PreviousDest");
 
-  const dependencies = transitiveDependencies(template.Resources, customResource);
-  for (const [policyId] of policyEntries) {
-    expect(dependencies).toContain(policyId);
-  }
-});
+    const dependencies = transitiveDependencies(template.Resources, customResource);
+    for (const [policyId] of policyEntries) {
+      expect(dependencies).toContain(policyId);
+    }
+  },
+);
 
 // N-1: the destination `s3:GetObject` grant is load-bearing. The provider's
 // copy-identity reconciliation probes destination objects with `HeadObject`

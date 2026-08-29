@@ -1,18 +1,15 @@
 {
   "compilerOptions": {
-    "target": "ES2025",
-    "lib": ["ES2025"],
+    "target": "ES2024",
+    "lib": ["ES2024"],
     "module": "NodeNext",
-    "moduleResolution": "NodeNext",
     "strict": true,
-    "strictPropertyInitialization": true,
+    "isolatedModules": true,
     "noImplicitReturns": true,
     "noUncheckedIndexedAccess": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
-    "resolveJsonModule": true,
     "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true,
     "types": ["node"],
     "rootDir": ".",
     "outDir": "dist"

@@ -6,6 +6,5 @@
     "docs/**/*.ts",
     "benchmarks/**/*.ts",
     "vitest.config.ts"
-  ],
-  "exclude": ["test/**/*.ts"]
+  ]
 }

@@ -24,16 +24,12 @@ describe("globSyntaxError", () => {
     }
   });
 
-  test.each([
-    "[",
-    "a[",
-    "[]",
-    "[!]",
-    "[abc",
-    "[!abc",
-  ])("rejects an unclosed character class: %s", (pattern) => {
-    expect(globSyntaxError(pattern)).toMatch(/unclosed character class/);
-  });
+  test.each(["[", "a[", "[]", "[!]", "[abc", "[!abc"])(
+    "rejects an unclosed character class: %s",
+    (pattern) => {
+      expect(globSyntaxError(pattern)).toMatch(/unclosed character class/);
+    },
+  );
 
   test.each(["[z-a]", "[z--]", "[b-a]x"])("rejects an invalid range: %s", (pattern) => {
     expect(globSyntaxError(pattern)).toMatch(/invalid character class range/);

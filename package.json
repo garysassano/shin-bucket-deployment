@@ -42,14 +42,9 @@
     "assets/bootstrap-arm64/bootstrap.zip",
     "assets/bootstrap-arm64/build-provenance.json",
     "assets/bootstrap-x86_64/bootstrap.zip",
-    "assets/bootstrap-x86_64/build-provenance.json",
-    "README.md",
-    "LICENSE"
+    "assets/bootstrap-x86_64/build-provenance.json"
   ],
-  "publishConfig": {
-    "access": "public"
-  },
-  "packageManager": "pnpm@11.10.0",
+  "packageManager": "pnpm@12.0.0",
   "engines": {
     "node": ">=22.0.0"
   },
@@ -113,19 +108,19 @@
     }
   },
   "devDependencies": {
-    "@aws-sdk/client-cloudfront": "3.1090.0",
-    "@aws-sdk/client-s3": "3.1090.0",
-    "@biomejs/biome": "2.5.0",
-    "@types/node": "24.12.4",
+    "@aws-sdk/client-cloudfront": "3.1118.0",
+    "@aws-sdk/client-s3": "3.1118.0",
+    "@biomejs/biome": "2.5.10",
+    "@types/node": "24.13.3",
     "ajv": "8.20.0",
     "ajv-formats": "3.0.1",
     "aws-cdk": "2.1138.0",
     "aws-cdk-lib": "2.266.0",
     "cargo-lambda-cdk": "0.0.36",
-    "constructs": "10.6.0",
+    "constructs": "10.8.1",
     "prettier": "3.9.6",
     "typescript": "7.0.2",
-    "vitest": "4.1.10",
+    "vitest": "4.1.11",
     "zod": "^4.4.3"
   }
 }
