@@ -6,8 +6,6 @@
 //! supplies the Linux process high-water RSS after the samples; this target is local
 //! evidence for the Linux Lambda provider and is not part of normal gates.
 
-#![cfg(feature = "bench-key-allocations")]
-
 use std::hint::black_box;
 use std::time::Instant;
 

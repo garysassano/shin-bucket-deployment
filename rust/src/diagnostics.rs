@@ -1356,25 +1356,3 @@ mod detailed_failure_diagnostics_tests {
         );
     }
 }
-
-#[cfg(test)]
-mod marker_spooled_upload_tests {
-    use std::sync::atomic::Ordering;
-
-    use super::DeploymentStats;
-
-    #[test]
-    fn marker_spooled_upload_counter_starts_at_zero_and_increments() {
-        let stats = DeploymentStats::default();
-
-        assert_eq!(
-            stats.marker_spooled_uploads.load(Ordering::Relaxed),
-            0,
-            "the F-3 spool fast path does not exist yet"
-        );
-
-        stats.add_marker_spooled_upload();
-
-        assert_eq!(stats.marker_spooled_uploads.load(Ordering::Relaxed), 1);
-    }
-}

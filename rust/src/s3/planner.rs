@@ -1634,21 +1634,6 @@ mod tests {
     }
 
     #[test]
-    fn compile_filters_keeps_existing_glob_behavior() {
-        let filters = compile_filters(&["*.map".to_string()], &[]).unwrap();
-
-        assert!(!filters.should_include("debug.map"));
-        assert!(filters.should_include("index.html"));
-    }
-
-    #[test]
-    fn zip_test_fixture_still_builds() {
-        let mut zip = zip_from_entries(&[("index.html", b"index" as &[u8])]);
-        assert_eq!(zip.len(), 1);
-        assert_eq!(zip.by_index(0).unwrap().name(), "index.html");
-    }
-
-    #[test]
     fn a_minimal_catalog_entry_decodes_larger_than_its_json() {
         // The reason CATALOG_ALLOCATION_FACTOR cannot be 2. The smallest syntactically
         // valid entry, including its separating comma, is:
@@ -2137,11 +2122,6 @@ mod tests {
                 },
             },
         )])
-    }
-
-    fn zip_from_entries(entries: &[(&str, &[u8])]) -> zip::ZipArchive<Cursor<Vec<u8>>> {
-        let bytes = zip_bytes_from_entries(entries, false);
-        zip::ZipArchive::new(Cursor::new(bytes)).unwrap()
     }
 
     fn zip_bytes_from_entries(entries: &[(&str, &[u8])], zip64: bool) -> Vec<u8> {

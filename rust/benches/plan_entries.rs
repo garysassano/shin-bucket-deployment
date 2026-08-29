@@ -43,8 +43,6 @@
 //! `pnpm rust:bench`). The bench is dev-only: `criterion` is a dev-dependency, the
 //! `bench-internals` feature is off by default, and no gate runs `cargo bench`.
 
-#![cfg(feature = "bench-internals")]
-
 use std::hint::black_box;
 use std::io::{Cursor, Write};
 use std::time::{Duration, Instant};
