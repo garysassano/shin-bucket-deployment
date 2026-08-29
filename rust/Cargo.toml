@@ -70,10 +70,10 @@ async-compression = { version = "0.4", default-features = false, features = [
   "tokio",
   "deflate",
 ] }
-# Keep the 0.0.20 floor: bounded external ZIP planning and the Info-ZIP/Python ZIP64
-# fixtures were introduced against this Astral fork release. Track both the fork and
-# upstream async_zip before upgrades because this pre-1.0 parser consumes untrusted metadata.
-async_zip = { package = "astral_async_zip", version = "0.0.20", features = [
+# Keep the Astral fork: releases after upstream async_zip 0.0.19 carry the ZIP64 and
+# hostile-metadata validation used at this trust boundary. Review both projects before
+# each incompatible upgrade; 0.0.21 adds strict short-read and truncation handling.
+async_zip = { package = "astral_async_zip", version = "0.0.21", features = [
   "tokio",
   "deflate",
 ] }
