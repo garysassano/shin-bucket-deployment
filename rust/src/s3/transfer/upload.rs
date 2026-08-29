@@ -37,15 +37,15 @@ use super::super::destination::{
     destination_write_precondition,
 };
 use super::super::planner::ZipEntryPlan;
+use super::super::retry::RetryCoordinator;
 use super::super::{
     S3_SINGLE_PUT_LIMIT, ZIP_ENTRY_READ_CHUNK_BYTES, source_window_bytes_for_archive,
 };
 use super::TransferExecution;
 use super::diagnostics::{
-    WriteDiagnostics, WriteRetryCoordinator, is_conditional_write_conflict,
-    is_retryable_conditional_write_conflict, is_retryable_write_error, log_put_diagnostics,
-    log_source_diagnostics, wait_for_write_retry_before_deadline, write_error_code,
-    write_error_message,
+    WriteDiagnostics, is_conditional_write_conflict, is_retryable_conditional_write_conflict,
+    is_retryable_write_error, log_put_diagnostics, log_source_diagnostics,
+    wait_for_write_retry_before_deadline, write_error_code, write_error_message,
 };
 use super::scheduler::TransferScheduler;
 
@@ -164,7 +164,7 @@ pub(super) struct PutContext<'a> {
     pub(super) destination_s3: &'a S3Client,
     pub(super) destination_bucket: &'a str,
     pub(super) retry: &'a PutObjectRetryOptions,
-    pub(super) retry_coordinator: &'a WriteRetryCoordinator,
+    pub(super) retry_coordinator: &'a RetryCoordinator,
     pub(super) diagnostics: &'a WriteDiagnostics,
     pub(super) stats: &'a DeploymentStats,
     pub(super) work_deadline: Instant,
@@ -181,7 +181,7 @@ pub(in crate::s3) async fn upload_zip_entries(
 ) -> Result<()> {
     let TransferExecution { stats, deadlines } = execution;
     let put_diagnostics = Arc::new(WriteDiagnostics::new(state.detailed_failure_diagnostics));
-    let put_retry_coordinator = Arc::new(WriteRetryCoordinator::new());
+    let put_retry_coordinator = Arc::new(RetryCoordinator::new());
     let mut archive_diagnostics_sources = Vec::new();
     let mut block_stores = Vec::new();
     let mut scheduler = TransferScheduler::new(

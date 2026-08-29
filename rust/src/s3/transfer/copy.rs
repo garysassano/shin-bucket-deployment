@@ -16,11 +16,12 @@ use crate::util::{MAX_DIAGNOSTIC_VALUE_BYTES, finalize_digest, sanitize_diagnost
 use super::super::content_type::apply_copy_content_type;
 use super::super::destination::DestinationWritePrecondition;
 use super::super::planner::CopyPlan;
+use super::super::retry::RetryCoordinator;
 use super::TransferExecution;
 use super::diagnostics::{
-    WriteDiagnostics, WriteRetryCoordinator, is_conditional_write_conflict,
-    is_retryable_conditional_write_conflict, is_retryable_write_error, log_copy_diagnostics,
-    wait_for_write_retry_before_deadline, write_error_code, write_error_message,
+    WriteDiagnostics, is_conditional_write_conflict, is_retryable_conditional_write_conflict,
+    is_retryable_write_error, log_copy_diagnostics, wait_for_write_retry_before_deadline,
+    write_error_code, write_error_message,
 };
 use super::scheduler::TransferScheduler;
 
@@ -32,7 +33,7 @@ pub(super) struct CopyContext<'a> {
     pub(super) destination_s3: &'a S3Client,
     pub(super) destination_bucket: &'a str,
     pub(super) retry: &'a PutObjectRetryOptions,
-    pub(super) retry_coordinator: &'a WriteRetryCoordinator,
+    pub(super) retry_coordinator: &'a RetryCoordinator,
     pub(super) diagnostics: &'a WriteDiagnostics,
     pub(super) stats: &'a DeploymentStats,
     pub(super) work_deadline: Instant,
@@ -63,7 +64,7 @@ pub(in crate::s3) async fn execute_copy_plans(
 ) -> Result<()> {
     let TransferExecution { stats, deadlines } = execution;
     let copy_diagnostics = Arc::new(WriteDiagnostics::new(false));
-    let retry_coordinator = Arc::new(WriteRetryCoordinator::new());
+    let retry_coordinator = Arc::new(RetryCoordinator::new());
     let retry = request.runtime.put_object_retry.clone();
     let mut scheduler = TransferScheduler::new(
         request.runtime.max_parallel_transfers,

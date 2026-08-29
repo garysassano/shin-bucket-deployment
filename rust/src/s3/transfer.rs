@@ -12,16 +12,17 @@ pub(super) use copy::execute_copy_plans;
 pub(super) use upload::upload_zip_entries;
 
 #[cfg(test)]
+use super::retry::{RetryCoordinator, retry_cap_millis};
+#[cfg(test)]
 use copy::{
     COPY_RECONCILIATION_METADATA_KEY, CopyContext, CopyOutcome, copy_reconciliation_identity,
     copy_source_object, quoted_etag, record_copy_outcome,
 };
 #[cfg(test)]
 use diagnostics::{
-    WriteDiagnostics, WriteDiagnosticsSnapshot, WriteRetryCoordinator, dispatch_failure_kind,
-    log_copy_diagnostics, log_put_diagnostics, record_bounded_diagnostic_count,
-    sanitize_diagnostic_label, serialize_put_attempt_failure, write_error_kind,
-    write_retry_cap_millis,
+    WriteDiagnostics, WriteDiagnosticsSnapshot, dispatch_failure_kind, log_copy_diagnostics,
+    log_put_diagnostics, record_bounded_diagnostic_count, sanitize_diagnostic_label,
+    serialize_put_attempt_failure, write_error_kind,
 };
 #[cfg(test)]
 use upload::{
@@ -81,14 +82,14 @@ mod tests {
 
     use super::{
         COMPARISON_SPOOL_TOTAL_BUDGET_BYTES, COPY_RECONCILIATION_METADATA_KEY, CopyContext,
-        CopyOutcome, PutContext, TransferExecution, UploadPayload, WriteDiagnostics,
-        WriteDiagnosticsSnapshot, WriteRetryCoordinator, catalog_skips_zip_entry,
+        CopyOutcome, PutContext, RetryCoordinator, TransferExecution, UploadPayload,
+        WriteDiagnostics, WriteDiagnosticsSnapshot, catalog_skips_zip_entry,
         comparison_spool_limit_bytes, compile_marker_replacements, copy_reconciliation_identity,
         copy_source_object, digest_async_reader, dispatch_failure_kind, log_copy_diagnostics,
         log_put_diagnostics, md5_hex, payload_body, prepare_zip_entry_upload, quoted_etag,
         read_async_reader_to_vec, record_bounded_diagnostic_count, record_copy_outcome,
-        sanitize_diagnostic_label, serialize_put_attempt_failure, should_compare_marker_free_entry,
-        upload_payload, upload_zip_entries, write_error_kind, write_retry_cap_millis,
+        retry_cap_millis, sanitize_diagnostic_label, serialize_put_attempt_failure,
+        should_compare_marker_free_entry, upload_payload, upload_zip_entries, write_error_kind,
     };
 
     #[derive(Clone, Default)]
@@ -423,7 +424,7 @@ mod tests {
         let client = replay_s3_client(replay.clone());
         let diagnostics = WriteDiagnostics::default();
         let stats = DeploymentStats::default();
-        let retry_coordinator = WriteRetryCoordinator::new();
+        let retry_coordinator = RetryCoordinator::new();
         let retry = test_retry_options();
 
         let result = upload_payload(
@@ -575,7 +576,7 @@ mod tests {
         let client = replay_s3_client(replay.clone());
         let diagnostics = WriteDiagnostics::default();
         let stats = DeploymentStats::default();
-        let retry_coordinator = WriteRetryCoordinator::new();
+        let retry_coordinator = RetryCoordinator::new();
         let retry = PutObjectRetryOptions {
             max_attempts: 2,
             retry_base_delay_ms: 30_000,
@@ -910,7 +911,7 @@ mod tests {
         let client = replay_s3_client(replay.clone());
         let diagnostics = WriteDiagnostics::new(true);
         let stats = DeploymentStats::default();
-        let retry_coordinator = WriteRetryCoordinator::new();
+        let retry_coordinator = RetryCoordinator::new();
         let mut retry = test_retry_options();
         retry.max_attempts = 1;
 
@@ -998,7 +999,7 @@ mod tests {
         let client = replay_s3_client(replay.clone());
         let diagnostics = WriteDiagnostics::new(false);
         let stats = DeploymentStats::default();
-        let retry_coordinator = WriteRetryCoordinator::new();
+        let retry_coordinator = RetryCoordinator::new();
         let mut retry = test_retry_options();
         retry.max_attempts = 1;
 
@@ -1099,7 +1100,7 @@ mod tests {
         let client = replay_s3_client(replay.clone());
         let diagnostics = WriteDiagnostics::new(true);
         let stats = DeploymentStats::default();
-        let retry_coordinator = WriteRetryCoordinator::new();
+        let retry_coordinator = RetryCoordinator::new();
         let mut retry = test_retry_options();
         retry.max_attempts = 33;
 
@@ -1725,16 +1726,16 @@ mod tests {
             jitter: PutObjectRetryJitter::None,
         };
 
-        assert_eq!(write_retry_cap_millis(1, false, &retry), 250);
-        assert_eq!(write_retry_cap_millis(2, false, &retry), 500);
-        assert_eq!(write_retry_cap_millis(3, false, &retry), 1_000);
-        assert_eq!(write_retry_cap_millis(4, false, &retry), 1_000);
-        assert_eq!(write_retry_cap_millis(2, true, &retry), 2_000);
+        assert_eq!(retry_cap_millis(1, false, &retry), 250);
+        assert_eq!(retry_cap_millis(2, false, &retry), 500);
+        assert_eq!(retry_cap_millis(3, false, &retry), 1_000);
+        assert_eq!(retry_cap_millis(4, false, &retry), 1_000);
+        assert_eq!(retry_cap_millis(2, true, &retry), 2_000);
     }
 
     #[test]
     fn object_write_retry_delay_supports_full_jitter_and_no_jitter() {
-        let coordinator = WriteRetryCoordinator::new();
+        let coordinator = RetryCoordinator::new();
         let mut retry = PutObjectRetryOptions {
             max_attempts: 6,
             retry_base_delay_ms: 250,
@@ -1760,7 +1761,7 @@ mod tests {
             let client = replay_s3_client(replay.clone());
             let diagnostics = WriteDiagnostics::default();
             let stats = DeploymentStats::default();
-            let retry_coordinator = WriteRetryCoordinator::new();
+            let retry_coordinator = RetryCoordinator::new();
             let retry = PutObjectRetryOptions {
                 max_attempts: 2,
                 retry_base_delay_ms: 30_000,
@@ -1808,7 +1809,7 @@ mod tests {
         let client = replay_s3_client(replay.clone());
         let diagnostics = WriteDiagnostics::default();
         let stats = DeploymentStats::default();
-        let retry_coordinator = WriteRetryCoordinator::new();
+        let retry_coordinator = RetryCoordinator::new();
         retry_coordinator.extend_throttle_cooldown(std::time::Duration::from_secs(30));
         let retry = test_retry_options();
 
@@ -1848,7 +1849,7 @@ mod tests {
         let client = replay_s3_client(replay.clone());
         let diagnostics = WriteDiagnostics::default();
         let stats = DeploymentStats::default();
-        let retry_coordinator = WriteRetryCoordinator::new();
+        let retry_coordinator = RetryCoordinator::new();
         let retry = PutObjectRetryOptions {
             max_attempts: 2,
             retry_base_delay_ms: 500,
@@ -1901,7 +1902,7 @@ mod tests {
         let client = replay_s3_client(replay.clone());
         let diagnostics = WriteDiagnostics::default();
         let stats = DeploymentStats::default();
-        let retry_coordinator = WriteRetryCoordinator::new();
+        let retry_coordinator = RetryCoordinator::new();
         let retry = test_retry_options();
         let result = upload_payload(
             PutContext {
@@ -1942,7 +1943,7 @@ mod tests {
         let client = replay_s3_client(replay.clone());
         let diagnostics = WriteDiagnostics::default();
         let stats = DeploymentStats::default();
-        let retry_coordinator = WriteRetryCoordinator::new();
+        let retry_coordinator = RetryCoordinator::new();
         let result = upload_payload(
             PutContext {
                 destination_s3: &client,
@@ -1974,7 +1975,7 @@ mod tests {
         let client = replay_s3_client(replay.clone());
         let diagnostics = WriteDiagnostics::default();
         let stats = DeploymentStats::default();
-        let retry_coordinator = WriteRetryCoordinator::new();
+        let retry_coordinator = RetryCoordinator::new();
         let mut retry = test_retry_options();
         retry.max_attempts = max_attempts;
         let result = copy_source_object(
@@ -2031,7 +2032,7 @@ mod tests {
                     slowdown_retry_max_delay_ms: 0,
                     jitter: PutObjectRetryJitter::None,
                 },
-                retry_coordinator: &WriteRetryCoordinator::new(),
+                retry_coordinator: &RetryCoordinator::new(),
                 diagnostics: &WriteDiagnostics::default(),
                 stats: &DeploymentStats::default(),
                 work_deadline: test_work_deadline(),
@@ -2218,7 +2219,7 @@ mod tests {
         let client = replay_s3_client(replay.clone());
         let diagnostics = WriteDiagnostics::default();
         let stats = DeploymentStats::default();
-        let retry_coordinator = WriteRetryCoordinator::new();
+        let retry_coordinator = RetryCoordinator::new();
         let retry = PutObjectRetryOptions {
             max_attempts: 3,
             retry_base_delay_ms: 10,

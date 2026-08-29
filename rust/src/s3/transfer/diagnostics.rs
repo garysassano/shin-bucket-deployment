@@ -4,11 +4,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use aws_sdk_s3::error::{ProvideErrorMetadata, SdkError};
-use fastrand::Rng;
 use serde::Serialize;
-use tokio::time::{Instant, sleep_until};
+use tokio::time::Instant;
 
-use crate::deployment::{PutObjectRetryJitter, PutObjectRetryOptions};
+use crate::deployment::PutObjectRetryOptions;
 use crate::diagnostics::{
     CopyObjectStats, DeploymentStats, DiagnosticRangeStats, MAX_FAILURE_DIAGNOSTIC_GROUPS,
     MAX_FAILURE_DIAGNOSTIC_LABELS, OTHER_DIAGNOSTIC_LABEL, PutObjectFailureBodyStats,
@@ -18,10 +17,7 @@ use crate::diagnostics::{
 use crate::util::{MAX_DIAGNOSTIC_VALUE_BYTES, duration_ms, lock_telemetry, sanitize_diagnostic};
 
 use super::super::archive::SourceClient;
-use super::super::retry::{
-    capped_exponential_backoff_millis, full_jitter_delay, is_retryable_http_status,
-    retry_wake_before_deadline,
-};
+use super::super::retry::{RetryCoordinator, RetryDiagnostics, is_retryable_http_status};
 use super::upload::UploadPayload;
 
 pub(super) struct WriteDiagnostics {
@@ -73,11 +69,6 @@ struct PutObjectAttemptFailureEvent<'a> {
     failure: &'a PutObjectFailureStateStats,
 }
 
-pub(super) struct WriteRetryCoordinator {
-    throttle_until: Mutex<Option<Instant>>,
-    jitter: Mutex<Rng>,
-}
-
 pub(super) fn is_conditional_write_conflict<E: ProvideErrorMetadata>(error: &SdkError<E>) -> bool {
     if let SdkError::ServiceError(service) = error {
         let status = service.raw().status().as_u16();
@@ -103,15 +94,6 @@ pub(super) fn is_retryable_conditional_write_conflict<E: ProvideErrorMetadata>(
     write_error_code(error).as_deref() == Some("ConditionalRequestConflict")
 }
 
-pub(super) fn write_retry_cap_millis(
-    attempt: usize,
-    throttled: bool,
-    retry: &PutObjectRetryOptions,
-) -> u64 {
-    let (base, max) = write_retry_delay_bounds(throttled, retry);
-    capped_exponential_backoff_millis(attempt, base, max)
-}
-
 pub(super) fn is_retryable_write_error<E: ProvideErrorMetadata>(error: &SdkError<E>) -> bool {
     match error {
         SdkError::ServiceError(service) => {
@@ -135,41 +117,17 @@ pub(super) fn is_retryable_write_error<E: ProvideErrorMetadata>(error: &SdkError
     }
 }
 
-fn write_retry_delay_bounds(throttled: bool, retry: &PutObjectRetryOptions) -> (u64, u64) {
-    if throttled {
-        (
-            retry.slowdown_retry_base_delay_ms,
-            retry.slowdown_retry_max_delay_ms,
-        )
-    } else {
-        (retry.retry_base_delay_ms, retry.retry_max_delay_ms)
-    }
-}
-
 pub(super) async fn wait_for_write_retry_before_deadline(
-    coordinator: &WriteRetryCoordinator,
+    coordinator: &RetryCoordinator,
     diagnostics: &WriteDiagnostics,
     retry: &PutObjectRetryOptions,
     attempt: usize,
     throttled: bool,
     work_deadline: Instant,
 ) -> bool {
-    let delay = coordinator.retry_delay(attempt, throttled, retry);
-    if throttled {
-        coordinator.extend_throttle_cooldown(delay);
-        coordinator
-            .wait_for_throttle_cooldown_before_deadline(diagnostics, work_deadline)
-            .await
-    } else {
-        let Some(wake) = retry_wake_before_deadline(Instant::now(), delay, work_deadline) else {
-            return false;
-        };
-        sleep_until(wake).await;
-        diagnostics
-            .retry_wait_millis
-            .fetch_add(duration_ms(delay), Ordering::Relaxed);
-        true
-    }
+    coordinator
+        .wait_for_retry_before_deadline(diagnostics, retry, attempt, throttled, work_deadline)
+        .await
 }
 
 impl WriteDiagnostics {
@@ -338,6 +296,27 @@ impl WriteDiagnostics {
     }
 }
 
+impl RetryDiagnostics for WriteDiagnostics {
+    fn record_retry(&self, _throttled: bool) {
+        // Write attempt counts remain coupled to their operation outcomes.
+    }
+
+    fn record_retry_wait(&self, delay: Duration) {
+        self.retry_wait_millis
+            .fetch_add(duration_ms(delay), Ordering::Relaxed);
+    }
+
+    fn record_throttle_cooldown_sleep(&self, delay: Duration) {
+        self.throttle_cooldown_waits.fetch_add(1, Ordering::Relaxed);
+        self.throttle_cooldown_wait_millis
+            .fetch_add(duration_ms(delay), Ordering::Relaxed);
+    }
+
+    fn record_throttle_retry_wait(&self, _elapsed: Duration) {
+        // Write diagnostics retain each actual shared-cooldown sleep instead.
+    }
+}
+
 impl DiagnosticRangeStats {
     fn single(value: u64) -> Self {
         Self {
@@ -452,88 +431,6 @@ pub(super) fn serialize_put_attempt_failure(
         event: "shin_put_object_attempt_failure",
         failure,
     })
-}
-
-impl WriteRetryCoordinator {
-    pub(super) fn new() -> Self {
-        Self {
-            throttle_until: Mutex::new(None),
-            jitter: Mutex::new(Rng::new()),
-        }
-    }
-
-    pub(super) async fn wait_for_throttle_cooldown_before_deadline(
-        &self,
-        diagnostics: &WriteDiagnostics,
-        work_deadline: Instant,
-    ) -> bool {
-        loop {
-            let wait = {
-                let throttle_until = self
-                    .throttle_until
-                    .lock()
-                    .expect("write retry coordinator mutex should not be poisoned");
-                throttle_until.and_then(|deadline| {
-                    deadline
-                        .checked_duration_since(Instant::now())
-                        .map(|delay| (deadline, delay))
-                })
-            };
-            let Some((wake, delay)) = wait else {
-                return true;
-            };
-            if delay.is_zero() {
-                return true;
-            }
-            if wake >= work_deadline {
-                return false;
-            }
-
-            sleep_until(wake).await;
-            diagnostics
-                .throttle_cooldown_waits
-                .fetch_add(1, Ordering::Relaxed);
-            diagnostics
-                .throttle_cooldown_wait_millis
-                .fetch_add(duration_ms(delay), Ordering::Relaxed);
-        }
-    }
-
-    pub(super) fn retry_delay(
-        &self,
-        attempt: usize,
-        throttled: bool,
-        retry: &PutObjectRetryOptions,
-    ) -> Duration {
-        let delay_millis = write_retry_cap_millis(attempt, throttled, retry);
-        match retry.jitter {
-            PutObjectRetryJitter::Full => full_jitter_delay(delay_millis, self.next_jitter()),
-            PutObjectRetryJitter::None => Duration::from_millis(delay_millis),
-        }
-    }
-
-    pub(super) fn extend_throttle_cooldown(&self, delay: Duration) {
-        if delay.is_zero() {
-            return;
-        }
-
-        let now = Instant::now();
-        let deadline = now.checked_add(delay).unwrap_or(now);
-        let mut throttle_until = self
-            .throttle_until
-            .lock()
-            .expect("write retry coordinator mutex should not be poisoned");
-        if throttle_until.is_none_or(|current| deadline > current) {
-            *throttle_until = Some(deadline);
-        }
-    }
-
-    fn next_jitter(&self) -> u64 {
-        self.jitter
-            .lock()
-            .expect("write retry jitter mutex should not be poisoned")
-            .u64(..)
-    }
 }
 
 pub(super) fn write_error_kind<E>(error: &SdkError<E>) -> &'static str {
