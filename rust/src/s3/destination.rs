@@ -1,6 +1,5 @@
 use std::collections::{HashMap, HashSet};
 use std::mem::size_of;
-use std::sync::Mutex;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
@@ -8,22 +7,16 @@ use aws_sdk_s3::config::retry::RetryConfig;
 use aws_sdk_s3::error::ProvideErrorMetadata;
 use aws_sdk_s3::error::SdkError;
 use aws_sdk_s3::types::{Delete, ObjectIdentifier};
-use fastrand::Rng;
-use tokio::time::{Instant, sleep_until};
+use tokio::time::Instant;
 use tracing::warn;
 
-use crate::deployment::{
-    DeploymentManifest, DeploymentRequest, Filters, PutObjectRetryJitter, PutObjectRetryOptions,
-};
+use crate::deployment::{DeploymentManifest, DeploymentRequest, Filters, PutObjectRetryOptions};
 use crate::diagnostics::DeploymentStats;
 use crate::namespace::{key_is_excluded, namespace_list_prefix, read_bucket_owner_tags};
 use crate::request::strip_destination_prefix;
 use crate::state::AppState;
 
-use super::retry::{
-    capped_exponential_backoff_millis, full_jitter_delay, is_retryable_http_status,
-    retry_wake_before_deadline,
-};
+use super::retry::{RetryCoordinator, RetryDiagnostics, is_retryable_http_status};
 
 const MAX_RETAINED_DELETION_KEY_BYTES: usize = 4 * 1024 * 1024;
 
@@ -136,11 +129,6 @@ pub(super) struct StaleCleanupContext<'a> {
     pub(super) destination_plan: &'a DestinationPlan,
     pub(super) stats: &'a DeploymentStats,
     pub(super) work_deadline: Instant,
-}
-
-struct DeleteRetryCoordinator {
-    throttle_until: Mutex<Option<Instant>>,
-    jitter: Mutex<Rng>,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -349,7 +337,7 @@ pub(super) async fn delete_stale_objects(
     // shared listing scan. A single window here attributed both legs to whichever
     // counter matched `current_cleanup_authorized`, so a prefix move that deleted from
     // both namespaces reported `oldPrefixDelete: 0`.
-    let retry_coordinator = DeleteRetryCoordinator::new();
+    let retry_coordinator = RetryCoordinator::new();
     let retry = &request.runtime.put_object_retry;
     let (_, timings) = delete_stale_objects_with_retry(
         state,
@@ -389,7 +377,7 @@ async fn delete_stale_objects_with_retry(
     destination_plan: &DestinationPlan,
     stats: &DeploymentStats,
     retry: &PutObjectRetryOptions,
-    retry_coordinator: &DeleteRetryCoordinator,
+    retry_coordinator: &RetryCoordinator,
     work_deadline: Instant,
 ) -> Result<(u64, StaleDeletionTimings)> {
     let mut timings = StaleDeletionTimings::default();
@@ -483,7 +471,7 @@ async fn delete_unplanned_objects(
     state: &AppState,
     context: UnplannedDeletionContext<'_>,
     retry: &PutObjectRetryOptions,
-    retry_coordinator: &DeleteRetryCoordinator,
+    retry_coordinator: &RetryCoordinator,
     work_deadline: Instant,
 ) -> Result<u64> {
     delete_listed_objects_with_coordinator(
@@ -527,7 +515,7 @@ async fn delete_listed_objects<F>(
 where
     F: Fn(&str) -> bool,
 {
-    let retry_coordinator = DeleteRetryCoordinator::new();
+    let retry_coordinator = RetryCoordinator::new();
     delete_listed_objects_with_coordinator(
         state,
         bucket,
@@ -548,7 +536,7 @@ async fn delete_listed_objects_with_coordinator<F>(
     list_prefix: Option<&str>,
     stats: Option<&DeploymentStats>,
     retry: &PutObjectRetryOptions,
-    retry_coordinator: &DeleteRetryCoordinator,
+    retry_coordinator: &RetryCoordinator,
     work_deadline: Instant,
     should_delete: F,
 ) -> Result<u64>
@@ -717,7 +705,7 @@ async fn delete_keys_optional_stats(
     keys: &[String],
     stats: Option<&DeploymentStats>,
     retry: &PutObjectRetryOptions,
-    retry_coordinator: &DeleteRetryCoordinator,
+    retry_coordinator: &RetryCoordinator,
     work_deadline: Instant,
 ) -> Result<u64> {
     let mut deleted = 0_u64;
@@ -751,7 +739,7 @@ async fn delete_key_chunk(
     keys: &[String],
     stats: Option<&DeploymentStats>,
     retry: &PutObjectRetryOptions,
-    retry_coordinator: &DeleteRetryCoordinator,
+    retry_coordinator: &RetryCoordinator,
     work_deadline: Instant,
 ) -> Result<(u64, bool)> {
     let mut pending = keys.iter().map(String::as_str).collect::<Vec<_>>();
@@ -760,7 +748,10 @@ async fn delete_key_chunk(
 
     for attempt in 1..=max_attempts {
         if !retry_coordinator
-            .wait_for_throttle_cooldown_before_deadline(work_deadline)
+            .wait_for_throttle_cooldown_before_deadline(
+                &DeleteRetryDiagnostics { stats },
+                work_deadline,
+            )
             .await
         {
             return Err(anyhow!(
@@ -938,121 +929,49 @@ fn is_retryable_delete_error<E: ProvideErrorMetadata>(error: &SdkError<E>) -> bo
     }
 }
 
-fn delete_retry_cap_millis(attempt: usize, throttled: bool, retry: &PutObjectRetryOptions) -> u64 {
-    let (base, max) = if throttled {
-        (
-            retry.slowdown_retry_base_delay_ms,
-            retry.slowdown_retry_max_delay_ms,
-        )
-    } else {
-        (retry.retry_base_delay_ms, retry.retry_max_delay_ms)
-    };
-    capped_exponential_backoff_millis(attempt, base, max)
+struct DeleteRetryDiagnostics<'a> {
+    stats: Option<&'a DeploymentStats>,
+}
+
+impl RetryDiagnostics for DeleteRetryDiagnostics<'_> {
+    fn record_retry(&self, throttled: bool) {
+        if let Some(stats) = self.stats {
+            stats.record_delete_retry(throttled);
+        }
+    }
+
+    fn record_throttle_retry_wait(&self, elapsed: Duration) {
+        if let Some(stats) = self.stats {
+            stats.record_delete_throttle_cooldown_wait(crate::util::duration_ms(elapsed));
+        }
+    }
+
+    fn record_retry_wait(&self, _delay: Duration) {
+        // Delete diagnostics do not expose non-throttled retry wait time.
+    }
+
+    fn record_throttle_cooldown_sleep(&self, _delay: Duration) {
+        // Delete diagnostics retain one aggregate cooldown observation per retry.
+    }
 }
 
 async fn wait_for_delete_retry_before_deadline(
-    coordinator: &DeleteRetryCoordinator,
+    coordinator: &RetryCoordinator,
     retry: &PutObjectRetryOptions,
     attempt: usize,
     throttled: bool,
     work_deadline: Instant,
     stats: Option<&DeploymentStats>,
 ) -> bool {
-    // The write side has always reported its retry and throttle counters; the delete
-    // side honoured throttle cooldowns but reported none of them, so a deployment
-    // throttled on `DeleteObjects` was indistinguishable in the ledger from one that
-    // was not. Record the same shape here.
-    if let Some(stats) = stats {
-        stats.record_delete_retry(throttled);
-    }
-    let delay = coordinator.retry_delay(attempt, throttled, retry);
-    if throttled {
-        coordinator.extend_throttle_cooldown(delay);
-        let started = Instant::now();
-        let proceeded = coordinator
-            .wait_for_throttle_cooldown_before_deadline(work_deadline)
-            .await;
-        if let Some(stats) = stats {
-            stats.record_delete_throttle_cooldown_wait(crate::util::duration_ms(started.elapsed()));
-        }
-        proceeded
-    } else {
-        let Some(wake) = retry_wake_before_deadline(Instant::now(), delay, work_deadline) else {
-            return false;
-        };
-        sleep_until(wake).await;
-        true
-    }
-}
-
-impl DeleteRetryCoordinator {
-    fn new() -> Self {
-        Self {
-            throttle_until: Mutex::new(None),
-            jitter: Mutex::new(Rng::new()),
-        }
-    }
-
-    async fn wait_for_throttle_cooldown_before_deadline(&self, work_deadline: Instant) -> bool {
-        loop {
-            let wait = {
-                let throttle_until = self
-                    .throttle_until
-                    .lock()
-                    .expect("delete retry coordinator mutex should not be poisoned");
-                throttle_until.and_then(|deadline| {
-                    deadline
-                        .checked_duration_since(Instant::now())
-                        .map(|delay| (deadline, delay))
-                })
-            };
-            let Some((wake, delay)) = wait else {
-                return true;
-            };
-            if delay.is_zero() {
-                return true;
-            }
-            if wake >= work_deadline {
-                return false;
-            }
-            sleep_until(wake).await;
-        }
-    }
-
-    fn retry_delay(
-        &self,
-        attempt: usize,
-        throttled: bool,
-        retry: &PutObjectRetryOptions,
-    ) -> Duration {
-        let cap_millis = delete_retry_cap_millis(attempt, throttled, retry);
-        match retry.jitter {
-            PutObjectRetryJitter::Full => full_jitter_delay(cap_millis, self.next_jitter()),
-            PutObjectRetryJitter::None => Duration::from_millis(cap_millis),
-        }
-    }
-
-    fn extend_throttle_cooldown(&self, delay: Duration) {
-        if delay.is_zero() {
-            return;
-        }
-        let now = Instant::now();
-        let deadline = now.checked_add(delay).unwrap_or(now);
-        let mut throttle_until = self
-            .throttle_until
-            .lock()
-            .expect("delete retry coordinator mutex should not be poisoned");
-        if throttle_until.is_none_or(|current| deadline > current) {
-            *throttle_until = Some(deadline);
-        }
-    }
-
-    fn next_jitter(&self) -> u64 {
-        self.jitter
-            .lock()
-            .expect("delete retry jitter mutex should not be poisoned")
-            .u64(..)
-    }
+    coordinator
+        .wait_for_retry_before_deadline(
+            &DeleteRetryDiagnostics { stats },
+            retry,
+            attempt,
+            throttled,
+            work_deadline,
+        )
+        .await
 }
 
 fn inferred_delete_counts(requested: u64, service_errors: u64) -> (u64, u64) {
@@ -1221,12 +1140,11 @@ mod tests {
     use tracing_subscriber::layer::SubscriberExt;
 
     use super::{
-        DeleteRetryCoordinator, DeletionCandidates, DestinationObject, DestinationPlan,
-        DestinationRecordContext, GuardedDeleteContext, GuardedDeleteOutcome,
-        UnplannedDeletionContext, delete_key_chunk, delete_listed_objects,
-        guarded_delete_namespace, inferred_delete_counts, normalize_etag,
-        record_destination_object, record_destination_object_original, stale_destination_key,
-        unplanned_cleanup_key, unplanned_destination_key,
+        DeletionCandidates, DestinationObject, DestinationPlan, DestinationRecordContext,
+        GuardedDeleteContext, GuardedDeleteOutcome, RetryCoordinator, UnplannedDeletionContext,
+        delete_key_chunk, delete_listed_objects, guarded_delete_namespace, inferred_delete_counts,
+        normalize_etag, record_destination_object, record_destination_object_original,
+        stale_destination_key, unplanned_cleanup_key, unplanned_destination_key,
     };
     use crate::deployment::{
         DeploymentManifest, DeploymentRequest, Filters, PlannedAction, PlannedObject,
@@ -1542,7 +1460,7 @@ mod tests {
         let replay = StaticReplayClient::new(vec![delete_success_event()]);
         let state = replay_app_state(replay.clone());
         let retry = retry_options(1, 0);
-        let coordinator = DeleteRetryCoordinator::new();
+        let coordinator = RetryCoordinator::new();
         let keys = vec!["site/stale.txt".to_string()];
 
         let deleted = super::delete_keys_optional_stats(
@@ -1605,7 +1523,7 @@ mod tests {
             &plan,
             &stats,
             &retry_options(1, 0),
-            &DeleteRetryCoordinator::new(),
+            &RetryCoordinator::new(),
             tokio::time::Instant::now() + Duration::from_secs(10),
         )
         .await
@@ -1640,7 +1558,7 @@ mod tests {
         ]);
         let state = replay_app_state(replay.clone());
         let retry = retry_options(2, 0);
-        let coordinator = DeleteRetryCoordinator::new();
+        let coordinator = RetryCoordinator::new();
         let keys = vec!["site/a.txt".to_string(), "site/b.txt".to_string()];
 
         let deleted = delete_key_chunk(
@@ -1683,7 +1601,7 @@ mod tests {
             &keys,
             Some(&stats),
             &retry_options(2, 0),
-            &DeleteRetryCoordinator::new(),
+            &RetryCoordinator::new(),
             tokio::time::Instant::now() + Duration::from_secs(10),
         )
         .await
@@ -1713,7 +1631,7 @@ mod tests {
         ]);
         let state = replay_app_state(replay.clone());
         let retry = retry_options(2, 0);
-        let coordinator = DeleteRetryCoordinator::new();
+        let coordinator = RetryCoordinator::new();
         let keys = vec!["site/done.txt".to_string(), "site/retry.txt".to_string()];
 
         let deleted = delete_key_chunk(
@@ -1755,7 +1673,7 @@ mod tests {
             &keys,
             Some(&stats),
             &retry_options(3, 0),
-            &DeleteRetryCoordinator::new(),
+            &RetryCoordinator::new(),
             tokio::time::Instant::now() + Duration::from_secs(10),
         )
         .await
@@ -1786,7 +1704,7 @@ mod tests {
         let replay = StaticReplayClient::new(vec![error_event(500, "InternalError")]);
         let state = replay_app_state(replay.clone());
         let retry = retry_options(2, 30_000);
-        let coordinator = DeleteRetryCoordinator::new();
+        let coordinator = RetryCoordinator::new();
 
         let error = delete_key_chunk(
             &state,
@@ -1901,7 +1819,7 @@ mod tests {
         let logs = TestWriter::default();
         let replay = StaticReplayClient::new(vec![error_event(404, "NoSuchBucket")]);
         let state = replay_app_state(replay.clone());
-        let coordinator = DeleteRetryCoordinator::new();
+        let coordinator = RetryCoordinator::new();
 
         let _guard = tracing::subscriber::set_default(log_subscriber(logs.clone()));
         let (deleted, bucket_missing) = delete_key_chunk(

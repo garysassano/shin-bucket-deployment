@@ -1,6 +1,158 @@
+use std::sync::Mutex;
 use std::time::Duration;
 
-use tokio::time::Instant;
+use fastrand::Rng;
+use tokio::time::{Instant, sleep_until};
+
+use crate::deployment::{PutObjectRetryJitter, PutObjectRetryOptions};
+
+/// Receives retry timing events without coupling the shared coordinator to an
+/// operation's diagnostics storage.
+///
+/// Write and delete retries intentionally publish to different summary sections
+/// and retain their existing accounting boundaries. Every method is required so
+/// adding an event cannot silently leave one operation's telemetry behind.
+pub(super) trait RetryDiagnostics: Sync {
+    /// One retry decision, before checking whether its delay fits the deadline.
+    fn record_retry(&self, throttled: bool);
+
+    /// One completed non-throttled backoff sleep.
+    fn record_retry_wait(&self, delay: Duration);
+
+    /// One actual sleep while following the shared throttle deadline.
+    fn record_throttle_cooldown_sleep(&self, delay: Duration);
+
+    /// The complete wait made by one throttled retry decision.
+    fn record_throttle_retry_wait(&self, elapsed: Duration);
+}
+
+/// Shared mutable state and wait policy for destination retries.
+pub(super) struct RetryCoordinator {
+    throttle_until: Mutex<Option<Instant>>,
+    jitter: Mutex<Rng>,
+}
+
+impl RetryCoordinator {
+    pub(super) fn new() -> Self {
+        Self {
+            throttle_until: Mutex::new(None),
+            jitter: Mutex::new(Rng::new()),
+        }
+    }
+
+    pub(super) async fn wait_for_retry_before_deadline<D: RetryDiagnostics + ?Sized>(
+        &self,
+        diagnostics: &D,
+        retry: &PutObjectRetryOptions,
+        attempt: usize,
+        throttled: bool,
+        work_deadline: Instant,
+    ) -> bool {
+        diagnostics.record_retry(throttled);
+        let delay = self.retry_delay(attempt, throttled, retry);
+        if throttled {
+            self.extend_throttle_cooldown(delay);
+            let started = Instant::now();
+            let proceeded = self
+                .wait_for_throttle_cooldown_before_deadline(diagnostics, work_deadline)
+                .await;
+            diagnostics.record_throttle_retry_wait(started.elapsed());
+            proceeded
+        } else {
+            let Some(wake) = retry_wake_before_deadline(Instant::now(), delay, work_deadline)
+            else {
+                return false;
+            };
+            sleep_until(wake).await;
+            diagnostics.record_retry_wait(delay);
+            true
+        }
+    }
+
+    pub(super) async fn wait_for_throttle_cooldown_before_deadline<D: RetryDiagnostics + ?Sized>(
+        &self,
+        diagnostics: &D,
+        work_deadline: Instant,
+    ) -> bool {
+        loop {
+            let wait = {
+                let throttle_until = self
+                    .throttle_until
+                    .lock()
+                    .expect("retry coordinator throttle mutex should not be poisoned");
+                throttle_until.and_then(|deadline| {
+                    deadline
+                        .checked_duration_since(Instant::now())
+                        .map(|delay| (deadline, delay))
+                })
+            };
+            let Some((wake, delay)) = wait else {
+                return true;
+            };
+            if delay.is_zero() {
+                return true;
+            }
+            if wake >= work_deadline {
+                return false;
+            }
+
+            sleep_until(wake).await;
+            diagnostics.record_throttle_cooldown_sleep(delay);
+        }
+    }
+
+    pub(super) fn retry_delay(
+        &self,
+        attempt: usize,
+        throttled: bool,
+        retry: &PutObjectRetryOptions,
+    ) -> Duration {
+        let cap_millis = retry_cap_millis(attempt, throttled, retry);
+        match retry.jitter {
+            PutObjectRetryJitter::Full => full_jitter_delay(cap_millis, self.next_jitter()),
+            PutObjectRetryJitter::None => Duration::from_millis(cap_millis),
+        }
+    }
+
+    pub(super) fn extend_throttle_cooldown(&self, delay: Duration) {
+        if delay.is_zero() {
+            return;
+        }
+
+        let now = Instant::now();
+        let deadline = now.checked_add(delay).unwrap_or(now);
+        let mut throttle_until = self
+            .throttle_until
+            .lock()
+            .expect("retry coordinator throttle mutex should not be poisoned");
+        if throttle_until.is_none_or(|current| deadline > current) {
+            *throttle_until = Some(deadline);
+        }
+    }
+
+    fn next_jitter(&self) -> u64 {
+        self.jitter
+            .lock()
+            .expect("retry coordinator jitter mutex should not be poisoned")
+            .u64(..)
+    }
+}
+
+pub(super) fn retry_cap_millis(
+    attempt: usize,
+    throttled: bool,
+    retry: &PutObjectRetryOptions,
+) -> u64 {
+    let (base, max) = if throttled {
+        (
+            retry.slowdown_retry_base_delay_ms,
+            retry.slowdown_retry_max_delay_ms,
+        )
+    } else {
+        (retry.retry_base_delay_ms, retry.retry_max_delay_ms)
+    };
+    capped_exponential_backoff_millis(attempt, base, max)
+}
 
 /// Returns `base_millis * 2^(attempt - 1)`, clamped to `max_millis` and
 /// saturating throughout. Retry loops number their first retry from one; zero is
