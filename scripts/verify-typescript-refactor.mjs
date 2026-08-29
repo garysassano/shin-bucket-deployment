@@ -40,7 +40,7 @@ async function main() {
 
   try {
     run("git", ["worktree", "add", "--detach", baselineRoot, baselineRef], repositoryRoot);
-    run("pnpm", ["install", "--offline", "--frozen-lockfile"], baselineRoot);
+    run("pnpm", ["install", "--prefer-offline", "--frozen-lockfile"], baselineRoot);
     prepareBootstrapArchives(baselineRoot);
     prepareBootstrapArchives(repositoryRoot);
 
