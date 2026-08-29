@@ -15,7 +15,6 @@ test("wires the explicit build command and the preflight first in the full check
   );
   assert.match(packageJson.scripts.check, /^pnpm verify:bootstrap-assets && /);
   assert.equal(packageJson.scripts["prebuild:bootstrap"], undefined);
-  assert.equal(packageJson.scripts["verify:synthesis-contract"], undefined);
 });
 
 function makeRoot(t) {

@@ -33,7 +33,6 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
 
 async function main() {
   const baselineRef = optionValue("--baseline-ref") ?? mergeBase();
-  const assembliesOnly = process.argv.includes("--assemblies-only");
   const expectChangesPath = optionValue("--expect-changes");
   scratchRoot = mkdtempSync(join(tmpdir(), "shin-typescript-contract-"));
   baselineRoot = join(scratchRoot, "baseline");
@@ -53,26 +52,18 @@ async function main() {
     const expectedChanges =
       expectChangesPath === undefined ? undefined : loadExpectedChanges(expectChangesPath);
 
-    if (assembliesOnly) {
-      evaluateSynthesisContract(differences, expectedChanges);
-      console.log(
-        `Synthesis contract matches ${baselineRef}: ${verification.templateCount} verification templates, ` +
-          `${benchmark.templateCount} benchmark templates.`,
-      );
-    } else {
-      // Declaration contents join the same accumulator so one manifest covers
-      // every acknowledged change and still has to match exactly in both
-      // directions. Runtime exports and entrypoints stay fail-fast: they are
-      // shape, not content.
-      const declarationCount = comparePublicDeclarations(differences);
-      evaluateSynthesisContract(differences, expectedChanges);
-      await compareRuntimeExports();
-      comparePackageEntrypoints();
-      console.log(
-        `TypeScript refactor contract matches ${baselineRef}: ${declarationCount} declarations, ` +
-          `${verification.templateCount} verification templates, ${benchmark.templateCount} benchmark templates.`,
-      );
-    }
+    // Declaration contents join the same accumulator so one manifest covers
+    // every acknowledged change and still has to match exactly in both
+    // directions. Runtime exports and entrypoints stay fail-fast: they are
+    // shape, not content.
+    const declarationCount = comparePublicDeclarations(differences);
+    evaluateSynthesisContract(differences, expectedChanges);
+    await compareRuntimeExports();
+    comparePackageEntrypoints();
+    console.log(
+      `TypeScript refactor contract matches ${baselineRef}: ${declarationCount} declarations, ` +
+        `${verification.templateCount} verification templates, ${benchmark.templateCount} benchmark templates.`,
+    );
   } finally {
     run("git", ["worktree", "remove", "--force", baselineRoot], repositoryRoot, true);
     rmSync(scratchRoot, { recursive: true, force: true });
