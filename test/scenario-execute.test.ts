@@ -427,29 +427,29 @@ describe("scenario executor", () => {
     expect(commands).toEqual(["pnpm"]);
   });
 
-  it.each([
-    "synth",
-    "destroy",
-  ] as const)("does not run a verifier for a successful %s action", async (action) => {
-    const commands: string[] = [];
+  it.each(["synth", "destroy"] as const)(
+    "does not run a verifier for a successful %s action",
+    async (action) => {
+      const commands: string[] = [];
 
-    const status = await executeScenarioPlan(
-      { concurrency: 1, groups: [{ runs: [verifiedRun(action, action)] }] },
-      {
-        repositoryRoot: "/repo",
-        assertDeployableBootstrap: () => {},
-        pathExists: () => true,
-        startProcess: (_run, command) => {
-          commands.push(command);
-          return { completion: Promise.resolve(0), terminate() {} };
+      const status = await executeScenarioPlan(
+        { concurrency: 1, groups: [{ runs: [verifiedRun(action, action)] }] },
+        {
+          repositoryRoot: "/repo",
+          assertDeployableBootstrap: () => {},
+          pathExists: () => true,
+          startProcess: (_run, command) => {
+            commands.push(command);
+            return { completion: Promise.resolve(0), terminate() {} };
+          },
+          log: () => {},
         },
-        log: () => {},
-      },
-    );
+      );
 
-    expect(status).toBe(0);
-    expect(commands).toEqual(["pnpm"]);
-  });
+      expect(status).toBe(0);
+      expect(commands).toEqual(["pnpm"]);
+    },
+  );
 
   it("cancels a running post-deploy verifier", async () => {
     const controller = new AbortController();

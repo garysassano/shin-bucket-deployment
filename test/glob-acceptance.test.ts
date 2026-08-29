@@ -42,9 +42,10 @@ describe("glob acceptance matrix", () => {
     }
   });
 
-  test.each(
-    matrix.cases.map((entry) => [entry.pattern, entry.accepted, entry.note] as const),
-  )("%j accepted=%s (%s)", (pattern, accepted) => {
-    expect(globSyntaxError(pattern) === undefined).toBe(accepted);
-  });
+  test.each(matrix.cases.map((entry) => [entry.pattern, entry.accepted, entry.note] as const))(
+    "%j accepted=%s (%s)",
+    (pattern, accepted) => {
+      expect(globSyntaxError(pattern) === undefined).toBe(accepted);
+    },
+  );
 });

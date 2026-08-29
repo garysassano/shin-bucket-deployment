@@ -468,7 +468,8 @@ export function benchmarkRunRecordErrors(run: BenchmarkRunRecord): string[] {
     }
   }
   for (const name of ["nodeVersion", "pnpmVersion"] as const) {
-    if (typeof environment?.[name] !== "string" || (environment?.[name] as string).length === 0) {
+    const value = environment?.[name];
+    if (typeof value !== "string" || value.length === 0) {
       errors.push(`${label}: missing ${name}`);
     }
   }
@@ -499,7 +500,8 @@ export function benchmarkRunRecordErrors(run: BenchmarkRunRecord): string[] {
     }
   }
   for (const name of ["cliVersion", "libVersion"] as const) {
-    if (typeof cdk?.[name] !== "string" || (cdk?.[name] as string).length === 0) {
+    const value = cdk?.[name];
+    if (typeof value !== "string" || value.length === 0) {
       errors.push(`${label}: missing cdk.${name}`);
     }
   }
@@ -623,7 +625,8 @@ export function benchmarkRunRecordErrors(run: BenchmarkRunRecord): string[] {
         "cargoLambdaVersion",
         "zigVersion",
       ] as const) {
-        if (typeof bootstrap?.[name] !== "string" || (bootstrap?.[name] as string).length === 0) {
+        const value = bootstrap?.[name];
+        if (typeof value !== "string" || value.length === 0) {
           errors.push(`${label}: missing provider.bootstrap.${name}`);
         }
       }

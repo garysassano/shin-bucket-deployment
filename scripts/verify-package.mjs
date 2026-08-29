@@ -510,11 +510,8 @@ function verifyConsumerInstall(tarball, workDir) {
       {
         compilerOptions: {
           target: "ES2022",
-          module: "commonjs",
-          moduleResolution: "node",
-          ignoreDeprecations: "6.0",
+          module: "Node20",
           strict: true,
-          esModuleInterop: true,
           skipLibCheck: true,
         },
         include: ["index.ts"],

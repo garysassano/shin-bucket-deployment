@@ -1,10 +1,4 @@
 minimumReleaseAge: 4320
 
-# nanoid <3.3.18 (GHSA-2v37-7h3g-55p8) reaches the tree only through
-# vitest -> vite -> postcss, which has not yet released a bump. The advisory is
-# development-only: the published package ships lib/** and assets/bootstrap-*
-# with no node_modules. It is overridden rather than tolerated because a
-# permanently failing npm scanner masks every scanner after it. Drop this once
-# postcss depends on nanoid >=3.3.18.
-overrides:
-  nanoid: ^3.3.18
+# mise and pnpm/action-setup own the package-manager binary.
+pmOnFail: ignore
