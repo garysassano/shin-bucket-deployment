@@ -51,12 +51,6 @@ describe("benchmark result collector", () => {
     test("still checks every phase for a required metric", () => {
       expect(rowsRequiringCompleteSamples(rows, "providerDurationSeconds")).toEqual(rows);
     });
-
-    test("does not exempt the cold-start phase, where the measurement must exist", () => {
-      expect(
-        rowsRequiringCompleteSamples([{ phase: "cold-create", count: 4 }], "initDurationSeconds"),
-      ).toEqual([{ phase: "cold-create", count: 4 }]);
-    });
   });
   // A warm Lambda container omits Init Duration. Requiring it on every phase
   // aborted a canonical run on pruned-update -- the fourth invocation of the

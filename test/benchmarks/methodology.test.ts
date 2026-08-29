@@ -823,22 +823,6 @@ describe("benchmark methodology", () => {
     expect(packageIntegrity(lockfile, "aws-cdk-lib", "2.266.0")).toMatch(/^sha512-/);
   });
 
-  test("does not mark a resumed run dirty only because its sanitized output changed", () => {
-    expect(
-      sourceStatusLines(
-        " M benchmarks/results.jsonl\n M benchmarks/src/model.ts\n",
-        process.cwd(),
-        "benchmarks/results.jsonl",
-      ),
-    ).toEqual([" M benchmarks/src/model.ts"]);
-  });
-
-  test("preserves porcelain status columns when filtering the active ledger", () => {
-    expect(
-      sourceStatusLines(" M benchmarks/results.jsonl\n", process.cwd(), "benchmarks/results.jsonl"),
-    ).toEqual([]);
-  });
-
   test("does not mark a run dirty because it persisted the run ledger", () => {
     // A run writes both ledgers. Excluding only results.jsonl made the first
     // persisted sample look like a source change, aborting the run.

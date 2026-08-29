@@ -18,7 +18,6 @@
     "src/**/*.ts",
     "test/**/*.ts",
     "scenarios/**/*.ts",
-    "docs/**/*.ts",
     "benchmarks/**/*.ts",
     "vitest.config.ts"
   ]

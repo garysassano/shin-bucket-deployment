@@ -159,11 +159,6 @@ export type BenchmarkSampleRow = {
   readonly record: BenchmarkSampleRecord;
 };
 
-export type BenchmarkRunRow = {
-  readonly line: number;
-  readonly record: BenchmarkRunRecord;
-};
-
 /** A sample joined with its run record, used by the render pipeline. */
 export type BenchmarkRunSample = BenchmarkSampleRecord & {
   readonly snapshotDate?: string | null;
@@ -184,10 +179,6 @@ export function runsFileFor(resultsFile: string): string {
 
 export function readBenchmarkRunRecords(filePath: string): BenchmarkRunRecord[] {
   return readJsonlRecords<BenchmarkRunRecord>(filePath).map((row) => row.record);
-}
-
-export function readBenchmarkRunRows(filePath: string): BenchmarkRunRow[] {
-  return readJsonlRecords<BenchmarkRunRecord>(filePath);
 }
 
 export function readBenchmarkSampleRecords(filePath: string): BenchmarkSampleRecord[] {

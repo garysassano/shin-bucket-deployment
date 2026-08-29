@@ -689,9 +689,8 @@ function main() {
         arch,
       );
     }
-    run("pnpm", ["build:package"]);
-    verifyDeclarations();
     const tarball = packTarball(workDir, options.packDestination);
+    verifyDeclarations();
     verifyTarball(tarball, workDir);
     verifyConsumerInstall(tarball, workDir);
     console.log(`Verified ${packageName} package smoke test.`);
