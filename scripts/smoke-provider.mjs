@@ -421,10 +421,14 @@ function outputTail(buffer, lines = 40) {
   return trimmed.slice(-lines).join("\n");
 }
 
-function killProcess(child) {
-  if (child.exitCode === null && child.signalCode === null) {
-    child.kill("SIGTERM");
+async function stopProcess(child) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) {
+    return;
   }
+
+  const exited = new Promise((resolveExit) => child.once("exit", resolveExit));
+  child.kill("SIGTERM");
+  await exited;
 }
 
 async function seedMock(s3) {
@@ -672,8 +676,7 @@ async function main() {
     }
     throw error;
   } finally {
-    killProcess(rie);
-    killProcess(minio);
+    await Promise.all([stopProcess(rie), stopProcess(minio)]);
     if (process.env.SMOKE_KEEP !== "1") {
       rmSync(workDir, { recursive: true, force: true });
     }
