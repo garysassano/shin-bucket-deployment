@@ -409,12 +409,6 @@ function walk(root, include) {
   return files.sort();
 }
 
-function compareBytes(label, baselinePath, currentPath) {
-  if (!readFileSync(baselinePath).equals(readFileSync(currentPath))) {
-    throw new Error(`${label} differs from baseline.`);
-  }
-}
-
 function compareValue(label, baseline, current) {
   if (JSON.stringify(baseline) !== JSON.stringify(current)) {
     throw new Error(`${label} differs from baseline.`);

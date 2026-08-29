@@ -57,9 +57,13 @@ function setAtPath(
   path: readonly string[],
   value: unknown,
 ): void {
+  const last = path.at(-1);
+  if (last === undefined) {
+    throw new Error("matrix path must not be empty");
+  }
+
   let node: unknown = payload;
-  for (let index = 0; index < path.length - 1; index++) {
-    const segment = path[index]!;
+  for (const segment of path.slice(0, -1)) {
     if (segment === "[0]") {
       node = (node as unknown[])[0];
     } else {
@@ -69,7 +73,6 @@ function setAtPath(
       throw new Error(`matrix path ${path.join(".")} does not resolve in the baseline payload`);
     }
   }
-  const last = path[path.length - 1]!;
   if (last === "[0]") {
     (node as unknown[])[0] = value;
   } else {
