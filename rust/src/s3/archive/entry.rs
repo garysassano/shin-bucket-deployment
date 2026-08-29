@@ -774,25 +774,6 @@ fn zip_entry_sdk_body(init: ReceiverBodyInit, content_length: u64) -> SdkBody {
     })
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
-pub(crate) async fn plan_marker_zip_entry(
-    store: Arc<SourceBlockStore>,
-    plan: ZipEntryPlan,
-    marker_replacements: &MarkerReplacements,
-    stats: Option<TransferFetchStats>,
-) -> io::Result<ReplacementResult> {
-    let mut output = tokio::io::sink();
-    replace_marker_zip_entry(
-        store,
-        std::sync::Arc::new(plan),
-        None,
-        marker_replacements,
-        &mut output,
-        stats,
-    )
-    .await
-}
-
 /// Planning variant that retains the replaced output while it fits `spool_limit_bytes`.
 /// Unlike the marker-free comparison pass (whose output length equals the declared
 /// entry size, so the spool decision is pre-made from `plan.size`), marker replacement

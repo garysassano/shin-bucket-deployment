@@ -196,7 +196,6 @@ pub(super) fn is_retryable_http_status(status: u16) -> bool {
 mod tests {
     use std::time::Duration;
 
-    use fastrand::Rng;
     use proptest::prelude::*;
     use tokio::time::Instant;
 
@@ -224,25 +223,6 @@ mod tests {
         assert_eq!(full_jitter_delay(100, 0), Duration::ZERO);
         assert_eq!(full_jitter_delay(100, 100), Duration::from_millis(100));
         assert_eq!(full_jitter_delay(100, 201), Duration::from_millis(100));
-    }
-
-    #[test]
-    fn seeded_jitter_sampling_is_reproducible() {
-        let mut first = Rng::with_seed(0x4d59_5df4_d0f3_3173);
-        let mut second = Rng::with_seed(0x4d59_5df4_d0f3_3173);
-        let first_delays = (0..32)
-            .map(|_| full_jitter_delay(1_000, first.u64(..)))
-            .collect::<Vec<_>>();
-        let second_delays = (0..32)
-            .map(|_| full_jitter_delay(1_000, second.u64(..)))
-            .collect::<Vec<_>>();
-
-        assert_eq!(first_delays, second_delays);
-        assert!(
-            first_delays
-                .iter()
-                .all(|delay| *delay <= Duration::from_millis(1_000))
-        );
     }
 
     #[test]

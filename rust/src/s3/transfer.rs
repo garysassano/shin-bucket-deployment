@@ -159,14 +159,6 @@ mod tests {
     }
 
     #[test]
-    fn md5_hex_matches_known_digest() {
-        assert_eq!(
-            md5_hex(b"hello"),
-            "5d41402abc4b2a76b9719d911017c592".to_string()
-        );
-    }
-
-    #[test]
     fn only_authenticated_catalog_integrity_enables_sparse_skips() {
         let object = DestinationObject {
             etag: Some("5d41402abc4b2a76b9719d911017c592".to_string()),

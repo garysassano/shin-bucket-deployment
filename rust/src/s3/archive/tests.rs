@@ -32,8 +32,8 @@ use super::directory::prepare_zip_directory_reader;
 use super::entry::{
     BodyFrame, LOCAL_FILE_HEADER_LEN, MarkerBodyContext, UploadBodyState,
     forward_replaced_body_chunks, marker_zip_entry_body, open_entry_data_reader,
-    plan_marker_zip_entry, plan_marker_zip_entry_spooled, send_marker_zip_entry_chunks,
-    send_zip_entry_chunks, zip_entry_body, zip_entry_reader,
+    plan_marker_zip_entry_spooled, send_marker_zip_entry_chunks, send_zip_entry_chunks,
+    zip_entry_body, zip_entry_reader,
 };
 use super::range_reader::S3RangeReader;
 use super::{
@@ -861,36 +861,6 @@ async fn marker_forward_reports_broken_pipe_from_the_trailing_partial_frame() {
 }
 
 #[tokio::test]
-async fn marker_planning_streams_exact_length_and_rejects_crc_failure() {
-    let zip = zip_from_entry("marker.txt", b"before TOKEN after");
-    let plan = zip_plan_from_archive(&zip, "marker.txt");
-    let replacements = MarkerReplacements::new(
-        &HashMap::from([("TOKEN".to_string(), "expanded-value".to_string())]),
-        &MarkerConfig::default(),
-    )
-    .expect("marker automaton");
-    let store = ready_store_for_plan(&zip, &plan);
-
-    let result = plan_marker_zip_entry(store, plan.clone(), &replacements, None)
-        .await
-        .expect("marker planning pass");
-
-    assert_eq!(
-        result.output_bytes,
-        b"before expanded-value after".len() as u64
-    );
-    assert!(!result.md5.is_empty());
-
-    let mut invalid = plan;
-    invalid.crc32 ^= 1;
-    let invalid_store = ready_store_for_plan(&zip, &invalid);
-    let error = plan_marker_zip_entry(invalid_store, invalid, &replacements, None)
-        .await
-        .expect_err("marker planning must preserve CRC validation");
-    assert!(error.to_string().contains("CRC32"));
-}
-
-#[tokio::test]
 async fn marker_spooled_planning_retains_bytes_within_the_cap() {
     let zip = zip_from_entry("marker.txt", b"before TOKEN after");
     let plan = zip_plan_from_archive(&zip, "marker.txt");
@@ -903,10 +873,15 @@ async fn marker_spooled_planning_retains_bytes_within_the_cap() {
     let expected = b"before expanded-value after";
 
     // The cap sits exactly on the output length: the boundary is inclusive.
-    let (result, spooled) =
-        plan_marker_zip_entry_spooled(store, plan, &replacements, expected.len() as u64, None)
-            .await
-            .expect("spooled marker planning pass");
+    let (result, spooled) = plan_marker_zip_entry_spooled(
+        store,
+        plan.clone(),
+        &replacements,
+        expected.len() as u64,
+        None,
+    )
+    .await
+    .expect("spooled marker planning pass");
 
     assert_eq!(result.output_bytes, expected.len() as u64);
     assert_eq!(
@@ -921,6 +896,20 @@ async fn marker_spooled_planning_retains_bytes_within_the_cap() {
         finalize_digest(hasher),
         "the planned MD5 must be the hash of the spooled bytes"
     );
+
+    let mut invalid = plan;
+    invalid.crc32 ^= 1;
+    let invalid_store = ready_store_for_plan(&zip, &invalid);
+    let error = plan_marker_zip_entry_spooled(
+        invalid_store,
+        invalid,
+        &replacements,
+        expected.len() as u64,
+        None,
+    )
+    .await
+    .expect_err("marker planning must preserve CRC validation");
+    assert!(error.to_string().contains("CRC32"));
 }
 
 #[tokio::test]

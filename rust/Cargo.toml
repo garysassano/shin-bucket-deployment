@@ -40,6 +40,7 @@ unsafe_code = "forbid"
 name = "plan_entries"
 path = "benches/plan_entries.rs"
 harness = false
+required-features = ["bench-internals"]
 
 # One-shot allocation and resident-memory companion to the Criterion planner bench.
 # It is skipped by normal `cargo bench` / `pnpm rust:bench` runs unless its dedicated

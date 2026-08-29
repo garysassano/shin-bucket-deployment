@@ -25,6 +25,7 @@ mod request;
 mod s3;
 mod state;
 mod util;
+#[cfg(test)]
 mod wire_contract;
 
 // Dev-only bench surface, compiled only when the off-by-default `bench-internals`
