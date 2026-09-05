@@ -49,6 +49,10 @@ use super::diagnostics::{
 };
 use super::scheduler::TransferScheduler;
 
+#[cfg(feature = "bench-internals")]
+#[allow(dead_code)] // used only by the dev library's transfer benchmark
+pub(crate) mod bench;
+
 pub(super) enum UploadPayload {
     /// A fully materialized body. Produced by the comparison pass when a small entry was
     /// spooled, and by tests.

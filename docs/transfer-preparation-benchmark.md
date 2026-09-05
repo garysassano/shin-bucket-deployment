@@ -1,0 +1,29 @@
+# Transfer preparation CPU benchmark
+
+This local harness measures the production ZIP reader, integrity validation, comparison, marker preparation and retryable body consumption. It selects no optimization and makes no AWS performance claim. The pre-experiment hypothesis is that decoder CPU inside `transferPutWait` could be material for cold creates even when the separate `transferPrepare` counter is small.
+
+## Method
+
+Run `pnpm rust:bench:transfer --fixtures-dir /tmp/shin-transfer-fixtures` from a clean checkout. Keep that fixture directory for every baseline/candidate run: an alternative backend can change the ZIP writer too, so regenerating candidate archives would change the experiment. Every sample identifies the archive SHA-256. Fixture generation, ZIP parsing/roundtrip verification, resident source setup, and marker matcher compilation happen before timing.
+
+The runner checks the normal and dev `flate2` graphs on both provider architectures and the host before compiling. It records the clean/dirty source commit, Rust source-input and lockfile hashes, compiler/Cargo versions, selected codec features/backend, release profile, flags, host CPU/memory, and executable digest. Compile-time provenance embedded in the harness binds sample `buildId` values to the preceding build record. This is a native release harness, not a packaged Lambda bootstrap; it records no deployed-provider provenance.
+
+The measured calls use the existing `bench-internals` library surface and cfg-gated child modules. `ZipEntryAsyncReader`, the codec, CRC, declared-size checks, trusted MD5 checks, `prepare_zip_entry_upload`, marker planning, and upload body framing are the production implementations. Source blocks use the real block planner but remain resident under a fixture-owned claim, so comparison replay has no network delay or refetch. No streaming algorithm or provider API is added. The sink consumes chunks without collecting the whole output. Exact-body comparisons run only during untimed fixture validation.
+
+The matrix contains 112 cases: Stored/Deflate × 16 KiB/2 MiB × high-entropy/repetitive JSON × cataloged/uncataloged; each has marker-free decode-and-validate, cold create, unchanged update, and same-size changed update, plus marker variants of the three transfer operations. Markers occur every 4 KiB and expand the output. Both input sizes bracket the actual 256 KiB comparison spool cap at the recorded concurrency setting of 64. JSON identifiers vary to keep repetitive inputs below the configured 100:1 expansion limit. Cataloged cases start after catalog authentication/planning, with the same trusted integrity passed to transfer in production; existing planner benchmarks cover that earlier work.
+
+Seven samples follow one exact-body warmup per case. Wall time and preparation/body subtimings come from an unprofiled pass. A separate pass uses the existing `allocation-counter` dependency to record total allocated bytes, allocation count, and peak live allocated bytes. Both passes use a current-thread Tokio runtime so spawned body producers stay on the measured thread; producers are drained before the pass ends. Allocation totals must return to zero. Source fixtures, client/runtime construction, and matcher compilation are excluded from these incremental allocation numbers. They are not process RSS, Lambda peak memory, or a concurrency/memory-budget simulation. Throughput uses the actual number of decoded bytes, including a second pass when needed, and is absent for a catalog skip.
+
+CI compiles the harness in the existing all-targets Clippy gate and runs `--check-fixtures` in the test profile. This verifies all matrix branch outcomes and exact upload bodies, plus CRC, declared-size, trusted MD5, and truncation failures. It has no wall-time thresholds. Existing malformed ZIP, ZIP64, marker, cancellation/replay tests remain in their original locations.
+
+## Decision gates
+
+Before changing a backend, require at least a repeatable 10% improvement in the focused local operation with identical fixtures, toolchain, settings, and clean commits. Retain the existing catalog-synthesis and `plan_entries` benchmarks as guards; do not rerun the rejected relative-key representation experiment. A local gain alone cannot accept a provider optimization. Any selected implementation still needs comparable upstream/Shin AWS controls, at least a repeatable 5% target-workload provider-duration or billed-cost improvement, no greater than 3% canonical-workload regression, exact-main provenance and published sanitized evidence before performance acceptance.
+
+Amdahl estimates must identify their assumptions. Host decoder time cannot be subtracted directly from Lambda duration, and summed concurrent `transferPutWait` timings are not a wall-clock partition. Unchanged cataloged marker-free entries do no decoding, so a faster codec cannot improve that transfer path. Marker entries above the spool cap still need a validated planning pass and another streamed pass; this harness measures both.
+
+[Upstream CDK's handler](https://github.com/aws/aws-cdk/blob/main/packages/%40aws-cdk/custom-resource-handlers/lib/aws-s3-deployment/bucket-deployment-handler/index.py) downloads/extracts to a working directory and uses AWS CLI sync. That established whole-workload control remains appropriate for deployed comparisons, while this local harness isolates Shin's streaming CPU cost. The existing [allocation-counter documentation](https://docs.rs/allocation-counter/0.8.1/allocation_counter/fn.measure.html) scopes allocation accounting to the calling thread, which is why this harness deliberately uses one runtime thread.
+
+## Baseline decision
+
+Measurements are pending the clean harness commit. P02 is a separate experiment; P03 and P04 require independently justified many-source and multi-batch deletion workloads.
