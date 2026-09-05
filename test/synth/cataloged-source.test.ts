@@ -213,7 +213,7 @@ function childMaxRssKb(sourceDirectory: string): number {
 }
 
 describe("cataloged directory assets", () => {
-  test("writes compact deterministic v1 entries in UTF-8 byte order", () => {
+  test("writes compact deterministic v1 entries in UTF-16 code-unit order", () => {
     const source = writeFixture({
       "z.txt": "z",
       "ä.txt": "unicode",

@@ -757,9 +757,6 @@ async fn delete_keys_optional_stats(
 ) -> Result<u64> {
     let mut deleted = 0_u64;
     for chunk in keys.chunks(1000) {
-        if chunk.is_empty() {
-            continue;
-        }
         let (chunk_deleted, bucket_missing) = delete_key_chunk(
             state,
             bucket,
