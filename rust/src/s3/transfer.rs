@@ -8,6 +8,9 @@ mod diagnostics;
 mod scheduler;
 mod upload;
 
+#[cfg(feature = "bench-internals")]
+pub(crate) use upload::bench;
+
 pub(super) use copy::execute_copy_plans;
 pub(super) use upload::upload_zip_entries;
 

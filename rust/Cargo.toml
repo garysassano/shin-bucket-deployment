@@ -51,6 +51,12 @@ path = "benches/plan_key_allocations.rs"
 harness = false
 required-features = ["bench-key-allocations"]
 
+[[bench]]
+name = "transfer_preparation"
+path = "benches/transfer_preparation.rs"
+harness = false
+required-features = ["bench-internals"]
+
 # Off-by-default surface for the `plan-entries` criterion bench
 # (`pnpm rust:bench`). The bench is a separate crate and cannot see `pub(crate)` /
 # `pub(super)` items, and Rust forbids re-exporting those from a `pub` module, so
