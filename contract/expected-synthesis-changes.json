@@ -1,0 +1,14 @@
+{
+  ".verification-assets/cdk.out/verify/filters/ShinBucketDeploymentFiltersDemo.assets.json": "Add safe synthetic exact-key sources and one excluded source to the existing filters fixture.",
+  ".verification-assets/cdk.out/verify/filters/ShinBucketDeploymentFiltersDemo.template.json": "Add safe synthetic exact-key sources and one excluded source to the existing filters fixture.",
+  ".verification-assets/cdk.out/verify/filters/manifest.json": "Add safe synthetic exact-key sources and one excluded source to the existing filters fixture. The assembly manifest tracks the changed stack template asset.",
+  ".verification-assets/cdk.out/verify/filters/tree.json": "Add safe synthetic exact-key sources and one excluded source to the existing filters fixture.",
+  ".verification-assets/cdk.out/verify/stale-object-cleanup-initial/ShinBucketDeploymentStaleObjectCleanupDemo.assets.json": "Seed kept, stale, and excluded synthetic exact keys for the stale-cleanup update.",
+  ".verification-assets/cdk.out/verify/stale-object-cleanup-initial/ShinBucketDeploymentStaleObjectCleanupDemo.template.json": "Seed kept, stale, and excluded synthetic exact keys for the stale-cleanup update.",
+  ".verification-assets/cdk.out/verify/stale-object-cleanup-initial/manifest.json": "Seed kept, stale, and excluded synthetic exact keys for the stale-cleanup update. The assembly manifest tracks the changed stack template asset.",
+  ".verification-assets/cdk.out/verify/stale-object-cleanup-initial/tree.json": "Seed kept, stale, and excluded synthetic exact keys for the stale-cleanup update.",
+  ".verification-assets/cdk.out/verify/stale-object-cleanup-updated/ShinBucketDeploymentStaleObjectCleanupDemo.assets.json": "Retain exact kept keys, exclude the seeded unusual key, and omit stale exact-key sources.",
+  ".verification-assets/cdk.out/verify/stale-object-cleanup-updated/ShinBucketDeploymentStaleObjectCleanupDemo.template.json": "Retain exact kept keys, exclude the seeded unusual key, and omit stale exact-key sources.",
+  ".verification-assets/cdk.out/verify/stale-object-cleanup-updated/manifest.json": "Retain exact kept keys, exclude the seeded unusual key, and omit stale exact-key sources. The assembly manifest tracks the changed stack template asset.",
+  ".verification-assets/cdk.out/verify/stale-object-cleanup-updated/tree.json": "Retain exact kept keys, exclude the seeded unusual key, and omit stale exact-key sources."
+}

@@ -34,17 +34,23 @@ The local experiment compiled the exact decoder with Rust 1.97.1 and `rustc -O` 
 
 | Synthetic key shape                         | Consume/drop baseline | Decode/drop |  Added cost |
 | ------------------------------------------- | --------------------: | ----------: | ----------: |
-| Ordinary short asset key                    |               4.71 ns |     7.18 ns |     2.47 ns |
-| Short key with one escape                   |               4.67 ns |    15.38 ns |    10.71 ns |
-| Short encoded Unicode key                   |               4.67 ns |    27.26 ns |    22.59 ns |
-| 1,024-byte ordinary key                     |              49.10 ns |    92.00 ns |    42.90 ns |
-| 1,024-byte UTF-8 key encoded as 3,072 bytes |             134.48 ns | 1,813.73 ns | 1,679.25 ns |
+| Ordinary short asset key                    |               5.32 ns |     8.57 ns |     3.25 ns |
+| Short key with one escape                   |               4.49 ns |    15.19 ns |    10.70 ns |
+| Short encoded Unicode key                   |               4.56 ns |    29.01 ns |    24.45 ns |
+| 1,024-byte ordinary key                     |              50.49 ns |    92.10 ns |    41.61 ns |
+| 1,024-byte UTF-8 key encoded as 3,072 bytes |             127.25 ns | 1,633.80 ns | 1,506.56 ns |
 
 Allocation-identity tests prove that successful decoding reuses the SDK string buffer. These local timings establish the incremental CPU cost only; they do not establish deployed performance acceptance. Comparable exact-main provider measurements and an upstream AWS CDK baseline remain required before performance acceptance.
 
+## Local validation
+
+Validation on the final runtime-dependency baseline `b499009` passed 329 Rust tests, Clippy with warnings denied, formatting, DEFLATE feature parity, TypeScript build/typecheck/lint, and 465 Vitest plus 60 script tests with staged archives. Fresh arm64 and x86_64 archives pass the provider-input/toolchain/build-environment freshness gate; all 33 verification scenarios synthesize.
+
+The exact TypeScript contract comparison against `b499009` passed with six unchanged public declarations, unchanged runtime exports and package entrypoints, 33 verification templates, and two unchanged benchmark templates. The acknowledgement contains only the 12 observed fixture changes: template, assets, tree, and assembly manifest for `filters`, `stale-object-cleanup-initial`, and `stale-object-cleanup-updated`.
+
 ## AWS validation boundary
 
-Targeted `filters` and `stale-object-cleanup` verification with current provider archives remains pending. The existing groups now use eight synthetic key shapes: distinct CR and LF names, literal-percent and slash names, plus and space names, Unicode, and XML metacharacters. No new scenario group or cloud resource type is required.
+Deployed correctness remains pending the intentional final release-candidate full verification suite, which includes the `filters` and `stale-object-cleanup` groups. The existing groups now use eight synthetic key shapes: distinct CR and LF names, literal-percent and slash names, plus and space names, Unicode, and XML metacharacters. No new scenario group or cloud resource type is required.
 
 | Phase                          | Expected boundary                                                                                                                                                                                      |
 | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -52,7 +58,7 @@ Targeted `filters` and `stale-object-cleanup` verification with current provider
 | `stale-object-cleanup-initial` | Twenty-one exact destination keys: the base fixture, current and legacy files, eight kept edge keys, eight stale edge keys, and one key to exclude on update.                                          |
 | `stale-object-cleanup-updated` | Twelve exact destination keys: the base fixture, changed current file, eight unchanged kept edge keys, and the excluded CR/plus/percent key. The legacy file and all eight stale edge keys are absent. |
 
-Run the selected groups after rebuilding current provider archives, and use the same group selection for cleanup:
+The selected integration run will execute the full suite after current provider archives are built. For a future isolated rerun of this boundary, the smallest relevant scope is below; use the same group selection for cleanup:
 
 ```bash
 pnpm verify deploy --groups filters,stale-object-cleanup --concurrency 1
