@@ -1,0 +1,3 @@
+{
+  "declaration shin-bucket-deployment.d.ts": "Provider JSDoc now documents deployment-scoped local builds, rejection of explicit STACK sharing, and the removal of implicit compilation when a prebuilt archive is missing."
+}

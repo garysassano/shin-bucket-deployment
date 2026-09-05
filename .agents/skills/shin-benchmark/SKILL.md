@@ -59,7 +59,7 @@ Committed benchmark records may include:
 
 > **Any change under `rust/` requires a current provider archive staged before collecting benchmark evidence.**
 >
-> Benchmark deploys use the same construct path as verification: the construct prefers a prebuilt `assets/bootstrap-<arch>/bootstrap.zip` and only compiles when no archive exists (`src/provider.ts`). A stale archive is selected silently, so rows would measure the previous provider binary while recording the new commit's `provider.bootstrap` digests and `provider.implementationCommit` — evidence that misdescribes what ran.
+> Benchmark deploys use the same construct path as verification: the construct requires `assets/bootstrap-<arch>/bootstrap.zip` unless `providerLambda.localBuild` explicitly selects compilation (`src/provider.ts`). Missing archives fail synthesis; compilation is never an implicit fallback, and explicit local builds require deployment-scoped handlers. A stale archive is selected silently, so rows would measure the previous provider binary while recording the new commit's `provider.bootstrap` digests and `provider.implementationCommit` — evidence that misdescribes what ran.
 >
 > Who stages the archive differs by entry point:
 >

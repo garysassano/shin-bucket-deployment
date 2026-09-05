@@ -6,7 +6,7 @@ import { AllowedMethods, Distribution, ViewerProtocolPolicy } from "aws-cdk-lib/
 import { S3BucketOrigin } from "aws-cdk-lib/aws-cloudfront-origins";
 import { Role } from "aws-cdk-lib/aws-iam";
 import { Bucket, type CfnBucket } from "aws-cdk-lib/aws-s3";
-import { describe, expect, test } from "vitest";
+import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import {
   DEFAULT_MAX_COMPRESSION_RATIO,
   DEFAULT_MAX_UNCOMPRESSED_ENTRY_BYTES,
@@ -18,6 +18,15 @@ import {
   type ValidationError,
 } from "../../src";
 import { testLocalProviderBuild } from "../support/bundling";
+import { ensurePrebuiltBootstrapAssets } from "../support/prebuilt-assets";
+
+let cleanupPrebuiltAssets: () => void;
+beforeAll(() => {
+  cleanupPrebuiltAssets = ensurePrebuiltBootstrapAssets();
+});
+afterAll(() => {
+  cleanupPrebuiltAssets();
+});
 
 function customResourceProperties(stack: Stack) {
   const template = Template.fromStack(stack).toJSON() as {
@@ -1876,7 +1885,6 @@ describe("ShinBucketDeployment validation and option coverage", () => {
       sources: [Source.data("index.html", "ok")],
       destination: { bucket: destinationBucket },
       destinationLifecycle: { onChange: { deletePreviousObjects: true } },
-      providerLambda: { localBuild: testLocalProviderBuild() },
     });
 
     Annotations.fromStack(stack).hasWarning(
@@ -1904,26 +1912,29 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     );
   });
 
-  test("does not warn about the shared role with deployment-scoped sharing", () => {
-    const app = new App();
-    const stack = new Stack(app, "IsolatedDelete");
-    const destinationBucket = new Bucket(stack, "Dest");
+  test.each([undefined, ProviderSharing.DEPLOYMENT])(
+    "does not warn about the shared role for a local build with sharing %s",
+    (sharing) => {
+      const app = new App();
+      const stack = new Stack(app, "IsolatedDelete");
+      const destinationBucket = new Bucket(stack, "Dest");
 
-    new ShinBucketDeployment(stack, "Deploy", {
-      sources: [Source.data("index.html", "ok")],
-      destination: { bucket: destinationBucket },
-      destinationLifecycle: { onChange: { deletePreviousObjects: true } },
-      providerLambda: {
-        sharing: ProviderSharing.DEPLOYMENT,
-        localBuild: testLocalProviderBuild(),
-      },
-    });
+      new ShinBucketDeployment(stack, "Deploy", {
+        sources: [Source.data("index.html", "ok")],
+        destination: { bucket: destinationBucket },
+        destinationLifecycle: { onChange: { deletePreviousObjects: true } },
+        providerLambda: {
+          sharing,
+          localBuild: testLocalProviderBuild(),
+        },
+      });
 
-    Annotations.fromStack(stack).hasNoWarning(
-      "/IsolatedDelete/Deploy",
-      Match.stringLikeRegexp("ProviderSharing.DEPLOYMENT"),
-    );
-  });
+      Annotations.fromStack(stack).hasNoWarning(
+        "/IsolatedDelete/Deploy",
+        Match.stringLikeRegexp("ProviderSharing.DEPLOYMENT"),
+      );
+    },
+  );
 
   test("warns when grants cannot be attached to an imported provider role", () => {
     const app = new App();

@@ -36,6 +36,13 @@ const providerLambda: ShinBucketDeploymentProviderLambdaOptions = {
   failureDiagnostics: FailureDiagnostics.DETAILED,
   localBuild,
 };
+const isolatedLocalBuild: ShinBucketDeploymentProviderLambdaOptions = { localBuild };
+const sharedPrebuilt: ShinBucketDeploymentProviderLambdaOptions = {
+  sharing: ProviderSharing.STACK,
+};
+void isolatedLocalBuild;
+void sharedPrebuilt;
+
 const advancedTuning: ShinBucketDeploymentAdvancedTransferTuning = {
   sourceBlockBytes: 4 * 1024 * 1024,
   destinationWriteRetry: { maxAttempts: 4 },

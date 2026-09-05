@@ -48,7 +48,9 @@ The check starts with `pnpm verify:bootstrap-assets` and stops before the longer
 
 ## Compile a local provider from a CDK app
 
-The construct uses the prebuilt provider by default. Passing `providerLambda.localBuild` opts into compiling the Rust provider during CDK asset bundling instead.
+The construct uses the prebuilt provider by default. If the archive for the selected architecture is missing, synthesis fails with `ShinBucketDeploymentPrebuiltProviderArchiveMissing`: run `pnpm build:bootstrap` in a source checkout, or explicitly select `providerLambda.localBuild` to compile during CDK asset bundling. A missing archive never starts compilation implicitly.
+
+Passing `providerLambda.localBuild` creates a deployment-scoped handler and generated role by default. Explicit `providerLambda.sharing: ProviderSharing.STACK` is rejected; omit `sharing` or set `ProviderSharing.DEPLOYMENT`. Each local build reaches the bundler independently, including separate source trees with identical Cargo manifests or hooks with different captured values. The handler keeps a fixed child ID, so moving the checkout or changing source and bundling options updates its code without changing its handler identity. Caller-supplied roles and log groups can still be shared intentionally.
 
 Install the optional compile dependency in the CDK app:
 

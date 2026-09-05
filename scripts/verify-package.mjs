@@ -705,6 +705,61 @@ function verifyConsumerInstall(tarball, workDir) {
     verifyStagedProviderArchive(consumerDir, join(workDir, "cdk.out-esm"), arch);
   }
   verifyCatalogedConsumerAsset(join(workDir, "cdk.out-esm"));
+
+  writeFileSync(
+    join(consumerDir, "build-modes.cjs"),
+    [
+      'const assert = require("node:assert/strict");',
+      'const { mkdirSync, renameSync, writeFileSync } = require("node:fs");',
+      'const { dirname, join } = require("node:path");',
+      'const Module = require("node:module");',
+      'const { App, Stack } = require("aws-cdk-lib");',
+      'const { Template } = require("aws-cdk-lib/assertions");',
+      'const { Architecture } = require("aws-cdk-lib/aws-lambda");',
+      'const { Bucket } = require("aws-cdk-lib/aws-s3");',
+      "const originalLoad = Module._load;",
+      "let compilerLoads = 0;",
+      "Module._load = function(request, ...args) {",
+      '  if (request === "cargo-lambda-cdk") compilerLoads++;',
+      "  return originalLoad.call(this, request, ...args);",
+      "};",
+      `const { ProviderSharing, ShinBucketDeployment, Source, ValidationError } = require("${packageName}");`,
+      `const packageRoot = dirname(dirname(require.resolve("${packageName}")));`,
+      `const assemblyRoot = ${JSON.stringify(join(workDir, "cdk.out-build-modes"))};`,
+      "function create(id, providerLambda) {",
+      "  const app = new App({ outdir: join(assemblyRoot, id) });",
+      '  const stack = new Stack(app, id, { stackName: id.replaceAll("_", "-") });',
+      '  const bucket = new Bucket(stack, "Bucket");',
+      '  const deployment = new ShinBucketDeployment(stack, "Deploy", {',
+      '    sources: [Source.data("index.txt", "ok")], destination: { bucket }, providerLambda,',
+      "  });",
+      "  return { stack, deployment };",
+      "}",
+      "for (const architecture of [Architecture.ARM_64, Architecture.X86_64]) {",
+      '  const { stack } = create("Prebuilt-" + architecture.name, { architecture });',
+      '  Template.fromStack(stack).hasResourceProperties("AWS::Lambda::Function", { Architectures: [architecture.name] });',
+      "}",
+      'assert.equal(compilerLoads, 0, "prebuilt imports and synthesis must not load the compiler peer");',
+      'const projectPath = join(__dirname, "provider");',
+      "mkdirSync(projectPath);",
+      'writeFileSync(join(projectPath, "Cargo.toml"), "[package]\\nname = \\"provider\\"\\nversion = \\"0.0.0\\"\\n");',
+      'assert.throws(() => create("ExplicitLocal", { localBuild: { projectPath } }), error => error instanceof ValidationError && error.code === "ShinBucketDeploymentCargoLambdaMissing" && error.message.includes("cargo-lambda-cdk"));',
+      'assert.equal(compilerLoads, 1, "only explicit localBuild loads the compiler peer");',
+      'assert.throws(() => create("InvalidSharing", { sharing: ProviderSharing.STACK, localBuild: { projectPath } }), error => error instanceof ValidationError && error.code === "ShinBucketDeploymentLocalProviderBuildSharing");',
+      'assert.equal(compilerLoads, 1, "invalid sharing must fail before loading the compiler peer");',
+      "for (const architecture of [Architecture.ARM_64, Architecture.X86_64]) {",
+      '  const archive = join(packageRoot, "assets", "bootstrap-" + architecture.name, "bootstrap.zip");',
+      '  renameSync(archive, archive + ".hidden");',
+      "  try {",
+      '    assert.throws(() => create("Missing-" + architecture.name, { architecture }), error => error instanceof ValidationError && error.code === "ShinBucketDeploymentPrebuiltProviderArchiveMissing" && error.message.includes("bootstrap-" + architecture.name + "/bootstrap.zip") && error.message.includes("pnpm build:bootstrap") && error.message.includes("providerLambda.localBuild"));',
+      '    assert.equal(compilerLoads, 1, "a missing prebuilt archive must not load the compiler peer");',
+      '  } finally { renameSync(archive + ".hidden", archive); }',
+      "}",
+      "Module._load = originalLoad;",
+      "",
+    ].join("\n"),
+  );
+  run("node", ["build-modes.cjs"], { cwd: consumerDir });
 }
 
 function main() {

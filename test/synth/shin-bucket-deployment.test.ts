@@ -12,7 +12,7 @@ import { Architecture } from "aws-cdk-lib/aws-lambda";
 import { LogGroup } from "aws-cdk-lib/aws-logs";
 import { Bucket, BucketEncryption, BucketNamespace, CfnBucket } from "aws-cdk-lib/aws-s3";
 import type { IConstruct } from "constructs";
-import { expect, test } from "vitest";
+import { afterAll, beforeAll, expect, test } from "vitest";
 import {
   DEFAULT_MAX_COMPRESSION_RATIO,
   DEFAULT_MAX_UNCOMPRESSED_ENTRY_BYTES,
@@ -30,6 +30,14 @@ import { renderHandlerConfigHashInput } from "../../src/provider";
 import { stableStringify } from "../../src/stable-json";
 import { testLocalProviderBuild } from "../support/bundling";
 import { ensurePrebuiltBootstrapAssets } from "../support/prebuilt-assets";
+
+let cleanupPrebuiltAssets: () => void;
+beforeAll(() => {
+  cleanupPrebuiltAssets = ensurePrebuiltBootstrapAssets();
+});
+afterAll(() => {
+  cleanupPrebuiltAssets();
+});
 
 interface FileAssetManifestEntry {
   displayName?: string;
@@ -261,30 +269,24 @@ test("binds shared prebuilt handler identity to the package version and archive 
   }
 });
 
-test("freezes the canonical handler hash input across the public API regrouping", () => {
+test("serializes the prebuilt handler configuration canonically", () => {
   const stack = new Stack();
   const serialized = renderHandlerConfigHashInput(
     stack,
     {
       memorySize: 2048,
       failureDiagnostics: FailureDiagnostics.DETAILED,
-      localBuild: {
-        bundling: {
-          environment: { B: "2", A: "1" },
-          forcedDockerBundling: true,
-        },
-      },
     },
     Architecture.X86_64,
     {
-      kind: "compile",
+      kind: "prebuilt",
       packageVersion: "0.9.0",
-      manifestPath: "/repo/rust/Cargo.toml",
+      bootstrapArchiveSha256: "archive-digest",
     },
   );
 
   expect(serialized).toBe(
-    `{"architecture":"x86_64","bundling":{"environment":{"A":"1","B":"2"},"forcedDockerBundling":true},"failureDiagnostics":"detailed","handlerSource":{"kind":"compile","manifestPath":"/repo/rust/Cargo.toml","packageVersion":"0.9.0"},"memoryLimit":2048,"stack":"${stack.node.addr}"}`,
+    `{"architecture":"x86_64","failureDiagnostics":"detailed","handlerSource":{"bootstrapArchiveSha256":"archive-digest","kind":"prebuilt","packageVersion":"0.9.0"},"memoryLimit":2048,"stack":"${stack.node.addr}"}`,
   );
 });
 
@@ -297,9 +299,9 @@ test("keeps every provider Lambda identity member in canonical handler selection
   });
   const logGroup = new LogGroup(stack, "LogGroup");
   const sourceIdentity = {
-    kind: "compile",
+    kind: "prebuilt",
     packageVersion: "0.9.0",
-    manifestPath: "/repo/rust/Cargo.toml",
+    bootstrapArchiveSha256: "archive-digest",
   };
   const render = (
     config: Parameters<typeof renderHandlerConfigHashInput>[1] = {},
@@ -315,7 +317,6 @@ test("keeps every provider Lambda identity member in canonical handler selection
     render({ vpc }),
     render({ vpcSubnets: { subnetType: SubnetType.PUBLIC } }),
     render({ securityGroups: [securityGroup] }),
-    render({ localBuild: { bundling: { environment: { BUILD: "variant" } } } }),
     render({}, Architecture.X86_64),
     render({}, Architecture.ARM_64, { ...sourceIdentity, packageVersion: "0.9.1" }),
   ];
@@ -332,9 +333,9 @@ test("canonicalizes provider security group identity independently of caller ord
   const firstGroup = new SecurityGroup(stack, "FirstGroup", { vpc });
   const secondGroup = new SecurityGroup(stack, "SecondGroup", { vpc });
   const handlerSource = {
-    kind: "compile",
+    kind: "prebuilt",
     packageVersion: "0.9.0",
-    manifestPath: "/repo/rust/Cargo.toml",
+    bootstrapArchiveSha256: "archive-digest",
   };
 
   const first = renderHandlerConfigHashInput(
@@ -363,9 +364,6 @@ test("detailed failure diagnostics are opt-in and select a distinct shared handl
     destination: {
       bucket: new Bucket(stack, "DefaultDest"),
     },
-    providerLambda: {
-      localBuild: testLocalProviderBuild(),
-    },
   });
   const diagnosticDeployment = new ShinBucketDeployment(stack, "DiagnosticDeploy", {
     sources: [Source.data("diagnostic.txt", "diagnostic")],
@@ -374,7 +372,6 @@ test("detailed failure diagnostics are opt-in and select a distinct shared handl
     },
     providerLambda: {
       failureDiagnostics: FailureDiagnostics.DETAILED,
-      localBuild: testLocalProviderBuild(),
     },
   });
 
@@ -447,18 +444,12 @@ test("reuses a shared handler for identical provider configuration in the same s
     destination: {
       bucket: firstBucket,
     },
-    providerLambda: {
-      localBuild: testLocalProviderBuild(),
-    },
   });
 
   const second = new ShinBucketDeployment(stack, "SecondDeploy", {
     sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
     destination: {
       bucket: secondBucket,
-    },
-    providerLambda: {
-      localBuild: testLocalProviderBuild(),
     },
   });
 
@@ -480,7 +471,6 @@ test("reuses a shared handler when provider security groups have reversed caller
     providerLambda: {
       vpc,
       securityGroups: [firstGroup, secondGroup],
-      localBuild: testLocalProviderBuild(),
     },
   });
   const second = new ShinBucketDeployment(stack, "SecondDeploy", {
@@ -489,7 +479,6 @@ test("reuses a shared handler when provider security groups have reversed caller
     providerLambda: {
       vpc,
       securityGroups: [secondGroup, firstGroup],
-      localBuild: testLocalProviderBuild(),
     },
   });
 
@@ -504,7 +493,6 @@ test("keeps every transfer setting request-scoped while sharing one handler", ()
   const first = new ShinBucketDeployment(stack, "FirstDeploy", {
     sources: [Source.data("first.txt", "first")],
     destination: { bucket: new Bucket(stack, "FirstDest") },
-    providerLambda: { localBuild: testLocalProviderBuild() },
     transfer: {
       maxConcurrency: 3,
       advancedTuning: { sourceBlockBytes: 4 * 1024 * 1024 },
@@ -513,7 +501,6 @@ test("keeps every transfer setting request-scoped while sharing one handler", ()
   const second = new ShinBucketDeployment(stack, "SecondDeploy", {
     sources: [Source.data("second.txt", "second")],
     destination: { bucket: new Bucket(stack, "SecondDest") },
-    providerLambda: { localBuild: testLocalProviderBuild() },
     transfer: {
       maxConcurrency: 9,
       advancedTuning: { sourceBlockBytes: 8 * 1024 * 1024 },
@@ -551,7 +538,6 @@ test("keeps omitted and explicit stack-scoped provider templates identical", () 
       },
       providerLambda: {
         ...(sharing === undefined ? {} : { sharing }),
-        localBuild: testLocalProviderBuild(),
       },
     });
     return Template.fromStack(stack).toJSON();
@@ -598,9 +584,6 @@ test("creates separate handlers when the provider configuration differs", () => 
     destination: {
       bucket: firstBucket,
     },
-    providerLambda: {
-      localBuild: testLocalProviderBuild(),
-    },
   });
 
   const second = new ShinBucketDeployment(stack, "SecondDeploy", {
@@ -610,7 +593,6 @@ test("creates separate handlers when the provider configuration differs", () => 
     },
     providerLambda: {
       memorySize: 3072,
-      localBuild: testLocalProviderBuild(),
     },
   });
 
@@ -632,9 +614,6 @@ test("isolates functions, generated roles, and destination policies per deployme
     destination: {
       bucket: sharedFirstBucket,
     },
-    providerLambda: {
-      localBuild: testLocalProviderBuild(),
-    },
   });
   const sharedSecond = new ShinBucketDeployment(stack, "SharedSecondDeploy", {
     sources: [Source.data("index.html", "shared-second")],
@@ -643,7 +622,6 @@ test("isolates functions, generated roles, and destination policies per deployme
     },
     providerLambda: {
       sharing: ProviderSharing.STACK,
-      localBuild: testLocalProviderBuild(),
     },
   });
   const isolatedFirst = new ShinBucketDeployment(stack, "IsolatedFirstDeploy", {
@@ -653,7 +631,6 @@ test("isolates functions, generated roles, and destination policies per deployme
     },
     providerLambda: {
       sharing: ProviderSharing.DEPLOYMENT,
-      localBuild: testLocalProviderBuild(),
     },
   });
   const isolatedSecond = new ShinBucketDeployment(stack, "IsolatedSecondDeploy", {
@@ -663,7 +640,6 @@ test("isolates functions, generated roles, and destination policies per deployme
     },
     providerLambda: {
       sharing: ProviderSharing.DEPLOYMENT,
-      localBuild: testLocalProviderBuild(),
     },
   });
 
@@ -707,17 +683,11 @@ test("keeps shared handlers scoped to their CDK stack", () => {
     destination: {
       bucket: new Bucket(firstStack, "Dest"),
     },
-    providerLambda: {
-      localBuild: testLocalProviderBuild(),
-    },
   });
   const second = new ShinBucketDeployment(secondStack, "Deploy", {
     sources: [Source.data("index.html", "second")],
     destination: {
       bucket: new Bucket(secondStack, "Dest"),
-    },
-    providerLambda: {
-      localBuild: testLocalProviderBuild(),
     },
   });
 
@@ -739,7 +709,6 @@ test("gives each handler replacement a distinct destination owner", () => {
       destinationLifecycle: { onDelete: { deleteCurrentObjects: true } },
       providerLambda: {
         memorySize: memoryLimit,
-        localBuild: testLocalProviderBuild(),
       },
     });
 

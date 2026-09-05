@@ -60,29 +60,21 @@ export function getOrCreateHandler(scope: Construct, config: ProviderLambdaConfi
   const stack = Stack.of(scope);
   const architecture = config.architecture ?? Architecture.ARM_64;
 
-  // A developer opts into local compilation through providerLambda.localBuild;
-  // otherwise prefer a prebuilt binary so consumers do not need a Rust
-  // toolchain. When neither a prebuilt binary nor an explicit compile request is
-  // available (e.g. a local checkout before prebuild), fall back to the local
-  // cargo-lambda compile path.
+  // Local builds are isolated: neither a manifest nor a serialized callback
+  // identifies the source tree and captured state that the bundler will use.
   const wantsCompile = config.localBuild !== undefined;
+  const sharing =
+    config.sharing ?? (wantsCompile ? ProviderSharing.DEPLOYMENT : ProviderSharing.STACK);
   const prebuiltBootstrapArchive = wantsCompile
     ? undefined
-    : resolvePrebuiltBootstrapArchive(architecture);
-  const useCompilePath = wantsCompile || prebuiltBootstrapArchive === undefined;
-
-  const rustProjectPath = useCompilePath
-    ? (config.localBuild?.projectPath ?? resolveDefaultRustProjectPath(scope))
-    : undefined;
-  const manifestPath =
-    rustProjectPath !== undefined ? join(rustProjectPath, "Cargo.toml") : undefined;
-  const stackScoped = (config.sharing ?? ProviderSharing.STACK) === ProviderSharing.STACK;
+    : resolvePrebuiltBootstrapArchive(scope, architecture);
+  const stackScoped = sharing === ProviderSharing.STACK;
   const handlerId = stackScoped
     ? `${SHARED_HANDLER_ID_PREFIX}${renderHandlerConfigHash(
         stack,
         config,
         architecture,
-        sharedHandlerSourceIdentity(scope, architecture, manifestPath, prebuiltBootstrapArchive),
+        prebuiltHandlerSourceIdentity(scope, architecture, prebuiltBootstrapArchive as string),
       )}`
     : ISOLATED_HANDLER_ID;
   const handlerScope = stackScoped ? stack : scope;
@@ -118,13 +110,13 @@ export function getOrCreateHandler(scope: Construct, config: ProviderLambdaConfi
     logGroup: config.logGroup,
   };
 
-  if (useCompilePath) {
+  if (config.localBuild !== undefined) {
     return createCompiledHandler(
       handlerScope,
       handlerId,
       config.localBuild,
       handlerOptions,
-      manifestPath as string,
+      join(config.localBuild.projectPath ?? resolveDefaultRustProjectPath(scope), "Cargo.toml"),
     );
   }
   return createPrebuiltHandler(
@@ -135,38 +127,17 @@ export function getOrCreateHandler(scope: Construct, config: ProviderLambdaConfi
   );
 }
 
-function sharedHandlerSourceIdentity(
+function prebuiltHandlerSourceIdentity(
   scope: Construct,
   architecture: Architecture,
-  manifestPath: string | undefined,
-  prebuiltBootstrapArchive: string | undefined,
+  prebuiltBootstrapArchive: string,
 ): Record<string, string> {
-  const packageVersion = resolvePackageVersion(scope);
-  if (prebuiltBootstrapArchive !== undefined) {
-    return {
-      kind: "prebuilt",
-      packageVersion,
-      architecture: architecture.name,
-      bootstrapArchiveSha256: fileSha256(prebuiltBootstrapArchive),
-    };
-  }
-  if (manifestPath !== undefined) {
-    return {
-      kind: "compile",
-      packageVersion,
-      // Hash the manifest content rather than its absolute path so a moved
-      // checkout (different machine or directory) keeps handler identity; the
-      // prebuilt path already hashes the archive bytes for the same reason.
-      // A missing manifest falls back to the path because compilation will
-      // fail later anyway with a proper diagnostic.
-      manifestSha256: existsSync(manifestPath) ? fileSha256(manifestPath) : manifestPath,
-    };
-  }
-  throw new ValidationError(
-    "ShinBucketDeploymentHandlerSource",
-    "Unable to resolve a prebuilt provider archive or local Rust manifest.",
-    scope,
-  );
+  return {
+    kind: "prebuilt",
+    packageVersion: resolvePackageVersion(scope),
+    architecture: architecture.name,
+    bootstrapArchiveSha256: fileSha256(prebuiltBootstrapArchive),
+  };
 }
 
 function resolvePackageVersion(scope: Construct): string {
@@ -232,7 +203,7 @@ function resolveDefaultRustProjectPath(scope: Construct): string {
   );
 }
 
-function resolvePrebuiltBootstrapArchive(architecture: Architecture): string | undefined {
+function resolvePrebuiltBootstrapArchive(scope: Construct, architecture: Architecture): string {
   const dirName = `bootstrap-${architecture.name}`;
   // Package-local assets first: the `..` candidate exists for the repository
   // layout (built output under dist/ or lib/ with assets/ at the repo root)
@@ -249,7 +220,13 @@ function resolvePrebuiltBootstrapArchive(architecture: Architecture): string | u
       return archive;
     }
   }
-  return undefined;
+  throw new ValidationError(
+    "ShinBucketDeploymentPrebuiltProviderArchiveMissing",
+    `Missing prebuilt provider archive assets/${dirName}/bootstrap.zip. ` +
+      "From a source checkout, run pnpm build:bootstrap; to compile during synthesis, " +
+      "explicitly set providerLambda.localBuild and install the optional cargo-lambda-cdk dependency.",
+    scope,
+  );
 }
 
 function createPrebuiltHandler(
@@ -277,7 +254,7 @@ function createPrebuiltHandler(
 function createCompiledHandler(
   scope: Construct,
   handlerId: string,
-  localBuild: ShinBucketDeploymentLocalBuildOptions | undefined,
+  localBuild: ShinBucketDeploymentLocalBuildOptions,
   options: HandlerOptions,
   manifestPath: string,
 ): LambdaFunction {
@@ -290,7 +267,7 @@ function createCompiledHandler(
     architecture: options.architecture,
     binaryName: HANDLER_BINARY_NAME,
     manifestPath,
-    bundling: localBuild?.bundling,
+    bundling: localBuild.bundling,
     timeout: options.timeout,
     memorySize: options.memorySize,
     role: options.role,
@@ -337,7 +314,6 @@ export function renderHandlerConfigHashInput(
 ): string {
   const hashInput = {
     architecture: architecture.name,
-    bundling: normalizeSingletonValue(config.localBuild?.bundling),
     failureDiagnostics: config.failureDiagnostics ?? DEFAULT_FAILURE_DIAGNOSTICS,
     handlerSource,
     logGroup: normalizeSingletonValue(config.logGroup),

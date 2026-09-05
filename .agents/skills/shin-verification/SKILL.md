@@ -87,7 +87,7 @@ Do not include benchmark configs in correctness verification unless the task is 
 
 > **Any change under `rust/` requires `pnpm build:bootstrap` before `pnpm verify deploy`.**
 >
-> The construct prefers a prebuilt provider archive (`assets/bootstrap-<arch>/bootstrap.zip`) and only compiles the Rust provider when no archive exists (`src/provider.ts`).
+> The construct requires a prebuilt provider archive (`assets/bootstrap-<arch>/bootstrap.zip`) unless `providerLambda.localBuild` explicitly selects compilation (`src/provider.ts`). A missing archive fails synthesis with an actionable error; it never triggers an implicit compile. Explicit local builds use deployment-scoped handlers and reject `ProviderSharing.STACK`.
 > `pnpm verify` does not rebuild that archive — only `pnpm build:bootstrap` does — and a stale archive is selected silently, with no freshness warning.
 > Deploying after a `rust/` change without rebuilding therefore runs the previous provider binary: on the PR-B run every stack failed with `unknown field CloudfrontInvalidation, expected one of …`, which looked like a provider bug when it was actually a build that predated the new wire schema.
 > Run `pnpm build:bootstrap` (it stages both arm64 and x86_64 archives) after any `rust/` change, before the first `pnpm verify deploy` of a session.
