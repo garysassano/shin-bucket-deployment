@@ -10,7 +10,7 @@ import {
 } from "aws-cdk-lib/aws-ec2";
 import type { CfnFunction } from "aws-cdk-lib/aws-lambda";
 import { Bucket } from "aws-cdk-lib/aws-s3";
-import { describe, expect, test, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import {
   ProviderSharing,
   ShinBucketDeployment,
@@ -18,6 +18,15 @@ import {
   Source,
 } from "../../src";
 import { testLocalProviderBuild } from "../support/bundling";
+import { ensurePrebuiltBootstrapAssets } from "../support/prebuilt-assets";
+
+let cleanupPrebuiltAssets: (() => void) | undefined;
+beforeAll(() => {
+  cleanupPrebuiltAssets = ensurePrebuiltBootstrapAssets();
+});
+afterAll(() => {
+  cleanupPrebuiltAssets?.();
+});
 
 function isolatedVpc(stack: Stack): Vpc {
   return new Vpc(stack, "Vpc", {
