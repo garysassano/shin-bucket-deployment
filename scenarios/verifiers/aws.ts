@@ -69,7 +69,8 @@ export class AwsVerificationApi implements VerificationApi {
         }
         // The JS SDK leaves explicitly encoded keys untouched. In particular,
         // parsing unencoded XML normalizes CR to LF and cannot prove exact keys.
-        keys.push(decodeURIComponent(object.Key));
+        // S3 uses form encoding: decode raw + before percent escapes so %2B stays +.
+        keys.push(decodeURIComponent(object.Key.replace(/\+/g, " ")));
       }
       if (response.IsTruncated && !response.NextContinuationToken) {
         throw new Error("Listing destination objects returned a truncated page without a token.");

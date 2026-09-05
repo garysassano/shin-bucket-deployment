@@ -705,11 +705,11 @@ impl<'a> DestinationListPager<'a> {
     }
 }
 
-/// Decode once in the SDK string's allocation. `urlencoding::decode` preserves
-/// `+` but tolerates malformed percent escapes; rejecting those would require a
-/// separate validation scan and it allocates a second buffer for encoded keys.
+/// Decode S3 form-style URL encoding once in the SDK string's allocation.
+/// Raw `+` means space; percent-decoded `%2B` remains a literal plus.
+/// Validate escapes during compaction without another scan or allocation.
 fn decode_destination_key(key: String) -> Result<String> {
-    let Some(first_escape) = key.find('%') else {
+    let Some(first_escape) = key.find(['%', '+']) else {
         return Ok(key);
     };
     let mut bytes = key.into_bytes();
@@ -728,7 +728,7 @@ fn decode_destination_key(key: String) -> Result<String> {
         } else {
             let byte = bytes[read];
             read += 1;
-            byte
+            if byte == b'+' { b' ' } else { byte }
         };
         bytes[write] = byte;
         write += 1;
@@ -1202,7 +1202,9 @@ mod tests {
     fn listing_decoder_reuses_the_sdk_string_and_never_decodes_twice() {
         for (encoded, expected) in [
             ("site/plain.txt", "site/plain.txt"),
-            ("site/a+b.txt", "site/a+b.txt"),
+            ("site/a+b.txt", "site/a b.txt"),
+            ("site/a%2Bb.txt", "site/a+b.txt"),
+            ("site/+%2B%252B+.txt", "site/ +%2B .txt"),
             ("site/a%252Fb.txt", "site/a%2Fb.txt"),
             ("site/%25GG%2b%00", "site/%GG+\0"),
         ] {
@@ -1217,7 +1219,7 @@ mod tests {
     proptest::proptest! {
         #[test]
         fn listing_decoder_round_trips_utf8_keys(key in proptest::prelude::any::<String>()) {
-            let encoded = urlencoding::encode(&key).into_owned();
+            let encoded = urlencoding::encode(&key).replace("%20", "+");
             proptest::prop_assert_eq!(super::decode_destination_key(encoded).unwrap(), key);
         }
     }
@@ -1280,9 +1282,15 @@ mod tests {
 
     #[tokio::test]
     async fn listing_decodes_exact_keys_and_start_after_once() {
-        let first = ["site/a%0Db.txt", "site/a%01b.txt", "site/a%252Fb.txt"];
+        let first = [
+            "site/a%0Db.txt",
+            "site/a%0Ab.txt",
+            "site/a%01b.txt",
+            "site/a%252Fb.txt",
+            "site/plus+sign.txt",
+        ];
         let second = [
-            "site/a+b.txt",
+            "site/plus%2Bsign.txt",
             "site/%E6%97%A5%E6%9C%AC%E8%AA%9E.txt",
             "site/a%26%3C%3E%22%27.txt",
         ];
@@ -1299,7 +1307,13 @@ mod tests {
                 .iter()
                 .filter_map(|object| object.key())
                 .collect::<Vec<_>>(),
-            ["site/a\rb.txt", "site/a\u{1}b.txt", "site/a%2Fb.txt"]
+            [
+                "site/a\rb.txt",
+                "site/a\nb.txt",
+                "site/a\u{1}b.txt",
+                "site/a%2Fb.txt",
+                "site/plus sign.txt"
+            ]
         );
         let second = pager.next_page().await.unwrap().unwrap();
         assert_eq!(
@@ -1308,7 +1322,7 @@ mod tests {
                 .iter()
                 .filter_map(|object| object.key())
                 .collect::<Vec<_>>(),
-            ["site/a+b.txt", "site/日本語.txt", "site/a&<>\"'.txt"]
+            ["site/plus+sign.txt", "site/日本語.txt", "site/a&<>\"'.txt"]
         );
         assert!(pager.next_page().await.unwrap().is_none());
         let requests = replay.actual_requests().collect::<Vec<_>>();
@@ -1318,8 +1332,38 @@ mod tests {
                 .iter()
                 .all(|request| request.uri().contains("encoding-type=url"))
         );
-        assert!(requests[1].uri().contains("start-after=site%2Fa%252Fb.txt"));
+        assert!(
+            requests[1]
+                .uri()
+                .contains("start-after=site%2Fplus%20sign.txt")
+        );
         assert!(!requests[1].uri().contains("continuation-token"));
+    }
+
+    #[tokio::test]
+    async fn listing_cursor_serializes_each_decoded_spelling_exactly_once() {
+        for (encoded, query) in [
+            ("site/plus+sign.txt", "site%2Fplus%20sign.txt"),
+            ("site/plus%2Bsign.txt", "site%2Fplus%2Bsign.txt"),
+            ("site/a%252Fb.txt", "site%2Fa%252Fb.txt"),
+        ] {
+            let replay = StaticReplayClient::new(vec![
+                encoded_list_page_event(&[encoded], true),
+                encoded_list_page_event(&[], false),
+            ]);
+            let state = replay_app_state(replay.clone());
+            let mut pager = super::DestinationListPager::new(&state, "destination", Some("site/"));
+            pager.next_page().await.unwrap();
+            pager.next_page().await.unwrap();
+            assert!(
+                replay
+                    .actual_requests()
+                    .nth(1)
+                    .unwrap()
+                    .uri()
+                    .contains(&format!("start-after={query}"))
+            );
+        }
     }
 
     #[tokio::test]
@@ -1330,6 +1374,8 @@ mod tests {
             "site%2B%25/cr%0D.txt",
             "site%2B%25/skip%01.txt",
             "site%2B%25/plus%2B.txt",
+            "site%2B%25/plus+.txt",
+            "site%2B%25/lf%0A.txt",
             "site%2B%25/%E6%97%A5%E6%9C%AC%E8%AA%9E.txt",
             "site%2B%25/xml%26%3C%3E%22%27.txt",
         ];
@@ -1369,6 +1415,8 @@ mod tests {
                     "site+%/a/b.txt",
                     "site+%/cr\r.txt",
                     "site+%/plus+.txt",
+                    "site+%/plus .txt",
+                    "site+%/lf\n.txt",
                     "site+%/日本語.txt",
                     "site+%/xml&<>\"'.txt"
                 ]
@@ -1393,7 +1441,7 @@ mod tests {
             )
             .await
             .unwrap();
-            assert_eq!(deleted, 5);
+            assert_eq!(deleted, 7);
             let requests = replay.actual_requests().collect::<Vec<_>>();
             assert_eq!(
                 requests
@@ -1407,6 +1455,8 @@ mod tests {
                 "site+%/a/b.txt",
                 "site+%/cr&#xD;.txt",
                 "site+%/plus+.txt",
+                "site+%/plus .txt",
+                "site+%/lf&#xA;.txt",
                 "site+%/日本語.txt",
                 "site+%/xml&amp;&lt;&gt;&quot;&apos;.txt",
             ] {
