@@ -13,11 +13,9 @@ class SourceOverwriteOrderShinBucketDeploymentStack extends Stack {
     });
     grantVerifierRead(websiteBucket);
 
+    const first = Source.data("runtime/overlap.txt", "first-source\n");
     new ShinBucketDeployment(this, "DeployWebsite", {
-      sources: [
-        Source.data("runtime/overlap.txt", "first-source\n"),
-        Source.data("runtime/overlap.txt", "second-source\n"),
-      ],
+      sources: [first, Source.data("runtime/overlap.txt", "second-source\n"), first],
       destination: {
         bucket: websiteBucket,
         keyPrefix: "multi-source",

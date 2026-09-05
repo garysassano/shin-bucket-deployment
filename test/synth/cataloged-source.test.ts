@@ -18,6 +18,7 @@ import { dirname, join } from "node:path";
 import {
   App,
   AssetHashType,
+  CfnParameter,
   DefaultStackSynthesizer,
   type FileAssetLocation,
   type FileAssetSource,
@@ -30,7 +31,7 @@ import { Role, ServicePrincipal } from "aws-cdk-lib/aws-iam";
 import { Key } from "aws-cdk-lib/aws-kms";
 import { Bucket } from "aws-cdk-lib/aws-s3";
 import { Asset, type AssetOptions } from "aws-cdk-lib/aws-s3-assets";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { type CatalogedAssetOptions, ShinBucketDeployment, Source } from "../../src";
 import {
   catalogedSourceStagingDirectory,
@@ -632,6 +633,108 @@ describe("cataloged directory assets", () => {
     expect(() => destination({ assetHashType: AssetHashType.CUSTOM })).toThrow(
       /requires assetHash/,
     );
+  });
+
+  test.each([
+    { mode: "constructor", embeddedCatalog: true },
+    { mode: "incremental", embeddedCatalog: true },
+    { mode: "equivalent objects", embeddedCatalog: true },
+    { mode: "constructor", embeddedCatalog: false },
+    { mode: "incremental", embeddedCatalog: false },
+    { mode: "equivalent objects", embeddedCatalog: false },
+  ])(
+    "keeps the last repeated source ($mode, catalog=$embeddedCatalog)",
+    ({ mode, embeddedCatalog }) => {
+      const firstDirectory = writeFixture({ "overlap.txt": "first-source\n" });
+      const secondDirectory = writeFixture({ "overlap.txt": "second-source\n" });
+      const outdir = tempDirectory("shin-source-order-out-");
+      const app = new App({ outdir });
+      const stack = new Stack(app, "SourceOrderStack");
+      const first = Source.asset(firstDirectory, { embeddedCatalog });
+      const second = Source.asset(secondDirectory, { embeddedCatalog });
+      const repeated =
+        mode === "equivalent objects" ? Source.asset(firstDirectory, { embeddedCatalog }) : first;
+      const firstBind = vi.spyOn(first, "bind");
+      const secondBind = vi.spyOn(second, "bind");
+      const deployment = new ShinBucketDeployment(stack, "Deploy", {
+        sources: mode === "incremental" ? [first] : [first, second, repeated],
+        destination: { bucket: new Bucket(stack, "Destination") },
+        providerLambda: { localBuild: testLocalProviderBuild() },
+      });
+      if (mode === "incremental") {
+        deployment.addSource(second);
+        deployment.addSource(repeated);
+      }
+
+      const properties = customResourceProperties(stack);
+      const manifest = JSON.parse(
+        readFileSync(join(outdir, "SourceOrderStack.assets.json"), "utf8"),
+      ) as { files: Record<string, ManifestAsset> };
+      // Read the colliding entry from each staged ZIP input in the emitted order.
+      const bodies = (properties.SourceObjectKeys as string[]).map((key) => {
+        const asset = manifest.files[key.replace(/\.zip$/, "")];
+        expect(asset?.source?.packaging).toBe("zip");
+        return readFileSync(join(outdir, asset?.source?.path as string, "overlap.txt"), "utf8");
+      });
+      expect(bodies).toEqual(["second-source\n", "first-source\n"]);
+      expect(bodies.at(-1)).toBe("first-source\n");
+      expect(firstBind).toHaveBeenCalledTimes(1);
+      expect(secondBind).toHaveBeenCalledTimes(1);
+      if (embeddedCatalog) {
+        const catalogs = (properties.SourceObjectKeys as string[]).map((key) => {
+          const asset = manifest.files[key.replace(/\.zip$/, "")];
+          const catalog = readFileSync(
+            join(outdir, asset?.source?.path as string, ".shin/catalog.v1.json"),
+          );
+          return { Version: 1, Sha256: createHash("sha256").update(catalog).digest("hex") };
+        });
+        expect(properties.SourceCatalogs).toEqual(catalogs);
+      } else {
+        expect(properties.SourceCatalogs).toBeUndefined();
+      }
+    },
+  );
+
+  test("moves a cached marker source last without merging different marker bindings", () => {
+    const stack = new Stack();
+    const firstValue = new CfnParameter(stack, "FirstValue").valueAsString;
+    const secondValue = new CfnParameter(stack, "SecondValue").valueAsString;
+    const first = Source.data("overlap.txt", firstValue, { jsonEscape: true });
+    const second = Source.data("overlap.txt", secondValue, { jsonEscape: false });
+    const firstBind = vi.spyOn(first, "bind");
+    new ShinBucketDeployment(stack, "Deploy", {
+      sources: [
+        first,
+        Source.asset(writeFixture({ "overlap.txt": "catalog-source\n" })),
+        second,
+        first,
+        first,
+      ],
+      destination: { bucket: new Bucket(stack, "Destination") },
+      providerLambda: { localBuild: testLocalProviderBuild() },
+    });
+
+    const properties = customResourceProperties(stack);
+    const keys = properties.SourceObjectKeys as string[];
+    expect(keys).toHaveLength(3);
+    expect(keys[1]).toBe(keys[2]);
+    expect(properties.SourceBucketNames).toHaveLength(3);
+    expect(properties.SourceCatalogs).toEqual([
+      { Version: 1, Sha256: expect.stringMatching(/^[0-9a-f]{64}$/) },
+      {},
+      {},
+    ]);
+    expect(properties.SourceMarkers).toEqual([
+      {},
+      { "<<marker:0xbaba:0>>": { Ref: "SecondValue" } },
+      { "<<marker:0xbaba:0>>": { Ref: "FirstValue" } },
+    ]);
+    expect(properties.SourceMarkersConfig).toEqual([
+      {},
+      { jsonEscape: false },
+      { jsonEscape: true },
+    ]);
+    expect(firstBind).toHaveBeenCalledTimes(1);
   });
 
   test("aligns mixed trusted sources and omits bindings when none can be used", () => {

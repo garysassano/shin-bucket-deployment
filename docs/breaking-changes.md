@@ -4,6 +4,12 @@ This file holds release-note text for `ShinBucketDeployment` changes that break 
 
 ## Unreleased
 
+### Repeated sources now take precedence at their last position
+
+Deployments that repeat a source with another source in between now honor the documented last-source-wins order. For example, `[A, B, A]` previously emitted `[A, B]` and deployed B's contents for overlapping keys; it now emits `[B, A]` and deploys A's contents. This also applies to incremental `addSource()` calls and distinct marker-free sources with equivalent bound configurations, including their authenticated catalogs. Repeated marker-bearing objects reuse their original binding and move to the last position; distinct marker bindings remain separate.
+
+Affected: existing deployments with non-adjacent repeated sources. Their next deployment updates the source sequence in place and can overwrite overlapping destination objects with the last source's contents. This change itself preserves the provider, custom-resource, and destination ownership identities. Each source object is still bound only once, and adjacent repeats of the same object remain idempotent.
+
 ## 0.13.0
 
 ### Stack-shared handlers advance to the 0.13.0 provider identity
