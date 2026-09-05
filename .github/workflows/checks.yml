@@ -80,6 +80,9 @@ jobs:
       - name: Format check
         run: cargo fmt --manifest-path rust/Cargo.toml --all --check
 
+      - name: Compare production and test DEFLATE features
+        run: bash scripts/check-deflate-features.sh
+
       - name: Clippy
         run: cargo clippy --manifest-path rust/Cargo.toml --all-targets --all-features -- -D warnings
 
