@@ -1,6 +1,3 @@
 {
-  ".verification-assets/cdk.out/verify/source-overwrite-order/ShinBucketDeploymentSourceOverwriteOrderDemo.assets.json": "The repeated-source regression changes the template asset hash because the source sequence now retains the first source at its last position.",
-  ".verification-assets/cdk.out/verify/source-overwrite-order/ShinBucketDeploymentSourceOverwriteOrderDemo.template.json": "The scenario now supplies [A, B, A] and emits [B, A], making A the final source for the overlapping destination key.",
-  ".verification-assets/cdk.out/verify/source-overwrite-order/manifest.json": "The assembly references the changed template asset hash for the repeated-source regression.",
-  "declaration shin-bucket-deployment.d.ts": "The addSource JSDoc now documents binding reuse and last-position precedence when re-adding a source."
+  "declaration shin-bucket-deployment.d.ts": "Document the rendered destination tag validation and the requirement that complete Tags overrides preserve every deployment ownership tag with value true."
 }

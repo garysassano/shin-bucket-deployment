@@ -2,7 +2,6 @@ import {
   type AssetHashType,
   type BundlingFileAccess,
   type BundlingOutput,
-  type CfnTag,
   CustomResource,
   type DockerImage,
   type DockerVolume,
@@ -27,6 +26,7 @@ import {
   inspectDestinationBucket,
   inspectableDestinationBucketResource,
   validateDestinationEncryption,
+  validateDestinationTags,
 } from "./destination";
 import type { DestinationWriteRetryJitter, FailureDiagnostics } from "./enums";
 import { ProviderSharing } from "./enums";
@@ -42,9 +42,6 @@ import {
 import { destinationOwnerPrefix, validateDeploymentProps } from "./validation";
 
 const CUSTOM_RESOURCE_OWNER_TAG = "aws-cdk:cr-owned";
-// S3 caps each bucket's tag set at 50 user-defined tags:
-// https://docs.aws.amazon.com/AmazonS3/latest/userguide/tagging.html
-const MAX_S3_BUCKET_TAGS = 50;
 
 export interface ShinBucketDeploymentBundlingCommandHooks {
   /**
@@ -449,8 +446,10 @@ export interface ShinBucketDeploymentDestination {
    *
    * Each deployment consumes one bucket ownership tag. Amazon S3 permits 50
    * total bucket tags; bucket, stack, aspect, auto-delete, and other Shin
-   * deployment tags all share that quota. Synthesis fails when the final
-   * deduplicated tag set exceeds the limit.
+   * deployment tags all share that quota. Synthesis validates the rendered
+   * tag set, including escape-hatch overrides: keys must be unique, the quota
+   * must be respected, and every deployment's ownership tag must retain the
+   * value `"true"`. A complete Tags override must preserve those ownership tags.
    */
   readonly bucket: Bucket;
 
@@ -1272,16 +1271,14 @@ export class ShinBucketDeployment extends Construct {
     const tagKey = `${CUSTOM_RESOURCE_OWNER_TAG}${ownerPrefix ? `:${ownerPrefix}` : ""}:${destinationOwnerId}`;
 
     Tags.of(this.destinationBucket).add(tagKey, "true");
-    this.node.addValidation({
-      validate: () => validateDestinationBucketTagQuota(destinationBucketResource),
-    });
     // Deferred to synthesis rather than checked here: an escape hatch that switches the
-    // bucket to KMS or enables versioning may be applied after this construct is created,
-    // and only the rendered resource reflects it.
+    // encryption, enables versioning, or replaces Tags may be applied after this
+    // construct is created, and only the rendered resource reflects it.
     this.node.addValidation({
       validate: () => {
         const destinationInspection = inspectDestinationBucket(this, destinationBucketResource);
         validateDestinationEncryption(this, destinationInspection);
+        validateDestinationTags(this, destinationInspection, tagKey);
         for (const warning of destinationVersioningWarnings(destinationInspection)) {
           Validations.of(this).addWarning("ShinBucketDeploymentVersionedDestination", warning);
         }
@@ -1345,19 +1342,4 @@ export class ShinBucketDeployment extends Construct {
     }
     this.sources.push(config);
   }
-}
-
-function validateDestinationBucketTagQuota(bucketResource: {
-  readonly tags: { tagValues(): Record<string, string> };
-  readonly tagsRaw?: CfnTag[];
-}): string[] {
-  const tagKeys = new Set(Object.keys(bucketResource.tags.tagValues()));
-  for (const tag of bucketResource.tagsRaw ?? []) {
-    tagKeys.add(tag.key);
-  }
-  const totalTagCount = tagKeys.size;
-  if (totalTagCount <= MAX_S3_BUCKET_TAGS) return [];
-  return [
-    `The destination bucket has ${totalTagCount} synthesized tags, exceeding Amazon S3's ${MAX_S3_BUCKET_TAGS}-tag limit. Each ShinBucketDeployment requires one ownership tag; reduce bucket, stack, aspect, auto-delete, or deployment ownership tags.`,
-  ];
 }
