@@ -6,12 +6,8 @@ import { Template } from "aws-cdk-lib/assertions";
 import { Architecture } from "aws-cdk-lib/aws-lambda";
 import { Bucket } from "aws-cdk-lib/aws-s3";
 import { afterEach, expect, test } from "vitest";
-import {
-  ProviderSharing,
-  ShinBucketDeployment,
-  type ShinBucketDeploymentLocalBuildOptions,
-  Source,
-} from "../../src";
+import { ProviderSharing, ShinBucketDeployment, Source } from "../../src";
+import type { ShinBucketDeploymentLocalBuildOptions } from "../../src/local-build";
 
 const scratchDirectories: string[] = [];
 afterEach(() => {

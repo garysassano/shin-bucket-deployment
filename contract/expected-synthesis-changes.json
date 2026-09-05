@@ -1,0 +1,5 @@
+{
+  "declaration index.d.ts": "Export the four local-build types from their canonical local-build module; public names and shapes are unchanged.",
+  "declaration local-build.d.ts": "Add the declaration module containing the four unchanged local-build interfaces and their existing JSDoc.",
+  "declaration shin-bucket-deployment.d.ts": "Move the four local-build interfaces to local-build.d.ts and import the local-build options type; deployment types and behavior are unchanged."
+}
