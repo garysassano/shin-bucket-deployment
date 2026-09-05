@@ -9,7 +9,6 @@ class StaleObjectCleanupShinBucketDeploymentStack extends Stack {
     super(scope, id, props);
 
     const websiteBucket = new Bucket(this, "WebsiteBucket", {
-      autoDeleteObjects: true,
       removalPolicy: RemovalPolicy.DESTROY,
     });
     grantVerifierRead(websiteBucket);
@@ -24,6 +23,8 @@ class StaleObjectCleanupShinBucketDeploymentStack extends Stack {
         Source.data("runtime/legacy.txt", "remove this by deploying stale-object-cleanup-updated"),
         Source.asset(decodeListingKeyZipFixture("stale-object-cleanup-initial")),
       ],
+      // Shin owns every object in this fixture prefix, including CR/LF keys.
+      destinationLifecycle: { onDelete: { deleteCurrentObjects: true } },
       destination: {
         bucket: websiteBucket,
         keyPrefix: "stale-cleanup-site",
