@@ -6,9 +6,15 @@ Runbooks, evidence collection rules, schema guidance, and sanitization rules liv
 
 Provider-summary schema-5 result rows, their generated reports, and their chart live in `archive/` and are not current evidence.
 
+## Form-decoding comparison baseline
+
+The latest complete benchmark is the BEFORE baseline for decision `stabilization-form-decoding-20260905`, variant `before`: run `61e8b1e5-0ad9-437d-b75f-9c9e640f64c4` measured exact clean `main` commit `db54f56ef17836887e8396ee05174c67cd782cd7` in GitHub Actions workflow `33992919938`. It predates the raw-plus form-decoding correction at `681d220`; its results do not measure the corrected provider or establish that correction's performance acceptance.
+
+The run preserves 240 sanitized samples and two provenance records across Shin and upstream AWS CDK, three profiles, two Lambda configurations, four phases and five repetitions per cell, with Shin `DETAILED` diagnostics. Original workflow and artifact identity checks, manifest-bound full-matrix validation and independent cleanup passed: all 60 stacks and 60 captured buckets are absent, with no cleanup errors. The provider commit, run UUID, decision label, variant and original configuration digest are unchanged. Reports and snapshots below describe this baseline against its contemporaneous upstream controls; the separate AFTER comparison remains pending.
+
 ## Destination listing performance review
 
-Retain the [exact destination-listing key fix](listing-key-review.md) with its measured performance tradeoff. URL encoding prevents the successful-response XML parser failure and preserves exact destination keys; decoding happens once in the existing response allocation, with no additional S3 request or namespace copy. This is a correctness fix, not an optimization or a zero-regression result. No numerical acceptance threshold was prespecified. The performance decision was reviewed against all 24 cells, their spread, billing, memory and contemporaneous upstream controls; formal performance acceptance requires this evidence on `main`. Deployed edge-key correctness remains pending the separate final verification suite.
+This section records the percent-only decoder measurement at `2dec0bd`, published through PR #212 (`7736c27`). That performance review retained its measured tradeoff; subsequent AWS verification exposed the space/plus ambiguity corrected at `681d220`. URL encoding addressed the successful-response XML parser boundary, with decoding in the existing response allocation and no additional S3 request or namespace copy. The historical decision reviewed all 24 cells, their spread, billing, memory and contemporaneous upstream controls, with no numerical acceptance threshold prespecified. The measurements below do not establish performance acceptance for the later form-decoding correction; its comparison and deployed correctness remain pending.
 
 | Side          | Run UUID                               | Exact measured clean `main` commit         |
 | ------------- | -------------------------------------- | ------------------------------------------ |
@@ -77,7 +83,7 @@ Independent cleanup confirmed all 60 planned stacks reached `DELETE_COMPLETE` an
 
 ## Latest CI benchmark
 
-The latest complete canonical five-repetition run was collected by GitHub Actions on 2026-09-05 from source commit `2dec0bd`. It contains five independently collected parallel repetitions of all canonical profiles across all four phases. The sanitized run UUID is `ad8b41e3-b7dc-4be0-a087-dfcce4581cc0`; raw AWS output remains outside git.
+The latest complete canonical five-repetition run was collected by GitHub Actions on 2026-09-05 from source commit `db54f56`. It contains five independently collected parallel repetitions of all canonical profiles across all four phases. The sanitized run UUID is `61e8b1e5-0ad9-437d-b75f-9c9e640f64c4`; raw AWS output remains outside git.
 
 | Field                 | Value                                                      |
 | --------------------- | ---------------------------------------------------------- |
@@ -88,30 +94,30 @@ The latest complete canonical five-repetition run was collected by GitHub Action
 
 | Profile     |  MiB | Max concurrency | Phase              |   n | Provider s, Shin / AWS | AWS/Shin | Local wall s, Shin / AWS | Max MiB, Shin / AWS |
 | ----------- | ---: | --------------: | ------------------ | --: | ---------------------: | -------: | -----------------------: | ------------------: |
-| `large-few` | 1024 |              32 | `cold-create`      |   5 |          2.068 / 9.386 |   4.539x |          75.151 / 80.803 |           132 / 447 |
-| `large-few` | 1024 |              32 | `unchanged-update` |   5 |          0.253 / 9.267 |  36.628x |           39.335 / 47.93 |            33 / 447 |
-| `large-few` | 1024 |              32 | `changed-update`   |   5 |          0.459 / 9.325 |  20.316x |          44.236 / 50.427 |            40 / 447 |
-| `large-few` | 1024 |              32 | `pruned-update`    |   5 |          0.535 / 9.167 |  17.135x |          38.347 / 54.205 |            41 / 417 |
-| `large-few` | 2048 |              64 | `cold-create`      |   5 |          1.165 / 5.165 |   4.433x |          71.966 / 74.216 |           191 / 447 |
-| `large-few` | 2048 |              64 | `unchanged-update` |   5 |           0.21 / 5.109 |  24.329x |          37.633 / 42.249 |            33 / 447 |
-| `large-few` | 2048 |              64 | `changed-update`   |   5 |          0.391 / 5.136 |  13.136x |          42.089 / 45.249 |            41 / 447 |
-| `large-few` | 2048 |              64 | `pruned-update`    |   5 |          0.451 / 5.015 |   11.12x |          42.585 / 48.617 |            40 / 417 |
-| `mixed`     | 1024 |              32 | `cold-create`      |   5 |         1.358 / 10.054 |   7.404x |          70.477 / 80.664 |           102 / 281 |
-| `mixed`     | 1024 |              32 | `unchanged-update` |   5 |          0.28 / 10.198 |  36.421x |          36.843 / 47.514 |            33 / 281 |
-| `mixed`     | 1024 |              32 | `changed-update`   |   5 |         0.426 / 10.166 |  23.864x |          41.738 / 53.198 |            37 / 280 |
-| `mixed`     | 1024 |              32 | `pruned-update`    |   5 |          1.064 / 9.821 |    9.23x |          43.309 / 51.041 |            37 / 273 |
-| `mixed`     | 2048 |              64 | `cold-create`      |   5 |          0.839 / 5.699 |   6.793x |          69.097 / 74.633 |           113 / 283 |
-| `mixed`     | 2048 |              64 | `unchanged-update` |   5 |          0.243 / 5.914 |  24.337x |          36.754 / 41.841 |            35 / 282 |
-| `mixed`     | 2048 |              64 | `changed-update`   |   5 |          0.351 / 5.731 |  16.328x |          42.036 / 48.436 |            37 / 283 |
-| `mixed`     | 2048 |              64 | `pruned-update`    |   5 |           1.036 / 5.65 |   5.454x |          38.254 / 42.643 |            39 / 275 |
-| `tiny-many` | 1024 |              32 | `cold-create`      |   5 |          2.68 / 25.948 |   9.682x |          75.945 / 98.579 |            58 / 219 |
-| `tiny-many` | 1024 |              32 | `unchanged-update` |   5 |         0.478 / 26.789 |  56.044x |          36.721 / 64.192 |            36 / 212 |
-| `tiny-many` | 1024 |              32 | `changed-update`   |   5 |         0.609 / 27.268 |  44.775x |           41.086 / 71.33 |            36 / 213 |
-| `tiny-many` | 1024 |              32 | `pruned-update`    |   5 |         1.367 / 26.651 |  19.496x |          38.867 / 67.506 |            36 / 215 |
-| `tiny-many` | 2048 |              64 | `cold-create`      |   5 |         1.492 / 15.025 |   10.07x |          73.077 / 85.626 |            69 / 223 |
-| `tiny-many` | 2048 |              64 | `unchanged-update` |   5 |          0.479 / 15.31 |  31.962x |          36.743 / 53.153 |            35 / 221 |
-| `tiny-many` | 2048 |              64 | `changed-update`   |   5 |          0.572 / 15.25 |  26.661x |          41.306 / 53.885 |            36 / 222 |
-| `tiny-many` | 2048 |              64 | `pruned-update`    |   5 |         1.325 / 15.072 |  11.375x |          41.882 / 59.826 |            36 / 219 |
+| `large-few` | 1024 |              32 | `cold-create`      |   5 |          1.859 / 9.456 |   5.087x |          70.797 / 79.457 |           127 / 447 |
+| `large-few` | 1024 |              32 | `unchanged-update` |   5 |          0.248 / 9.312 |  37.548x |          33.401 / 43.677 |            33 / 447 |
+| `large-few` | 1024 |              32 | `changed-update`   |   5 |           0.444 / 9.33 |  21.014x |          40.925 / 49.441 |            40 / 447 |
+| `large-few` | 1024 |              32 | `pruned-update`    |   5 |          0.523 / 8.912 |   17.04x |          39.334 / 48.179 |            40 / 416 |
+| `large-few` | 2048 |              64 | `cold-create`      |   5 |           1.176 / 5.02 |   4.269x |           73.38 / 71.041 |           190 / 447 |
+| `large-few` | 2048 |              64 | `unchanged-update` |   5 |          0.206 / 5.188 |  25.184x |           38.73 / 41.903 |            33 / 447 |
+| `large-few` | 2048 |              64 | `changed-update`   |   5 |          0.423 / 5.173 |  12.229x |          37.651 / 42.738 |            40 / 447 |
+| `large-few` | 2048 |              64 | `pruned-update`    |   5 |          0.466 / 5.041 |  10.818x |          38.518 / 42.866 |            40 / 417 |
+| `mixed`     | 1024 |              32 | `cold-create`      |   5 |          1.305 / 9.819 |   7.524x |           71.106 / 78.11 |           105 / 282 |
+| `mixed`     | 1024 |              32 | `unchanged-update` |   5 |         0.274 / 10.016 |  36.555x |          33.697 / 43.454 |            33 / 281 |
+| `mixed`     | 1024 |              32 | `changed-update`   |   5 |         0.421 / 10.013 |  23.784x |          37.737 / 47.882 |            37 / 282 |
+| `mixed`     | 1024 |              32 | `pruned-update`    |   5 |          1.052 / 9.823 |   9.337x |          37.687 / 47.803 |            37 / 274 |
+| `mixed`     | 2048 |              64 | `cold-create`      |   5 |          0.832 / 5.678 |   6.825x |          69.303 / 75.166 |           109 / 282 |
+| `mixed`     | 2048 |              64 | `unchanged-update` |   5 |          0.246 / 5.692 |  23.138x |          33.964 / 38.888 |            33 / 282 |
+| `mixed`     | 2048 |              64 | `changed-update`   |   5 |          0.364 / 5.602 |   15.39x |          38.831 / 43.845 |            38 / 282 |
+| `mixed`     | 2048 |              64 | `pruned-update`    |   5 |          1.035 / 5.515 |   5.329x |          38.593 / 42.678 |            37 / 275 |
+| `tiny-many` | 1024 |              32 | `cold-create`      |   5 |         2.568 / 24.926 |   9.706x |           71.03 / 92.874 |            57 / 220 |
+| `tiny-many` | 1024 |              32 | `unchanged-update` |   5 |         0.529 / 26.383 |  49.873x |          33.324 / 64.567 |            35 / 213 |
+| `tiny-many` | 1024 |              32 | `changed-update`   |   5 |          0.57 / 26.949 |  47.279x |          38.791 / 71.736 |            36 / 213 |
+| `tiny-many` | 1024 |              32 | `pruned-update`    |   5 |         1.374 / 25.611 |   18.64x |          37.991 / 65.864 |            36 / 211 |
+| `tiny-many` | 2048 |              64 | `cold-create`      |   5 |         1.535 / 14.365 |   9.358x |            70.25 / 84.52 |            69 / 223 |
+| `tiny-many` | 2048 |              64 | `unchanged-update` |   5 |         0.488 / 14.914 |  30.561x |          32.983 / 49.881 |            37 / 222 |
+| `tiny-many` | 2048 |              64 | `changed-update`   |   5 |         0.563 / 14.997 |  26.638x |          37.274 / 53.755 |            36 / 221 |
+| `tiny-many` | 2048 |              64 | `pruned-update`    |   5 |         1.373 / 14.434 |  10.513x |          38.808 / 53.798 |            36 / 219 |
 
 The [complete generated report](../benchmarks/ci-report.md) includes quartiles, end-to-end timings, and per-phase deltas. [Provider telemetry](../benchmarks/ci-telemetry.md) contains the sanitized Shin diagnostic tables.
 
@@ -237,7 +243,7 @@ Do not commit `.benchmark-runs/` or other raw AWS output. Commit only sanitized 
 
 ## Current Ledger State
 
-The active ledger contains six run records and 624 samples: the latest paired run `673c7141-7632-4cc4-866f-3e5a2dea1ccf` has two run records and 240 samples, and four retained upstream AWS CDK runs contribute another 384 samples. The current Shin run records `provider.implementationCommit` as `a1ab4fddf317c73d03650410b237c89dda69663d`. Later implementation changes are not measured by those samples.
+The active ledger contains 14 run records and 1,584 samples across nine run UUIDs. This publication adds the form-decoding BEFORE baseline's 240 samples and two run records while preserving all 1,344 existing samples and 12 run records, including the previous runtime-maintenance and percent-decoding comparisons. The latest measured Shin commit is `db54f56ef17836887e8396ee05174c67cd782cd7`; its run `61e8b1e5-0ad9-437d-b75f-9c9e640f64c4` predates the form-decoding correction, so later implementation changes are not measured by these samples.
 
 Older Shin rows, including the `cd8953b` samples from run `62f8ad5d`, are archived because they predate the required deletion retry/throttle telemetry. They are historical evidence, not a second active schema, and missing counters must not be reconstructed. `pnpm build` followed by `pnpm verify:ledger` validates the committed run/sample ledgers; it does not certify a new performance result.
 
