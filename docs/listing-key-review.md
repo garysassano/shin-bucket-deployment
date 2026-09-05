@@ -40,7 +40,7 @@ The local experiment compiled the exact decoder with Rust 1.97.1 and `rustc -O` 
 | 1,024-byte ordinary key                     |              50.49 ns |    92.10 ns |    41.61 ns |
 | 1,024-byte UTF-8 key encoded as 3,072 bytes |             127.25 ns | 1,633.80 ns | 1,506.56 ns |
 
-Allocation-identity tests prove that successful decoding reuses the SDK string buffer. These local timings establish the incremental CPU cost only; they do not establish deployed performance acceptance. Comparable exact-main provider measurements and an upstream AWS CDK baseline remain required before performance acceptance.
+Allocation-identity tests prove that successful decoding reuses the SDK string buffer. These local timings establish the incremental CPU cost only; they do not establish deployed performance acceptance. The completed exact-main comparison and upstream AWS CDK baseline are reviewed in the [benchmark performance decision](benchmark.md#destination-listing-performance-review): retain the correctness fix with its measured tradeoff, including the 7.43% largest provider-median regression and 10.08% largest billed-median regression. This is not an optimization or zero-regression result; formal performance acceptance requires the sanitized evidence on `main`. Deployed correctness remains a separate pending boundary.
 
 ## Local validation
 

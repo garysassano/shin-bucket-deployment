@@ -6,6 +6,39 @@ Runbooks, evidence collection rules, schema guidance, and sanitization rules liv
 
 Provider-summary schema-5 result rows, their generated reports, and their chart live in `archive/` and are not current evidence.
 
+## Destination listing performance review
+
+Retain the [exact destination-listing key fix](listing-key-review.md) with its measured performance tradeoff. URL encoding prevents the successful-response XML parser failure and preserves exact destination keys; decoding happens once in the existing response allocation, with no additional S3 request or namespace copy. This is a correctness fix, not an optimization or a zero-regression result. No numerical acceptance threshold was prespecified. The performance decision was reviewed against all 24 cells, their spread, billing, memory and contemporaneous upstream controls; formal performance acceptance requires this evidence on `main`. Deployed edge-key correctness remains pending the separate final verification suite.
+
+| Side          | Run UUID                               | Exact measured clean `main` commit         |
+| ------------- | -------------------------------------- | ------------------------------------------ |
+| Reused BEFORE | `57536204-0786-4c2f-8b51-1708dd98a59c` | `b499009c157b468fb521bec0de683bf03acdeaa4` |
+| AFTER         | `ad8b41e3-b7dc-4be0-a087-dfcce4581cc0` | `2dec0bdef78d2109569724631aea3174d15efa89` |
+
+The baseline remains the published runtime-maintenance AFTER run with its original `stabilization-runtime-dependencies-20260905` decision and `after` variant. The new run retains `stabilization-listing-keys-20260905` and `after`; neither provenance nor decision labels were rewritten. Each run contains 240 samples across Shin and upstream AWS CDK, three profiles, two Lambda configurations, four phases and five repetitions per cell, with Shin `DETAILED` diagnostics. All 47 strict identity checks passed. The [complete comparison](../benchmarks/listing-key-comparison.md) explains the narrowly pinned application-build difference using the exact-source review and 48 identical benchmark synthesis comparisons; it retains all metrics, quartiles and ranges.
+
+Provider medians increased in 11 cells and decreased in 13. The largest increase was `large-few` 1024 MiB cold-create: +143 ms / +7.43% provider time, +206 ms / +10.08% billed time, and +16 MiB peak-memory median. `mixed` 1024 MiB cold-create increased by 59 ms / 4.54%, with disjoint full observed ranges: 1.063–1.313 s before and 1.321–1.372 s after. All four increases of at least 5% have overlapping IQRs, which does not prove an effect is absent. Across all cells, billed medians changed by −6.40% to +10.08%, peak-memory medians by −6 to +16 MiB, and observed initialization medians by −9 to +4 ms. AFTER provider medians remain 4.43–56.04 times faster than upstream; that advantage does not cancel the measured regressions.
+
+The table highlights all provider increases above 3% and the largest improvement, as a review aid rather than a new threshold.
+
+| Profile / MiB / transfers | Phase            | Provider s, before → after | Δ provider | Δ billed | AWS Δ provider | Before IQR s | After IQR s |
+| ------------------------- | ---------------- | -------------------------: | ---------: | -------: | -------------: | -----------: | ----------: |
+| mixed / 1024 / 32         | cold-create      |              1.299 → 1.358 |     +4.54% |   +4.30% |         +1.09% |  1.297–1.303 | 1.332–1.368 |
+| mixed / 1024 / 32         | changed-update   |               0.41 → 0.426 |     +3.90% |   +3.39% |         -2.52% |  0.407–0.432 | 0.424–0.432 |
+| mixed / 2048 / 64         | changed-update   |              0.382 → 0.351 |     -8.12% |   -5.71% |         -1.63% |  0.373–0.414 |  0.351–0.38 |
+| tiny-many / 2048 / 64     | unchanged-update |              0.454 → 0.479 |     +5.51% |   +3.28% |         -2.03% |  0.445–0.477 | 0.473–0.497 |
+| large-few / 1024 / 32     | cold-create      |              1.925 → 2.068 |     +7.43% |  +10.08% |         +2.56% |  1.923–2.043 |  2.04–2.222 |
+| large-few / 1024 / 32     | unchanged-update |               0.24 → 0.253 |     +5.42% |   +3.92% |         -2.98% |  0.239–0.251 |  0.25–0.257 |
+| large-few / 1024 / 32     | pruned-update    |              0.508 → 0.535 |     +5.31% |   +4.48% |         +1.98% |  0.499–0.524 |  0.48–0.573 |
+
+Destination-list medians for the six slower highlighted cells were: `mixed` 1024 MiB cold-create 29→34 ms and changed-update 60→62 ms; `tiny-many` 2048 MiB unchanged-update 196→210 ms; `large-few` 1024 MiB cold-create 27→31 ms, unchanged-update 33→34 ms and pruned-update 32→34 ms. Both cold-create destinations were empty. The unchanged-update destinations contained 2,584 and 32 objects respectively, all skipped. The mixed changed update listed 442 objects, skipped 436 and uploaded six; the large-few pruned update listed 32, skipped 25, uploaded three and deleted four. All count medians and uploaded-byte medians matched across every cell.
+
+The largest regression also has transfer wall time 1,695→1,802 ms, cumulative PUT wait 29,605→30,654 ms, cumulative PUT source wait 161→122 ms, planning 174→188 ms and callback 43→47 ms. The disjoint-range mixed cold-create cell has planning 173→183 ms, transfer 1,053→1,069 ms and callback 44→43 ms. These measurements do not isolate decoder cost: concurrent cumulative timings are not additive with wall time, and subtracting separate medians cannot produce CPU time. The few-object cold regression and improvements in several many-object cells are descriptive observations, not causal proof.
+
+Every observed source GET retry/error and request retry/throttle/failure counter was zero in both runs. Source scheduling waits are not S3-throttling evidence. Five observations per cell from separate concurrent run windows support neither a significance claim nor attribution of movement to the decoder or to noise. Ordinary asset profiles do not measure pathological long encoded-key populations, and the arm64 measurements establish no x86_64 performance result.
+
+Both original complete artifacts passed manifest and full-matrix validation before publication; relocation used the existing manifest API with unchanged identity and both ledger digests. Independent cleanup confirmed all 60 stacks and 60 captured buckets absent for each run. The new evidence adds exactly 240 samples and two run records while preserving all 1,104 existing samples and ten run records, including the separate runtime-maintenance decision.
+
 ## Runtime dependency maintenance decision
 
 Retain the [reviewed runtime dependency refresh](runtime-dependency-review.md) with its measured performance tradeoff. The benefits are corrected compression-buffer position/bounds handling, LRU lifetime and panic-safety corrections, SDK clock-skew correction, and Lambda invocation-ID handling. The pair does not establish a speedup or zero regression. No numerical acceptance threshold was prespecified for this maintenance update; the decision considers these correctness benefits alongside every measured workload, its spread, and the upstream controls.
@@ -44,7 +77,7 @@ Independent cleanup confirmed all 60 planned stacks reached `DELETE_COMPLETE` an
 
 ## Latest CI benchmark
 
-The latest complete canonical five-repetition run was collected by GitHub Actions on 2026-09-05 from source commit `b499009`. It contains five independently collected parallel repetitions of all canonical profiles across all four phases. The sanitized run UUID is `57536204-0786-4c2f-8b51-1708dd98a59c`; raw AWS output remains outside git.
+The latest complete canonical five-repetition run was collected by GitHub Actions on 2026-09-05 from source commit `2dec0bd`. It contains five independently collected parallel repetitions of all canonical profiles across all four phases. The sanitized run UUID is `ad8b41e3-b7dc-4be0-a087-dfcce4581cc0`; raw AWS output remains outside git.
 
 | Field                 | Value                                                      |
 | --------------------- | ---------------------------------------------------------- |
@@ -55,30 +88,30 @@ The latest complete canonical five-repetition run was collected by GitHub Action
 
 | Profile     |  MiB | Max concurrency | Phase              |   n | Provider s, Shin / AWS | AWS/Shin | Local wall s, Shin / AWS | Max MiB, Shin / AWS |
 | ----------- | ---: | --------------: | ------------------ | --: | ---------------------: | -------: | -----------------------: | ------------------: |
-| `large-few` | 1024 |              32 | `cold-create`      |   5 |          1.925 / 9.152 |   4.754x |          74.504 / 80.657 |           116 / 447 |
-| `large-few` | 1024 |              32 | `unchanged-update` |   5 |           0.24 / 9.552 |    39.8x |           37.686 / 46.36 |            33 / 447 |
-| `large-few` | 1024 |              32 | `changed-update`   |   5 |          0.469 / 9.556 |  20.375x |           40.91 / 53.672 |            41 / 447 |
-| `large-few` | 1024 |              32 | `pruned-update`    |   5 |          0.508 / 8.989 |  17.695x |          41.816 / 51.394 |            41 / 417 |
-| `large-few` | 2048 |              64 | `cold-create`      |   5 |          1.142 / 5.333 |    4.67x |          71.895 / 73.125 |           186 / 447 |
-| `large-few` | 2048 |              64 | `unchanged-update` |   5 |          0.209 / 5.226 |  25.005x |          35.159 / 41.579 |            33 / 447 |
-| `large-few` | 2048 |              64 | `changed-update`   |   5 |          0.387 / 5.165 |  13.346x |          41.867 / 46.313 |            40 / 447 |
-| `large-few` | 2048 |              64 | `pruned-update`    |   5 |          0.483 / 4.988 |  10.327x |          37.441 / 45.515 |            40 / 417 |
-| `mixed`     | 1024 |              32 | `cold-create`      |   5 |          1.299 / 9.946 |   7.657x |          74.565 / 80.996 |           105 / 281 |
-| `mixed`     | 1024 |              32 | `unchanged-update` |   5 |         0.282 / 10.366 |  36.759x |          34.679 / 45.133 |            33 / 280 |
-| `mixed`     | 1024 |              32 | `changed-update`   |   5 |          0.41 / 10.429 |  25.437x |          40.717 / 50.085 |            37 / 281 |
-| `mixed`     | 1024 |              32 | `pruned-update`    |   5 |         1.125 / 10.127 |   9.002x |          40.105 / 50.221 |            38 / 273 |
-| `mixed`     | 2048 |              64 | `cold-create`      |   5 |          0.834 / 5.741 |   6.884x |          71.371 / 76.604 |           119 / 283 |
-| `mixed`     | 2048 |              64 | `unchanged-update` |   5 |           0.25 / 5.682 |  22.728x |          35.483 / 39.933 |            33 / 282 |
-| `mixed`     | 2048 |              64 | `changed-update`   |   5 |          0.382 / 5.826 |  15.251x |          37.097 / 46.844 |            37 / 283 |
-| `mixed`     | 2048 |              64 | `pruned-update`    |   5 |            1.112 / 5.6 |   5.036x |          40.337 / 45.783 |            37 / 275 |
-| `tiny-many` | 1024 |              32 | `cold-create`      |   5 |          2.71 / 24.823 |    9.16x |          71.904 / 96.555 |            57 / 220 |
-| `tiny-many` | 1024 |              32 | `unchanged-update` |   5 |         0.507 / 27.138 |  53.527x |          34.514 / 63.351 |            35 / 213 |
-| `tiny-many` | 1024 |              32 | `changed-update`   |   5 |         0.604 / 27.138 |   44.93x |          38.005 / 69.194 |            36 / 212 |
-| `tiny-many` | 1024 |              32 | `pruned-update`    |   5 |          1.373 / 26.46 |  19.272x |          38.112 / 67.986 |            36 / 209 |
-| `tiny-many` | 2048 |              64 | `cold-create`      |   5 |          1.54 / 14.882 |   9.664x |          71.578 / 84.885 |            68 / 223 |
-| `tiny-many` | 2048 |              64 | `unchanged-update` |   5 |         0.454 / 15.627 |  34.421x |          34.635 / 50.975 |            36 / 222 |
-| `tiny-many` | 2048 |              64 | `changed-update`   |   5 |         0.597 / 15.561 |  26.065x |          38.064 / 55.613 |            36 / 222 |
-| `tiny-many` | 2048 |              64 | `pruned-update`    |   5 |         1.358 / 14.973 |  11.026x |          39.699 / 56.874 |            36 / 219 |
+| `large-few` | 1024 |              32 | `cold-create`      |   5 |          2.068 / 9.386 |   4.539x |          75.151 / 80.803 |           132 / 447 |
+| `large-few` | 1024 |              32 | `unchanged-update` |   5 |          0.253 / 9.267 |  36.628x |           39.335 / 47.93 |            33 / 447 |
+| `large-few` | 1024 |              32 | `changed-update`   |   5 |          0.459 / 9.325 |  20.316x |          44.236 / 50.427 |            40 / 447 |
+| `large-few` | 1024 |              32 | `pruned-update`    |   5 |          0.535 / 9.167 |  17.135x |          38.347 / 54.205 |            41 / 417 |
+| `large-few` | 2048 |              64 | `cold-create`      |   5 |          1.165 / 5.165 |   4.433x |          71.966 / 74.216 |           191 / 447 |
+| `large-few` | 2048 |              64 | `unchanged-update` |   5 |           0.21 / 5.109 |  24.329x |          37.633 / 42.249 |            33 / 447 |
+| `large-few` | 2048 |              64 | `changed-update`   |   5 |          0.391 / 5.136 |  13.136x |          42.089 / 45.249 |            41 / 447 |
+| `large-few` | 2048 |              64 | `pruned-update`    |   5 |          0.451 / 5.015 |   11.12x |          42.585 / 48.617 |            40 / 417 |
+| `mixed`     | 1024 |              32 | `cold-create`      |   5 |         1.358 / 10.054 |   7.404x |          70.477 / 80.664 |           102 / 281 |
+| `mixed`     | 1024 |              32 | `unchanged-update` |   5 |          0.28 / 10.198 |  36.421x |          36.843 / 47.514 |            33 / 281 |
+| `mixed`     | 1024 |              32 | `changed-update`   |   5 |         0.426 / 10.166 |  23.864x |          41.738 / 53.198 |            37 / 280 |
+| `mixed`     | 1024 |              32 | `pruned-update`    |   5 |          1.064 / 9.821 |    9.23x |          43.309 / 51.041 |            37 / 273 |
+| `mixed`     | 2048 |              64 | `cold-create`      |   5 |          0.839 / 5.699 |   6.793x |          69.097 / 74.633 |           113 / 283 |
+| `mixed`     | 2048 |              64 | `unchanged-update` |   5 |          0.243 / 5.914 |  24.337x |          36.754 / 41.841 |            35 / 282 |
+| `mixed`     | 2048 |              64 | `changed-update`   |   5 |          0.351 / 5.731 |  16.328x |          42.036 / 48.436 |            37 / 283 |
+| `mixed`     | 2048 |              64 | `pruned-update`    |   5 |           1.036 / 5.65 |   5.454x |          38.254 / 42.643 |            39 / 275 |
+| `tiny-many` | 1024 |              32 | `cold-create`      |   5 |          2.68 / 25.948 |   9.682x |          75.945 / 98.579 |            58 / 219 |
+| `tiny-many` | 1024 |              32 | `unchanged-update` |   5 |         0.478 / 26.789 |  56.044x |          36.721 / 64.192 |            36 / 212 |
+| `tiny-many` | 1024 |              32 | `changed-update`   |   5 |         0.609 / 27.268 |  44.775x |           41.086 / 71.33 |            36 / 213 |
+| `tiny-many` | 1024 |              32 | `pruned-update`    |   5 |         1.367 / 26.651 |  19.496x |          38.867 / 67.506 |            36 / 215 |
+| `tiny-many` | 2048 |              64 | `cold-create`      |   5 |         1.492 / 15.025 |   10.07x |          73.077 / 85.626 |            69 / 223 |
+| `tiny-many` | 2048 |              64 | `unchanged-update` |   5 |          0.479 / 15.31 |  31.962x |          36.743 / 53.153 |            35 / 221 |
+| `tiny-many` | 2048 |              64 | `changed-update`   |   5 |          0.572 / 15.25 |  26.661x |          41.306 / 53.885 |            36 / 222 |
+| `tiny-many` | 2048 |              64 | `pruned-update`    |   5 |         1.325 / 15.072 |  11.375x |          41.882 / 59.826 |            36 / 219 |
 
 The [complete generated report](../benchmarks/ci-report.md) includes quartiles, end-to-end timings, and per-phase deltas. [Provider telemetry](../benchmarks/ci-telemetry.md) contains the sanitized Shin diagnostic tables.
 

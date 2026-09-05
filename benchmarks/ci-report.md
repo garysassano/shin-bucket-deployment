@@ -3,7 +3,7 @@
 ## Scope
 
 - Snapshot date: 2026-09-05
-- Run ID: 57536204-0786-4c2f-8b51-1708dd98a59c
+- Run ID: ad8b41e3-b7dc-4be0-a087-dfcce4581cc0
 - Sample completeness: complete (n=5 per provider-duration cell)
 - Implementations: aws, shin
 - Asset profiles: large-few, mixed, tiny-many
@@ -16,293 +16,293 @@
 
 | Asset profile | Phase            | Memory MiB | Max concurrency | Source window bytes |                    Provider duration |                      Local wall time |                    CDK deploy time |                         Max memory |
 | ------------- | ---------------- | ---------: | --------------: | ------------------: | -----------------------------------: | -----------------------------------: | ---------------------------------: | ---------------------------------: |
-| large-few     | cold-create      |       1024 |              32 |            adaptive |   1.925 s vs 9.152 s (4.754x faster) | 74.504 s vs 80.657 s (1.083x faster) | 57.28 s vs 62.63 s (1.093x faster) | 116 MiB vs 447 MiB (74.049% lower) |
-| large-few     | unchanged-update |       1024 |              32 |            adaptive |     0.24 s vs 9.552 s (39.8x faster) |   37.686 s vs 46.36 s (1.23x faster) | 19.11 s vs 29.95 s (1.567x faster) |  33 MiB vs 447 MiB (92.617% lower) |
-| large-few     | changed-update   |       1024 |              32 |            adaptive |  0.469 s vs 9.556 s (20.375x faster) |  40.91 s vs 53.672 s (1.312x faster) |    19.17 s vs 30 s (1.565x faster) |  41 MiB vs 447 MiB (90.828% lower) |
-| large-few     | pruned-update    |       1024 |              32 |            adaptive |  0.508 s vs 8.989 s (17.695x faster) | 41.816 s vs 51.394 s (1.229x faster) | 19.27 s vs 30.04 s (1.559x faster) |  41 MiB vs 417 MiB (90.168% lower) |
-| large-few     | cold-create      |       2048 |              64 |            adaptive |    1.142 s vs 5.333 s (4.67x faster) | 71.895 s vs 73.125 s (1.017x faster) | 56.45 s vs 57.35 s (1.016x faster) | 186 MiB vs 447 MiB (58.389% lower) |
-| large-few     | unchanged-update |       2048 |              64 |            adaptive |  0.209 s vs 5.226 s (25.005x faster) | 35.159 s vs 41.579 s (1.183x faster) | 19.02 s vs 24.56 s (1.291x faster) |  33 MiB vs 447 MiB (92.617% lower) |
-| large-few     | changed-update   |       2048 |              64 |            adaptive |  0.387 s vs 5.165 s (13.346x faster) | 41.867 s vs 46.313 s (1.106x faster) |  19.24 s vs 24.5 s (1.273x faster) |  40 MiB vs 447 MiB (91.051% lower) |
-| large-few     | pruned-update    |       2048 |              64 |            adaptive |  0.483 s vs 4.988 s (10.327x faster) | 37.441 s vs 45.515 s (1.216x faster) | 19.28 s vs 24.65 s (1.279x faster) |  40 MiB vs 417 MiB (90.408% lower) |
-| mixed         | cold-create      |       1024 |              32 |            adaptive |   1.299 s vs 9.946 s (7.657x faster) | 74.565 s vs 80.996 s (1.086x faster) | 57.82 s vs 62.72 s (1.085x faster) | 105 MiB vs 281 MiB (62.633% lower) |
-| mixed         | unchanged-update |       1024 |              32 |            adaptive | 0.282 s vs 10.366 s (36.759x faster) | 34.679 s vs 45.133 s (1.301x faster) |  19.07 s vs 29.9 s (1.568x faster) |  33 MiB vs 280 MiB (88.214% lower) |
-| mixed         | changed-update   |       1024 |              32 |            adaptive |  0.41 s vs 10.429 s (25.437x faster) |  40.717 s vs 50.085 s (1.23x faster) |     19.23 s vs 30 s (1.56x faster) |  37 MiB vs 281 MiB (86.833% lower) |
-| mixed         | pruned-update    |       1024 |              32 |            adaptive |  1.125 s vs 10.127 s (9.002x faster) | 40.105 s vs 50.221 s (1.252x faster) |  19.33 s vs 29.96 s (1.55x faster) |  38 MiB vs 273 MiB (86.081% lower) |
-| mixed         | cold-create      |       2048 |              64 |            adaptive |   0.834 s vs 5.741 s (6.884x faster) | 71.371 s vs 76.604 s (1.073x faster) | 56.37 s vs 61.69 s (1.094x faster) | 119 MiB vs 283 MiB (57.951% lower) |
-| mixed         | unchanged-update |       2048 |              64 |            adaptive |   0.25 s vs 5.682 s (22.728x faster) | 35.483 s vs 39.933 s (1.125x faster) | 19.07 s vs 24.44 s (1.282x faster) |  33 MiB vs 282 MiB (88.298% lower) |
-| mixed         | changed-update   |       2048 |              64 |            adaptive |  0.382 s vs 5.826 s (15.251x faster) | 37.097 s vs 46.844 s (1.263x faster) |  19.23 s vs 24.5 s (1.274x faster) |  37 MiB vs 283 MiB (86.926% lower) |
-| mixed         | pruned-update    |       2048 |              64 |            adaptive |     1.112 s vs 5.6 s (5.036x faster) | 40.337 s vs 45.783 s (1.135x faster) | 19.28 s vs 24.54 s (1.273x faster) |  37 MiB vs 275 MiB (86.545% lower) |
-| tiny-many     | cold-create      |       1024 |              32 |            adaptive |    2.71 s vs 24.823 s (9.16x faster) | 71.904 s vs 96.555 s (1.343x faster) | 56.42 s vs 79.47 s (1.409x faster) |  57 MiB vs 220 MiB (74.091% lower) |
-| tiny-many     | unchanged-update |       1024 |              32 |            adaptive | 0.507 s vs 27.138 s (53.527x faster) | 34.514 s vs 63.351 s (1.836x faster) | 18.94 s vs 46.75 s (2.468x faster) |  35 MiB vs 213 MiB (83.568% lower) |
-| tiny-many     | changed-update   |       1024 |              32 |            adaptive |  0.604 s vs 27.138 s (44.93x faster) | 38.005 s vs 69.194 s (1.821x faster) |  19.2 s vs 46.37 s (2.415x faster) |  36 MiB vs 212 MiB (83.019% lower) |
-| tiny-many     | pruned-update    |       1024 |              32 |            adaptive |  1.373 s vs 26.46 s (19.272x faster) | 38.112 s vs 67.986 s (1.784x faster) | 19.32 s vs 46.51 s (2.407x faster) |  36 MiB vs 209 MiB (82.775% lower) |
-| tiny-many     | cold-create      |       2048 |              64 |            adaptive |   1.54 s vs 14.882 s (9.664x faster) | 71.578 s vs 84.885 s (1.186x faster) |  56.47 s vs 68.6 s (1.215x faster) |  68 MiB vs 223 MiB (69.507% lower) |
-| tiny-many     | unchanged-update |       2048 |              64 |            adaptive | 0.454 s vs 15.627 s (34.421x faster) | 34.635 s vs 50.975 s (1.472x faster) |    19 s vs 35.35 s (1.861x faster) |  36 MiB vs 222 MiB (83.784% lower) |
-| tiny-many     | changed-update   |       2048 |              64 |            adaptive | 0.597 s vs 15.561 s (26.065x faster) | 38.064 s vs 55.613 s (1.461x faster) | 19.23 s vs 35.32 s (1.837x faster) |  36 MiB vs 222 MiB (83.784% lower) |
-| tiny-many     | pruned-update    |       2048 |              64 |            adaptive | 1.358 s vs 14.973 s (11.026x faster) | 39.699 s vs 56.874 s (1.433x faster) | 19.36 s vs 35.52 s (1.835x faster) |  36 MiB vs 219 MiB (83.562% lower) |
+| large-few     | cold-create      |       1024 |              32 |            adaptive |   2.068 s vs 9.386 s (4.539x faster) | 75.151 s vs 80.803 s (1.075x faster) | 57.15 s vs 63.28 s (1.107x faster) |  132 MiB vs 447 MiB (70.47% lower) |
+| large-few     | unchanged-update |       1024 |              32 |            adaptive |  0.253 s vs 9.267 s (36.628x faster) |  39.335 s vs 47.93 s (1.219x faster) |  19.38 s vs 30.4 s (1.569x faster) |  33 MiB vs 447 MiB (92.617% lower) |
+| large-few     | changed-update   |       1024 |              32 |            adaptive |  0.459 s vs 9.325 s (20.316x faster) |  44.236 s vs 50.427 s (1.14x faster) | 19.52 s vs 30.43 s (1.559x faster) |  40 MiB vs 447 MiB (91.051% lower) |
+| large-few     | pruned-update    |       1024 |              32 |            adaptive |  0.535 s vs 9.167 s (17.135x faster) | 38.347 s vs 54.205 s (1.414x faster) | 19.92 s vs 30.86 s (1.549x faster) |  41 MiB vs 417 MiB (90.168% lower) |
+| large-few     | cold-create      |       2048 |              64 |            adaptive |   1.165 s vs 5.165 s (4.433x faster) | 71.966 s vs 74.216 s (1.031x faster) | 52.48 s vs 57.82 s (1.102x faster) | 191 MiB vs 447 MiB (57.271% lower) |
+| large-few     | unchanged-update |       2048 |              64 |            adaptive |   0.21 s vs 5.109 s (24.329x faster) | 37.633 s vs 42.249 s (1.123x faster) | 19.39 s vs 24.85 s (1.282x faster) |  33 MiB vs 447 MiB (92.617% lower) |
+| large-few     | changed-update   |       2048 |              64 |            adaptive |  0.391 s vs 5.136 s (13.136x faster) | 42.089 s vs 45.249 s (1.075x faster) | 19.52 s vs 24.86 s (1.274x faster) |  41 MiB vs 447 MiB (90.828% lower) |
+| large-few     | pruned-update    |       2048 |              64 |            adaptive |   0.451 s vs 5.015 s (11.12x faster) | 42.585 s vs 48.617 s (1.142x faster) | 19.86 s vs 25.32 s (1.275x faster) |  40 MiB vs 417 MiB (90.408% lower) |
+| mixed         | cold-create      |       1024 |              32 |            adaptive |  1.358 s vs 10.054 s (7.404x faster) | 70.477 s vs 80.664 s (1.145x faster) | 52.42 s vs 63.38 s (1.209x faster) | 102 MiB vs 281 MiB (63.701% lower) |
+| mixed         | unchanged-update |       1024 |              32 |            adaptive |  0.28 s vs 10.198 s (36.421x faster) |  36.843 s vs 47.514 s (1.29x faster) | 19.38 s vs 30.34 s (1.566x faster) |  33 MiB vs 281 MiB (88.256% lower) |
+| mixed         | changed-update   |       1024 |              32 |            adaptive | 0.426 s vs 10.166 s (23.864x faster) | 41.738 s vs 53.198 s (1.275x faster) |  19.5 s vs 30.36 s (1.557x faster) |  37 MiB vs 280 MiB (86.786% lower) |
+| mixed         | pruned-update    |       1024 |              32 |            adaptive |    1.064 s vs 9.821 s (9.23x faster) | 43.309 s vs 51.041 s (1.179x faster) |  19.84 s vs 30.8 s (1.552x faster) |  37 MiB vs 273 MiB (86.447% lower) |
+| mixed         | cold-create      |       2048 |              64 |            adaptive |   0.839 s vs 5.699 s (6.793x faster) |  69.097 s vs 74.633 s (1.08x faster) |  52.4 s vs 57.82 s (1.103x faster) | 113 MiB vs 283 MiB (60.071% lower) |
+| mixed         | unchanged-update |       2048 |              64 |            adaptive |  0.243 s vs 5.914 s (24.337x faster) | 36.754 s vs 41.841 s (1.138x faster) | 19.33 s vs 24.86 s (1.286x faster) |  35 MiB vs 282 MiB (87.589% lower) |
+| mixed         | changed-update   |       2048 |              64 |            adaptive |  0.351 s vs 5.731 s (16.328x faster) | 42.036 s vs 48.436 s (1.152x faster) | 19.49 s vs 24.85 s (1.275x faster) |  37 MiB vs 283 MiB (86.926% lower) |
+| mixed         | pruned-update    |       2048 |              64 |            adaptive |    1.036 s vs 5.65 s (5.454x faster) | 38.254 s vs 42.643 s (1.115x faster) |  19.83 s vs 25.1 s (1.266x faster) |  39 MiB vs 275 MiB (85.818% lower) |
+| tiny-many     | cold-create      |       1024 |              32 |            adaptive |   2.68 s vs 25.948 s (9.682x faster) | 75.945 s vs 98.579 s (1.298x faster) | 57.84 s vs 83.11 s (1.437x faster) |  58 MiB vs 219 MiB (73.516% lower) |
+| tiny-many     | unchanged-update |       1024 |              32 |            adaptive | 0.478 s vs 26.789 s (56.044x faster) | 36.721 s vs 64.192 s (1.748x faster) | 19.33 s vs 47.09 s (2.436x faster) |  36 MiB vs 212 MiB (83.019% lower) |
+| tiny-many     | changed-update   |       1024 |              32 |            adaptive | 0.609 s vs 27.268 s (44.775x faster) |  41.086 s vs 71.33 s (1.736x faster) | 19.52 s vs 47.29 s (2.423x faster) |  36 MiB vs 213 MiB (83.099% lower) |
+| tiny-many     | pruned-update    |       1024 |              32 |            adaptive | 1.367 s vs 26.651 s (19.496x faster) | 38.867 s vs 67.506 s (1.737x faster) |    20 s vs 47.62 s (2.381x faster) |  36 MiB vs 215 MiB (83.256% lower) |
+| tiny-many     | cold-create      |       2048 |              64 |            adaptive |  1.492 s vs 15.025 s (10.07x faster) | 73.077 s vs 85.626 s (1.172x faster) |  57.14 s vs 68.8 s (1.204x faster) |  69 MiB vs 223 MiB (69.058% lower) |
+| tiny-many     | unchanged-update |       2048 |              64 |            adaptive |  0.479 s vs 15.31 s (31.962x faster) | 36.743 s vs 53.153 s (1.447x faster) | 19.35 s vs 35.96 s (1.858x faster) |  35 MiB vs 221 MiB (84.163% lower) |
+| tiny-many     | changed-update   |       2048 |              64 |            adaptive |  0.572 s vs 15.25 s (26.661x faster) | 41.306 s vs 53.885 s (1.305x faster) | 19.52 s vs 36.02 s (1.845x faster) |  36 MiB vs 222 MiB (83.784% lower) |
+| tiny-many     | pruned-update    |       2048 |              64 |            adaptive | 1.325 s vs 15.072 s (11.375x faster) | 41.882 s vs 59.826 s (1.428x faster) | 19.84 s vs 36.41 s (1.835x faster) |  36 MiB vs 219 MiB (83.562% lower) |
 
 ### large-few cold-create at 1024 MiB / max concurrency 32 / source window adaptive
 
 | Metric            | ShinBucketDeployment | AWS BucketDeployment | Difference | AWS/Shin | AWS delta % |
 | ----------------- | -------------------: | -------------------: | ---------: | -------: | ----------: |
-| Provider duration |              1.925 s |              9.152 s |   +7.227 s |   4.754x |   +375.429% |
-| Billed duration   |              2.043 s |              9.729 s |   +7.686 s |   4.762x |   +376.211% |
-| Init duration     |               0.12 s |              0.545 s |   +0.425 s |   4.542x |   +354.167% |
-| Local wall time   |             74.504 s |             80.657 s |   +6.153 s |   1.083x |     +8.259% |
-| CDK deploy time   |              57.28 s |              62.63 s |    +5.35 s |   1.093x |      +9.34% |
-| Max memory        |              116 MiB |              447 MiB |   +331 MiB |   3.853x |   +285.345% |
+| Provider duration |              2.068 s |              9.386 s |   +7.318 s |   4.539x |   +353.868% |
+| Billed duration   |              2.249 s |              9.913 s |   +7.664 s |   4.408x |   +340.774% |
+| Init duration     |              0.122 s |              0.527 s |   +0.405 s |    4.32x |   +331.967% |
+| Local wall time   |             75.151 s |             80.803 s |   +5.652 s |   1.075x |     +7.521% |
+| CDK deploy time   |              57.15 s |              63.28 s |    +6.13 s |   1.107x |    +10.726% |
+| Max memory        |              132 MiB |              447 MiB |   +315 MiB |   3.386x |   +238.636% |
 
 ### large-few unchanged-update at 1024 MiB / max concurrency 32 / source window adaptive
 
 | Metric            | ShinBucketDeployment | AWS BucketDeployment | Difference | AWS/Shin | AWS delta % |
 | ----------------- | -------------------: | -------------------: | ---------: | -------: | ----------: |
-| Provider duration |               0.24 s |              9.552 s |   +9.312 s |    39.8x |      +3880% |
-| Billed duration   |              0.357 s |             10.131 s |   +9.774 s |  28.378x |  +2737.815% |
-| Init duration     |              0.117 s |              0.579 s |   +0.462 s |   4.949x |   +394.872% |
-| Local wall time   |             37.686 s |              46.36 s |   +8.674 s |    1.23x |    +23.017% |
-| CDK deploy time   |              19.11 s |              29.95 s |   +10.84 s |   1.567x |    +56.724% |
+| Provider duration |              0.253 s |              9.267 s |   +9.014 s |  36.628x |  +3562.846% |
+| Billed duration   |              0.371 s |              9.838 s |   +9.467 s |  26.518x |  +2551.752% |
+| Init duration     |              0.118 s |              0.519 s |   +0.401 s |   4.398x |   +339.831% |
+| Local wall time   |             39.335 s |              47.93 s |   +8.595 s |   1.219x |    +21.851% |
+| CDK deploy time   |              19.38 s |               30.4 s |   +11.02 s |   1.569x |    +56.863% |
 | Max memory        |               33 MiB |              447 MiB |   +414 MiB |  13.545x |  +1254.545% |
 
 ### large-few changed-update at 1024 MiB / max concurrency 32 / source window adaptive
 
 | Metric            | ShinBucketDeployment | AWS BucketDeployment | Difference | AWS/Shin | AWS delta % |
 | ----------------- | -------------------: | -------------------: | ---------: | -------: | ----------: |
-| Provider duration |              0.469 s |              9.556 s |   +9.087 s |  20.375x |  +1937.527% |
-| Billed duration   |              0.594 s |             10.117 s |   +9.523 s |  17.032x |  +1603.199% |
-| Init duration     |              0.124 s |              0.562 s |   +0.438 s |   4.532x |   +353.226% |
-| Local wall time   |              40.91 s |             53.672 s |  +12.762 s |   1.312x |    +31.195% |
-| CDK deploy time   |              19.17 s |                 30 s |   +10.83 s |   1.565x |    +56.495% |
-| Max memory        |               41 MiB |              447 MiB |   +406 MiB |  10.902x |   +990.244% |
+| Provider duration |              0.459 s |              9.325 s |   +8.866 s |  20.316x |   +1931.59% |
+| Billed duration   |              0.574 s |              9.859 s |   +9.285 s |  17.176x |  +1617.596% |
+| Init duration     |              0.115 s |              0.523 s |   +0.408 s |   4.548x |   +354.783% |
+| Local wall time   |             44.236 s |             50.427 s |   +6.191 s |    1.14x |    +13.995% |
+| CDK deploy time   |              19.52 s |              30.43 s |   +10.91 s |   1.559x |    +55.891% |
+| Max memory        |               40 MiB |              447 MiB |   +407 MiB |  11.175x |    +1017.5% |
 
 ### large-few pruned-update at 1024 MiB / max concurrency 32 / source window adaptive
 
 | Metric            | ShinBucketDeployment | AWS BucketDeployment | Difference | AWS/Shin | AWS delta % |
 | ----------------- | -------------------: | -------------------: | ---------: | -------: | ----------: |
-| Provider duration |              0.508 s |              8.989 s |   +8.481 s |  17.695x |  +1669.488% |
-| Billed duration   |              0.625 s |              9.498 s |   +8.873 s |  15.197x |   +1419.68% |
-| Init duration     |              0.118 s |              0.512 s |   +0.394 s |   4.339x |   +333.898% |
-| Local wall time   |             41.816 s |             51.394 s |   +9.578 s |   1.229x |    +22.905% |
-| CDK deploy time   |              19.27 s |              30.04 s |   +10.77 s |   1.559x |     +55.89% |
+| Provider duration |              0.535 s |              9.167 s |   +8.632 s |  17.135x |  +1613.458% |
+| Billed duration   |              0.653 s |              9.717 s |   +9.064 s |  14.881x |  +1388.055% |
+| Init duration     |              0.115 s |              0.537 s |   +0.422 s |    4.67x |   +366.957% |
+| Local wall time   |             38.347 s |             54.205 s |  +15.858 s |   1.414x |    +41.354% |
+| CDK deploy time   |              19.92 s |              30.86 s |   +10.94 s |   1.549x |     +54.92% |
 | Max memory        |               41 MiB |              417 MiB |   +376 MiB |  10.171x |   +917.073% |
 
 ### large-few cold-create at 2048 MiB / max concurrency 64 / source window adaptive
 
 | Metric            | ShinBucketDeployment | AWS BucketDeployment | Difference | AWS/Shin | AWS delta % |
 | ----------------- | -------------------: | -------------------: | ---------: | -------: | ----------: |
-| Provider duration |              1.142 s |              5.333 s |   +4.191 s |    4.67x |   +366.988% |
-| Billed duration   |              1.262 s |              5.911 s |   +4.649 s |   4.684x |   +368.384% |
-| Init duration     |               0.12 s |              0.592 s |   +0.472 s |   4.933x |   +393.333% |
-| Local wall time   |             71.895 s |             73.125 s |    +1.23 s |   1.017x |     +1.711% |
-| CDK deploy time   |              56.45 s |              57.35 s |     +0.9 s |   1.016x |     +1.594% |
-| Max memory        |              186 MiB |              447 MiB |   +261 MiB |   2.403x |   +140.323% |
+| Provider duration |              1.165 s |              5.165 s |       +4 s |   4.433x |   +343.348% |
+| Billed duration   |              1.288 s |              5.673 s |   +4.385 s |   4.405x |    +340.45% |
+| Init duration     |              0.117 s |              0.517 s |     +0.4 s |   4.419x |    +341.88% |
+| Local wall time   |             71.966 s |             74.216 s |    +2.25 s |   1.031x |     +3.126% |
+| CDK deploy time   |              52.48 s |              57.82 s |    +5.34 s |   1.102x |    +10.175% |
+| Max memory        |              191 MiB |              447 MiB |   +256 MiB |    2.34x |   +134.031% |
 
 ### large-few unchanged-update at 2048 MiB / max concurrency 64 / source window adaptive
 
 | Metric            | ShinBucketDeployment | AWS BucketDeployment | Difference | AWS/Shin | AWS delta % |
 | ----------------- | -------------------: | -------------------: | ---------: | -------: | ----------: |
-| Provider duration |              0.209 s |              5.226 s |   +5.017 s |  25.005x |  +2400.478% |
-| Billed duration   |              0.324 s |              5.787 s |   +5.463 s |  17.861x |  +1686.111% |
-| Init duration     |              0.117 s |              0.516 s |   +0.399 s |    4.41x |   +341.026% |
-| Local wall time   |             35.159 s |             41.579 s |    +6.42 s |   1.183x |     +18.26% |
-| CDK deploy time   |              19.02 s |              24.56 s |    +5.54 s |   1.291x |    +29.127% |
+| Provider duration |               0.21 s |              5.109 s |   +4.899 s |  24.329x |  +2332.857% |
+| Billed duration   |              0.329 s |              5.631 s |   +5.302 s |  17.116x |   +1611.55% |
+| Init duration     |              0.118 s |              0.522 s |   +0.404 s |   4.424x |   +342.373% |
+| Local wall time   |             37.633 s |             42.249 s |   +4.616 s |   1.123x |    +12.266% |
+| CDK deploy time   |              19.39 s |              24.85 s |    +5.46 s |   1.282x |    +28.159% |
 | Max memory        |               33 MiB |              447 MiB |   +414 MiB |  13.545x |  +1254.545% |
 
 ### large-few changed-update at 2048 MiB / max concurrency 64 / source window adaptive
 
 | Metric            | ShinBucketDeployment | AWS BucketDeployment | Difference | AWS/Shin | AWS delta % |
 | ----------------- | -------------------: | -------------------: | ---------: | -------: | ----------: |
-| Provider duration |              0.387 s |              5.165 s |   +4.778 s |  13.346x |  +1234.625% |
-| Billed duration   |              0.498 s |              5.684 s |   +5.186 s |  11.414x |  +1041.365% |
-| Init duration     |               0.12 s |              0.519 s |   +0.399 s |   4.325x |     +332.5% |
-| Local wall time   |             41.867 s |             46.313 s |   +4.446 s |   1.106x |    +10.619% |
-| CDK deploy time   |              19.24 s |               24.5 s |    +5.26 s |   1.273x |    +27.339% |
-| Max memory        |               40 MiB |              447 MiB |   +407 MiB |  11.175x |    +1017.5% |
+| Provider duration |              0.391 s |              5.136 s |   +4.745 s |  13.136x |  +1213.555% |
+| Billed duration   |              0.509 s |              5.647 s |   +5.138 s |  11.094x |   +1009.43% |
+| Init duration     |              0.119 s |              0.524 s |   +0.405 s |   4.403x |   +340.336% |
+| Local wall time   |             42.089 s |             45.249 s |    +3.16 s |   1.075x |     +7.508% |
+| CDK deploy time   |              19.52 s |              24.86 s |    +5.34 s |   1.274x |    +27.357% |
+| Max memory        |               41 MiB |              447 MiB |   +406 MiB |  10.902x |   +990.244% |
 
 ### large-few pruned-update at 2048 MiB / max concurrency 64 / source window adaptive
 
 | Metric            | ShinBucketDeployment | AWS BucketDeployment | Difference | AWS/Shin | AWS delta % |
 | ----------------- | -------------------: | -------------------: | ---------: | -------: | ----------: |
-| Provider duration |              0.483 s |              4.988 s |   +4.505 s |  10.327x |   +932.712% |
-| Billed duration   |              0.608 s |              5.506 s |   +4.898 s |   9.056x |   +805.592% |
-| Init duration     |              0.121 s |              0.527 s |   +0.406 s |   4.355x |   +335.537% |
-| Local wall time   |             37.441 s |             45.515 s |   +8.074 s |   1.216x |    +21.565% |
-| CDK deploy time   |              19.28 s |              24.65 s |    +5.37 s |   1.279x |    +27.853% |
+| Provider duration |              0.451 s |              5.015 s |   +4.564 s |   11.12x |  +1011.973% |
+| Billed duration   |              0.576 s |               5.54 s |   +4.964 s |   9.618x |   +861.806% |
+| Init duration     |              0.116 s |              0.521 s |   +0.405 s |   4.491x |   +349.138% |
+| Local wall time   |             42.585 s |             48.617 s |   +6.032 s |   1.142x |    +14.165% |
+| CDK deploy time   |              19.86 s |              25.32 s |    +5.46 s |   1.275x |    +27.492% |
 | Max memory        |               40 MiB |              417 MiB |   +377 MiB |  10.425x |     +942.5% |
 
 ### mixed cold-create at 1024 MiB / max concurrency 32 / source window adaptive
 
 | Metric            | ShinBucketDeployment | AWS BucketDeployment | Difference | AWS/Shin | AWS delta % |
 | ----------------- | -------------------: | -------------------: | ---------: | -------: | ----------: |
-| Provider duration |              1.299 s |              9.946 s |   +8.647 s |   7.657x |   +665.666% |
-| Billed duration   |              1.418 s |             10.514 s |   +9.096 s |   7.415x |   +641.467% |
-| Init duration     |              0.118 s |              0.519 s |   +0.401 s |   4.398x |   +339.831% |
-| Local wall time   |             74.565 s |             80.996 s |   +6.431 s |   1.086x |     +8.625% |
-| CDK deploy time   |              57.82 s |              62.72 s |     +4.9 s |   1.085x |     +8.475% |
-| Max memory        |              105 MiB |              281 MiB |   +176 MiB |   2.676x |   +167.619% |
+| Provider duration |              1.358 s |             10.054 s |   +8.696 s |   7.404x |   +640.353% |
+| Billed duration   |              1.479 s |             10.629 s |    +9.15 s |   7.187x |   +618.661% |
+| Init duration     |               0.12 s |              0.541 s |   +0.421 s |   4.508x |   +350.833% |
+| Local wall time   |             70.477 s |             80.664 s |  +10.187 s |   1.145x |    +14.454% |
+| CDK deploy time   |              52.42 s |              63.38 s |   +10.96 s |   1.209x |    +20.908% |
+| Max memory        |              102 MiB |              281 MiB |   +179 MiB |   2.755x |    +175.49% |
 
 ### mixed unchanged-update at 1024 MiB / max concurrency 32 / source window adaptive
 
 | Metric            | ShinBucketDeployment | AWS BucketDeployment | Difference | AWS/Shin | AWS delta % |
 | ----------------- | -------------------: | -------------------: | ---------: | -------: | ----------: |
-| Provider duration |              0.282 s |             10.366 s |  +10.084 s |  36.759x |  +3575.887% |
-| Billed duration   |              0.402 s |              10.92 s |  +10.518 s |  27.164x |  +2616.418% |
-| Init duration     |               0.12 s |              0.523 s |   +0.403 s |   4.358x |   +335.833% |
-| Local wall time   |             34.679 s |             45.133 s |  +10.454 s |   1.301x |    +30.145% |
-| CDK deploy time   |              19.07 s |               29.9 s |   +10.83 s |   1.568x |    +56.791% |
-| Max memory        |               33 MiB |              280 MiB |   +247 MiB |   8.485x |   +748.485% |
+| Provider duration |               0.28 s |             10.198 s |   +9.918 s |  36.421x |  +3542.143% |
+| Billed duration   |              0.397 s |             10.838 s |  +10.441 s |    27.3x |  +2629.975% |
+| Init duration     |              0.117 s |              0.574 s |   +0.457 s |   4.906x |   +390.598% |
+| Local wall time   |             36.843 s |             47.514 s |  +10.671 s |    1.29x |    +28.963% |
+| CDK deploy time   |              19.38 s |              30.34 s |   +10.96 s |   1.566x |    +56.553% |
+| Max memory        |               33 MiB |              281 MiB |   +248 MiB |   8.515x |   +751.515% |
 
 ### mixed changed-update at 1024 MiB / max concurrency 32 / source window adaptive
 
 | Metric            | ShinBucketDeployment | AWS BucketDeployment | Difference | AWS/Shin | AWS delta % |
 | ----------------- | -------------------: | -------------------: | ---------: | -------: | ----------: |
-| Provider duration |               0.41 s |             10.429 s |  +10.019 s |  25.437x |  +2443.659% |
-| Billed duration   |              0.531 s |             11.007 s |  +10.476 s |  20.729x |  +1972.881% |
-| Init duration     |              0.124 s |              0.538 s |   +0.414 s |   4.339x |   +333.871% |
-| Local wall time   |             40.717 s |             50.085 s |   +9.368 s |    1.23x |    +23.008% |
-| CDK deploy time   |              19.23 s |                 30 s |   +10.77 s |    1.56x |    +56.006% |
-| Max memory        |               37 MiB |              281 MiB |   +244 MiB |   7.595x |   +659.459% |
+| Provider duration |              0.426 s |             10.166 s |    +9.74 s |  23.864x |  +2286.385% |
+| Billed duration   |              0.549 s |             11.102 s |  +10.553 s |  20.222x |  +1922.222% |
+| Init duration     |              0.116 s |              0.543 s |   +0.427 s |   4.681x |   +368.103% |
+| Local wall time   |             41.738 s |             53.198 s |   +11.46 s |   1.275x |    +27.457% |
+| CDK deploy time   |               19.5 s |              30.36 s |   +10.86 s |   1.557x |    +55.692% |
+| Max memory        |               37 MiB |              280 MiB |   +243 MiB |   7.568x |   +656.757% |
 
 ### mixed pruned-update at 1024 MiB / max concurrency 32 / source window adaptive
 
 | Metric            | ShinBucketDeployment | AWS BucketDeployment | Difference | AWS/Shin | AWS delta % |
 | ----------------- | -------------------: | -------------------: | ---------: | -------: | ----------: |
-| Provider duration |              1.125 s |             10.127 s |   +9.002 s |   9.002x |   +800.178% |
-| Billed duration   |              1.241 s |             10.644 s |   +9.403 s |   8.577x |   +757.695% |
-| Init duration     |              0.121 s |              0.543 s |   +0.422 s |   4.488x |    +348.76% |
-| Local wall time   |             40.105 s |             50.221 s |  +10.116 s |   1.252x |    +25.224% |
-| CDK deploy time   |              19.33 s |              29.96 s |   +10.63 s |    1.55x |    +54.992% |
-| Max memory        |               38 MiB |              273 MiB |   +235 MiB |   7.184x |   +618.421% |
+| Provider duration |              1.064 s |              9.821 s |   +8.757 s |    9.23x |   +823.026% |
+| Billed duration   |              1.174 s |             10.361 s |   +9.187 s |   8.825x |   +782.538% |
+| Init duration     |              0.118 s |              0.539 s |   +0.421 s |   4.568x |    +356.78% |
+| Local wall time   |             43.309 s |             51.041 s |   +7.732 s |   1.179x |    +17.853% |
+| CDK deploy time   |              19.84 s |               30.8 s |   +10.96 s |   1.552x |    +55.242% |
+| Max memory        |               37 MiB |              273 MiB |   +236 MiB |   7.378x |   +637.838% |
 
 ### mixed cold-create at 2048 MiB / max concurrency 64 / source window adaptive
 
 | Metric            | ShinBucketDeployment | AWS BucketDeployment | Difference | AWS/Shin | AWS delta % |
 | ----------------- | -------------------: | -------------------: | ---------: | -------: | ----------: |
-| Provider duration |              0.834 s |              5.741 s |   +4.907 s |   6.884x |   +588.369% |
-| Billed duration   |              0.961 s |              6.261 s |     +5.3 s |   6.515x |   +551.509% |
-| Init duration     |              0.123 s |              0.519 s |   +0.396 s |    4.22x |   +321.951% |
-| Local wall time   |             71.371 s |             76.604 s |   +5.233 s |   1.073x |     +7.332% |
-| CDK deploy time   |              56.37 s |              61.69 s |    +5.32 s |   1.094x |     +9.438% |
-| Max memory        |              119 MiB |              283 MiB |   +164 MiB |   2.378x |   +137.815% |
+| Provider duration |              0.839 s |              5.699 s |    +4.86 s |   6.793x |   +579.261% |
+| Billed duration   |              0.964 s |              6.231 s |   +5.267 s |   6.464x |   +546.369% |
+| Init duration     |              0.121 s |              0.526 s |   +0.405 s |   4.347x |   +334.711% |
+| Local wall time   |             69.097 s |             74.633 s |   +5.536 s |    1.08x |     +8.012% |
+| CDK deploy time   |               52.4 s |              57.82 s |    +5.42 s |   1.103x |    +10.344% |
+| Max memory        |              113 MiB |              283 MiB |   +170 MiB |   2.504x |   +150.442% |
 
 ### mixed unchanged-update at 2048 MiB / max concurrency 64 / source window adaptive
 
 | Metric            | ShinBucketDeployment | AWS BucketDeployment | Difference | AWS/Shin | AWS delta % |
 | ----------------- | -------------------: | -------------------: | ---------: | -------: | ----------: |
-| Provider duration |               0.25 s |              5.682 s |   +5.432 s |  22.728x |    +2172.8% |
-| Billed duration   |              0.368 s |              6.201 s |   +5.833 s |  16.851x |  +1585.054% |
-| Init duration     |              0.121 s |              0.518 s |   +0.397 s |   4.281x |   +328.099% |
-| Local wall time   |             35.483 s |             39.933 s |    +4.45 s |   1.125x |    +12.541% |
-| CDK deploy time   |              19.07 s |              24.44 s |    +5.37 s |   1.282x |    +28.159% |
-| Max memory        |               33 MiB |              282 MiB |   +249 MiB |   8.545x |   +754.545% |
+| Provider duration |              0.243 s |              5.914 s |   +5.671 s |  24.337x |  +2333.745% |
+| Billed duration   |              0.359 s |               6.49 s |   +6.131 s |  18.078x |  +1707.799% |
+| Init duration     |              0.117 s |              0.493 s |   +0.376 s |   4.214x |   +321.368% |
+| Local wall time   |             36.754 s |             41.841 s |   +5.087 s |   1.138x |    +13.841% |
+| CDK deploy time   |              19.33 s |              24.86 s |    +5.53 s |   1.286x |    +28.608% |
+| Max memory        |               35 MiB |              282 MiB |   +247 MiB |   8.057x |   +705.714% |
 
 ### mixed changed-update at 2048 MiB / max concurrency 64 / source window adaptive
 
 | Metric            | ShinBucketDeployment | AWS BucketDeployment | Difference | AWS/Shin | AWS delta % |
 | ----------------- | -------------------: | -------------------: | ---------: | -------: | ----------: |
-| Provider duration |              0.382 s |              5.826 s |   +5.444 s |  15.251x |  +1425.131% |
-| Billed duration   |              0.508 s |              6.347 s |   +5.839 s |  12.494x |  +1149.409% |
-| Init duration     |              0.115 s |              0.526 s |   +0.411 s |   4.574x |   +357.391% |
-| Local wall time   |             37.097 s |             46.844 s |   +9.747 s |   1.263x |    +26.274% |
-| CDK deploy time   |              19.23 s |               24.5 s |    +5.27 s |   1.274x |    +27.405% |
+| Provider duration |              0.351 s |              5.731 s |    +5.38 s |  16.328x |  +1532.764% |
+| Billed duration   |              0.479 s |              6.249 s |    +5.77 s |  13.046x |  +1204.593% |
+| Init duration     |              0.119 s |              0.528 s |   +0.409 s |   4.437x |   +343.697% |
+| Local wall time   |             42.036 s |             48.436 s |     +6.4 s |   1.152x |    +15.225% |
+| CDK deploy time   |              19.49 s |              24.85 s |    +5.36 s |   1.275x |    +27.501% |
 | Max memory        |               37 MiB |              283 MiB |   +246 MiB |   7.649x |   +664.865% |
 
 ### mixed pruned-update at 2048 MiB / max concurrency 64 / source window adaptive
 
 | Metric            | ShinBucketDeployment | AWS BucketDeployment | Difference | AWS/Shin | AWS delta % |
 | ----------------- | -------------------: | -------------------: | ---------: | -------: | ----------: |
-| Provider duration |              1.112 s |                5.6 s |   +4.488 s |   5.036x |   +403.597% |
-| Billed duration   |              1.217 s |              6.107 s |    +4.89 s |   5.018x |   +401.808% |
-| Init duration     |              0.118 s |              0.528 s |    +0.41 s |   4.475x |   +347.458% |
-| Local wall time   |             40.337 s |             45.783 s |   +5.446 s |   1.135x |    +13.501% |
-| CDK deploy time   |              19.28 s |              24.54 s |    +5.26 s |   1.273x |    +27.282% |
-| Max memory        |               37 MiB |              275 MiB |   +238 MiB |   7.432x |   +643.243% |
+| Provider duration |              1.036 s |               5.65 s |   +4.614 s |   5.454x |   +445.367% |
+| Billed duration   |              1.161 s |              6.168 s |   +5.007 s |   5.313x |   +431.266% |
+| Init duration     |              0.122 s |              0.518 s |   +0.396 s |   4.246x |    +324.59% |
+| Local wall time   |             38.254 s |             42.643 s |   +4.389 s |   1.115x |    +11.473% |
+| CDK deploy time   |              19.83 s |               25.1 s |    +5.27 s |   1.266x |    +26.576% |
+| Max memory        |               39 MiB |              275 MiB |   +236 MiB |   7.051x |   +605.128% |
 
 ### tiny-many cold-create at 1024 MiB / max concurrency 32 / source window adaptive
 
 | Metric            | ShinBucketDeployment | AWS BucketDeployment | Difference | AWS/Shin | AWS delta % |
 | ----------------- | -------------------: | -------------------: | ---------: | -------: | ----------: |
-| Provider duration |               2.71 s |             24.823 s |  +22.113 s |    9.16x |   +815.978% |
-| Billed duration   |              2.827 s |             25.346 s |  +22.519 s |   8.966x |   +796.569% |
-| Init duration     |              0.116 s |              0.528 s |   +0.412 s |   4.552x |   +355.172% |
-| Local wall time   |             71.904 s |             96.555 s |  +24.651 s |   1.343x |    +34.283% |
-| CDK deploy time   |              56.42 s |              79.47 s |   +23.05 s |   1.409x |    +40.854% |
-| Max memory        |               57 MiB |              220 MiB |   +163 MiB |    3.86x |   +285.965% |
+| Provider duration |               2.68 s |             25.948 s |  +23.268 s |   9.682x |   +868.209% |
+| Billed duration   |              2.805 s |             26.467 s |  +23.662 s |   9.436x |   +843.565% |
+| Init duration     |              0.118 s |              0.527 s |   +0.409 s |   4.466x |    +346.61% |
+| Local wall time   |             75.945 s |             98.579 s |  +22.634 s |   1.298x |    +29.803% |
+| CDK deploy time   |              57.84 s |              83.11 s |   +25.27 s |   1.437x |    +43.689% |
+| Max memory        |               58 MiB |              219 MiB |   +161 MiB |   3.776x |   +277.586% |
 
 ### tiny-many unchanged-update at 1024 MiB / max concurrency 32 / source window adaptive
 
 | Metric            | ShinBucketDeployment | AWS BucketDeployment | Difference | AWS/Shin | AWS delta % |
 | ----------------- | -------------------: | -------------------: | ---------: | -------: | ----------: |
-| Provider duration |              0.507 s |             27.138 s |  +26.631 s |  53.527x |  +5252.663% |
-| Billed duration   |              0.606 s |             27.665 s |  +27.059 s |  45.652x |  +4465.182% |
-| Init duration     |              0.117 s |              0.536 s |   +0.419 s |   4.581x |    +358.12% |
-| Local wall time   |             34.514 s |             63.351 s |  +28.837 s |   1.836x |    +83.552% |
-| CDK deploy time   |              18.94 s |              46.75 s |   +27.81 s |   2.468x |   +146.832% |
-| Max memory        |               35 MiB |              213 MiB |   +178 MiB |   6.086x |   +508.571% |
+| Provider duration |              0.478 s |             26.789 s |  +26.311 s |  56.044x |  +5504.393% |
+| Billed duration   |              0.598 s |             27.318 s |   +26.72 s |  45.682x |  +4468.227% |
+| Init duration     |               0.12 s |              0.545 s |   +0.425 s |   4.542x |   +354.167% |
+| Local wall time   |             36.721 s |             64.192 s |  +27.471 s |   1.748x |     +74.81% |
+| CDK deploy time   |              19.33 s |              47.09 s |   +27.76 s |   2.436x |   +143.611% |
+| Max memory        |               36 MiB |              212 MiB |   +176 MiB |   5.889x |   +488.889% |
 
 ### tiny-many changed-update at 1024 MiB / max concurrency 32 / source window adaptive
 
 | Metric            | ShinBucketDeployment | AWS BucketDeployment | Difference | AWS/Shin | AWS delta % |
 | ----------------- | -------------------: | -------------------: | ---------: | -------: | ----------: |
-| Provider duration |              0.604 s |             27.138 s |  +26.534 s |   44.93x |  +4393.046% |
-| Billed duration   |              0.722 s |              27.67 s |  +26.948 s |  38.324x |   +3732.41% |
-| Init duration     |              0.119 s |              0.526 s |   +0.407 s |    4.42x |   +342.017% |
-| Local wall time   |             38.005 s |             69.194 s |  +31.189 s |   1.821x |    +82.066% |
-| CDK deploy time   |               19.2 s |              46.37 s |   +27.17 s |   2.415x |    +141.51% |
-| Max memory        |               36 MiB |              212 MiB |   +176 MiB |   5.889x |   +488.889% |
+| Provider duration |              0.609 s |             27.268 s |  +26.659 s |  44.775x |  +4377.504% |
+| Billed duration   |              0.726 s |              27.79 s |  +27.064 s |  38.278x |  +3727.824% |
+| Init duration     |              0.122 s |              0.523 s |   +0.401 s |   4.287x |   +328.689% |
+| Local wall time   |             41.086 s |              71.33 s |  +30.244 s |   1.736x |    +73.611% |
+| CDK deploy time   |              19.52 s |              47.29 s |   +27.77 s |   2.423x |   +142.264% |
+| Max memory        |               36 MiB |              213 MiB |   +177 MiB |   5.917x |   +491.667% |
 
 ### tiny-many pruned-update at 1024 MiB / max concurrency 32 / source window adaptive
 
 | Metric            | ShinBucketDeployment | AWS BucketDeployment | Difference | AWS/Shin | AWS delta % |
 | ----------------- | -------------------: | -------------------: | ---------: | -------: | ----------: |
-| Provider duration |              1.373 s |              26.46 s |  +25.087 s |  19.272x |  +1827.167% |
-| Billed duration   |              1.499 s |             27.041 s |  +25.542 s |  18.039x |  +1703.936% |
-| Init duration     |              0.119 s |              0.544 s |   +0.425 s |   4.571x |   +357.143% |
-| Local wall time   |             38.112 s |             67.986 s |  +29.874 s |   1.784x |    +78.385% |
-| CDK deploy time   |              19.32 s |              46.51 s |   +27.19 s |   2.407x |   +140.735% |
-| Max memory        |               36 MiB |              209 MiB |   +173 MiB |   5.806x |   +480.556% |
+| Provider duration |              1.367 s |             26.651 s |  +25.284 s |  19.496x |  +1849.598% |
+| Billed duration   |              1.466 s |             27.186 s |   +25.72 s |  18.544x |  +1754.434% |
+| Init duration     |              0.115 s |              0.534 s |   +0.419 s |   4.643x |   +364.348% |
+| Local wall time   |             38.867 s |             67.506 s |  +28.639 s |   1.737x |    +73.685% |
+| CDK deploy time   |                 20 s |              47.62 s |   +27.62 s |   2.381x |     +138.1% |
+| Max memory        |               36 MiB |              215 MiB |   +179 MiB |   5.972x |   +497.222% |
 
 ### tiny-many cold-create at 2048 MiB / max concurrency 64 / source window adaptive
 
 | Metric            | ShinBucketDeployment | AWS BucketDeployment | Difference | AWS/Shin | AWS delta % |
 | ----------------- | -------------------: | -------------------: | ---------: | -------: | ----------: |
-| Provider duration |               1.54 s |             14.882 s |  +13.342 s |   9.664x |   +866.364% |
-| Billed duration   |              1.663 s |              15.41 s |  +13.747 s |   9.266x |   +826.639% |
-| Init duration     |              0.121 s |              0.516 s |   +0.395 s |   4.264x |   +326.446% |
-| Local wall time   |             71.578 s |             84.885 s |  +13.307 s |   1.186x |    +18.591% |
-| CDK deploy time   |              56.47 s |               68.6 s |   +12.13 s |   1.215x |     +21.48% |
-| Max memory        |               68 MiB |              223 MiB |   +155 MiB |   3.279x |   +227.941% |
+| Provider duration |              1.492 s |             15.025 s |  +13.533 s |   10.07x |   +907.038% |
+| Billed duration   |               1.61 s |             15.562 s |  +13.952 s |   9.666x |   +866.584% |
+| Init duration     |              0.118 s |              0.525 s |   +0.407 s |   4.449x |   +344.915% |
+| Local wall time   |             73.077 s |             85.626 s |  +12.549 s |   1.172x |    +17.172% |
+| CDK deploy time   |              57.14 s |               68.8 s |   +11.66 s |   1.204x |    +20.406% |
+| Max memory        |               69 MiB |              223 MiB |   +154 MiB |   3.232x |   +223.188% |
 
 ### tiny-many unchanged-update at 2048 MiB / max concurrency 64 / source window adaptive
 
 | Metric            | ShinBucketDeployment | AWS BucketDeployment | Difference | AWS/Shin | AWS delta % |
 | ----------------- | -------------------: | -------------------: | ---------: | -------: | ----------: |
-| Provider duration |              0.454 s |             15.627 s |  +15.173 s |  34.421x |   +3342.07% |
-| Billed duration   |              0.579 s |             16.199 s |   +15.62 s |  27.978x |  +2697.755% |
-| Init duration     |              0.121 s |              0.539 s |   +0.418 s |   4.455x |   +345.455% |
-| Local wall time   |             34.635 s |             50.975 s |   +16.34 s |   1.472x |    +47.178% |
-| CDK deploy time   |                 19 s |              35.35 s |   +16.35 s |   1.861x |    +86.053% |
-| Max memory        |               36 MiB |              222 MiB |   +186 MiB |   6.167x |   +516.667% |
+| Provider duration |              0.479 s |              15.31 s |  +14.831 s |  31.962x |  +3096.242% |
+| Billed duration   |              0.598 s |             15.832 s |  +15.234 s |  26.475x |  +2547.492% |
+| Init duration     |              0.114 s |              0.521 s |   +0.407 s |    4.57x |   +357.018% |
+| Local wall time   |             36.743 s |             53.153 s |   +16.41 s |   1.447x |    +44.662% |
+| CDK deploy time   |              19.35 s |              35.96 s |   +16.61 s |   1.858x |     +85.84% |
+| Max memory        |               35 MiB |              221 MiB |   +186 MiB |   6.314x |   +531.429% |
 
 ### tiny-many changed-update at 2048 MiB / max concurrency 64 / source window adaptive
 
 | Metric            | ShinBucketDeployment | AWS BucketDeployment | Difference | AWS/Shin | AWS delta % |
 | ----------------- | -------------------: | -------------------: | ---------: | -------: | ----------: |
-| Provider duration |              0.597 s |             15.561 s |  +14.964 s |  26.065x |  +2506.533% |
-| Billed duration   |              0.719 s |             16.067 s |  +15.348 s |  22.346x |  +2134.631% |
-| Init duration     |              0.121 s |              0.505 s |   +0.384 s |   4.174x |   +317.355% |
-| Local wall time   |             38.064 s |             55.613 s |  +17.549 s |   1.461x |    +46.104% |
-| CDK deploy time   |              19.23 s |              35.32 s |   +16.09 s |   1.837x |    +83.671% |
+| Provider duration |              0.572 s |              15.25 s |  +14.678 s |  26.661x |  +2566.084% |
+| Billed duration   |              0.673 s |             15.785 s |  +15.112 s |  23.455x |  +2245.468% |
+| Init duration     |              0.117 s |              0.542 s |   +0.425 s |   4.632x |   +363.248% |
+| Local wall time   |             41.306 s |             53.885 s |  +12.579 s |   1.305x |    +30.453% |
+| CDK deploy time   |              19.52 s |              36.02 s |    +16.5 s |   1.845x |    +84.529% |
 | Max memory        |               36 MiB |              222 MiB |   +186 MiB |   6.167x |   +516.667% |
 
 ### tiny-many pruned-update at 2048 MiB / max concurrency 64 / source window adaptive
 
 | Metric            | ShinBucketDeployment | AWS BucketDeployment | Difference | AWS/Shin | AWS delta % |
 | ----------------- | -------------------: | -------------------: | ---------: | -------: | ----------: |
-| Provider duration |              1.358 s |             14.973 s |  +13.615 s |  11.026x |  +1002.577% |
-| Billed duration   |              1.486 s |             15.613 s |  +14.127 s |  10.507x |   +950.673% |
-| Init duration     |              0.122 s |              0.543 s |   +0.421 s |   4.451x |   +345.082% |
-| Local wall time   |             39.699 s |             56.874 s |  +17.175 s |   1.433x |    +43.263% |
-| CDK deploy time   |              19.36 s |              35.52 s |   +16.16 s |   1.835x |    +83.471% |
+| Provider duration |              1.325 s |             15.072 s |  +13.747 s |  11.375x |  +1037.509% |
+| Billed duration   |              1.443 s |             15.614 s |  +14.171 s |  10.821x |   +982.051% |
+| Init duration     |              0.119 s |              0.518 s |   +0.399 s |   4.353x |   +335.294% |
+| Local wall time   |             41.882 s |             59.826 s |  +17.944 s |   1.428x |    +42.844% |
+| CDK deploy time   |              19.84 s |              36.41 s |   +16.57 s |   1.835x |    +83.518% |
 | Max memory        |               36 MiB |              219 MiB |   +183 MiB |   6.083x |   +508.333% |
 
 ## Metric Tables
@@ -311,572 +311,572 @@
 
 | Asset profile | Phase            | Memory MiB | Max concurrency | Source window bytes | Implementation |   n | median (s) | Q1 (s) | Q3 (s) | IQR (s) | min (s) | max (s) |
 | ------------- | ---------------- | ---------: | --------------: | ------------------: | -------------- | --: | ---------: | -----: | -----: | ------: | ------: | ------: |
-| large-few     | cold-create      |       1024 |                 |            adaptive | aws            |   5 |      9.152 |  9.047 |  9.251 |   0.204 |   8.712 |     9.4 |
-| large-few     | unchanged-update |       1024 |                 |            adaptive | aws            |   5 |      9.552 |  9.373 |   9.63 |   0.257 |   8.982 |   9.877 |
-| large-few     | changed-update   |       1024 |                 |            adaptive | aws            |   5 |      9.556 |  9.295 |  9.611 |   0.316 |   9.208 |   9.803 |
-| large-few     | pruned-update    |       1024 |                 |            adaptive | aws            |   5 |      8.989 |  8.775 |  9.014 |   0.239 |   8.692 |   9.302 |
-| large-few     | cold-create      |       1024 |              32 |            adaptive | shin           |   5 |      1.925 |  1.923 |  2.043 |    0.12 |   1.914 |   2.062 |
-| large-few     | unchanged-update |       1024 |              32 |            adaptive | shin           |   5 |       0.24 |  0.239 |  0.251 |   0.012 |   0.237 |    0.28 |
-| large-few     | changed-update   |       1024 |              32 |            adaptive | shin           |   5 |      0.469 |  0.414 |   0.49 |   0.076 |    0.41 |   0.498 |
-| large-few     | pruned-update    |       1024 |              32 |            adaptive | shin           |   5 |      0.508 |  0.499 |  0.524 |   0.025 |   0.496 |    0.56 |
-| large-few     | cold-create      |       2048 |                 |            adaptive | aws            |   5 |      5.333 |  5.308 |  5.344 |   0.036 |   5.226 |   5.943 |
-| large-few     | unchanged-update |       2048 |                 |            adaptive | aws            |   5 |      5.226 |  5.206 |  5.261 |   0.055 |   5.016 |   5.922 |
-| large-few     | changed-update   |       2048 |                 |            adaptive | aws            |   5 |      5.165 |  5.035 |   5.17 |   0.135 |   4.614 |   5.275 |
-| large-few     | pruned-update    |       2048 |                 |            adaptive | aws            |   5 |      4.988 |  4.942 |  4.989 |   0.047 |   4.927 |   5.048 |
-| large-few     | cold-create      |       2048 |              64 |            adaptive | shin           |   5 |      1.142 |  1.132 |  1.179 |   0.047 |   0.995 |   1.307 |
-| large-few     | unchanged-update |       2048 |              64 |            adaptive | shin           |   5 |      0.209 |  0.203 |   0.22 |   0.017 |   0.195 |   0.228 |
-| large-few     | changed-update   |       2048 |              64 |            adaptive | shin           |   5 |      0.387 |  0.375 |  0.402 |   0.027 |   0.369 |   0.523 |
-| large-few     | pruned-update    |       2048 |              64 |            adaptive | shin           |   5 |      0.483 |  0.462 |  0.504 |   0.042 |   0.446 |   0.567 |
-| mixed         | cold-create      |       1024 |                 |            adaptive | aws            |   5 |      9.946 |  9.766 | 10.052 |   0.286 |   9.369 |  10.662 |
-| mixed         | unchanged-update |       1024 |                 |            adaptive | aws            |   5 |     10.366 | 10.144 | 10.856 |   0.712 |   9.659 |  11.389 |
-| mixed         | changed-update   |       1024 |                 |            adaptive | aws            |   5 |     10.429 | 10.414 | 10.528 |   0.114 |  10.061 |  10.747 |
-| mixed         | pruned-update    |       1024 |                 |            adaptive | aws            |   5 |     10.127 |  9.706 | 10.241 |   0.535 |   9.617 |  10.283 |
-| mixed         | cold-create      |       1024 |              32 |            adaptive | shin           |   5 |      1.299 |  1.297 |  1.303 |   0.006 |   1.063 |   1.313 |
-| mixed         | unchanged-update |       1024 |              32 |            adaptive | shin           |   5 |      0.282 |  0.273 |  0.286 |   0.013 |    0.25 |   0.288 |
-| mixed         | changed-update   |       1024 |              32 |            adaptive | shin           |   5 |       0.41 |  0.407 |  0.432 |   0.025 |   0.384 |    0.46 |
-| mixed         | pruned-update    |       1024 |              32 |            adaptive | shin           |   5 |      1.125 |   1.11 |  1.172 |   0.062 |   1.105 |   1.244 |
-| mixed         | cold-create      |       2048 |                 |            adaptive | aws            |   5 |      5.741 |  5.737 |  5.772 |   0.035 |   5.686 |   5.834 |
-| mixed         | unchanged-update |       2048 |                 |            adaptive | aws            |   5 |      5.682 |   5.67 |  5.809 |   0.139 |   5.262 |    5.92 |
-| mixed         | changed-update   |       2048 |                 |            adaptive | aws            |   5 |      5.826 |  5.818 |  5.884 |   0.066 |   5.757 |   5.956 |
-| mixed         | pruned-update    |       2048 |                 |            adaptive | aws            |   5 |        5.6 |  5.574 |  5.716 |   0.142 |   5.479 |   5.885 |
-| mixed         | cold-create      |       2048 |              64 |            adaptive | shin           |   5 |      0.834 |  0.815 |  0.876 |   0.061 |   0.785 |    0.97 |
-| mixed         | unchanged-update |       2048 |              64 |            adaptive | shin           |   5 |       0.25 |  0.245 |  0.256 |   0.011 |    0.24 |   0.267 |
-| mixed         | changed-update   |       2048 |              64 |            adaptive | shin           |   5 |      0.382 |  0.373 |  0.414 |   0.041 |   0.348 |   0.439 |
-| mixed         | pruned-update    |       2048 |              64 |            adaptive | shin           |   5 |      1.112 |  1.028 |  1.122 |   0.094 |   1.003 |   1.184 |
-| tiny-many     | cold-create      |       1024 |                 |            adaptive | aws            |   5 |     24.823 | 24.728 | 25.249 |   0.521 |  24.303 |  25.602 |
-| tiny-many     | unchanged-update |       1024 |                 |            adaptive | aws            |   5 |     27.138 | 26.862 | 27.277 |   0.415 |  25.382 |  27.634 |
-| tiny-many     | changed-update   |       1024 |                 |            adaptive | aws            |   5 |     27.138 | 26.882 | 27.209 |   0.327 |  26.046 |  27.693 |
-| tiny-many     | pruned-update    |       1024 |                 |            adaptive | aws            |   5 |      26.46 | 25.961 | 26.942 |   0.981 |  24.314 |  27.305 |
-| tiny-many     | cold-create      |       1024 |              32 |            adaptive | shin           |   5 |       2.71 |  2.502 |  2.734 |   0.232 |   2.488 |   2.807 |
-| tiny-many     | unchanged-update |       1024 |              32 |            adaptive | shin           |   5 |      0.507 |  0.475 |  0.523 |   0.048 |   0.446 |   0.529 |
-| tiny-many     | changed-update   |       1024 |              32 |            adaptive | shin           |   5 |      0.604 |  0.601 |  0.608 |   0.007 |    0.56 |   0.621 |
-| tiny-many     | pruned-update    |       1024 |              32 |            adaptive | shin           |   5 |      1.373 |  1.371 |  1.447 |   0.076 |   1.348 |   1.451 |
-| tiny-many     | cold-create      |       2048 |                 |            adaptive | aws            |   5 |     14.882 | 14.825 | 14.969 |   0.144 |  14.768 |  16.513 |
-| tiny-many     | unchanged-update |       2048 |                 |            adaptive | aws            |   5 |     15.627 | 15.442 |  15.66 |   0.218 |  15.263 |  15.844 |
-| tiny-many     | changed-update   |       2048 |                 |            adaptive | aws            |   5 |     15.561 | 15.327 | 15.707 |    0.38 |  14.955 |  15.802 |
-| tiny-many     | pruned-update    |       2048 |                 |            adaptive | aws            |   5 |     14.973 | 14.828 | 15.096 |   0.268 |  14.685 |   15.25 |
-| tiny-many     | cold-create      |       2048 |              64 |            adaptive | shin           |   5 |       1.54 |   1.54 |  1.565 |   0.025 |   1.506 |   1.637 |
-| tiny-many     | unchanged-update |       2048 |              64 |            adaptive | shin           |   5 |      0.454 |  0.445 |  0.477 |   0.032 |   0.425 |   0.485 |
-| tiny-many     | changed-update   |       2048 |              64 |            adaptive | shin           |   5 |      0.597 |  0.588 |  0.617 |   0.029 |   0.559 |   0.621 |
-| tiny-many     | pruned-update    |       2048 |              64 |            adaptive | shin           |   5 |      1.358 |  1.342 |  1.415 |   0.073 |   1.294 |    1.48 |
+| large-few     | cold-create      |       1024 |                 |            adaptive | aws            |   5 |      9.386 |  9.385 |  9.465 |    0.08 |   9.171 |   9.581 |
+| large-few     | unchanged-update |       1024 |                 |            adaptive | aws            |   5 |      9.267 |  9.143 |  9.467 |   0.324 |   9.004 |  10.302 |
+| large-few     | changed-update   |       1024 |                 |            adaptive | aws            |   5 |      9.325 |  9.272 |  9.335 |   0.063 |   9.143 |   9.528 |
+| large-few     | pruned-update    |       1024 |                 |            adaptive | aws            |   5 |      9.167 |  8.731 |  9.231 |     0.5 |   8.716 |   9.794 |
+| large-few     | cold-create      |       1024 |              32 |            adaptive | shin           |   5 |      2.068 |   2.04 |  2.222 |   0.182 |    1.92 |   2.284 |
+| large-few     | unchanged-update |       1024 |              32 |            adaptive | shin           |   5 |      0.253 |   0.25 |  0.257 |   0.007 |   0.249 |   0.262 |
+| large-few     | changed-update   |       1024 |              32 |            adaptive | shin           |   5 |      0.459 |  0.427 |  0.468 |   0.041 |   0.417 |   0.606 |
+| large-few     | pruned-update    |       1024 |              32 |            adaptive | shin           |   5 |      0.535 |   0.48 |  0.573 |   0.093 |   0.471 |   0.599 |
+| large-few     | cold-create      |       2048 |                 |            adaptive | aws            |   5 |      5.165 |  5.072 |  5.209 |   0.137 |   5.062 |   5.303 |
+| large-few     | unchanged-update |       2048 |                 |            adaptive | aws            |   5 |      5.109 |  5.101 |  5.222 |   0.121 |   5.094 |   5.396 |
+| large-few     | changed-update   |       2048 |                 |            adaptive | aws            |   5 |      5.136 |   5.09 |  5.167 |   0.077 |   5.012 |   5.288 |
+| large-few     | pruned-update    |       2048 |                 |            adaptive | aws            |   5 |      5.015 |   4.95 |  5.035 |   0.085 |   4.905 |   5.057 |
+| large-few     | cold-create      |       2048 |              64 |            adaptive | shin           |   5 |      1.165 |   1.14 |  1.188 |   0.048 |   0.964 |    1.19 |
+| large-few     | unchanged-update |       2048 |              64 |            adaptive | shin           |   5 |       0.21 |  0.209 |  0.211 |   0.002 |   0.202 |   0.216 |
+| large-few     | changed-update   |       2048 |              64 |            adaptive | shin           |   5 |      0.391 |  0.377 |  0.415 |   0.038 |   0.371 |   0.451 |
+| large-few     | pruned-update    |       2048 |              64 |            adaptive | shin           |   5 |      0.451 |  0.451 |  0.462 |   0.011 |   0.449 |   0.479 |
+| mixed         | cold-create      |       1024 |                 |            adaptive | aws            |   5 |     10.054 |  9.853 | 10.087 |   0.234 |   9.633 |  10.206 |
+| mixed         | unchanged-update |       1024 |                 |            adaptive | aws            |   5 |     10.198 | 10.115 | 10.387 |   0.272 |  10.026 |  11.307 |
+| mixed         | changed-update   |       1024 |                 |            adaptive | aws            |   5 |     10.166 |  10.16 | 10.535 |   0.375 |   9.972 |  10.629 |
+| mixed         | pruned-update    |       1024 |                 |            adaptive | aws            |   5 |      9.821 |  9.763 |  9.997 |   0.234 |   9.648 |  11.408 |
+| mixed         | cold-create      |       1024 |              32 |            adaptive | shin           |   5 |      1.358 |  1.332 |  1.368 |   0.036 |   1.321 |   1.372 |
+| mixed         | unchanged-update |       1024 |              32 |            adaptive | shin           |   5 |       0.28 |  0.259 |  0.282 |   0.023 |   0.258 |   0.284 |
+| mixed         | changed-update   |       1024 |              32 |            adaptive | shin           |   5 |      0.426 |  0.424 |  0.432 |   0.008 |   0.402 |   0.491 |
+| mixed         | pruned-update    |       1024 |              32 |            adaptive | shin           |   5 |      1.064 |  1.056 |  1.076 |    0.02 |   1.016 |   1.183 |
+| mixed         | cold-create      |       2048 |                 |            adaptive | aws            |   5 |      5.699 |  5.632 |  5.764 |   0.132 |   5.313 |   5.808 |
+| mixed         | unchanged-update |       2048 |                 |            adaptive | aws            |   5 |      5.914 |  5.689 |  6.472 |   0.783 |   5.669 |   6.551 |
+| mixed         | changed-update   |       2048 |                 |            adaptive | aws            |   5 |      5.731 |  5.702 |  5.738 |   0.036 |   5.493 |   5.836 |
+| mixed         | pruned-update    |       2048 |                 |            adaptive | aws            |   5 |       5.65 |  5.476 |  5.674 |   0.198 |   4.969 |   6.339 |
+| mixed         | cold-create      |       2048 |              64 |            adaptive | shin           |   5 |      0.839 |  0.828 |   0.88 |   0.052 |   0.808 |   0.897 |
+| mixed         | unchanged-update |       2048 |              64 |            adaptive | shin           |   5 |      0.243 |   0.24 |  0.258 |   0.018 |   0.232 |    0.26 |
+| mixed         | changed-update   |       2048 |              64 |            adaptive | shin           |   5 |      0.351 |  0.351 |   0.38 |   0.029 |   0.349 |   0.391 |
+| mixed         | pruned-update    |       2048 |              64 |            adaptive | shin           |   5 |      1.036 |  1.026 |  1.036 |    0.01 |   1.011 |   1.074 |
+| tiny-many     | cold-create      |       1024 |                 |            adaptive | aws            |   5 |     25.948 | 25.564 | 25.975 |   0.411 |  25.092 |  26.208 |
+| tiny-many     | unchanged-update |       1024 |                 |            adaptive | aws            |   5 |     26.789 |  26.67 | 26.918 |   0.248 |  26.191 |  27.825 |
+| tiny-many     | changed-update   |       1024 |                 |            adaptive | aws            |   5 |     27.268 |  27.08 |  27.27 |    0.19 |  25.925 |  27.864 |
+| tiny-many     | pruned-update    |       1024 |                 |            adaptive | aws            |   5 |     26.651 | 25.207 | 26.976 |   1.769 |  24.308 |  27.618 |
+| tiny-many     | cold-create      |       1024 |              32 |            adaptive | shin           |   5 |       2.68 |  2.625 |  2.777 |   0.152 |   2.583 |    2.79 |
+| tiny-many     | unchanged-update |       1024 |              32 |            adaptive | shin           |   5 |      0.478 |  0.467 |  0.499 |   0.032 |   0.458 |    0.52 |
+| tiny-many     | changed-update   |       1024 |              32 |            adaptive | shin           |   5 |      0.609 |  0.598 |  0.634 |   0.036 |   0.587 |   0.642 |
+| tiny-many     | pruned-update    |       1024 |              32 |            adaptive | shin           |   5 |      1.367 |  1.334 |  1.373 |   0.039 |   1.309 |   1.418 |
+| tiny-many     | cold-create      |       2048 |                 |            adaptive | aws            |   5 |     15.025 | 15.003 | 15.219 |   0.216 |  14.797 |  15.422 |
+| tiny-many     | unchanged-update |       2048 |                 |            adaptive | aws            |   5 |      15.31 | 14.955 | 15.455 |     0.5 |  14.691 |  15.643 |
+| tiny-many     | changed-update   |       2048 |                 |            adaptive | aws            |   5 |      15.25 | 15.243 | 15.712 |   0.469 |  14.964 |  16.368 |
+| tiny-many     | pruned-update    |       2048 |                 |            adaptive | aws            |   5 |     15.072 | 14.906 | 15.202 |   0.296 |  14.468 |  16.844 |
+| tiny-many     | cold-create      |       2048 |              64 |            adaptive | shin           |   5 |      1.492 |  1.491 |  1.522 |   0.031 |   1.488 |   1.553 |
+| tiny-many     | unchanged-update |       2048 |              64 |            adaptive | shin           |   5 |      0.479 |  0.473 |  0.497 |   0.024 |   0.437 |   0.502 |
+| tiny-many     | changed-update   |       2048 |              64 |            adaptive | shin           |   5 |      0.572 |  0.549 |  0.582 |   0.033 |   0.513 |   0.632 |
+| tiny-many     | pruned-update    |       2048 |              64 |            adaptive | shin           |   5 |      1.325 |  1.322 |  1.424 |   0.102 |   1.311 |   1.444 |
 
 ```text
-large-few cold-create 1024//adaptive aws         | ########## 9.152 s
-large-few unchanged-update 1024//adaptive aws    | ########### 9.552 s
-large-few changed-update 1024//adaptive aws      | ########### 9.556 s
-large-few pruned-update 1024//adaptive aws       | ########## 8.989 s
-large-few cold-create 1024/32/adaptive shin      | ## 1.925 s
-large-few unchanged-update 1024/32/adaptive shin | # 0.24 s
-large-few changed-update 1024/32/adaptive shin   | # 0.469 s
-large-few pruned-update 1024/32/adaptive shin    | # 0.508 s
-large-few cold-create 2048//adaptive aws         | ###### 5.333 s
-large-few unchanged-update 2048//adaptive aws    | ###### 5.226 s
-large-few changed-update 2048//adaptive aws      | ###### 5.165 s
-large-few pruned-update 2048//adaptive aws       | ###### 4.988 s
-large-few cold-create 2048/64/adaptive shin      | # 1.142 s
-large-few unchanged-update 2048/64/adaptive shin | # 0.209 s
-large-few changed-update 2048/64/adaptive shin   | # 0.387 s
-large-few pruned-update 2048/64/adaptive shin    | # 0.483 s
-mixed cold-create 1024//adaptive aws             | ########### 9.946 s
-mixed unchanged-update 1024//adaptive aws        | ########### 10.366 s
-mixed changed-update 1024//adaptive aws          | ############ 10.429 s
-mixed pruned-update 1024//adaptive aws           | ########### 10.127 s
-mixed cold-create 1024/32/adaptive shin          | # 1.299 s
-mixed unchanged-update 1024/32/adaptive shin     | # 0.282 s
-mixed changed-update 1024/32/adaptive shin       | # 0.41 s
-mixed pruned-update 1024/32/adaptive shin        | # 1.125 s
-mixed cold-create 2048//adaptive aws             | ###### 5.741 s
-mixed unchanged-update 2048//adaptive aws        | ###### 5.682 s
-mixed changed-update 2048//adaptive aws          | ###### 5.826 s
-mixed pruned-update 2048//adaptive aws           | ###### 5.6 s
-mixed cold-create 2048/64/adaptive shin          | # 0.834 s
-mixed unchanged-update 2048/64/adaptive shin     | # 0.25 s
-mixed changed-update 2048/64/adaptive shin       | # 0.382 s
-mixed pruned-update 2048/64/adaptive shin        | # 1.112 s
-tiny-many cold-create 1024//adaptive aws         | ########################### 24.823 s
-tiny-many unchanged-update 1024//adaptive aws    | ############################## 27.138 s
-tiny-many changed-update 1024//adaptive aws      | ############################## 27.138 s
-tiny-many pruned-update 1024//adaptive aws       | ############################# 26.46 s
-tiny-many cold-create 1024/32/adaptive shin      | ### 2.71 s
-tiny-many unchanged-update 1024/32/adaptive shin | # 0.507 s
-tiny-many changed-update 1024/32/adaptive shin   | # 0.604 s
-tiny-many pruned-update 1024/32/adaptive shin    | ## 1.373 s
-tiny-many cold-create 2048//adaptive aws         | ################ 14.882 s
-tiny-many unchanged-update 2048//adaptive aws    | ################# 15.627 s
-tiny-many changed-update 2048//adaptive aws      | ################# 15.561 s
-tiny-many pruned-update 2048//adaptive aws       | ################# 14.973 s
-tiny-many cold-create 2048/64/adaptive shin      | ## 1.54 s
-tiny-many unchanged-update 2048/64/adaptive shin | # 0.454 s
-tiny-many changed-update 2048/64/adaptive shin   | # 0.597 s
-tiny-many pruned-update 2048/64/adaptive shin    | ## 1.358 s
+large-few cold-create 1024//adaptive aws         | ########## 9.386 s
+large-few unchanged-update 1024//adaptive aws    | ########## 9.267 s
+large-few changed-update 1024//adaptive aws      | ########## 9.325 s
+large-few pruned-update 1024//adaptive aws       | ########## 9.167 s
+large-few cold-create 1024/32/adaptive shin      | ## 2.068 s
+large-few unchanged-update 1024/32/adaptive shin | # 0.253 s
+large-few changed-update 1024/32/adaptive shin   | # 0.459 s
+large-few pruned-update 1024/32/adaptive shin    | # 0.535 s
+large-few cold-create 2048//adaptive aws         | ###### 5.165 s
+large-few unchanged-update 2048//adaptive aws    | ###### 5.109 s
+large-few changed-update 2048//adaptive aws      | ###### 5.136 s
+large-few pruned-update 2048//adaptive aws       | ###### 5.015 s
+large-few cold-create 2048/64/adaptive shin      | # 1.165 s
+large-few unchanged-update 2048/64/adaptive shin | # 0.21 s
+large-few changed-update 2048/64/adaptive shin   | # 0.391 s
+large-few pruned-update 2048/64/adaptive shin    | # 0.451 s
+mixed cold-create 1024//adaptive aws             | ########### 10.054 s
+mixed unchanged-update 1024//adaptive aws        | ########### 10.198 s
+mixed changed-update 1024//adaptive aws          | ########### 10.166 s
+mixed pruned-update 1024//adaptive aws           | ########### 9.821 s
+mixed cold-create 1024/32/adaptive shin          | # 1.358 s
+mixed unchanged-update 1024/32/adaptive shin     | # 0.28 s
+mixed changed-update 1024/32/adaptive shin       | # 0.426 s
+mixed pruned-update 1024/32/adaptive shin        | # 1.064 s
+mixed cold-create 2048//adaptive aws             | ###### 5.699 s
+mixed unchanged-update 2048//adaptive aws        | ####### 5.914 s
+mixed changed-update 2048//adaptive aws          | ###### 5.731 s
+mixed pruned-update 2048//adaptive aws           | ###### 5.65 s
+mixed cold-create 2048/64/adaptive shin          | # 0.839 s
+mixed unchanged-update 2048/64/adaptive shin     | # 0.243 s
+mixed changed-update 2048/64/adaptive shin       | # 0.351 s
+mixed pruned-update 2048/64/adaptive shin        | # 1.036 s
+tiny-many cold-create 1024//adaptive aws         | ############################# 25.948 s
+tiny-many unchanged-update 1024//adaptive aws    | ############################# 26.789 s
+tiny-many changed-update 1024//adaptive aws      | ############################## 27.268 s
+tiny-many pruned-update 1024//adaptive aws       | ############################# 26.651 s
+tiny-many cold-create 1024/32/adaptive shin      | ### 2.68 s
+tiny-many unchanged-update 1024/32/adaptive shin | # 0.478 s
+tiny-many changed-update 1024/32/adaptive shin   | # 0.609 s
+tiny-many pruned-update 1024/32/adaptive shin    | ## 1.367 s
+tiny-many cold-create 2048//adaptive aws         | ################# 15.025 s
+tiny-many unchanged-update 2048//adaptive aws    | ################# 15.31 s
+tiny-many changed-update 2048//adaptive aws      | ################# 15.25 s
+tiny-many pruned-update 2048//adaptive aws       | ################# 15.072 s
+tiny-many cold-create 2048/64/adaptive shin      | ## 1.492 s
+tiny-many unchanged-update 2048/64/adaptive shin | # 0.479 s
+tiny-many changed-update 2048/64/adaptive shin   | # 0.572 s
+tiny-many pruned-update 2048/64/adaptive shin    | # 1.325 s
 ```
 
 ### Billed duration
 
 | Asset profile | Phase            | Memory MiB | Max concurrency | Source window bytes | Implementation |   n | median (s) | Q1 (s) | Q3 (s) | IQR (s) | min (s) | max (s) |
 | ------------- | ---------------- | ---------: | --------------: | ------------------: | -------------- | --: | ---------: | -----: | -----: | ------: | ------: | ------: |
-| large-few     | cold-create      |       1024 |                 |            adaptive | aws            |   5 |      9.729 |  9.695 |  9.767 |   0.072 |   9.605 |   9.946 |
-| large-few     | unchanged-update |       1024 |                 |            adaptive | aws            |   5 |     10.131 |  9.941 | 10.439 |   0.498 |   9.708 |  10.494 |
-| large-few     | changed-update   |       1024 |                 |            adaptive | aws            |   5 |     10.117 |  9.904 | 10.181 |   0.277 |   9.755 |  10.366 |
-| large-few     | pruned-update    |       1024 |                 |            adaptive | aws            |   5 |      9.498 |  9.286 |  9.527 |   0.241 |   9.217 |   9.818 |
-| large-few     | cold-create      |       1024 |              32 |            adaptive | shin           |   5 |      2.043 |   2.04 |  2.168 |   0.128 |    2.04 |    2.18 |
-| large-few     | unchanged-update |       1024 |              32 |            adaptive | shin           |   5 |      0.357 |  0.356 |  0.367 |   0.011 |   0.355 |   0.406 |
-| large-few     | changed-update   |       1024 |              32 |            adaptive | shin           |   5 |      0.594 |  0.538 |  0.608 |    0.07 |   0.534 |   0.646 |
-| large-few     | pruned-update    |       1024 |              32 |            adaptive | shin           |   5 |      0.625 |   0.62 |  0.646 |   0.026 |    0.61 |   0.679 |
-| large-few     | cold-create      |       2048 |                 |            adaptive | aws            |   5 |      5.911 |  5.901 |  6.218 |   0.317 |   5.766 |   6.702 |
-| large-few     | unchanged-update |       2048 |                 |            adaptive | aws            |   5 |      5.787 |  5.713 |  5.802 |   0.089 |   5.532 |    6.39 |
-| large-few     | changed-update   |       2048 |                 |            adaptive | aws            |   5 |      5.684 |  5.552 |  5.702 |    0.15 |   5.061 |   5.815 |
-| large-few     | pruned-update    |       2048 |                 |            adaptive | aws            |   5 |      5.506 |   5.47 |  5.532 |   0.062 |   5.439 |   5.594 |
-| large-few     | cold-create      |       2048 |              64 |            adaptive | shin           |   5 |      1.262 |  1.262 |  1.303 |   0.041 |   1.094 |   1.424 |
-| large-few     | unchanged-update |       2048 |              64 |            adaptive | shin           |   5 |      0.324 |  0.322 |   0.33 |   0.008 |   0.312 |   0.336 |
-| large-few     | changed-update   |       2048 |              64 |            adaptive | shin           |   5 |      0.498 |  0.495 |   0.51 |   0.015 |   0.489 |   0.641 |
-| large-few     | pruned-update    |       2048 |              64 |            adaptive | shin           |   5 |      0.608 |  0.585 |  0.625 |    0.04 |   0.543 |   0.689 |
-| mixed         | cold-create      |       1024 |                 |            adaptive | aws            |   5 |     10.514 | 10.281 | 10.572 |   0.291 |   9.866 |  11.212 |
-| mixed         | unchanged-update |       1024 |                 |            adaptive | aws            |   5 |      10.92 | 10.668 | 11.292 |   0.624 |   10.15 |   11.96 |
-| mixed         | changed-update   |       1024 |                 |            adaptive | aws            |   5 |     11.007 | 10.974 | 11.067 |   0.093 |   10.58 |  11.206 |
-| mixed         | pruned-update    |       1024 |                 |            adaptive | aws            |   5 |     10.644 | 10.241 | 10.788 |   0.547 |  10.161 |  10.851 |
-| mixed         | cold-create      |       1024 |              32 |            adaptive | shin           |   5 |      1.418 |  1.415 |  1.423 |   0.008 |   1.161 |   1.432 |
-| mixed         | unchanged-update |       1024 |              32 |            adaptive | shin           |   5 |      0.402 |  0.391 |  0.405 |   0.014 |   0.383 |   0.417 |
-| mixed         | changed-update   |       1024 |              32 |            adaptive | shin           |   5 |      0.531 |  0.527 |  0.557 |    0.03 |    0.51 |   0.591 |
-| mixed         | pruned-update    |       1024 |              32 |            adaptive | shin           |   5 |      1.241 |  1.232 |  1.297 |   0.065 |   1.223 |   1.366 |
-| mixed         | cold-create      |       2048 |                 |            adaptive | aws            |   5 |      6.261 |  6.259 |  6.291 |   0.032 |   6.202 |    6.36 |
-| mixed         | unchanged-update |       2048 |                 |            adaptive | aws            |   5 |      6.201 |   6.17 |  6.456 |   0.286 |   5.721 |   6.577 |
-| mixed         | changed-update   |       2048 |                 |            adaptive | aws            |   5 |      6.347 |  6.347 |  6.405 |   0.058 |   6.284 |   6.536 |
-| mixed         | pruned-update    |       2048 |                 |            adaptive | aws            |   5 |      6.107 |  6.106 |  6.245 |   0.139 |   5.981 |   6.451 |
-| mixed         | cold-create      |       2048 |              64 |            adaptive | shin           |   5 |      0.961 |  0.933 |      1 |   0.067 |   0.902 |   1.123 |
-| mixed         | unchanged-update |       2048 |              64 |            adaptive | shin           |   5 |      0.368 |  0.362 |   0.38 |   0.018 |    0.36 |   0.392 |
-| mixed         | changed-update   |       2048 |              64 |            adaptive | shin           |   5 |      0.508 |  0.488 |  0.526 |   0.038 |   0.475 |   0.534 |
-| mixed         | pruned-update    |       2048 |              64 |            adaptive | shin           |   5 |      1.217 |  1.148 |  1.231 |   0.083 |   1.122 |   1.303 |
-| tiny-many     | cold-create      |       1024 |                 |            adaptive | aws            |   5 |     25.346 | 25.246 | 25.778 |   0.532 |  24.858 |  26.134 |
-| tiny-many     | unchanged-update |       1024 |                 |            adaptive | aws            |   5 |     27.665 | 27.398 |  27.84 |   0.442 |   25.85 |  28.219 |
-| tiny-many     | changed-update   |       1024 |                 |            adaptive | aws            |   5 |      27.67 | 27.405 | 27.731 |   0.326 |  26.573 |  28.251 |
-| tiny-many     | pruned-update    |       1024 |                 |            adaptive | aws            |   5 |     27.041 |  26.47 | 27.492 |   1.022 |  24.823 |  27.849 |
-| tiny-many     | cold-create      |       1024 |              32 |            adaptive | shin           |   5 |      2.827 |  2.616 |  2.859 |   0.243 |   2.581 |   2.938 |
-| tiny-many     | unchanged-update |       1024 |              32 |            adaptive | shin           |   5 |      0.606 |  0.593 |  0.643 |    0.05 |   0.561 |   0.646 |
-| tiny-many     | changed-update   |       1024 |              32 |            adaptive | shin           |   5 |      0.722 |   0.72 |  0.727 |   0.007 |   0.656 |    0.74 |
-| tiny-many     | pruned-update    |       1024 |              32 |            adaptive | shin           |   5 |      1.499 |  1.491 |  1.566 |   0.075 |   1.468 |   1.573 |
-| tiny-many     | cold-create      |       2048 |                 |            adaptive | aws            |   5 |      15.41 | 15.341 | 15.502 |   0.161 |  15.275 |  16.952 |
-| tiny-many     | unchanged-update |       2048 |                 |            adaptive | aws            |   5 |     16.199 | 15.956 | 16.382 |   0.426 |  15.803 |  16.443 |
-| tiny-many     | changed-update   |       2048 |                 |            adaptive | aws            |   5 |     16.067 | 15.831 | 16.235 |   0.404 |  15.454 |  16.343 |
-| tiny-many     | pruned-update    |       2048 |                 |            adaptive | aws            |   5 |     15.613 | 15.527 |  15.67 |   0.143 |  15.219 |  15.794 |
-| tiny-many     | cold-create      |       2048 |              64 |            adaptive | shin           |   5 |      1.663 |  1.654 |  1.686 |   0.032 |   1.603 |   1.764 |
-| tiny-many     | unchanged-update |       2048 |              64 |            adaptive | shin           |   5 |      0.579 |  0.542 |  0.598 |   0.056 |    0.54 |   0.607 |
-| tiny-many     | changed-update   |       2048 |              64 |            adaptive | shin           |   5 |      0.719 |  0.705 |  0.735 |    0.03 |   0.681 |   0.746 |
-| tiny-many     | pruned-update    |       2048 |              64 |            adaptive | shin           |   5 |      1.486 |  1.465 |  1.532 |   0.067 |   1.415 |   1.605 |
+| large-few     | cold-create      |       1024 |                 |            adaptive | aws            |   5 |      9.913 |  9.897 | 10.033 |   0.136 |   9.698 |  10.143 |
+| large-few     | unchanged-update |       1024 |                 |            adaptive | aws            |   5 |      9.838 |  9.663 | 10.017 |   0.354 |   9.516 |  10.747 |
+| large-few     | changed-update   |       1024 |                 |            adaptive | aws            |   5 |      9.859 |  9.789 |  9.876 |   0.087 |   9.665 |  10.376 |
+| large-few     | pruned-update    |       1024 |                 |            adaptive | aws            |   5 |      9.717 |  9.269 |  9.798 |   0.529 |   9.241 |  10.245 |
+| large-few     | cold-create      |       1024 |              32 |            adaptive | shin           |   5 |      2.249 |  2.162 |  2.341 |   0.179 |   2.038 |   2.432 |
+| large-few     | unchanged-update |       1024 |              32 |            adaptive | shin           |   5 |      0.371 |   0.37 |  0.371 |   0.001 |   0.366 |   0.386 |
+| large-few     | changed-update   |       1024 |              32 |            adaptive | shin           |   5 |      0.574 |  0.543 |  0.618 |   0.075 |   0.513 |   0.725 |
+| large-few     | pruned-update    |       1024 |              32 |            adaptive | shin           |   5 |      0.653 |  0.596 |  0.696 |     0.1 |   0.568 |   0.721 |
+| large-few     | cold-create      |       2048 |                 |            adaptive | aws            |   5 |      5.673 |   5.58 |  5.727 |   0.147 |   5.575 |   5.828 |
+| large-few     | unchanged-update |       2048 |                 |            adaptive | aws            |   5 |      5.631 |  5.623 |  5.774 |   0.151 |   5.616 |   5.965 |
+| large-few     | changed-update   |       2048 |                 |            adaptive | aws            |   5 |      5.647 |   5.62 |  5.698 |   0.078 |   5.524 |   5.812 |
+| large-few     | pruned-update    |       2048 |                 |            adaptive | aws            |   5 |       5.54 |   5.47 |  5.572 |   0.102 |   5.426 |   5.576 |
+| large-few     | cold-create      |       2048 |              64 |            adaptive | shin           |   5 |      1.288 |  1.258 |  1.303 |   0.045 |   1.062 |    1.31 |
+| large-few     | unchanged-update |       2048 |              64 |            adaptive | shin           |   5 |      0.329 |  0.328 |  0.333 |   0.005 |   0.298 |   0.334 |
+| large-few     | changed-update   |       2048 |              64 |            adaptive | shin           |   5 |      0.509 |  0.496 |  0.535 |   0.039 |   0.493 |   0.572 |
+| large-few     | pruned-update    |       2048 |              64 |            adaptive | shin           |   5 |      0.576 |   0.57 |  0.577 |   0.007 |   0.565 |   0.595 |
+| mixed         | cold-create      |       1024 |                 |            adaptive | aws            |   5 |     10.629 | 10.596 | 10.697 |   0.101 |   10.15 |  10.725 |
+| mixed         | unchanged-update |       1024 |                 |            adaptive | aws            |   5 |     10.838 | 10.734 | 10.962 |   0.228 |  10.694 |  11.745 |
+| mixed         | changed-update   |       1024 |                 |            adaptive | aws            |   5 |     11.102 | 10.695 | 11.172 |   0.477 |  10.685 |  11.265 |
+| mixed         | pruned-update    |       1024 |                 |            adaptive | aws            |   5 |     10.361 | 10.299 | 10.535 |   0.236 |  10.191 |  12.174 |
+| mixed         | cold-create      |       1024 |              32 |            adaptive | shin           |   5 |      1.479 |  1.451 |  1.491 |    0.04 |   1.442 |   1.517 |
+| mixed         | unchanged-update |       1024 |              32 |            adaptive | shin           |   5 |      0.397 |  0.375 |  0.399 |   0.024 |   0.373 |   0.402 |
+| mixed         | changed-update   |       1024 |              32 |            adaptive | shin           |   5 |      0.549 |  0.542 |  0.554 |   0.012 |   0.518 |   0.606 |
+| mixed         | pruned-update    |       1024 |              32 |            adaptive | shin           |   5 |      1.174 |  1.173 |  1.179 |   0.006 |   1.134 |   1.302 |
+| mixed         | cold-create      |       2048 |                 |            adaptive | aws            |   5 |      6.231 |  6.159 |   6.27 |   0.111 |   5.807 |   6.343 |
+| mixed         | unchanged-update |       2048 |                 |            adaptive | aws            |   5 |       6.49 |   6.46 |  6.926 |   0.466 |   6.162 |   7.036 |
+| mixed         | changed-update   |       2048 |                 |            adaptive | aws            |   5 |      6.249 |  6.214 |  6.266 |   0.052 |   6.033 |   6.383 |
+| mixed         | pruned-update    |       2048 |                 |            adaptive | aws            |   5 |      6.168 |  5.976 |    6.2 |   0.224 |   5.471 |   7.086 |
+| mixed         | cold-create      |       2048 |              64 |            adaptive | shin           |   5 |      0.964 |   0.95 |  0.999 |   0.049 |    0.93 |   1.047 |
+| mixed         | unchanged-update |       2048 |              64 |            adaptive | shin           |   5 |      0.359 |  0.348 |  0.376 |   0.028 |    0.34 |   0.377 |
+| mixed         | changed-update   |       2048 |              64 |            adaptive | shin           |   5 |      0.479 |  0.471 |  0.496 |   0.025 |   0.468 |   0.511 |
+| mixed         | pruned-update    |       2048 |              64 |            adaptive | shin           |   5 |      1.161 |  1.148 |  1.165 |   0.017 |   1.133 |   1.172 |
+| tiny-many     | cold-create      |       1024 |                 |            adaptive | aws            |   5 |     26.467 | 26.118 | 26.502 |   0.384 |  25.903 |  26.728 |
+| tiny-many     | unchanged-update |       1024 |                 |            adaptive | aws            |   5 |     27.318 | 27.195 | 27.467 |   0.272 |  26.737 |  28.416 |
+| tiny-many     | changed-update   |       1024 |                 |            adaptive | aws            |   5 |      27.79 | 27.603 | 27.839 |   0.236 |  26.445 |  28.487 |
+| tiny-many     | pruned-update    |       1024 |                 |            adaptive | aws            |   5 |     27.186 | 25.798 | 27.501 |   1.703 |   24.83 |  28.177 |
+| tiny-many     | cold-create      |       1024 |              32 |            adaptive | shin           |   5 |      2.805 |  2.741 |  2.896 |   0.155 |   2.702 |   2.906 |
+| tiny-many     | unchanged-update |       1024 |              32 |            adaptive | shin           |   5 |      0.598 |  0.591 |  0.615 |   0.024 |   0.572 |    0.67 |
+| tiny-many     | changed-update   |       1024 |              32 |            adaptive | shin           |   5 |      0.726 |  0.721 |  0.758 |   0.037 |   0.706 |   0.765 |
+| tiny-many     | pruned-update    |       1024 |              32 |            adaptive | shin           |   5 |      1.466 |  1.454 |  1.488 |   0.034 |   1.405 |   1.535 |
+| tiny-many     | cold-create      |       2048 |                 |            adaptive | aws            |   5 |     15.562 | 15.529 | 15.744 |   0.215 |  15.299 |  15.937 |
+| tiny-many     | unchanged-update |       2048 |                 |            adaptive | aws            |   5 |     15.832 | 15.469 | 16.013 |   0.544 |  15.199 |  16.491 |
+| tiny-many     | changed-update   |       2048 |                 |            adaptive | aws            |   5 |     15.785 | 15.784 | 16.488 |   0.704 |  15.483 |  16.931 |
+| tiny-many     | pruned-update    |       2048 |                 |            adaptive | aws            |   5 |     15.614 | 15.434 | 15.721 |   0.287 |  14.968 |  17.294 |
+| tiny-many     | cold-create      |       2048 |              64 |            adaptive | shin           |   5 |       1.61 |  1.608 |   1.64 |   0.032 |   1.607 |   1.678 |
+| tiny-many     | unchanged-update |       2048 |              64 |            adaptive | shin           |   5 |      0.598 |  0.594 |  0.601 |   0.007 |   0.556 |   0.612 |
+| tiny-many     | changed-update   |       2048 |              64 |            adaptive | shin           |   5 |      0.673 |  0.667 |  0.702 |   0.035 |   0.627 |   0.753 |
+| tiny-many     | pruned-update    |       2048 |              64 |            adaptive | shin           |   5 |      1.443 |  1.442 |  1.543 |   0.101 |    1.41 |   1.568 |
 
 ```text
-large-few cold-create 1024//adaptive aws         | ########### 9.729 s
-large-few unchanged-update 1024//adaptive aws    | ########### 10.131 s
-large-few changed-update 1024//adaptive aws      | ########### 10.117 s
-large-few pruned-update 1024//adaptive aws       | ########## 9.498 s
-large-few cold-create 1024/32/adaptive shin      | ## 2.043 s
-large-few unchanged-update 1024/32/adaptive shin | # 0.357 s
-large-few changed-update 1024/32/adaptive shin   | # 0.594 s
-large-few pruned-update 1024/32/adaptive shin    | # 0.625 s
-large-few cold-create 2048//adaptive aws         | ###### 5.911 s
-large-few unchanged-update 2048//adaptive aws    | ###### 5.787 s
-large-few changed-update 2048//adaptive aws      | ###### 5.684 s
-large-few pruned-update 2048//adaptive aws       | ###### 5.506 s
-large-few cold-create 2048/64/adaptive shin      | # 1.262 s
-large-few unchanged-update 2048/64/adaptive shin | # 0.324 s
-large-few changed-update 2048/64/adaptive shin   | # 0.498 s
-large-few pruned-update 2048/64/adaptive shin    | # 0.608 s
-mixed cold-create 1024//adaptive aws             | ########### 10.514 s
-mixed unchanged-update 1024//adaptive aws        | ############ 10.92 s
-mixed changed-update 1024//adaptive aws          | ############ 11.007 s
-mixed pruned-update 1024//adaptive aws           | ############ 10.644 s
-mixed cold-create 1024/32/adaptive shin          | ## 1.418 s
-mixed unchanged-update 1024/32/adaptive shin     | # 0.402 s
-mixed changed-update 1024/32/adaptive shin       | # 0.531 s
-mixed pruned-update 1024/32/adaptive shin        | # 1.241 s
-mixed cold-create 2048//adaptive aws             | ####### 6.261 s
-mixed unchanged-update 2048//adaptive aws        | ####### 6.201 s
-mixed changed-update 2048//adaptive aws          | ####### 6.347 s
-mixed pruned-update 2048//adaptive aws           | ####### 6.107 s
-mixed cold-create 2048/64/adaptive shin          | # 0.961 s
-mixed unchanged-update 2048/64/adaptive shin     | # 0.368 s
-mixed changed-update 2048/64/adaptive shin       | # 0.508 s
-mixed pruned-update 2048/64/adaptive shin        | # 1.217 s
-tiny-many cold-create 1024//adaptive aws         | ########################### 25.346 s
-tiny-many unchanged-update 1024//adaptive aws    | ############################## 27.665 s
-tiny-many changed-update 1024//adaptive aws      | ############################## 27.67 s
-tiny-many pruned-update 1024//adaptive aws       | ############################# 27.041 s
-tiny-many cold-create 1024/32/adaptive shin      | ### 2.827 s
-tiny-many unchanged-update 1024/32/adaptive shin | # 0.606 s
-tiny-many changed-update 1024/32/adaptive shin   | # 0.722 s
-tiny-many pruned-update 1024/32/adaptive shin    | ## 1.499 s
-tiny-many cold-create 2048//adaptive aws         | ################# 15.41 s
-tiny-many unchanged-update 2048//adaptive aws    | ################## 16.199 s
-tiny-many changed-update 2048//adaptive aws      | ################# 16.067 s
-tiny-many pruned-update 2048//adaptive aws       | ################# 15.613 s
-tiny-many cold-create 2048/64/adaptive shin      | ## 1.663 s
-tiny-many unchanged-update 2048/64/adaptive shin | # 0.579 s
-tiny-many changed-update 2048/64/adaptive shin   | # 0.719 s
-tiny-many pruned-update 2048/64/adaptive shin    | ## 1.486 s
+large-few cold-create 1024//adaptive aws         | ########### 9.913 s
+large-few unchanged-update 1024//adaptive aws    | ########### 9.838 s
+large-few changed-update 1024//adaptive aws      | ########### 9.859 s
+large-few pruned-update 1024//adaptive aws       | ########## 9.717 s
+large-few cold-create 1024/32/adaptive shin      | ## 2.249 s
+large-few unchanged-update 1024/32/adaptive shin | # 0.371 s
+large-few changed-update 1024/32/adaptive shin   | # 0.574 s
+large-few pruned-update 1024/32/adaptive shin    | # 0.653 s
+large-few cold-create 2048//adaptive aws         | ###### 5.673 s
+large-few unchanged-update 2048//adaptive aws    | ###### 5.631 s
+large-few changed-update 2048//adaptive aws      | ###### 5.647 s
+large-few pruned-update 2048//adaptive aws       | ###### 5.54 s
+large-few cold-create 2048/64/adaptive shin      | # 1.288 s
+large-few unchanged-update 2048/64/adaptive shin | # 0.329 s
+large-few changed-update 2048/64/adaptive shin   | # 0.509 s
+large-few pruned-update 2048/64/adaptive shin    | # 0.576 s
+mixed cold-create 1024//adaptive aws             | ########### 10.629 s
+mixed unchanged-update 1024//adaptive aws        | ############ 10.838 s
+mixed changed-update 1024//adaptive aws          | ############ 11.102 s
+mixed pruned-update 1024//adaptive aws           | ########### 10.361 s
+mixed cold-create 1024/32/adaptive shin          | ## 1.479 s
+mixed unchanged-update 1024/32/adaptive shin     | # 0.397 s
+mixed changed-update 1024/32/adaptive shin       | # 0.549 s
+mixed pruned-update 1024/32/adaptive shin        | # 1.174 s
+mixed cold-create 2048//adaptive aws             | ####### 6.231 s
+mixed unchanged-update 2048//adaptive aws        | ####### 6.49 s
+mixed changed-update 2048//adaptive aws          | ####### 6.249 s
+mixed pruned-update 2048//adaptive aws           | ####### 6.168 s
+mixed cold-create 2048/64/adaptive shin          | # 0.964 s
+mixed unchanged-update 2048/64/adaptive shin     | # 0.359 s
+mixed changed-update 2048/64/adaptive shin       | # 0.479 s
+mixed pruned-update 2048/64/adaptive shin        | # 1.161 s
+tiny-many cold-create 1024//adaptive aws         | ############################# 26.467 s
+tiny-many unchanged-update 1024//adaptive aws    | ############################# 27.318 s
+tiny-many changed-update 1024//adaptive aws      | ############################## 27.79 s
+tiny-many pruned-update 1024//adaptive aws       | ############################# 27.186 s
+tiny-many cold-create 1024/32/adaptive shin      | ### 2.805 s
+tiny-many unchanged-update 1024/32/adaptive shin | # 0.598 s
+tiny-many changed-update 1024/32/adaptive shin   | # 0.726 s
+tiny-many pruned-update 1024/32/adaptive shin    | ## 1.466 s
+tiny-many cold-create 2048//adaptive aws         | ################# 15.562 s
+tiny-many unchanged-update 2048//adaptive aws    | ################# 15.832 s
+tiny-many changed-update 2048//adaptive aws      | ################# 15.785 s
+tiny-many pruned-update 2048//adaptive aws       | ################# 15.614 s
+tiny-many cold-create 2048/64/adaptive shin      | ## 1.61 s
+tiny-many unchanged-update 2048/64/adaptive shin | # 0.598 s
+tiny-many changed-update 2048/64/adaptive shin   | # 0.673 s
+tiny-many pruned-update 2048/64/adaptive shin    | ## 1.443 s
 ```
 
 ### Init duration
 
 | Asset profile | Phase            | Memory MiB | Max concurrency | Source window bytes | Implementation |   n | median (s) | Q1 (s) | Q3 (s) | IQR (s) | min (s) | max (s) |
 | ------------- | ---------------- | ---------: | --------------: | ------------------: | -------------- | --: | ---------: | -----: | -----: | ------: | ------: | ------: |
-| large-few     | cold-create      |       1024 |                 |            adaptive | aws            |   5 |      0.545 |  0.543 |  0.557 |   0.014 |   0.516 |   1.017 |
-| large-few     | unchanged-update |       1024 |                 |            adaptive | aws            |   5 |      0.579 |  0.568 |  0.726 |   0.158 |   0.561 |   0.863 |
-| large-few     | changed-update   |       1024 |                 |            adaptive | aws            |   5 |      0.562 |  0.561 |   0.57 |   0.009 |   0.547 |   0.608 |
-| large-few     | pruned-update    |       1024 |                 |            adaptive | aws            |   5 |      0.512 |   0.51 |  0.516 |   0.006 |   0.509 |   0.525 |
-| large-few     | cold-create      |       1024 |              32 |            adaptive | shin           |   5 |       0.12 |  0.118 |  0.125 |   0.007 |   0.115 |   0.125 |
-| large-few     | unchanged-update |       1024 |              32 |            adaptive | shin           |   5 |      0.117 |  0.116 |  0.118 |   0.002 |   0.115 |   0.126 |
-| large-few     | changed-update   |       1024 |              32 |            adaptive | shin           |   5 |      0.124 |  0.119 |  0.127 |   0.008 |   0.117 |   0.148 |
-| large-few     | pruned-update    |       1024 |              32 |            adaptive | shin           |   5 |      0.118 |  0.117 |  0.121 |   0.004 |   0.114 |   0.122 |
-| large-few     | cold-create      |       2048 |                 |            adaptive | aws            |   5 |      0.592 |  0.577 |  0.758 |   0.181 |    0.54 |   0.874 |
-| large-few     | unchanged-update |       2048 |                 |            adaptive | aws            |   5 |      0.516 |  0.507 |  0.525 |   0.018 |   0.468 |   0.575 |
-| large-few     | changed-update   |       2048 |                 |            adaptive | aws            |   5 |      0.519 |  0.517 |  0.532 |   0.015 |   0.447 |   0.539 |
-| large-few     | pruned-update    |       2048 |                 |            adaptive | aws            |   5 |      0.527 |  0.517 |  0.543 |   0.026 |   0.512 |   0.546 |
-| large-few     | cold-create      |       2048 |              64 |            adaptive | shin           |   5 |       0.12 |  0.116 |  0.124 |   0.008 |   0.098 |   0.129 |
-| large-few     | unchanged-update |       2048 |              64 |            adaptive | shin           |   5 |      0.117 |  0.115 |  0.119 |   0.004 |   0.095 |   0.121 |
-| large-few     | changed-update   |       2048 |              64 |            adaptive | shin           |   5 |       0.12 |  0.118 |   0.12 |   0.002 |   0.095 |   0.123 |
-| large-few     | pruned-update    |       2048 |              64 |            adaptive | shin           |   5 |      0.121 |   0.12 |  0.123 |   0.003 |   0.096 |   0.124 |
-| mixed         | cold-create      |       1024 |                 |            adaptive | aws            |   5 |      0.519 |  0.514 |  0.549 |   0.035 |   0.497 |   0.567 |
-| mixed         | unchanged-update |       1024 |                 |            adaptive | aws            |   5 |      0.523 |   0.49 |  0.554 |   0.064 |   0.435 |    0.57 |
-| mixed         | changed-update   |       1024 |                 |            adaptive | aws            |   5 |      0.538 |  0.519 |  0.545 |   0.026 |   0.458 |   0.593 |
-| mixed         | pruned-update    |       1024 |                 |            adaptive | aws            |   5 |      0.543 |  0.534 |  0.546 |   0.012 |   0.517 |   0.568 |
-| mixed         | cold-create      |       1024 |              32 |            adaptive | shin           |   5 |      0.118 |  0.117 |  0.119 |   0.002 |   0.098 |   0.119 |
-| mixed         | unchanged-update |       1024 |              32 |            adaptive | shin           |   5 |       0.12 |  0.118 |  0.129 |   0.011 |   0.117 |   0.133 |
-| mixed         | changed-update   |       1024 |              32 |            adaptive | shin           |   5 |      0.124 |  0.121 |  0.125 |   0.004 |    0.12 |    0.13 |
-| mixed         | pruned-update    |       1024 |              32 |            adaptive | shin           |   5 |      0.121 |  0.118 |  0.122 |   0.004 |   0.116 |   0.124 |
-| mixed         | cold-create      |       2048 |                 |            adaptive | aws            |   5 |      0.519 |  0.518 |  0.524 |   0.006 |   0.516 |   0.525 |
-| mixed         | unchanged-update |       2048 |                 |            adaptive | aws            |   5 |      0.518 |    0.5 |  0.536 |   0.036 |   0.459 |   0.767 |
-| mixed         | changed-update   |       2048 |                 |            adaptive | aws            |   5 |      0.526 |  0.521 |  0.529 |   0.008 |    0.52 |    0.58 |
-| mixed         | pruned-update    |       2048 |                 |            adaptive | aws            |   5 |      0.528 |  0.506 |  0.532 |   0.026 |   0.502 |   0.565 |
-| mixed         | cold-create      |       2048 |              64 |            adaptive | shin           |   5 |      0.123 |  0.118 |  0.126 |   0.008 |   0.116 |   0.153 |
-| mixed         | unchanged-update |       2048 |              64 |            adaptive | shin           |   5 |      0.121 |  0.117 |  0.124 |   0.007 |   0.114 |   0.124 |
-| mixed         | changed-update   |       2048 |              64 |            adaptive | shin           |   5 |      0.115 |  0.112 |  0.126 |   0.014 |   0.095 |   0.127 |
-| mixed         | pruned-update    |       2048 |              64 |            adaptive | shin           |   5 |      0.118 |  0.118 |  0.118 |       0 |   0.094 |   0.119 |
-| tiny-many     | cold-create      |       1024 |                 |            adaptive | aws            |   5 |      0.528 |  0.522 |  0.531 |   0.009 |   0.517 |   0.555 |
-| tiny-many     | unchanged-update |       1024 |                 |            adaptive | aws            |   5 |      0.536 |  0.527 |  0.563 |   0.036 |   0.467 |   0.584 |
-| tiny-many     | changed-update   |       1024 |                 |            adaptive | aws            |   5 |      0.526 |  0.523 |  0.532 |   0.009 |   0.521 |   0.557 |
-| tiny-many     | pruned-update    |       1024 |                 |            adaptive | aws            |   5 |      0.544 |  0.508 |   0.55 |   0.042 |   0.508 |    0.58 |
-| tiny-many     | cold-create      |       1024 |              32 |            adaptive | shin           |   5 |      0.116 |  0.114 |  0.125 |   0.011 |   0.093 |    0.13 |
-| tiny-many     | unchanged-update |       1024 |              32 |            adaptive | shin           |   5 |      0.117 |  0.115 |  0.118 |   0.003 |   0.099 |   0.119 |
-| tiny-many     | changed-update   |       1024 |              32 |            adaptive | shin           |   5 |      0.119 |  0.116 |  0.119 |   0.003 |   0.096 |    0.12 |
-| tiny-many     | pruned-update    |       1024 |              32 |            adaptive | shin           |   5 |      0.119 |  0.119 |  0.121 |   0.002 |   0.117 |   0.127 |
-| tiny-many     | cold-create      |       2048 |                 |            adaptive | aws            |   5 |      0.516 |  0.506 |  0.528 |   0.022 |   0.438 |   0.532 |
-| tiny-many     | unchanged-update |       2048 |                 |            adaptive | aws            |   5 |      0.539 |  0.538 |  0.539 |   0.001 |   0.514 |   0.816 |
-| tiny-many     | changed-update   |       2048 |                 |            adaptive | aws            |   5 |      0.505 |  0.504 |  0.527 |   0.023 |   0.499 |   0.541 |
-| tiny-many     | pruned-update    |       2048 |                 |            adaptive | aws            |   5 |      0.543 |  0.533 |  0.553 |    0.02 |   0.516 |   0.841 |
-| tiny-many     | cold-create      |       2048 |              64 |            adaptive | shin           |   5 |      0.121 |  0.114 |  0.122 |   0.008 |   0.097 |   0.126 |
-| tiny-many     | unchanged-update |       2048 |              64 |            adaptive | shin           |   5 |      0.121 |  0.117 |  0.122 |   0.005 |   0.095 |   0.125 |
-| tiny-many     | changed-update   |       2048 |              64 |            adaptive | shin           |   5 |      0.121 |  0.117 |  0.122 |   0.005 |   0.116 |   0.124 |
-| tiny-many     | pruned-update    |       2048 |              64 |            adaptive | shin           |   5 |      0.122 |   0.12 |  0.125 |   0.005 |   0.116 |   0.127 |
+| large-few     | cold-create      |       1024 |                 |            adaptive | aws            |   5 |      0.527 |  0.526 |  0.561 |   0.035 |    0.51 |   0.567 |
+| large-few     | unchanged-update |       1024 |                 |            adaptive | aws            |   5 |      0.519 |  0.511 |  0.549 |   0.038 |   0.445 |   0.571 |
+| large-few     | changed-update   |       1024 |                 |            adaptive | aws            |   5 |      0.523 |  0.522 |  0.551 |   0.029 |   0.517 |   0.847 |
+| large-few     | pruned-update    |       1024 |                 |            adaptive | aws            |   5 |      0.537 |  0.524 |  0.549 |   0.025 |    0.45 |   0.566 |
+| large-few     | cold-create      |       1024 |              32 |            adaptive | shin           |   5 |      0.122 |  0.119 |  0.148 |   0.029 |   0.117 |   0.181 |
+| large-few     | unchanged-update |       1024 |              32 |            adaptive | shin           |   5 |      0.118 |  0.116 |   0.12 |   0.004 |   0.114 |   0.124 |
+| large-few     | changed-update   |       1024 |              32 |            adaptive | shin           |   5 |      0.115 |  0.114 |  0.118 |   0.004 |   0.096 |    0.15 |
+| large-few     | pruned-update    |       1024 |              32 |            adaptive | shin           |   5 |      0.115 |  0.096 |  0.118 |   0.022 |   0.096 |   0.148 |
+| large-few     | cold-create      |       2048 |                 |            adaptive | aws            |   5 |      0.517 |  0.507 |  0.518 |   0.011 |   0.503 |   0.524 |
+| large-few     | unchanged-update |       2048 |                 |            adaptive | aws            |   5 |      0.522 |  0.521 |  0.552 |   0.031 |   0.521 |   0.569 |
+| large-few     | changed-update   |       2048 |                 |            adaptive | aws            |   5 |      0.524 |  0.512 |   0.53 |   0.018 |    0.51 |   0.531 |
+| large-few     | pruned-update    |       2048 |                 |            adaptive | aws            |   5 |      0.521 |  0.519 |  0.524 |   0.005 |   0.514 |   0.541 |
+| large-few     | cold-create      |       2048 |              64 |            adaptive | shin           |   5 |      0.117 |  0.115 |   0.12 |   0.005 |   0.098 |   0.122 |
+| large-few     | unchanged-update |       2048 |              64 |            adaptive | shin           |   5 |      0.118 |  0.116 |   0.12 |   0.004 |   0.096 |   0.123 |
+| large-few     | changed-update   |       2048 |              64 |            adaptive | shin           |   5 |      0.119 |  0.118 |  0.121 |   0.003 |   0.118 |   0.122 |
+| large-few     | pruned-update    |       2048 |              64 |            adaptive | shin           |   5 |      0.116 |  0.116 |  0.118 |   0.002 |   0.114 |   0.125 |
+| mixed         | cold-create      |       1024 |                 |            adaptive | aws            |   5 |      0.541 |  0.519 |  0.541 |   0.022 |   0.517 |   0.843 |
+| mixed         | unchanged-update |       1024 |                 |            adaptive | aws            |   5 |      0.574 |  0.535 |  0.579 |   0.044 |   0.437 |   0.811 |
+| mixed         | changed-update   |       1024 |                 |            adaptive | aws            |   5 |      0.543 |  0.534 |  0.567 |   0.033 |   0.519 |   1.293 |
+| mixed         | pruned-update    |       1024 |                 |            adaptive | aws            |   5 |      0.539 |  0.537 |  0.543 |   0.006 |   0.535 |   0.766 |
+| mixed         | cold-create      |       1024 |              32 |            adaptive | shin           |   5 |       0.12 |  0.119 |  0.121 |   0.002 |   0.118 |   0.149 |
+| mixed         | unchanged-update |       1024 |              32 |            adaptive | shin           |   5 |      0.117 |  0.116 |  0.117 |   0.001 |   0.114 |   0.118 |
+| mixed         | changed-update   |       1024 |              32 |            adaptive | shin           |   5 |      0.116 |  0.115 |  0.121 |   0.006 |   0.115 |   0.124 |
+| mixed         | pruned-update    |       1024 |              32 |            adaptive | shin           |   5 |      0.118 |  0.115 |  0.118 |   0.003 |   0.096 |   0.118 |
+| mixed         | cold-create      |       2048 |                 |            adaptive | aws            |   5 |      0.526 |  0.506 |  0.531 |   0.025 |   0.494 |   0.535 |
+| mixed         | unchanged-update |       2048 |                 |            adaptive | aws            |   5 |      0.493 |  0.485 |  0.545 |    0.06 |   0.453 |     0.8 |
+| mixed         | changed-update   |       2048 |                 |            adaptive | aws            |   5 |      0.528 |  0.518 |   0.54 |   0.022 |   0.512 |   0.547 |
+| mixed         | pruned-update    |       2048 |                 |            adaptive | aws            |   5 |      0.518 |  0.501 |  0.526 |   0.025 |     0.5 |   0.746 |
+| mixed         | cold-create      |       2048 |              64 |            adaptive | shin           |   5 |      0.121 |  0.121 |  0.124 |   0.003 |   0.118 |    0.15 |
+| mixed         | unchanged-update |       2048 |              64 |            adaptive | shin           |   5 |      0.117 |  0.115 |  0.118 |   0.003 |   0.096 |   0.119 |
+| mixed         | changed-update   |       2048 |              64 |            adaptive | shin           |   5 |      0.119 |  0.118 |   0.12 |   0.002 |   0.116 |   0.127 |
+| mixed         | pruned-update    |       2048 |              64 |            adaptive | shin           |   5 |      0.122 |  0.122 |  0.124 |   0.002 |   0.098 |   0.129 |
+| tiny-many     | cold-create      |       1024 |                 |            adaptive | aws            |   5 |      0.527 |   0.52 |  0.553 |   0.033 |   0.519 |    0.81 |
+| tiny-many     | unchanged-update |       1024 |                 |            adaptive | aws            |   5 |      0.545 |  0.529 |  0.549 |    0.02 |   0.525 |   0.591 |
+| tiny-many     | changed-update   |       1024 |                 |            adaptive | aws            |   5 |      0.523 |   0.52 |   0.57 |    0.05 |    0.52 |   0.622 |
+| tiny-many     | pruned-update    |       1024 |                 |            adaptive | aws            |   5 |      0.534 |  0.524 |  0.558 |   0.034 |   0.522 |   0.591 |
+| tiny-many     | cold-create      |       1024 |              32 |            adaptive | shin           |   5 |      0.118 |  0.116 |  0.119 |   0.003 |   0.115 |   0.124 |
+| tiny-many     | unchanged-update |       1024 |              32 |            adaptive | shin           |   5 |       0.12 |  0.116 |  0.124 |   0.008 |   0.114 |    0.15 |
+| tiny-many     | changed-update   |       1024 |              32 |            adaptive | shin           |   5 |      0.122 |  0.119 |  0.123 |   0.004 |   0.116 |   0.123 |
+| tiny-many     | pruned-update    |       1024 |              32 |            adaptive | shin           |   5 |      0.115 |  0.098 |  0.117 |   0.019 |   0.095 |   0.119 |
+| tiny-many     | cold-create      |       2048 |                 |            adaptive | aws            |   5 |      0.525 |  0.514 |  0.526 |   0.012 |   0.502 |   0.537 |
+| tiny-many     | unchanged-update |       2048 |                 |            adaptive | aws            |   5 |      0.521 |  0.513 |  0.558 |   0.045 |   0.507 |   0.847 |
+| tiny-many     | changed-update   |       2048 |                 |            adaptive | aws            |   5 |      0.542 |  0.533 |  0.563 |    0.03 |   0.518 |   0.775 |
+| tiny-many     | pruned-update    |       2048 |                 |            adaptive | aws            |   5 |      0.518 |    0.5 |  0.528 |   0.028 |    0.45 |   0.542 |
+| tiny-many     | cold-create      |       2048 |              64 |            adaptive | shin           |   5 |      0.118 |  0.118 |  0.118 |       0 |   0.117 |   0.125 |
+| tiny-many     | unchanged-update |       2048 |              64 |            adaptive | shin           |   5 |      0.114 |  0.114 |  0.119 |   0.005 |   0.096 |   0.127 |
+| tiny-many     | changed-update   |       2048 |              64 |            adaptive | shin           |   5 |      0.117 |  0.113 |   0.12 |   0.007 |   0.101 |    0.12 |
+| tiny-many     | pruned-update    |       2048 |              64 |            adaptive | shin           |   5 |      0.119 |  0.117 |   0.12 |   0.003 |   0.099 |   0.124 |
 
 ```text
-large-few cold-create 1024//adaptive aws         | ############################ 0.545 s
-large-few unchanged-update 1024//adaptive aws    | ############################# 0.579 s
-large-few changed-update 1024//adaptive aws      | ############################ 0.562 s
-large-few pruned-update 1024//adaptive aws       | ########################## 0.512 s
-large-few cold-create 1024/32/adaptive shin      | ###### 0.12 s
-large-few unchanged-update 1024/32/adaptive shin | ###### 0.117 s
-large-few changed-update 1024/32/adaptive shin   | ###### 0.124 s
-large-few pruned-update 1024/32/adaptive shin    | ###### 0.118 s
-large-few cold-create 2048//adaptive aws         | ############################## 0.592 s
-large-few unchanged-update 2048//adaptive aws    | ########################## 0.516 s
-large-few changed-update 2048//adaptive aws      | ########################## 0.519 s
-large-few pruned-update 2048//adaptive aws       | ########################### 0.527 s
-large-few cold-create 2048/64/adaptive shin      | ###### 0.12 s
-large-few unchanged-update 2048/64/adaptive shin | ###### 0.117 s
-large-few changed-update 2048/64/adaptive shin   | ###### 0.12 s
-large-few pruned-update 2048/64/adaptive shin    | ###### 0.121 s
-mixed cold-create 1024//adaptive aws             | ########################## 0.519 s
-mixed unchanged-update 1024//adaptive aws        | ########################### 0.523 s
-mixed changed-update 1024//adaptive aws          | ########################### 0.538 s
-mixed pruned-update 1024//adaptive aws           | ############################ 0.543 s
-mixed cold-create 1024/32/adaptive shin          | ###### 0.118 s
-mixed unchanged-update 1024/32/adaptive shin     | ###### 0.12 s
-mixed changed-update 1024/32/adaptive shin       | ###### 0.124 s
-mixed pruned-update 1024/32/adaptive shin        | ###### 0.121 s
-mixed cold-create 2048//adaptive aws             | ########################## 0.519 s
-mixed unchanged-update 2048//adaptive aws        | ########################## 0.518 s
-mixed changed-update 2048//adaptive aws          | ########################### 0.526 s
-mixed pruned-update 2048//adaptive aws           | ########################### 0.528 s
-mixed cold-create 2048/64/adaptive shin          | ###### 0.123 s
-mixed unchanged-update 2048/64/adaptive shin     | ###### 0.121 s
-mixed changed-update 2048/64/adaptive shin       | ###### 0.115 s
-mixed pruned-update 2048/64/adaptive shin        | ###### 0.118 s
-tiny-many cold-create 1024//adaptive aws         | ########################### 0.528 s
-tiny-many unchanged-update 1024//adaptive aws    | ########################### 0.536 s
-tiny-many changed-update 1024//adaptive aws      | ########################### 0.526 s
-tiny-many pruned-update 1024//adaptive aws       | ############################ 0.544 s
-tiny-many cold-create 1024/32/adaptive shin      | ###### 0.116 s
-tiny-many unchanged-update 1024/32/adaptive shin | ###### 0.117 s
-tiny-many changed-update 1024/32/adaptive shin   | ###### 0.119 s
-tiny-many pruned-update 1024/32/adaptive shin    | ###### 0.119 s
-tiny-many cold-create 2048//adaptive aws         | ########################## 0.516 s
-tiny-many unchanged-update 2048//adaptive aws    | ########################### 0.539 s
-tiny-many changed-update 2048//adaptive aws      | ########################## 0.505 s
-tiny-many pruned-update 2048//adaptive aws       | ############################ 0.543 s
-tiny-many cold-create 2048/64/adaptive shin      | ###### 0.121 s
-tiny-many unchanged-update 2048/64/adaptive shin | ###### 0.121 s
-tiny-many changed-update 2048/64/adaptive shin   | ###### 0.121 s
-tiny-many pruned-update 2048/64/adaptive shin    | ###### 0.122 s
+large-few cold-create 1024//adaptive aws         | ############################ 0.527 s
+large-few unchanged-update 1024//adaptive aws    | ########################### 0.519 s
+large-few changed-update 1024//adaptive aws      | ########################### 0.523 s
+large-few pruned-update 1024//adaptive aws       | ############################ 0.537 s
+large-few cold-create 1024/32/adaptive shin      | ###### 0.122 s
+large-few unchanged-update 1024/32/adaptive shin | ###### 0.118 s
+large-few changed-update 1024/32/adaptive shin   | ###### 0.115 s
+large-few pruned-update 1024/32/adaptive shin    | ###### 0.115 s
+large-few cold-create 2048//adaptive aws         | ########################### 0.517 s
+large-few unchanged-update 2048//adaptive aws    | ########################### 0.522 s
+large-few changed-update 2048//adaptive aws      | ########################### 0.524 s
+large-few pruned-update 2048//adaptive aws       | ########################### 0.521 s
+large-few cold-create 2048/64/adaptive shin      | ###### 0.117 s
+large-few unchanged-update 2048/64/adaptive shin | ###### 0.118 s
+large-few changed-update 2048/64/adaptive shin   | ###### 0.119 s
+large-few pruned-update 2048/64/adaptive shin    | ###### 0.116 s
+mixed cold-create 1024//adaptive aws             | ############################ 0.541 s
+mixed unchanged-update 1024//adaptive aws        | ############################## 0.574 s
+mixed changed-update 1024//adaptive aws          | ############################ 0.543 s
+mixed pruned-update 1024//adaptive aws           | ############################ 0.539 s
+mixed cold-create 1024/32/adaptive shin          | ###### 0.12 s
+mixed unchanged-update 1024/32/adaptive shin     | ###### 0.117 s
+mixed changed-update 1024/32/adaptive shin       | ###### 0.116 s
+mixed pruned-update 1024/32/adaptive shin        | ###### 0.118 s
+mixed cold-create 2048//adaptive aws             | ########################### 0.526 s
+mixed unchanged-update 2048//adaptive aws        | ########################## 0.493 s
+mixed changed-update 2048//adaptive aws          | ############################ 0.528 s
+mixed pruned-update 2048//adaptive aws           | ########################### 0.518 s
+mixed cold-create 2048/64/adaptive shin          | ###### 0.121 s
+mixed unchanged-update 2048/64/adaptive shin     | ###### 0.117 s
+mixed changed-update 2048/64/adaptive shin       | ###### 0.119 s
+mixed pruned-update 2048/64/adaptive shin        | ###### 0.122 s
+tiny-many cold-create 1024//adaptive aws         | ############################ 0.527 s
+tiny-many unchanged-update 1024//adaptive aws    | ############################ 0.545 s
+tiny-many changed-update 1024//adaptive aws      | ########################### 0.523 s
+tiny-many pruned-update 1024//adaptive aws       | ############################ 0.534 s
+tiny-many cold-create 1024/32/adaptive shin      | ###### 0.118 s
+tiny-many unchanged-update 1024/32/adaptive shin | ###### 0.12 s
+tiny-many changed-update 1024/32/adaptive shin   | ###### 0.122 s
+tiny-many pruned-update 1024/32/adaptive shin    | ###### 0.115 s
+tiny-many cold-create 2048//adaptive aws         | ########################### 0.525 s
+tiny-many unchanged-update 2048//adaptive aws    | ########################### 0.521 s
+tiny-many changed-update 2048//adaptive aws      | ############################ 0.542 s
+tiny-many pruned-update 2048//adaptive aws       | ########################### 0.518 s
+tiny-many cold-create 2048/64/adaptive shin      | ###### 0.118 s
+tiny-many unchanged-update 2048/64/adaptive shin | ###### 0.114 s
+tiny-many changed-update 2048/64/adaptive shin   | ###### 0.117 s
+tiny-many pruned-update 2048/64/adaptive shin    | ###### 0.119 s
 ```
 
 ### Local wall time
 
-| Asset profile | Phase            | Memory MiB | Max concurrency | Source window bytes | Implementation |   n | median (s) | Q1 (s) | Q3 (s) | IQR (s) | min (s) | max (s) |
-| ------------- | ---------------- | ---------: | --------------: | ------------------: | -------------- | --: | ---------: | -----: | -----: | ------: | ------: | ------: |
-| large-few     | cold-create      |       1024 |                 |            adaptive | aws            |   5 |     80.657 |  80.33 | 81.419 |   1.089 |  77.227 |  84.443 |
-| large-few     | unchanged-update |       1024 |                 |            adaptive | aws            |   5 |      46.36 | 45.484 | 47.671 |   2.187 |  45.058 |  49.387 |
-| large-few     | changed-update   |       1024 |                 |            adaptive | aws            |   5 |     53.672 | 51.854 | 53.714 |    1.86 |  50.787 |  57.998 |
-| large-few     | pruned-update    |       1024 |                 |            adaptive | aws            |   5 |     51.394 | 46.528 | 53.629 |   7.101 |  45.633 |  54.129 |
-| large-few     | cold-create      |       1024 |              32 |            adaptive | shin           |   5 |     74.504 | 74.315 |  75.82 |   1.505 |  74.164 |  80.361 |
-| large-few     | unchanged-update |       1024 |              32 |            adaptive | shin           |   5 |     37.686 | 36.168 | 37.715 |   1.547 |  34.869 |  44.596 |
-| large-few     | changed-update   |       1024 |              32 |            adaptive | shin           |   5 |      40.91 | 40.022 | 41.467 |   1.445 |  37.424 |  41.879 |
-| large-few     | pruned-update    |       1024 |              32 |            adaptive | shin           |   5 |     41.816 | 40.792 | 42.708 |   1.916 |  35.173 |  44.454 |
-| large-few     | cold-create      |       2048 |                 |            adaptive | aws            |   5 |     73.125 | 73.045 |  74.37 |   1.325 |  71.704 |  76.892 |
-| large-few     | unchanged-update |       2048 |                 |            adaptive | aws            |   5 |     41.579 | 39.885 | 41.851 |   1.966 |  38.814 | 495.667 |
-| large-few     | changed-update   |       2048 |                 |            adaptive | aws            |   5 |     46.313 | 45.547 | 47.324 |   1.777 |  45.035 |  47.766 |
-| large-few     | pruned-update    |       2048 |                 |            adaptive | aws            |   5 |     45.515 | 45.472 | 46.589 |   1.117 |   42.73 |  47.316 |
-| large-few     | cold-create      |       2048 |              64 |            adaptive | shin           |   5 |     71.895 | 71.884 |  74.28 |   2.396 |   68.12 |  87.074 |
-| large-few     | unchanged-update |       2048 |              64 |            adaptive | shin           |   5 |     35.159 | 34.209 | 36.311 |   2.102 |  33.752 |  37.752 |
-| large-few     | changed-update   |       2048 |              64 |            adaptive | shin           |   5 |     41.867 | 40.827 | 42.091 |   1.264 |  39.822 |   43.44 |
-| large-few     | pruned-update    |       2048 |              64 |            adaptive | shin           |   5 |     37.441 | 35.513 | 43.546 |   8.033 |  35.285 |   45.34 |
-| mixed         | cold-create      |       1024 |                 |            adaptive | aws            |   5 |     80.996 | 79.727 |  82.07 |   2.343 |  78.177 |   83.04 |
-| mixed         | unchanged-update |       1024 |                 |            adaptive | aws            |   5 |     45.133 | 43.995 | 47.571 |   3.576 |  43.638 |  48.161 |
-| mixed         | changed-update   |       1024 |                 |            adaptive | aws            |   5 |     50.085 | 48.233 | 50.113 |    1.88 |  46.898 |   51.08 |
-| mixed         | pruned-update    |       1024 |                 |            adaptive | aws            |   5 |     50.221 | 48.922 | 50.543 |   1.621 |  46.686 |  64.318 |
-| mixed         | cold-create      |       1024 |              32 |            adaptive | shin           |   5 |     74.565 |  73.28 | 74.738 |   1.458 |  72.627 |  75.511 |
-| mixed         | unchanged-update |       1024 |              32 |            adaptive | shin           |   5 |     34.679 |  34.07 | 36.468 |   2.398 |  33.316 |  37.366 |
-| mixed         | changed-update   |       1024 |              32 |            adaptive | shin           |   5 |     40.717 | 39.823 | 41.954 |   2.131 |  39.244 |  42.638 |
-| mixed         | pruned-update    |       1024 |              32 |            adaptive | shin           |   5 |     40.105 | 39.899 | 42.301 |   2.402 |  35.801 |  43.058 |
-| mixed         | cold-create      |       2048 |                 |            adaptive | aws            |   5 |     76.604 | 74.296 | 78.069 |   3.773 |  72.499 |  78.392 |
-| mixed         | unchanged-update |       2048 |                 |            adaptive | aws            |   5 |     39.933 | 39.137 | 41.142 |   2.005 |  38.721 |  62.579 |
-| mixed         | changed-update   |       2048 |                 |            adaptive | aws            |   5 |     46.844 | 45.065 | 47.584 |   2.519 |  38.968 |  59.698 |
-| mixed         | pruned-update    |       2048 |                 |            adaptive | aws            |   5 |     45.783 | 44.762 | 47.247 |   2.485 |  39.845 |  48.156 |
-| mixed         | cold-create      |       2048 |              64 |            adaptive | shin           |   5 |     71.371 |   70.7 | 73.586 |   2.886 |  67.639 |  74.489 |
-| mixed         | unchanged-update |       2048 |              64 |            adaptive | shin           |   5 |     35.483 | 34.971 | 35.781 |    0.81 |  33.714 |  36.629 |
-| mixed         | changed-update   |       2048 |              64 |            adaptive | shin           |   5 |     37.097 | 35.417 | 39.617 |     4.2 |  33.907 |  42.513 |
-| mixed         | pruned-update    |       2048 |              64 |            adaptive | shin           |   5 |     40.337 | 39.499 | 41.001 |   1.502 |  37.421 |  41.905 |
-| tiny-many     | cold-create      |       1024 |                 |            adaptive | aws            |   5 |     96.555 | 92.763 | 97.238 |   4.475 |  92.698 |   99.44 |
-| tiny-many     | unchanged-update |       1024 |                 |            adaptive | aws            |   5 |     63.351 | 61.955 | 64.439 |   2.484 |  59.775 |  65.724 |
-| tiny-many     | changed-update   |       1024 |                 |            adaptive | aws            |   5 |     69.194 | 65.196 | 71.812 |   6.616 |   60.79 |   74.59 |
-| tiny-many     | pruned-update    |       1024 |                 |            adaptive | aws            |   5 |     67.986 |  67.81 | 69.839 |   2.029 |  67.292 |  72.842 |
-| tiny-many     | cold-create      |       1024 |              32 |            adaptive | shin           |   5 |     71.904 | 71.157 | 72.824 |   1.667 |  70.432 |  75.359 |
-| tiny-many     | unchanged-update |       1024 |              32 |            adaptive | shin           |   5 |     34.514 | 34.151 |  35.62 |   1.469 |  33.421 |  36.737 |
-| tiny-many     | changed-update   |       1024 |              32 |            adaptive | shin           |   5 |     38.005 | 37.042 | 39.332 |    2.29 |  34.697 |  40.863 |
-| tiny-many     | pruned-update    |       1024 |              32 |            adaptive | shin           |   5 |     38.112 | 36.783 | 40.619 |   3.836 |  34.089 |  41.228 |
-| tiny-many     | cold-create      |       2048 |                 |            adaptive | aws            |   5 |     84.885 | 83.353 | 85.712 |   2.359 |  82.095 |  87.326 |
-| tiny-many     | unchanged-update |       2048 |                 |            adaptive | aws            |   5 |     50.975 | 50.049 | 53.088 |   3.039 |  49.635 |  53.215 |
-| tiny-many     | changed-update   |       2048 |                 |            adaptive | aws            |   5 |     55.613 |  55.16 | 57.367 |   2.207 |  51.341 |  59.335 |
-| tiny-many     | pruned-update    |       2048 |                 |            adaptive | aws            |   5 |     56.874 | 56.022 |  58.23 |   2.208 |  50.313 |  59.715 |
-| tiny-many     | cold-create      |       2048 |              64 |            adaptive | shin           |   5 |     71.578 | 71.426 | 73.774 |   2.348 |  69.417 |  75.776 |
-| tiny-many     | unchanged-update |       2048 |              64 |            adaptive | shin           |   5 |     34.635 | 33.707 | 35.468 |   1.761 |  33.249 |  36.748 |
-| tiny-many     | changed-update   |       2048 |              64 |            adaptive | shin           |   5 |     38.064 | 36.427 |  39.62 |   3.193 |  34.199 |  40.601 |
-| tiny-many     | pruned-update    |       2048 |              64 |            adaptive | shin           |   5 |     39.699 | 38.231 | 40.025 |   1.794 |  37.427 |  41.474 |
+| Asset profile | Phase            | Memory MiB | Max concurrency | Source window bytes | Implementation |   n | median (s) | Q1 (s) |  Q3 (s) | IQR (s) | min (s) | max (s) |
+| ------------- | ---------------- | ---------: | --------------: | ------------------: | -------------- | --: | ---------: | -----: | ------: | ------: | ------: | ------: |
+| large-few     | cold-create      |       1024 |                 |            adaptive | aws            |   5 |     80.803 | 80.324 |  81.092 |   0.768 |  79.726 |  84.254 |
+| large-few     | unchanged-update |       1024 |                 |            adaptive | aws            |   5 |      47.93 | 47.511 |   55.47 |   7.959 |  46.199 |  67.309 |
+| large-few     | changed-update   |       1024 |                 |            adaptive | aws            |   5 |     50.427 |  48.97 |  54.427 |   5.457 |  47.271 |  54.892 |
+| large-few     | pruned-update    |       1024 |                 |            adaptive | aws            |   5 |     54.205 | 51.745 |  54.371 |   2.626 |  48.271 |  54.764 |
+| large-few     | cold-create      |       1024 |              32 |            adaptive | shin           |   5 |     75.151 | 74.421 |  76.254 |   1.833 |  71.474 |  77.689 |
+| large-few     | unchanged-update |       1024 |              32 |            adaptive | shin           |   5 |     39.335 | 36.897 |  42.031 |   5.134 |  35.941 |  48.284 |
+| large-few     | changed-update   |       1024 |              32 |            adaptive | shin           |   5 |     44.236 | 43.038 |  45.765 |   2.727 |  37.611 |  62.087 |
+| large-few     | pruned-update    |       1024 |              32 |            adaptive | shin           |   5 |     38.347 | 38.009 |  40.417 |   2.408 |  36.817 |  43.907 |
+| large-few     | cold-create      |       2048 |                 |            adaptive | aws            |   5 |     74.216 | 74.095 |   74.34 |   0.245 |  71.556 |   74.38 |
+| large-few     | unchanged-update |       2048 |                 |            adaptive | aws            |   5 |     42.249 | 42.018 |  42.264 |   0.246 |  39.625 |  52.327 |
+| large-few     | changed-update   |       2048 |                 |            adaptive | aws            |   5 |     45.249 | 42.475 |  47.783 |   5.308 |  42.399 |  47.812 |
+| large-few     | pruned-update    |       2048 |                 |            adaptive | aws            |   5 |     48.617 | 47.953 |  48.655 |   0.702 |  45.406 |  48.749 |
+| large-few     | cold-create      |       2048 |              64 |            adaptive | shin           |   5 |     71.966 | 69.477 |  72.705 |   3.228 |  69.176 |  82.463 |
+| large-few     | unchanged-update |       2048 |              64 |            adaptive | shin           |   5 |     37.633 | 36.863 |   37.71 |   0.847 |  34.625 |  40.734 |
+| large-few     | changed-update   |       2048 |              64 |            adaptive | shin           |   5 |     42.089 | 41.567 |   42.56 |   0.993 |  37.817 |  43.169 |
+| large-few     | pruned-update    |       2048 |              64 |            adaptive | shin           |   5 |     42.585 | 38.164 |  47.286 |   9.122 |  34.599 |  49.299 |
+| mixed         | cold-create      |       1024 |                 |            adaptive | aws            |   5 |     80.664 | 80.629 |  81.847 |   1.218 |  79.705 |  82.983 |
+| mixed         | unchanged-update |       1024 |                 |            adaptive | aws            |   5 |     47.514 | 47.513 |  47.602 |   0.089 |  44.714 |  47.961 |
+| mixed         | changed-update   |       1024 |                 |            adaptive | aws            |   5 |     53.198 |  50.27 |  53.367 |   3.097 |  47.088 |  59.082 |
+| mixed         | pruned-update    |       1024 |                 |            adaptive | aws            |   5 |     51.041 | 48.422 |  52.678 |   4.256 |  48.393 |  66.715 |
+| mixed         | cold-create      |       1024 |              32 |            adaptive | shin           |   5 |     70.477 | 70.264 |   73.36 |   3.096 |  69.885 |  75.599 |
+| mixed         | unchanged-update |       1024 |              32 |            adaptive | shin           |   5 |     36.843 | 35.861 |  37.301 |    1.44 |  34.784 |  37.896 |
+| mixed         | changed-update   |       1024 |              32 |            adaptive | shin           |   5 |     41.738 | 39.928 |  42.773 |   2.845 |  39.256 |  43.147 |
+| mixed         | pruned-update    |       1024 |              32 |            adaptive | shin           |   5 |     43.309 | 41.836 |  43.466 |    1.63 |  40.423 |  44.793 |
+| mixed         | cold-create      |       2048 |                 |            adaptive | aws            |   5 |     74.633 | 74.365 |  76.062 |   1.697 |  74.346 |  77.445 |
+| mixed         | unchanged-update |       2048 |                 |            adaptive | aws            |   5 |     41.841 | 40.995 |  41.926 |   0.931 |  38.947 |  42.016 |
+| mixed         | changed-update   |       2048 |                 |            adaptive | aws            |   5 |     48.436 | 47.884 |  50.552 |   2.668 |  45.179 |  56.907 |
+| mixed         | pruned-update    |       2048 |                 |            adaptive | aws            |   5 |     42.643 | 41.662 |  48.016 |   6.354 |   39.83 |  48.074 |
+| mixed         | cold-create      |       2048 |              64 |            adaptive | shin           |   5 |     69.097 | 69.062 |   69.93 |   0.868 |  65.974 |   74.07 |
+| mixed         | unchanged-update |       2048 |              64 |            adaptive | shin           |   5 |     36.754 | 35.761 |  37.332 |   1.571 |  34.545 |  37.738 |
+| mixed         | changed-update   |       2048 |              64 |            adaptive | shin           |   5 |     42.036 | 40.667 |  44.083 |   3.416 |  37.431 |   44.66 |
+| mixed         | pruned-update    |       2048 |              64 |            adaptive | shin           |   5 |     38.254 | 37.465 |  39.936 |   2.471 |   36.33 |  43.377 |
+| tiny-many     | cold-create      |       1024 |                 |            adaptive | aws            |   5 |     98.579 | 97.298 | 100.174 |   2.876 |  96.723 |  102.94 |
+| tiny-many     | unchanged-update |       1024 |                 |            adaptive | aws            |   5 |     64.192 | 62.565 |  64.488 |   1.923 |  61.842 |  64.593 |
+| tiny-many     | changed-update   |       1024 |                 |            adaptive | aws            |   5 |      71.33 | 71.081 |  75.308 |   4.227 |  70.456 |  79.967 |
+| tiny-many     | pruned-update    |       1024 |                 |            adaptive | aws            |   5 |     67.506 | 66.969 |  69.211 |   2.242 |  66.121 |  70.804 |
+| tiny-many     | cold-create      |       1024 |              32 |            adaptive | shin           |   5 |     75.945 | 74.249 |  76.081 |   1.832 |  72.797 |  77.959 |
+| tiny-many     | unchanged-update |       1024 |              32 |            adaptive | shin           |   5 |     36.721 | 35.315 |   36.87 |   1.555 |  35.111 |  37.405 |
+| tiny-many     | changed-update   |       1024 |              32 |            adaptive | shin           |   5 |     41.086 | 37.945 |  43.429 |   5.484 |  36.236 |  43.534 |
+| tiny-many     | pruned-update    |       1024 |              32 |            adaptive | shin           |   5 |     38.867 | 38.341 |  41.957 |   3.616 |   36.19 |   44.04 |
+| tiny-many     | cold-create      |       2048 |                 |            adaptive | aws            |   5 |     85.626 | 84.296 |  85.637 |   1.341 |  82.582 |  85.811 |
+| tiny-many     | unchanged-update |       2048 |                 |            adaptive | aws            |   5 |     53.153 | 52.278 |  53.218 |    0.94 |  49.958 |  53.385 |
+| tiny-many     | changed-update   |       2048 |                 |            adaptive | aws            |   5 |     53.885 | 53.701 |  53.962 |   0.261 |  52.859 |  56.606 |
+| tiny-many     | pruned-update    |       2048 |                 |            adaptive | aws            |   5 |     59.826 | 56.889 |  60.026 |   3.137 |  53.142 |  60.085 |
+| tiny-many     | cold-create      |       2048 |              64 |            adaptive | shin           |   5 |     73.077 | 72.593 |  75.678 |   3.085 |  70.208 |  76.552 |
+| tiny-many     | unchanged-update |       2048 |              64 |            adaptive | shin           |   5 |     36.743 | 35.342 |   36.77 |   1.428 |  34.481 |  36.804 |
+| tiny-many     | changed-update   |       2048 |              64 |            adaptive | shin           |   5 |     41.306 | 37.828 |   42.06 |   4.232 |  37.595 |  43.382 |
+| tiny-many     | pruned-update    |       2048 |              64 |            adaptive | shin           |   5 |     41.882 | 41.026 |  43.707 |   2.681 |  38.597 |  43.914 |
 
 ```text
-large-few cold-create 1024//adaptive aws         | ######################### 80.657 s
-large-few unchanged-update 1024//adaptive aws    | ############## 46.36 s
-large-few changed-update 1024//adaptive aws      | ################# 53.672 s
-large-few pruned-update 1024//adaptive aws       | ################ 51.394 s
-large-few cold-create 1024/32/adaptive shin      | ####################### 74.504 s
-large-few unchanged-update 1024/32/adaptive shin | ############ 37.686 s
-large-few changed-update 1024/32/adaptive shin   | ############# 40.91 s
-large-few pruned-update 1024/32/adaptive shin    | ############# 41.816 s
-large-few cold-create 2048//adaptive aws         | ####################### 73.125 s
-large-few unchanged-update 2048//adaptive aws    | ############# 41.579 s
-large-few changed-update 2048//adaptive aws      | ############## 46.313 s
-large-few pruned-update 2048//adaptive aws       | ############## 45.515 s
-large-few cold-create 2048/64/adaptive shin      | ###################### 71.895 s
-large-few unchanged-update 2048/64/adaptive shin | ########### 35.159 s
-large-few changed-update 2048/64/adaptive shin   | ############# 41.867 s
-large-few pruned-update 2048/64/adaptive shin    | ############ 37.441 s
-mixed cold-create 1024//adaptive aws             | ######################### 80.996 s
-mixed unchanged-update 1024//adaptive aws        | ############## 45.133 s
-mixed changed-update 1024//adaptive aws          | ################ 50.085 s
-mixed pruned-update 1024//adaptive aws           | ################ 50.221 s
-mixed cold-create 1024/32/adaptive shin          | ####################### 74.565 s
-mixed unchanged-update 1024/32/adaptive shin     | ########### 34.679 s
-mixed changed-update 1024/32/adaptive shin       | ############# 40.717 s
-mixed pruned-update 1024/32/adaptive shin        | ############ 40.105 s
-mixed cold-create 2048//adaptive aws             | ######################## 76.604 s
-mixed unchanged-update 2048//adaptive aws        | ############ 39.933 s
-mixed changed-update 2048//adaptive aws          | ############### 46.844 s
-mixed pruned-update 2048//adaptive aws           | ############## 45.783 s
-mixed cold-create 2048/64/adaptive shin          | ###################### 71.371 s
-mixed unchanged-update 2048/64/adaptive shin     | ########### 35.483 s
-mixed changed-update 2048/64/adaptive shin       | ############ 37.097 s
-mixed pruned-update 2048/64/adaptive shin        | ############# 40.337 s
-tiny-many cold-create 1024//adaptive aws         | ############################## 96.555 s
-tiny-many unchanged-update 1024//adaptive aws    | #################### 63.351 s
-tiny-many changed-update 1024//adaptive aws      | ##################### 69.194 s
-tiny-many pruned-update 1024//adaptive aws       | ##################### 67.986 s
-tiny-many cold-create 1024/32/adaptive shin      | ###################### 71.904 s
-tiny-many unchanged-update 1024/32/adaptive shin | ########### 34.514 s
-tiny-many changed-update 1024/32/adaptive shin   | ############ 38.005 s
-tiny-many pruned-update 1024/32/adaptive shin    | ############ 38.112 s
-tiny-many cold-create 2048//adaptive aws         | ########################## 84.885 s
-tiny-many unchanged-update 2048//adaptive aws    | ################ 50.975 s
-tiny-many changed-update 2048//adaptive aws      | ################# 55.613 s
-tiny-many pruned-update 2048//adaptive aws       | ################## 56.874 s
-tiny-many cold-create 2048/64/adaptive shin      | ###################### 71.578 s
-tiny-many unchanged-update 2048/64/adaptive shin | ########### 34.635 s
-tiny-many changed-update 2048/64/adaptive shin   | ############ 38.064 s
-tiny-many pruned-update 2048/64/adaptive shin    | ############ 39.699 s
+large-few cold-create 1024//adaptive aws         | ######################### 80.803 s
+large-few unchanged-update 1024//adaptive aws    | ############### 47.93 s
+large-few changed-update 1024//adaptive aws      | ############### 50.427 s
+large-few pruned-update 1024//adaptive aws       | ################ 54.205 s
+large-few cold-create 1024/32/adaptive shin      | ####################### 75.151 s
+large-few unchanged-update 1024/32/adaptive shin | ############ 39.335 s
+large-few changed-update 1024/32/adaptive shin   | ############# 44.236 s
+large-few pruned-update 1024/32/adaptive shin    | ############ 38.347 s
+large-few cold-create 2048//adaptive aws         | ####################### 74.216 s
+large-few unchanged-update 2048//adaptive aws    | ############# 42.249 s
+large-few changed-update 2048//adaptive aws      | ############## 45.249 s
+large-few pruned-update 2048//adaptive aws       | ############### 48.617 s
+large-few cold-create 2048/64/adaptive shin      | ###################### 71.966 s
+large-few unchanged-update 2048/64/adaptive shin | ########### 37.633 s
+large-few changed-update 2048/64/adaptive shin   | ############# 42.089 s
+large-few pruned-update 2048/64/adaptive shin    | ############# 42.585 s
+mixed cold-create 1024//adaptive aws             | ######################### 80.664 s
+mixed unchanged-update 1024//adaptive aws        | ############## 47.514 s
+mixed changed-update 1024//adaptive aws          | ################ 53.198 s
+mixed pruned-update 1024//adaptive aws           | ################ 51.041 s
+mixed cold-create 1024/32/adaptive shin          | ##################### 70.477 s
+mixed unchanged-update 1024/32/adaptive shin     | ########### 36.843 s
+mixed changed-update 1024/32/adaptive shin       | ############# 41.738 s
+mixed pruned-update 1024/32/adaptive shin        | ############# 43.309 s
+mixed cold-create 2048//adaptive aws             | ####################### 74.633 s
+mixed unchanged-update 2048//adaptive aws        | ############# 41.841 s
+mixed changed-update 2048//adaptive aws          | ############### 48.436 s
+mixed pruned-update 2048//adaptive aws           | ############# 42.643 s
+mixed cold-create 2048/64/adaptive shin          | ##################### 69.097 s
+mixed unchanged-update 2048/64/adaptive shin     | ########### 36.754 s
+mixed changed-update 2048/64/adaptive shin       | ############# 42.036 s
+mixed pruned-update 2048/64/adaptive shin        | ############ 38.254 s
+tiny-many cold-create 1024//adaptive aws         | ############################## 98.579 s
+tiny-many unchanged-update 1024//adaptive aws    | #################### 64.192 s
+tiny-many changed-update 1024//adaptive aws      | ###################### 71.33 s
+tiny-many pruned-update 1024//adaptive aws       | ##################### 67.506 s
+tiny-many cold-create 1024/32/adaptive shin      | ####################### 75.945 s
+tiny-many unchanged-update 1024/32/adaptive shin | ########### 36.721 s
+tiny-many changed-update 1024/32/adaptive shin   | ############# 41.086 s
+tiny-many pruned-update 1024/32/adaptive shin    | ############ 38.867 s
+tiny-many cold-create 2048//adaptive aws         | ########################## 85.626 s
+tiny-many unchanged-update 2048//adaptive aws    | ################ 53.153 s
+tiny-many changed-update 2048//adaptive aws      | ################ 53.885 s
+tiny-many pruned-update 2048//adaptive aws       | ################## 59.826 s
+tiny-many cold-create 2048/64/adaptive shin      | ###################### 73.077 s
+tiny-many unchanged-update 2048/64/adaptive shin | ########### 36.743 s
+tiny-many changed-update 2048/64/adaptive shin   | ############# 41.306 s
+tiny-many pruned-update 2048/64/adaptive shin    | ############# 41.882 s
 ```
 
 ### CDK deploy time
 
 | Asset profile | Phase            | Memory MiB | Max concurrency | Source window bytes | Implementation |   n | median (s) | Q1 (s) | Q3 (s) | IQR (s) | min (s) | max (s) |
 | ------------- | ---------------- | ---------: | --------------: | ------------------: | -------------- | --: | ---------: | -----: | -----: | ------: | ------: | ------: |
-| large-few     | cold-create      |       1024 |                 |            adaptive | aws            |   5 |      62.63 |  61.84 |  62.82 |    0.98 |   61.74 |   63.41 |
-| large-few     | unchanged-update |       1024 |                 |            adaptive | aws            |   5 |      29.95 |  29.36 |  29.98 |    0.62 |   29.31 |   30.47 |
-| large-few     | changed-update   |       1024 |                 |            adaptive | aws            |   5 |         30 |  29.34 |  30.05 |    0.71 |    29.2 |   30.55 |
-| large-few     | pruned-update    |       1024 |                 |            adaptive | aws            |   5 |      30.04 |  29.56 |  30.13 |    0.57 |   29.46 |   30.85 |
-| large-few     | cold-create      |       1024 |              32 |            adaptive | shin           |   5 |      57.28 |  56.33 |  57.46 |    1.13 |   56.26 |   57.87 |
-| large-few     | unchanged-update |       1024 |              32 |            adaptive | shin           |   5 |      19.11 |  18.59 |  19.14 |    0.55 |   18.48 |   19.43 |
-| large-few     | changed-update   |       1024 |              32 |            adaptive | shin           |   5 |      19.17 |  18.79 |  19.22 |    0.43 |   18.71 |   19.54 |
-| large-few     | pruned-update    |       1024 |              32 |            adaptive | shin           |   5 |      19.27 |  19.06 |  19.43 |    0.37 |   18.91 |   20.04 |
-| large-few     | cold-create      |       2048 |                 |            adaptive | aws            |   5 |      57.35 |  57.33 |  57.97 |    0.64 |   56.61 |   61.78 |
-| large-few     | unchanged-update |       2048 |                 |            adaptive | aws            |   5 |      24.56 |  24.05 |  24.64 |    0.59 |   24.04 |   24.79 |
-| large-few     | changed-update   |       2048 |                 |            adaptive | aws            |   5 |       24.5 |  23.99 |  24.65 |    0.66 |    23.9 |   24.86 |
-| large-few     | pruned-update    |       2048 |                 |            adaptive | aws            |   5 |      24.65 |  24.13 |  24.75 |    0.62 |   24.08 |   25.23 |
-| large-few     | cold-create      |       2048 |              64 |            adaptive | shin           |   5 |      56.45 |  56.17 |  57.97 |     1.8 |   51.83 |      58 |
-| large-few     | unchanged-update |       2048 |              64 |            adaptive | shin           |   5 |      19.02 |  18.68 |  19.11 |    0.43 |   18.43 |   19.36 |
-| large-few     | changed-update   |       2048 |              64 |            adaptive | shin           |   5 |      19.24 |  18.62 |  19.26 |    0.64 |   18.62 |   19.57 |
-| large-few     | pruned-update    |       2048 |              64 |            adaptive | shin           |   5 |      19.28 |  18.77 |  19.43 |    0.66 |   18.72 |   19.82 |
-| mixed         | cold-create      |       1024 |                 |            adaptive | aws            |   5 |      62.72 |  62.67 |  63.38 |    0.71 |    61.7 |   67.07 |
-| mixed         | unchanged-update |       1024 |                 |            adaptive | aws            |   5 |       29.9 |  29.24 |  29.99 |    0.75 |   29.22 |   30.37 |
-| mixed         | changed-update   |       1024 |                 |            adaptive | aws            |   5 |         30 |  29.26 |  30.05 |    0.79 |    29.2 |   30.33 |
-| mixed         | pruned-update    |       1024 |                 |            adaptive | aws            |   5 |      29.96 |   29.5 |  30.06 |    0.56 |   29.36 |   30.87 |
-| mixed         | cold-create      |       1024 |              32 |            adaptive | shin           |   5 |      57.82 |  56.47 |  57.89 |    1.42 |   56.28 |   57.97 |
-| mixed         | unchanged-update |       1024 |              32 |            adaptive | shin           |   5 |      19.07 |  18.49 |  19.19 |     0.7 |   18.44 |   19.37 |
-| mixed         | changed-update   |       1024 |              32 |            adaptive | shin           |   5 |      19.23 |   18.7 |  19.52 |    0.82 |   18.66 |   19.53 |
-| mixed         | pruned-update    |       1024 |              32 |            adaptive | shin           |   5 |      19.33 |  18.83 |  19.34 |    0.51 |    18.7 |   19.89 |
-| mixed         | cold-create      |       2048 |                 |            adaptive | aws            |   5 |      61.69 |  57.89 |  61.69 |     3.8 |   57.23 |   62.67 |
-| mixed         | unchanged-update |       2048 |                 |            adaptive | aws            |   5 |      24.44 |   24.2 |  24.53 |    0.33 |    23.9 |   24.94 |
-| mixed         | changed-update   |       2048 |                 |            adaptive | aws            |   5 |       24.5 |  24.03 |  24.64 |    0.61 |   23.97 |   24.91 |
-| mixed         | pruned-update    |       2048 |                 |            adaptive | aws            |   5 |      24.54 |  24.32 |  24.67 |    0.35 |   24.16 |   25.28 |
-| mixed         | cold-create      |       2048 |              64 |            adaptive | shin           |   5 |      56.37 |  56.26 |   57.8 |    1.54 |   52.45 |   57.83 |
-| mixed         | unchanged-update |       2048 |              64 |            adaptive | shin           |   5 |      19.07 |  18.59 |  19.09 |     0.5 |   18.45 |   19.39 |
-| mixed         | changed-update   |       2048 |              64 |            adaptive | shin           |   5 |      19.23 |  18.77 |  19.26 |    0.49 |   18.61 |   19.51 |
-| mixed         | pruned-update    |       2048 |              64 |            adaptive | shin           |   5 |      19.28 |  18.81 |  19.36 |    0.55 |   18.78 |    19.8 |
-| tiny-many     | cold-create      |       1024 |                 |            adaptive | aws            |   5 |      79.47 |  77.87 |  79.74 |    1.87 |   77.68 |   84.39 |
-| tiny-many     | unchanged-update |       1024 |                 |            adaptive | aws            |   5 |      46.75 |  46.23 |  47.18 |    0.95 |    45.4 |    50.9 |
-| tiny-many     | changed-update   |       1024 |                 |            adaptive | aws            |   5 |      46.37 |  46.37 |   47.1 |    0.73 |   45.46 |   50.91 |
-| tiny-many     | pruned-update    |       1024 |                 |            adaptive | aws            |   5 |      46.51 |  46.34 |  47.69 |    1.35 |   45.73 |      51 |
-| tiny-many     | cold-create      |       1024 |              32 |            adaptive | shin           |   5 |      56.42 |  56.36 |  57.79 |    1.43 |   52.45 |   57.81 |
-| tiny-many     | unchanged-update |       1024 |              32 |            adaptive | shin           |   5 |      18.94 |  18.61 |  19.04 |    0.43 |   18.58 |   19.33 |
-| tiny-many     | changed-update   |       1024 |              32 |            adaptive | shin           |   5 |       19.2 |   18.7 |  19.51 |    0.81 |   18.69 |      20 |
-| tiny-many     | pruned-update    |       1024 |              32 |            adaptive | shin           |   5 |      19.32 |  18.92 |  19.35 |    0.43 |   18.83 |   19.97 |
-| tiny-many     | cold-create      |       2048 |                 |            adaptive | aws            |   5 |       68.6 |   68.2 |  68.78 |    0.58 |   67.18 |   72.53 |
-| tiny-many     | unchanged-update |       2048 |                 |            adaptive | aws            |   5 |      35.35 |  34.73 |  35.87 |    1.14 |    34.7 |   36.11 |
-| tiny-many     | changed-update   |       2048 |                 |            adaptive | aws            |   5 |      35.32 |  34.92 |  35.42 |     0.5 |   34.68 |      36 |
-| tiny-many     | pruned-update    |       2048 |                 |            adaptive | aws            |   5 |      35.52 |   35.1 |  35.89 |    0.79 |   35.01 |   36.42 |
-| tiny-many     | cold-create      |       2048 |              64 |            adaptive | shin           |   5 |      56.47 |  56.34 |  57.78 |    1.44 |   52.06 |   57.99 |
-| tiny-many     | unchanged-update |       2048 |              64 |            adaptive | shin           |   5 |         19 |  18.55 |  19.02 |    0.47 |   18.38 |   19.39 |
-| tiny-many     | changed-update   |       2048 |              64 |            adaptive | shin           |   5 |      19.23 |  18.64 |  19.37 |    0.73 |   18.62 |   19.52 |
-| tiny-many     | pruned-update    |       2048 |              64 |            adaptive | shin           |   5 |      19.36 |  18.77 |  19.68 |    0.91 |   18.74 |   19.97 |
+| large-few     | cold-create      |       1024 |                 |            adaptive | aws            |   5 |      63.28 |  62.52 |  63.38 |    0.86 |   61.62 |   63.38 |
+| large-few     | unchanged-update |       1024 |                 |            adaptive | aws            |   5 |       30.4 |  29.86 |  30.46 |     0.6 |   29.38 |   30.51 |
+| large-few     | changed-update   |       1024 |                 |            adaptive | aws            |   5 |      30.43 |  29.85 |  30.43 |    0.58 |   29.29 |   30.46 |
+| large-few     | pruned-update    |       1024 |                 |            adaptive | aws            |   5 |      30.86 |  30.02 |  30.88 |    0.86 |   29.46 |   30.95 |
+| large-few     | cold-create      |       1024 |              32 |            adaptive | shin           |   5 |      57.15 |  56.26 |  57.84 |    1.58 |   52.45 |   57.92 |
+| large-few     | unchanged-update |       1024 |              32 |            adaptive | shin           |   5 |      19.38 |  19.03 |  19.42 |    0.39 |   18.55 |   19.42 |
+| large-few     | changed-update   |       1024 |              32 |            adaptive | shin           |   5 |      19.52 |  19.16 |  19.53 |    0.37 |    18.6 |   19.61 |
+| large-few     | pruned-update    |       1024 |              32 |            adaptive | shin           |   5 |      19.92 |  19.22 |  20.02 |     0.8 |   18.75 |   20.12 |
+| large-few     | cold-create      |       2048 |                 |            adaptive | aws            |   5 |      57.82 |  57.39 |  57.85 |    0.46 |   56.44 |   57.87 |
+| large-few     | unchanged-update |       2048 |                 |            adaptive | aws            |   5 |      24.85 |  24.55 |  24.91 |    0.36 |   24.05 |   24.94 |
+| large-few     | changed-update   |       2048 |                 |            adaptive | aws            |   5 |      24.86 |  24.53 |  24.91 |    0.38 |   23.91 |   24.94 |
+| large-few     | pruned-update    |       2048 |                 |            adaptive | aws            |   5 |      25.32 |  24.74 |  25.33 |    0.59 |   24.14 |   25.55 |
+| large-few     | cold-create      |       2048 |              64 |            adaptive | shin           |   5 |      52.48 |  52.42 |  56.08 |    3.66 |   52.33 |   57.92 |
+| large-few     | unchanged-update |       2048 |              64 |            adaptive | shin           |   5 |      19.39 |  19.02 |  19.41 |    0.39 |   18.57 |   19.43 |
+| large-few     | changed-update   |       2048 |              64 |            adaptive | shin           |   5 |      19.52 |  19.11 |  19.53 |    0.42 |   18.75 |   19.56 |
+| large-few     | pruned-update    |       2048 |              64 |            adaptive | shin           |   5 |      19.86 |  19.31 |     20 |    0.69 |   18.71 |   20.08 |
+| mixed         | cold-create      |       1024 |                 |            adaptive | aws            |   5 |      63.38 |  63.36 |  63.38 |    0.02 |   62.68 |   67.11 |
+| mixed         | unchanged-update |       1024 |                 |            adaptive | aws            |   5 |      30.34 |  29.81 |  30.38 |    0.57 |    29.3 |   30.39 |
+| mixed         | changed-update   |       1024 |                 |            adaptive | aws            |   5 |      30.36 |  29.91 |   30.4 |    0.49 |   29.21 |   30.44 |
+| mixed         | pruned-update    |       1024 |                 |            adaptive | aws            |   5 |       30.8 |  30.11 |  30.84 |    0.73 |   29.71 |      31 |
+| mixed         | cold-create      |       1024 |              32 |            adaptive | shin           |   5 |      52.42 |  52.35 |  56.23 |    3.88 |   52.34 |   57.82 |
+| mixed         | unchanged-update |       1024 |              32 |            adaptive | shin           |   5 |      19.38 |  19.04 |  19.41 |    0.37 |   18.66 |   19.43 |
+| mixed         | changed-update   |       1024 |              32 |            adaptive | shin           |   5 |       19.5 |  19.18 |  19.53 |    0.35 |   18.57 |   21.63 |
+| mixed         | pruned-update    |       1024 |              32 |            adaptive | shin           |   5 |      19.84 |  19.28 |  19.94 |    0.66 |   18.71 |   19.97 |
+| mixed         | cold-create      |       2048 |                 |            adaptive | aws            |   5 |      57.82 |  57.27 |  57.86 |    0.59 |   56.48 |   57.88 |
+| mixed         | unchanged-update |       2048 |                 |            adaptive | aws            |   5 |      24.86 |  24.48 |  24.86 |    0.38 |   23.83 |   24.91 |
+| mixed         | changed-update   |       2048 |                 |            adaptive | aws            |   5 |      24.85 |  24.81 |  24.87 |    0.06 |   23.98 |   24.87 |
+| mixed         | pruned-update    |       2048 |                 |            adaptive | aws            |   5 |       25.1 |  24.58 |   25.3 |    0.72 |   24.12 |    25.3 |
+| mixed         | cold-create      |       2048 |              64 |            adaptive | shin           |   5 |       52.4 |  52.35 |  52.44 |    0.09 |   50.94 |   57.73 |
+| mixed         | unchanged-update |       2048 |              64 |            adaptive | shin           |   5 |      19.33 |  19.13 |   19.4 |    0.27 |   18.48 |   19.43 |
+| mixed         | changed-update   |       2048 |              64 |            adaptive | shin           |   5 |      19.49 |  19.12 |  19.56 |    0.44 |   18.51 |   19.56 |
+| mixed         | pruned-update    |       2048 |              64 |            adaptive | shin           |   5 |      19.83 |  19.24 |  19.94 |     0.7 |   18.67 |   19.99 |
+| tiny-many     | cold-create      |       1024 |                 |            adaptive | aws            |   5 |      83.11 |  79.77 |  84.25 |    4.48 |   79.75 |   85.21 |
+| tiny-many     | unchanged-update |       1024 |                 |            adaptive | aws            |   5 |      47.09 |  46.16 |  47.11 |    0.95 |    45.4 |   47.16 |
+| tiny-many     | changed-update   |       1024 |                 |            adaptive | aws            |   5 |      47.29 |   47.1 |  47.32 |    0.22 |   46.37 |   50.82 |
+| tiny-many     | pruned-update    |       1024 |                 |            adaptive | aws            |   5 |      47.62 |  47.59 |  47.91 |    0.32 |   46.26 |    50.8 |
+| tiny-many     | cold-create      |       1024 |              32 |            adaptive | shin           |   5 |      57.84 |   57.6 |   57.9 |     0.3 |    56.3 |   57.96 |
+| tiny-many     | unchanged-update |       1024 |              32 |            adaptive | shin           |   5 |      19.33 |     19 |  19.34 |    0.34 |   18.49 |   19.37 |
+| tiny-many     | changed-update   |       1024 |              32 |            adaptive | shin           |   5 |      19.52 |  19.16 |  19.53 |    0.37 |   18.59 |   19.56 |
+| tiny-many     | pruned-update    |       1024 |              32 |            adaptive | shin           |   5 |         20 |  19.28 |  20.04 |    0.76 |   18.73 |   20.06 |
+| tiny-many     | cold-create      |       2048 |                 |            adaptive | aws            |   5 |       68.8 |  68.14 |  68.83 |    0.69 |   67.06 |   68.86 |
+| tiny-many     | unchanged-update |       2048 |                 |            adaptive | aws            |   5 |      35.96 |  35.49 |  36.02 |    0.53 |   34.62 |   36.05 |
+| tiny-many     | changed-update   |       2048 |                 |            adaptive | aws            |   5 |      36.02 |  35.39 |  36.05 |    0.66 |   34.94 |   36.06 |
+| tiny-many     | pruned-update    |       2048 |                 |            adaptive | aws            |   5 |      36.41 |  35.74 |  36.48 |    0.74 |   34.89 |   36.58 |
+| tiny-many     | cold-create      |       2048 |              64 |            adaptive | shin           |   5 |      57.14 |   56.2 |  57.85 |    1.65 |   52.44 |   57.86 |
+| tiny-many     | unchanged-update |       2048 |              64 |            adaptive | shin           |   5 |      19.35 |  18.98 |  19.35 |    0.37 |   18.47 |    19.4 |
+| tiny-many     | changed-update   |       2048 |              64 |            adaptive | shin           |   5 |      19.52 |  19.17 |  19.55 |    0.38 |   18.73 |   19.59 |
+| tiny-many     | pruned-update    |       2048 |              64 |            adaptive | shin           |   5 |      19.84 |  19.23 |  19.85 |    0.62 |    18.8 |   19.85 |
 
 ```text
-large-few cold-create 1024//adaptive aws         | ######################## 62.63 s
-large-few unchanged-update 1024//adaptive aws    | ########### 29.95 s
-large-few changed-update 1024//adaptive aws      | ########### 30 s
-large-few pruned-update 1024//adaptive aws       | ########### 30.04 s
-large-few cold-create 1024/32/adaptive shin      | ###################### 57.28 s
-large-few unchanged-update 1024/32/adaptive shin | ####### 19.11 s
-large-few changed-update 1024/32/adaptive shin   | ####### 19.17 s
-large-few pruned-update 1024/32/adaptive shin    | ####### 19.27 s
-large-few cold-create 2048//adaptive aws         | ###################### 57.35 s
-large-few unchanged-update 2048//adaptive aws    | ######### 24.56 s
-large-few changed-update 2048//adaptive aws      | ######### 24.5 s
-large-few pruned-update 2048//adaptive aws       | ######### 24.65 s
-large-few cold-create 2048/64/adaptive shin      | ##################### 56.45 s
-large-few unchanged-update 2048/64/adaptive shin | ####### 19.02 s
-large-few changed-update 2048/64/adaptive shin   | ####### 19.24 s
-large-few pruned-update 2048/64/adaptive shin    | ####### 19.28 s
-mixed cold-create 1024//adaptive aws             | ######################## 62.72 s
-mixed unchanged-update 1024//adaptive aws        | ########### 29.9 s
-mixed changed-update 1024//adaptive aws          | ########### 30 s
-mixed pruned-update 1024//adaptive aws           | ########### 29.96 s
-mixed cold-create 1024/32/adaptive shin          | ###################### 57.82 s
-mixed unchanged-update 1024/32/adaptive shin     | ####### 19.07 s
-mixed changed-update 1024/32/adaptive shin       | ####### 19.23 s
-mixed pruned-update 1024/32/adaptive shin        | ####### 19.33 s
-mixed cold-create 2048//adaptive aws             | ####################### 61.69 s
-mixed unchanged-update 2048//adaptive aws        | ######### 24.44 s
-mixed changed-update 2048//adaptive aws          | ######### 24.5 s
-mixed pruned-update 2048//adaptive aws           | ######### 24.54 s
-mixed cold-create 2048/64/adaptive shin          | ##################### 56.37 s
-mixed unchanged-update 2048/64/adaptive shin     | ####### 19.07 s
-mixed changed-update 2048/64/adaptive shin       | ####### 19.23 s
-mixed pruned-update 2048/64/adaptive shin        | ####### 19.28 s
-tiny-many cold-create 1024//adaptive aws         | ############################## 79.47 s
-tiny-many unchanged-update 1024//adaptive aws    | ################## 46.75 s
-tiny-many changed-update 1024//adaptive aws      | ################## 46.37 s
-tiny-many pruned-update 1024//adaptive aws       | ################## 46.51 s
-tiny-many cold-create 1024/32/adaptive shin      | ##################### 56.42 s
-tiny-many unchanged-update 1024/32/adaptive shin | ####### 18.94 s
-tiny-many changed-update 1024/32/adaptive shin   | ####### 19.2 s
-tiny-many pruned-update 1024/32/adaptive shin    | ####### 19.32 s
-tiny-many cold-create 2048//adaptive aws         | ########################## 68.6 s
-tiny-many unchanged-update 2048//adaptive aws    | ############# 35.35 s
-tiny-many changed-update 2048//adaptive aws      | ############# 35.32 s
-tiny-many pruned-update 2048//adaptive aws       | ############# 35.52 s
-tiny-many cold-create 2048/64/adaptive shin      | ##################### 56.47 s
-tiny-many unchanged-update 2048/64/adaptive shin | ####### 19 s
-tiny-many changed-update 2048/64/adaptive shin   | ####### 19.23 s
-tiny-many pruned-update 2048/64/adaptive shin    | ####### 19.36 s
+large-few cold-create 1024//adaptive aws         | ####################### 63.28 s
+large-few unchanged-update 1024//adaptive aws    | ########### 30.4 s
+large-few changed-update 1024//adaptive aws      | ########### 30.43 s
+large-few pruned-update 1024//adaptive aws       | ########### 30.86 s
+large-few cold-create 1024/32/adaptive shin      | ##################### 57.15 s
+large-few unchanged-update 1024/32/adaptive shin | ####### 19.38 s
+large-few changed-update 1024/32/adaptive shin   | ####### 19.52 s
+large-few pruned-update 1024/32/adaptive shin    | ####### 19.92 s
+large-few cold-create 2048//adaptive aws         | ##################### 57.82 s
+large-few unchanged-update 2048//adaptive aws    | ######### 24.85 s
+large-few changed-update 2048//adaptive aws      | ######### 24.86 s
+large-few pruned-update 2048//adaptive aws       | ######### 25.32 s
+large-few cold-create 2048/64/adaptive shin      | ################### 52.48 s
+large-few unchanged-update 2048/64/adaptive shin | ####### 19.39 s
+large-few changed-update 2048/64/adaptive shin   | ####### 19.52 s
+large-few pruned-update 2048/64/adaptive shin    | ####### 19.86 s
+mixed cold-create 1024//adaptive aws             | ####################### 63.38 s
+mixed unchanged-update 1024//adaptive aws        | ########### 30.34 s
+mixed changed-update 1024//adaptive aws          | ########### 30.36 s
+mixed pruned-update 1024//adaptive aws           | ########### 30.8 s
+mixed cold-create 1024/32/adaptive shin          | ################### 52.42 s
+mixed unchanged-update 1024/32/adaptive shin     | ####### 19.38 s
+mixed changed-update 1024/32/adaptive shin       | ####### 19.5 s
+mixed pruned-update 1024/32/adaptive shin        | ####### 19.84 s
+mixed cold-create 2048//adaptive aws             | ##################### 57.82 s
+mixed unchanged-update 2048//adaptive aws        | ######### 24.86 s
+mixed changed-update 2048//adaptive aws          | ######### 24.85 s
+mixed pruned-update 2048//adaptive aws           | ######### 25.1 s
+mixed cold-create 2048/64/adaptive shin          | ################### 52.4 s
+mixed unchanged-update 2048/64/adaptive shin     | ####### 19.33 s
+mixed changed-update 2048/64/adaptive shin       | ####### 19.49 s
+mixed pruned-update 2048/64/adaptive shin        | ####### 19.83 s
+tiny-many cold-create 1024//adaptive aws         | ############################## 83.11 s
+tiny-many unchanged-update 1024//adaptive aws    | ################# 47.09 s
+tiny-many changed-update 1024//adaptive aws      | ################# 47.29 s
+tiny-many pruned-update 1024//adaptive aws       | ################# 47.62 s
+tiny-many cold-create 1024/32/adaptive shin      | ##################### 57.84 s
+tiny-many unchanged-update 1024/32/adaptive shin | ####### 19.33 s
+tiny-many changed-update 1024/32/adaptive shin   | ####### 19.52 s
+tiny-many pruned-update 1024/32/adaptive shin    | ####### 20 s
+tiny-many cold-create 2048//adaptive aws         | ######################### 68.8 s
+tiny-many unchanged-update 2048//adaptive aws    | ############# 35.96 s
+tiny-many changed-update 2048//adaptive aws      | ############# 36.02 s
+tiny-many pruned-update 2048//adaptive aws       | ############# 36.41 s
+tiny-many cold-create 2048/64/adaptive shin      | ##################### 57.14 s
+tiny-many unchanged-update 2048/64/adaptive shin | ####### 19.35 s
+tiny-many changed-update 2048/64/adaptive shin   | ####### 19.52 s
+tiny-many pruned-update 2048/64/adaptive shin    | ####### 19.84 s
 ```
 
 ### Max memory
 
 | Asset profile | Phase            | Memory MiB | Max concurrency | Source window bytes | Implementation |   n | median (MiB) | Q1 (MiB) | Q3 (MiB) | IQR (MiB) | min (MiB) | max (MiB) |
 | ------------- | ---------------- | ---------: | --------------: | ------------------: | -------------- | --: | -----------: | -------: | -------: | --------: | --------: | --------: |
-| large-few     | cold-create      |       1024 |                 |            adaptive | aws            |   5 |          447 |      447 |      447 |         0 |       446 |       448 |
-| large-few     | unchanged-update |       1024 |                 |            adaptive | aws            |   5 |          447 |      447 |      447 |         0 |       447 |       447 |
+| large-few     | cold-create      |       1024 |                 |            adaptive | aws            |   5 |          447 |      446 |      447 |         1 |       446 |       447 |
+| large-few     | unchanged-update |       1024 |                 |            adaptive | aws            |   5 |          447 |      447 |      447 |         0 |       447 |       448 |
 | large-few     | changed-update   |       1024 |                 |            adaptive | aws            |   5 |          447 |      447 |      447 |         0 |       447 |       447 |
-| large-few     | pruned-update    |       1024 |                 |            adaptive | aws            |   5 |          417 |      416 |      417 |         1 |       414 |       417 |
-| large-few     | cold-create      |       1024 |              32 |            adaptive | shin           |   5 |          116 |      116 |      127 |        11 |       113 |       128 |
-| large-few     | unchanged-update |       1024 |              32 |            adaptive | shin           |   5 |           33 |       33 |       33 |         0 |        33 |        34 |
-| large-few     | changed-update   |       1024 |              32 |            adaptive | shin           |   5 |           41 |       40 |       42 |         2 |        40 |        44 |
-| large-few     | pruned-update    |       1024 |              32 |            adaptive | shin           |   5 |           41 |       39 |       42 |         3 |        38 |        42 |
-| large-few     | cold-create      |       2048 |                 |            adaptive | aws            |   5 |          447 |      447 |      447 |         0 |       447 |       447 |
-| large-few     | unchanged-update |       2048 |                 |            adaptive | aws            |   5 |          447 |      446 |      447 |         1 |       446 |       447 |
-| large-few     | changed-update   |       2048 |                 |            adaptive | aws            |   5 |          447 |      447 |      447 |         0 |       446 |       447 |
+| large-few     | pruned-update    |       1024 |                 |            adaptive | aws            |   5 |          417 |      415 |      417 |         2 |       415 |       418 |
+| large-few     | cold-create      |       1024 |              32 |            adaptive | shin           |   5 |          132 |      121 |      134 |        13 |       117 |       142 |
+| large-few     | unchanged-update |       1024 |              32 |            adaptive | shin           |   5 |           33 |       33 |       33 |         0 |        33 |        35 |
+| large-few     | changed-update   |       1024 |              32 |            adaptive | shin           |   5 |           40 |       40 |       41 |         1 |        39 |        42 |
+| large-few     | pruned-update    |       1024 |              32 |            adaptive | shin           |   5 |           41 |       40 |       41 |         1 |        39 |        41 |
+| large-few     | cold-create      |       2048 |                 |            adaptive | aws            |   5 |          447 |      447 |      447 |         0 |       446 |       447 |
+| large-few     | unchanged-update |       2048 |                 |            adaptive | aws            |   5 |          447 |      447 |      447 |         0 |       446 |       448 |
+| large-few     | changed-update   |       2048 |                 |            adaptive | aws            |   5 |          447 |      446 |      447 |         1 |       446 |       447 |
 | large-few     | pruned-update    |       2048 |                 |            adaptive | aws            |   5 |          417 |      417 |      417 |         0 |       416 |       417 |
-| large-few     | cold-create      |       2048 |              64 |            adaptive | shin           |   5 |          186 |      179 |      189 |        10 |       178 |       201 |
+| large-few     | cold-create      |       2048 |              64 |            adaptive | shin           |   5 |          191 |      182 |      201 |        19 |       178 |       207 |
 | large-few     | unchanged-update |       2048 |              64 |            adaptive | shin           |   5 |           33 |       33 |       33 |         0 |        33 |        33 |
-| large-few     | changed-update   |       2048 |              64 |            adaptive | shin           |   5 |           40 |       40 |       40 |         0 |        39 |        43 |
-| large-few     | pruned-update    |       2048 |              64 |            adaptive | shin           |   5 |           40 |       40 |       40 |         0 |        39 |        40 |
-| mixed         | cold-create      |       1024 |                 |            adaptive | aws            |   5 |          281 |      281 |      281 |         0 |       281 |       281 |
-| mixed         | unchanged-update |       1024 |                 |            adaptive | aws            |   5 |          280 |      280 |      281 |         1 |       280 |       281 |
-| mixed         | changed-update   |       1024 |                 |            adaptive | aws            |   5 |          281 |      280 |      281 |         1 |       280 |       281 |
-| mixed         | pruned-update    |       1024 |                 |            adaptive | aws            |   5 |          273 |      273 |      274 |         1 |       273 |       274 |
-| mixed         | cold-create      |       1024 |              32 |            adaptive | shin           |   5 |          105 |      105 |      106 |         1 |       100 |       108 |
-| mixed         | unchanged-update |       1024 |              32 |            adaptive | shin           |   5 |           33 |       33 |       33 |         0 |        33 |        33 |
+| large-few     | changed-update   |       2048 |              64 |            adaptive | shin           |   5 |           41 |       40 |       41 |         1 |        40 |        43 |
+| large-few     | pruned-update    |       2048 |              64 |            adaptive | shin           |   5 |           40 |       40 |       41 |         1 |        39 |        41 |
+| mixed         | cold-create      |       1024 |                 |            adaptive | aws            |   5 |          281 |      280 |      281 |         1 |       280 |       281 |
+| mixed         | unchanged-update |       1024 |                 |            adaptive | aws            |   5 |          281 |      281 |      281 |         0 |       279 |       282 |
+| mixed         | changed-update   |       1024 |                 |            adaptive | aws            |   5 |          280 |      280 |      281 |         1 |       280 |       281 |
+| mixed         | pruned-update    |       1024 |                 |            adaptive | aws            |   5 |          273 |      273 |      274 |         1 |       272 |       274 |
+| mixed         | cold-create      |       1024 |              32 |            adaptive | shin           |   5 |          102 |      101 |      103 |         2 |       101 |       104 |
+| mixed         | unchanged-update |       1024 |              32 |            adaptive | shin           |   5 |           33 |       33 |       35 |         2 |        33 |        35 |
 | mixed         | changed-update   |       1024 |              32 |            adaptive | shin           |   5 |           37 |       37 |       37 |         0 |        37 |        37 |
-| mixed         | pruned-update    |       1024 |              32 |            adaptive | shin           |   5 |           38 |       37 |       39 |         2 |        37 |        41 |
-| mixed         | cold-create      |       2048 |                 |            adaptive | aws            |   5 |          283 |      283 |      283 |         0 |       283 |       283 |
-| mixed         | unchanged-update |       2048 |                 |            adaptive | aws            |   5 |          282 |      282 |      282 |         0 |       282 |       283 |
+| mixed         | pruned-update    |       1024 |              32 |            adaptive | shin           |   5 |           37 |       37 |       37 |         0 |        37 |        39 |
+| mixed         | cold-create      |       2048 |                 |            adaptive | aws            |   5 |          283 |      282 |      283 |         1 |       281 |       283 |
+| mixed         | unchanged-update |       2048 |                 |            adaptive | aws            |   5 |          282 |      282 |      282 |         0 |       281 |       283 |
 | mixed         | changed-update   |       2048 |                 |            adaptive | aws            |   5 |          283 |      282 |      283 |         1 |       282 |       283 |
-| mixed         | pruned-update    |       2048 |                 |            adaptive | aws            |   5 |          275 |      275 |      276 |         1 |       274 |       276 |
-| mixed         | cold-create      |       2048 |              64 |            adaptive | shin           |   5 |          119 |      117 |      124 |         7 |       109 |       130 |
-| mixed         | unchanged-update |       2048 |              64 |            adaptive | shin           |   5 |           33 |       33 |       35 |         2 |        33 |        35 |
-| mixed         | changed-update   |       2048 |              64 |            adaptive | shin           |   5 |           37 |       37 |       37 |         0 |        37 |        39 |
-| mixed         | pruned-update    |       2048 |              64 |            adaptive | shin           |   5 |           37 |       37 |       37 |         0 |        37 |        39 |
-| tiny-many     | cold-create      |       1024 |                 |            adaptive | aws            |   5 |          220 |      220 |      220 |         0 |       219 |       220 |
-| tiny-many     | unchanged-update |       1024 |                 |            adaptive | aws            |   5 |          213 |      212 |      217 |         5 |       212 |       221 |
-| tiny-many     | changed-update   |       1024 |                 |            adaptive | aws            |   5 |          212 |      211 |      215 |         4 |       211 |       215 |
-| tiny-many     | pruned-update    |       1024 |                 |            adaptive | aws            |   5 |          209 |      208 |      211 |         3 |       207 |       212 |
-| tiny-many     | cold-create      |       1024 |              32 |            adaptive | shin           |   5 |           57 |       57 |       57 |         0 |        57 |        58 |
-| tiny-many     | unchanged-update |       1024 |              32 |            adaptive | shin           |   5 |           35 |       35 |       35 |         0 |        35 |        36 |
+| mixed         | pruned-update    |       2048 |                 |            adaptive | aws            |   5 |          275 |      274 |      275 |         1 |       273 |       275 |
+| mixed         | cold-create      |       2048 |              64 |            adaptive | shin           |   5 |          113 |      112 |      118 |         6 |       112 |       120 |
+| mixed         | unchanged-update |       2048 |              64 |            adaptive | shin           |   5 |           35 |       33 |       35 |         2 |        33 |        35 |
+| mixed         | changed-update   |       2048 |              64 |            adaptive | shin           |   5 |           37 |       37 |       38 |         1 |        37 |        39 |
+| mixed         | pruned-update    |       2048 |              64 |            adaptive | shin           |   5 |           39 |       37 |       39 |         2 |        37 |        39 |
+| tiny-many     | cold-create      |       1024 |                 |            adaptive | aws            |   5 |          219 |      219 |      220 |         1 |       219 |       220 |
+| tiny-many     | unchanged-update |       1024 |                 |            adaptive | aws            |   5 |          212 |      211 |      214 |         3 |       210 |       217 |
+| tiny-many     | changed-update   |       1024 |                 |            adaptive | aws            |   5 |          213 |      211 |      214 |         3 |       211 |       214 |
+| tiny-many     | pruned-update    |       1024 |                 |            adaptive | aws            |   5 |          215 |      209 |      217 |         8 |       209 |       218 |
+| tiny-many     | cold-create      |       1024 |              32 |            adaptive | shin           |   5 |           58 |       57 |       58 |         1 |        50 |        58 |
+| tiny-many     | unchanged-update |       1024 |              32 |            adaptive | shin           |   5 |           36 |       35 |       36 |         1 |        35 |        37 |
 | tiny-many     | changed-update   |       1024 |              32 |            adaptive | shin           |   5 |           36 |       36 |       36 |         0 |        36 |        36 |
-| tiny-many     | pruned-update    |       1024 |              32 |            adaptive | shin           |   5 |           36 |       36 |       36 |         0 |        36 |        38 |
-| tiny-many     | cold-create      |       2048 |                 |            adaptive | aws            |   5 |          223 |      223 |      223 |         0 |       221 |       223 |
-| tiny-many     | unchanged-update |       2048 |                 |            adaptive | aws            |   5 |          222 |      222 |      222 |         0 |       221 |       222 |
-| tiny-many     | changed-update   |       2048 |                 |            adaptive | aws            |   5 |          222 |      222 |      222 |         0 |       222 |       223 |
-| tiny-many     | pruned-update    |       2048 |                 |            adaptive | aws            |   5 |          219 |      219 |      219 |         0 |       218 |       220 |
-| tiny-many     | cold-create      |       2048 |              64 |            adaptive | shin           |   5 |           68 |       65 |       73 |         8 |        58 |        74 |
-| tiny-many     | unchanged-update |       2048 |              64 |            adaptive | shin           |   5 |           36 |       36 |       36 |         0 |        35 |        36 |
+| tiny-many     | pruned-update    |       1024 |              32 |            adaptive | shin           |   5 |           36 |       36 |       36 |         0 |        36 |        36 |
+| tiny-many     | cold-create      |       2048 |                 |            adaptive | aws            |   5 |          223 |      223 |      224 |         1 |       223 |       224 |
+| tiny-many     | unchanged-update |       2048 |                 |            adaptive | aws            |   5 |          221 |      221 |      222 |         1 |       221 |       222 |
+| tiny-many     | changed-update   |       2048 |                 |            adaptive | aws            |   5 |          222 |      222 |      222 |         0 |       222 |       222 |
+| tiny-many     | pruned-update    |       2048 |                 |            adaptive | aws            |   5 |          219 |      219 |      219 |         0 |       218 |       219 |
+| tiny-many     | cold-create      |       2048 |              64 |            adaptive | shin           |   5 |           69 |       68 |       70 |         2 |        66 |        72 |
+| tiny-many     | unchanged-update |       2048 |              64 |            adaptive | shin           |   5 |           35 |       35 |       35 |         0 |        35 |        36 |
 | tiny-many     | changed-update   |       2048 |              64 |            adaptive | shin           |   5 |           36 |       36 |       36 |         0 |        36 |        36 |
 | tiny-many     | pruned-update    |       2048 |              64 |            adaptive | shin           |   5 |           36 |       36 |       36 |         0 |        36 |        36 |
 
@@ -885,48 +885,48 @@ large-few cold-create 1024//adaptive aws         | #############################
 large-few unchanged-update 1024//adaptive aws    | ############################## 447 MiB
 large-few changed-update 1024//adaptive aws      | ############################## 447 MiB
 large-few pruned-update 1024//adaptive aws       | ############################ 417 MiB
-large-few cold-create 1024/32/adaptive shin      | ######## 116 MiB
+large-few cold-create 1024/32/adaptive shin      | ######### 132 MiB
 large-few unchanged-update 1024/32/adaptive shin | ## 33 MiB
-large-few changed-update 1024/32/adaptive shin   | ### 41 MiB
+large-few changed-update 1024/32/adaptive shin   | ### 40 MiB
 large-few pruned-update 1024/32/adaptive shin    | ### 41 MiB
 large-few cold-create 2048//adaptive aws         | ############################## 447 MiB
 large-few unchanged-update 2048//adaptive aws    | ############################## 447 MiB
 large-few changed-update 2048//adaptive aws      | ############################## 447 MiB
 large-few pruned-update 2048//adaptive aws       | ############################ 417 MiB
-large-few cold-create 2048/64/adaptive shin      | ############ 186 MiB
+large-few cold-create 2048/64/adaptive shin      | ############# 191 MiB
 large-few unchanged-update 2048/64/adaptive shin | ## 33 MiB
-large-few changed-update 2048/64/adaptive shin   | ### 40 MiB
+large-few changed-update 2048/64/adaptive shin   | ### 41 MiB
 large-few pruned-update 2048/64/adaptive shin    | ### 40 MiB
 mixed cold-create 1024//adaptive aws             | ################### 281 MiB
-mixed unchanged-update 1024//adaptive aws        | ################### 280 MiB
-mixed changed-update 1024//adaptive aws          | ################### 281 MiB
+mixed unchanged-update 1024//adaptive aws        | ################### 281 MiB
+mixed changed-update 1024//adaptive aws          | ################### 280 MiB
 mixed pruned-update 1024//adaptive aws           | ################## 273 MiB
-mixed cold-create 1024/32/adaptive shin          | ####### 105 MiB
+mixed cold-create 1024/32/adaptive shin          | ####### 102 MiB
 mixed unchanged-update 1024/32/adaptive shin     | ## 33 MiB
 mixed changed-update 1024/32/adaptive shin       | ## 37 MiB
-mixed pruned-update 1024/32/adaptive shin        | ### 38 MiB
+mixed pruned-update 1024/32/adaptive shin        | ## 37 MiB
 mixed cold-create 2048//adaptive aws             | ################### 283 MiB
 mixed unchanged-update 2048//adaptive aws        | ################### 282 MiB
 mixed changed-update 2048//adaptive aws          | ################### 283 MiB
 mixed pruned-update 2048//adaptive aws           | ################## 275 MiB
-mixed cold-create 2048/64/adaptive shin          | ######## 119 MiB
-mixed unchanged-update 2048/64/adaptive shin     | ## 33 MiB
+mixed cold-create 2048/64/adaptive shin          | ######## 113 MiB
+mixed unchanged-update 2048/64/adaptive shin     | ## 35 MiB
 mixed changed-update 2048/64/adaptive shin       | ## 37 MiB
-mixed pruned-update 2048/64/adaptive shin        | ## 37 MiB
-tiny-many cold-create 1024//adaptive aws         | ############### 220 MiB
-tiny-many unchanged-update 1024//adaptive aws    | ############## 213 MiB
-tiny-many changed-update 1024//adaptive aws      | ############## 212 MiB
-tiny-many pruned-update 1024//adaptive aws       | ############## 209 MiB
-tiny-many cold-create 1024/32/adaptive shin      | #### 57 MiB
-tiny-many unchanged-update 1024/32/adaptive shin | ## 35 MiB
+mixed pruned-update 2048/64/adaptive shin        | ### 39 MiB
+tiny-many cold-create 1024//adaptive aws         | ############### 219 MiB
+tiny-many unchanged-update 1024//adaptive aws    | ############## 212 MiB
+tiny-many changed-update 1024//adaptive aws      | ############## 213 MiB
+tiny-many pruned-update 1024//adaptive aws       | ############## 215 MiB
+tiny-many cold-create 1024/32/adaptive shin      | #### 58 MiB
+tiny-many unchanged-update 1024/32/adaptive shin | ## 36 MiB
 tiny-many changed-update 1024/32/adaptive shin   | ## 36 MiB
 tiny-many pruned-update 1024/32/adaptive shin    | ## 36 MiB
 tiny-many cold-create 2048//adaptive aws         | ############### 223 MiB
-tiny-many unchanged-update 2048//adaptive aws    | ############### 222 MiB
+tiny-many unchanged-update 2048//adaptive aws    | ############### 221 MiB
 tiny-many changed-update 2048//adaptive aws      | ############### 222 MiB
 tiny-many pruned-update 2048//adaptive aws       | ############### 219 MiB
-tiny-many cold-create 2048/64/adaptive shin      | ##### 68 MiB
-tiny-many unchanged-update 2048/64/adaptive shin | ## 36 MiB
+tiny-many cold-create 2048/64/adaptive shin      | ##### 69 MiB
+tiny-many unchanged-update 2048/64/adaptive shin | ## 35 MiB
 tiny-many changed-update 2048/64/adaptive shin   | ## 36 MiB
 tiny-many pruned-update 2048/64/adaptive shin    | ## 36 MiB
 ```
