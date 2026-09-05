@@ -21,6 +21,10 @@ pub(super) mod directory;
 pub(super) mod entry;
 mod range_reader;
 
+#[cfg(feature = "bench-internals")]
+#[allow(dead_code)] // used only by the dev library's transfer benchmark
+pub(crate) mod bench;
+
 use diagnostics::{SourceDiagnostics, SourceDiagnosticsSnapshot};
 
 const GET_OBJECT_MAX_ATTEMPTS: usize = 3;

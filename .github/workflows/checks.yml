@@ -89,6 +89,9 @@ jobs:
       - name: Test
         run: cargo test --manifest-path rust/Cargo.toml --all-features
 
+      - name: Validate transfer benchmark fixtures
+        run: cargo test --manifest-path rust/Cargo.toml --bench transfer_preparation --features bench-internals -- --check-fixtures
+
   provider-smoke:
     name: Provider smoke (S3 mock)
     runs-on: ubuntu-24.04

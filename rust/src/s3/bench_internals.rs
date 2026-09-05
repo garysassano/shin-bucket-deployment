@@ -33,6 +33,11 @@ use crate::request::compile_filters;
 use crate::s3::archive::budget::SourceByteBudget;
 use crate::state::AppState;
 
+#[allow(unused_imports)] // the binary includes this module but only dev consumers link it
+pub use super::transfer::bench::{
+    TransferBench, TransferFixture, TransferOperation, TransferOutcome,
+};
+
 const MIXED_PROFILE_ENTRY_COUNT: usize = 442;
 const MIXED_PROFILE_TOTAL_BYTES: u64 = 52_904_649;
 pub const LARGE_KEY_PROFILE_ENTRY_COUNT: usize = 100_000;
