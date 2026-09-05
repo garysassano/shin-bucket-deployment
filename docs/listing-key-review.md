@@ -48,6 +48,10 @@ Validation on the final runtime-dependency baseline `b499009` passed 329 Rust te
 
 The exact TypeScript contract comparison against `b499009` passed with six unchanged public declarations, unchanged runtime exports and package entrypoints, 33 verification templates, and two unchanged benchmark templates. The acknowledgement contains only the 12 observed fixture changes: template, assets, tree, and assembly manifest for `filters`, `stale-object-cleanup-initial`, and `stale-object-cleanup-updated`.
 
+## Fixture packaging guard
+
+The CDK CLI directory ZIP writer omits CR and LF filenames through its glob enumeration. A local replay of the installed writer produced empty archives for both control-character keys and the excluded CR key, explaining the first deployed filters key-set failure before those names reached the provider. The three affected scenarios now use committed deterministic ZIP fixtures passed as regular-file assets, bypassing directory enumeration. Local tests inspect exact entry names, bodies, CRCs and file packaging; regenerate the base64 fixtures with `python3 scenarios/fixtures/listing-keys/generate.py`. The corrected fixtures retain the original expected key sets and still require deployed verification.
+
 ## AWS validation boundary
 
 Deployed correctness remains pending the intentional final release-candidate full verification suite, which includes the `filters` and `stale-object-cleanup` groups. The existing groups now use eight synthetic key shapes: distinct CR and LF names, literal-percent and slash names, plus and space names, Unicode, and XML metacharacters. No new scenario group or cloud resource type is required.
