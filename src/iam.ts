@@ -116,8 +116,8 @@ export function grantDestinationPermissions(
 }
 
 /**
- * Attaches a policy statement to the provider handler's role and orders the
- * handler after whichever policy CDK creates for it.
+ * Attaches a policy statement to the provider handler's role and collects a
+ * dependable so the caller can order the custom resource after that policy.
  *
  * `Function.addToRolePolicy` is not sufficient on its own. Under the
  * `@aws-cdk/aws-lambda:createNewPoliciesWithAddToRolePolicy` feature flag CDK
