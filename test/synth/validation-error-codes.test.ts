@@ -80,6 +80,8 @@ const EXPECTED_ERROR_CODES = [
   "ShinBucketDeploymentPackageManifest",
   "ShinBucketDeploymentPrebuiltProviderArchiveMissing",
   "ShinBucketDeploymentPreviousBucketRequiresDeletePreviousObjects",
+  "ShinBucketDeploymentProviderPublicSubnet",
+  "ShinBucketDeploymentProviderVpcRequired",
   "ShinBucketDeploymentRequiredObject",
   "ShinBucketDeploymentSourceBlockExceedsMemoryBudget",
   "ShinBucketDeploymentSourceConcurrencyExceedsMemoryBudget",

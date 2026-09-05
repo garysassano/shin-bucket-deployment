@@ -283,6 +283,7 @@ test("serializes the prebuilt handler configuration canonically", () => {
       packageVersion: "0.9.0",
       bootstrapArchiveSha256: "archive-digest",
     },
+    undefined,
   );
 
   expect(serialized).toBe(
@@ -307,7 +308,14 @@ test("keeps every provider Lambda identity member in canonical handler selection
     config: Parameters<typeof renderHandlerConfigHashInput>[1] = {},
     architecture = Architecture.ARM_64,
     handlerSource: Record<string, string> = sourceIdentity,
-  ) => renderHandlerConfigHashInput(stack, config, architecture, handlerSource);
+  ) =>
+    renderHandlerConfigHashInput(
+      stack,
+      config,
+      architecture,
+      handlerSource,
+      config.vpc?.selectSubnets(config.vpcSubnets).subnetIds,
+    );
   const baseline = render();
   const variants = [
     render({ memorySize: 3072 }),
@@ -315,7 +323,7 @@ test("keeps every provider Lambda identity member in canonical handler selection
     render({ role }),
     render({ logGroup }),
     render({ vpc }),
-    render({ vpcSubnets: { subnetType: SubnetType.PUBLIC } }),
+    render({ vpc, vpcSubnets: { subnetType: SubnetType.PUBLIC } }),
     render({ securityGroups: [securityGroup] }),
     render({}, Architecture.X86_64),
     render({}, Architecture.ARM_64, { ...sourceIdentity, packageVersion: "0.9.1" }),
@@ -343,12 +351,14 @@ test("canonicalizes provider security group identity independently of caller ord
     { securityGroups: [firstGroup, secondGroup] },
     Architecture.ARM_64,
     handlerSource,
+    undefined,
   );
   const reversed = renderHandlerConfigHashInput(
     stack,
     { securityGroups: [secondGroup, firstGroup] },
     Architecture.ARM_64,
     handlerSource,
+    undefined,
   );
 
   expect(first).toBe(reversed);
