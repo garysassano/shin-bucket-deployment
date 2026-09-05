@@ -3,4 +3,10 @@ export { type CatalogedAssetOptions, Source } from "./cataloged-source";
 export * from "./defaults";
 export { DestinationWriteRetryJitter, FailureDiagnostics, ProviderSharing } from "./enums";
 export { ValidationError } from "./errors";
+export type {
+  ShinBucketDeploymentBundlingCommandHooks,
+  ShinBucketDeploymentBundlingDockerOptions,
+  ShinBucketDeploymentBundlingOptions,
+  ShinBucketDeploymentLocalBuildOptions,
+} from "./local-build";
 export * from "./shin-bucket-deployment";
