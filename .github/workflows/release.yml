@@ -26,13 +26,14 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Validate tag, version, and main ancestry
+      - name: Validate tag, version, main ancestry, and authored notes
         if: ${{ github.event_name == 'push' }}
         run: |
           [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
           test "v$(node -p "require('./package.json').version")" = "$GITHUB_REF_NAME"
           git fetch origin main
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+          node scripts/release-notes.mjs "$GITHUB_REF_NAME" >"$RUNNER_TEMP/release-notes.md"
 
   checks:
     name: Complete release gates
@@ -180,7 +181,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release create "$GITHUB_REF_NAME" --generate-notes --verify-tag
+          node scripts/release-notes.mjs "$GITHUB_REF_NAME" >"$RUNNER_TEMP/release-notes.md"
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release edit "$GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/release-notes.md"
+          else
+            gh release create "$GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/release-notes.md" --verify-tag
           fi
           gh release upload "$GITHUB_REF_NAME" "$RUNNER_TEMP"/release-package/* --clobber
