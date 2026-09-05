@@ -44,7 +44,7 @@ Only README-linked snapshot SVGs are committed under `benchmarks/snapshots`. The
 
 ## Latest Canonical CI Benchmark
 
-GitHub Actions last published a complete five-repetition canonical run dated 2026-08-26 (run `673c7141-7632-4cc4-866f-3e5a2dea1ccf`).
+GitHub Actions last published a complete five-repetition canonical run dated 2026-09-05 (run `ab9ac956-af55-40a0-9139-23bace5acb4c`).
 
 - [Comparison report](ci-report.md)
 - [Shin provider telemetry](ci-telemetry.md)
@@ -79,6 +79,6 @@ GitHub Actions last published a complete five-repetition canonical run dated 202
 
 ## Shin Provider Telemetry
 
-Structured JSONL sources: [`results.jsonl`](results.jsonl) sample rows and [`runs.jsonl`](runs.jsonl) run provenance. The active ledger currently holds six run records and 624 samples: four retained upstream AWS CDK run records with 384 samples plus the current paired run's two records and 240 samples. The three older Shin run records and 136 samples remain archived because their provider summaries predate the required `DeleteObjects` retry and throttle fields; those values cannot be reconstructed without inventing evidence. Provider summaries follow the current diagnostics contract, including the invocation-global source release anomaly counter alongside deployment/callback, scheduler, source, deletion, replay, marker, `PutObject`, and `CopyObject` diagnostics. The exact fields and interpretation are documented in [`docs/architecture.md`](../docs/architecture.md#diagnostics).
+Structured JSONL sources: [`results.jsonl`](results.jsonl) sample rows and [`runs.jsonl`](runs.jsonl) run provenance. The active ledger retains upstream AWS CDK history and completed paired runs; select a run explicitly when generating reports. The three older Shin run records and 136 samples remain archived because their provider summaries predate the required `DeleteObjects` retry and throttle fields; those values cannot be reconstructed without inventing evidence. Provider summaries follow the current diagnostics contract, including the invocation-global source release anomaly counter alongside deployment/callback, scheduler, source, deletion, replay, marker, `PutObject`, and `CopyObject` diagnostics. The exact fields and interpretation are documented in [`docs/architecture.md`](../docs/architecture.md#diagnostics).
 
 For failed deploys, the runner waits until the phase's Lambda `REPORT` event is visible and then writes three independent CloudWatch captures under the external scratch sample directory: an unfiltered phase-scoped raw event export, `shin_put_object_attempt_failure` events, and `shin_deployment_summary` events when present. The immediate failure event is emitted before provider retry/backoff or transfer cleanup and does not depend on the final summary. Abruptly terminated invocations may have no summary; that absence must not discard an immediate attempt event. Raw CloudWatch exports, resource descriptions, log metadata, preservation manifests, and any identifiers remain outside git. A preserved stack/log group also permits later recapture when log ingestion is delayed.
