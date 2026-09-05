@@ -7,7 +7,6 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
-  readdirSync,
   rmSync,
   symlinkSync,
   truncateSync,
@@ -91,6 +90,7 @@ function tempDirectory(prefix: string): string {
 
 function writeFixture(files: Record<string, string | Buffer>): string {
   const directory = tempDirectory("shin-catalog-fixture-");
+  cleanupPaths.add(catalogedSourceStagingDirectory(directory));
   for (const [path, bytes] of Object.entries(files)) {
     const absolutePath = join(directory, ...path.split("/"));
     mkdirSync(join(absolutePath, ".."), { recursive: true });
@@ -122,6 +122,9 @@ function synthesizeCatalog(
   deploymentProps: Partial<ConstructorParameters<typeof ShinBucketDeployment>[2]> = {},
   appContext?: Record<string, unknown>,
 ): SynthesizedCatalog {
+  if (options?.embeddedCatalog !== false) {
+    cleanupPaths.add(catalogedSourceStagingDirectory(sourceDirectory, options));
+  }
   const outdir = tempDirectory("shin-catalog-out-");
   const app = new App({ outdir, context: appContext });
   const stack = new Stack(app, "CatalogStack");
@@ -173,12 +176,6 @@ function catalogEntries(synthesized: SynthesizedCatalog): Array<{
   md5: string;
 }> {
   return JSON.parse(synthesized.catalog).entries;
-}
-
-function scratchDirectories(): string[] {
-  return readdirSync(tmpdir())
-    .filter((entry) => entry.startsWith(SCRATCH_PREFIX))
-    .sort();
 }
 
 function linkError(code: string): NodeJS.ErrnoException {
@@ -470,9 +467,6 @@ describe("cataloged directory assets", () => {
 
     restoreFileSystem();
     restoreFileSystem = undefined;
-    for (const entry of scratchDirectories()) {
-      cleanupPaths.add(join(tmpdir(), entry));
-    }
   });
 
   test("uses a new custom identity for a tree changed between two binds in one app", () => {
@@ -561,10 +555,6 @@ describe("cataloged directory assets", () => {
     // the next bind of the same source wipes and re-materializes it.
     expect(() => synthesizeCatalog(invalid)).toThrow(/symbolic links/);
     expect(synthesizeCatalog(source).catalogSha256).toBe(first.catalogSha256);
-
-    for (const entry of scratchDirectories()) {
-      cleanupPaths.add(join(tmpdir(), entry));
-    }
   });
 
   test("surfaces staging-directory wipe failures as bind errors", () => {
@@ -586,7 +576,10 @@ describe("cataloged directory assets", () => {
 
   test("fails before scratch creation when asset staging is disabled", () => {
     const source = writeFixture({ "index.html": "ok" });
-    const before = scratchDirectories();
+    const stagingDirectory = catalogedSourceStagingDirectory(source);
+    expect(existsSync(stagingDirectory)).toBe(false);
+    // Another worker can create a catalog staging directory during this bind.
+    tempDirectory(SCRATCH_PREFIX);
     const app = new App({ context: { "aws:cdk:disable-asset-staging": true } });
     const stack = new Stack(app, "DisabledStaging");
     const destinationBucket = new Bucket(stack, "Destination");
@@ -603,7 +596,7 @@ describe("cataloged directory assets", () => {
           },
         }),
     ).toThrow(/requires CDK asset staging/);
-    expect(scratchDirectories()).toEqual(before);
+    expect(existsSync(stagingDirectory)).toBe(false);
   });
 
   test("rejects catalog-incompatible options with clear runtime errors", () => {
