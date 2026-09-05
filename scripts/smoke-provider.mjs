@@ -513,9 +513,11 @@ async function main() {
   try {
     console.log(`Scratch directory: ${workDir}`);
     console.log(`Provider binary: ${providerBin}`);
+    runOrThrow(minioBin, ["--version"], repoRoot, "MinIO version");
 
     const mockEnv = {
       ...process.env,
+      MINIO_BROWSER: "off",
       MINIO_ROOT_USER: SMOKE_ACCESS_KEY,
       MINIO_ROOT_PASSWORD: SMOKE_SECRET_KEY,
       MINIO_REGION: "us-east-1",

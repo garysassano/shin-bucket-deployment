@@ -134,15 +134,22 @@ jobs:
           key: provider-smoke-x86_64
 
       - name: Download MinIO server
+        # Pinned legacy test dependency, confined to the disposable local smoke job.
+        # Upstream was archived on 2026-04-25; historical binaries are unmaintained:
+        # https://github.com/minio/minio#legacy-binary-releases
+        # To update, verify the archive's .sha256sum against the downloaded binary,
+        # change release and digest together, and rerun the provider lifecycle smoke.
+        # Evaluate a replacement separately against conditional PUT/COPY, ranged GET,
+        # listing, and delete semantics before switching the S3 mock.
+        env:
+          MINIO_RELEASE: RELEASE.2025-09-07T16-13-09Z
+          MINIO_SHA256: 7c5bd8512c6e966455b1d198209358b2d191c77a83ab377c4073281065fb855f
         run: |
-          curl -fsSL --retry 3 -o "$RUNNER_TEMP/minio" https://dl.min.io/server/minio/release/linux-amd64/minio
-          curl -fsSL --retry 3 -o "$RUNNER_TEMP/minio.sha256sum" https://dl.min.io/server/minio/release/linux-amd64/minio.sha256sum
-          # The published checksum names the release artifact (minio.RELEASE.<timestamp>),
-          # not the "minio" filename downloaded above, so `sha256sum -c` on it as-is fails
-          # to find the file. Re-point the recorded digest at the local name.
-          printf '%s  minio\n' "$(cut -d' ' -f1 "$RUNNER_TEMP/minio.sha256sum")" > "$RUNNER_TEMP/minio.sha256.local"
-          (cd "$RUNNER_TEMP" && sha256sum -c minio.sha256.local)
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/minio" \
+            "https://dl.min.io/server/minio/release/linux-amd64/archive/minio.${MINIO_RELEASE}"
+          echo "${MINIO_SHA256}  ${RUNNER_TEMP}/minio" | sha256sum -c -
           chmod +x "$RUNNER_TEMP/minio"
+          printf 'MinIO artifact: %s (linux-amd64), SHA-256: %s\n' "$MINIO_RELEASE" "$MINIO_SHA256"
 
       - name: Download Lambda Runtime Interface Emulator
         # Upstream publishes no checksum asset, so the release is pinned and the
