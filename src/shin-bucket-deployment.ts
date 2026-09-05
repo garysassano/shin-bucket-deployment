@@ -440,9 +440,12 @@ export interface ShinBucketDeploymentDestination {
    * Update is a destination change handled by
    * `destinationLifecycle.onChange`.
    *
-   * Shin inspects the synthesized bucket encryption configuration to select
-   * the cheapest sound conditional-write reconciliation strategy. Imported or
-   * otherwise uninspectable buckets are rejected.
+   * The synthesized default encryption must be SSE-S3 (AES256). SSE-KMS,
+   * SSE-DSSE, imported buckets, and otherwise uninspectable configurations are
+   * rejected; Shin does not select an alternative reconciliation strategy.
+   *
+   * With versioning enabled, cleanup adds delete markers rather than removing
+   * noncurrent versions. Those versions remain stored and incur storage costs.
    *
    * Each deployment consumes one bucket ownership tag. Amazon S3 permits 50
    * total bucket tags; bucket, stack, aspect, auto-delete, and other Shin
@@ -499,8 +502,11 @@ export interface ShinBucketDeploymentSourceProcessingOptions {
    * The provider rejects non-empty entries with zero compressed bytes. Empty
    * entries are valid. Copy mode (`extract: false`) is unaffected.
    *
-   * Raise it to admit highly compressible entries; lower it to reject
-   * archives that expand more than a fixed factor.
+   * This configurable heuristic can reject legitimate highly repetitive data.
+   * Set an integer in the inclusive range 1..10000; raise it to admit more
+   * compressible entries or lower it to reject larger expansion factors.
+   * Unlike `maxUncompressedEntryBytes`, it limits a ratio rather than an
+   * entry's absolute size. Neither limit caps the total expanded deployment.
    *
    * @default DEFAULT_MAX_COMPRESSION_RATIO (100)
    */
@@ -550,6 +556,15 @@ export interface ShinBucketDeploymentProviderLambdaOptions {
    * Choose `ProviderSharing.DEPLOYMENT` when deployments in the same stack
    * must not accumulate permissions on one shared role, for example when
    * they need distinct trust or ownership boundaries.
+   *
+   * A shared generated role accumulates source read grants (including source
+   * KMS decryption when supplied), destination read/write/list grants,
+   * authorized cleanup grants, and configured CloudFront invalidation grants
+   * from every deployment using that handler. Previous-bucket cleanup grants
+   * include bucket-wide delete authority.
+   *
+   * Changing a shared handler's configuration or prebuilt source identity can
+   * change its service token and replace the deployment custom resource.
    *
    * Local builds always use `ProviderSharing.DEPLOYMENT`; explicitly combining
    * `localBuild` with `ProviderSharing.STACK` is rejected before resource creation.
@@ -924,6 +939,13 @@ export interface ShinBucketDeploymentProps {
    * Sources deployed in array order. Later sources replace earlier sources
    * with the same destination key.
    *
+   * Each source object is bound once per deployment. Repeated objects and
+   * equivalent marker-free bindings retain only their last occurrence: for
+   * example, `[A, B, A]` deploys as `[B, A]`, so A wins overlapping keys.
+   * Marker-free bindings are equivalent when their resolved bucket, archive
+   * key, and trusted catalog identity match. Distinct sources with markers
+   * remain separate even when they use the same archive.
+   *
    * Any upstream CDK `ISource` is accepted. Shin's `Source.asset` adds an
    * authenticated catalog to local directories by default; other source
    * implementations use the normal streamed validation path.
@@ -975,7 +997,11 @@ export interface ShinBucketDeploymentProps {
    * Cleanup deletes objects, never bucket or distribution resources. Previous
    * buckets and changed distributions require the explicit `onChange`
    * authorization fields so the shared provider receives the necessary IAM
-   * permissions. Object changes are not transactional across a deployment.
+   * permissions.
+   *
+   * Deployment is not transactional across objects: successful earlier writes
+   * can remain when a later entry fails. Deploy and destination-change cleanup
+   * follow successful transfer. Arbitrary external writers are not coordinated.
    *
    * @default - delete stale objects during deployment, retain previous objects
    * after destination changes, and retain current objects on Delete
@@ -1301,10 +1327,16 @@ export class ShinBucketDeployment extends Construct {
   }
 
   /**
-   * Destination bucket reconstructed from the custom-resource response.
+   * Immutable imported destination-bucket reference that depends on this deployment.
+   *
+   * Pass this reference to a downstream construct when its resource must wait
+   * for deployment completion. To sequence a consumer of the original bucket,
+   * use `consumer.node.addDependency(deployment)` instead.
    *
    * Accessing this property asks the provider to return the destination ARN and
    * therefore consumes part of CloudFormation's 4096-byte response budget.
+   *
+   * @see https://docs.aws.amazon.com/cdk/api/v2/docs/aws-cdk-lib.aws_s3_deployment.BucketDeployment.html#deployedbucket
    */
   public get deployedBucket(): IBucket {
     this.requestDestinationArn = true;
@@ -1320,11 +1352,17 @@ export class ShinBucketDeployment extends Construct {
   }
 
   /**
-   * Object keys returned by the provider.
+   * Tokenized bound source archive keys returned as `SourceObjectKeys`.
    *
-   * Accessing this property asks the provider to include object keys in the
-   * custom-resource response. Leave it unread when the complete key list could
-   * exceed CloudFormation's response limit.
+   * These are the original source keys, not a manifest of extracted destination
+   * entries. With `sourceProcessing.extract: false`, each selected archive is
+   * copied using its basename under `destination.keyPrefix`. For example,
+   * source key `assets/site.zip` and prefix `releases` produce destination key
+   * `releases/site.zip`, while this property still returns `assets/site.zip`.
+   *
+   * Accessing this property includes the source key list in the custom-resource
+   * response. Leave it unread when the list could exceed CloudFormation's
+   * 4096-byte response budget.
    */
   public get objectKeys(): string[] {
     this.requestObjectKeys = true;
@@ -1339,7 +1377,8 @@ export class ShinBucketDeployment extends Construct {
    * catalog materialization or `Asset` staging. An existing occurrence of that
    * object, or an equivalent marker-free source, moves to the last position so
    * its contents take precedence over earlier sources. Adjacent repeats of the
-   * same object have no effect.
+   * same object have no effect. The same last-occurrence ordering and
+   * marker-free equivalence rules apply to the constructor's `sources` array.
    */
   public addSource(source: ISource): void {
     let config = this.boundSources.get(source);

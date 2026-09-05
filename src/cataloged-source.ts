@@ -34,14 +34,9 @@ const LINK_COPY_FALLBACK_ERRORS = new Set([
   "EXDEV",
 ]);
 
-// CDK's `AssetStaging` keeps a process-global cache keyed by the staged source
-// path and hash options. Cataloged materialization therefore uses a
-// deterministic path per source directory and a content-derived custom hash:
-// unchanged binds hit that exact cache entry, while changed binds get a new
-// entry without evicting unrelated assets. The path includes the resolved
-// source path and materialization options (`exclude` / `ignoreMode`), and is
-// scoped to this process so concurrent synthesizers cannot interleave wipes of
-// the same directory.
+// Each bind rematerializes its cataloged directory. A deterministic staging
+// path and asset hash let CDK reuse subsequent AssetStaging work. Process-scoped
+// paths prevent concurrent synthesizers from wiping one another's directories.
 const nextCatalogedAssetIds = new WeakMap<Construct, number>();
 
 interface CatalogedSourceFileSystem {
@@ -130,12 +125,17 @@ export class Source {
    * ZIP bytes compared with upstream packaging. By default Shin derives a
    * collision-resistant custom asset identity during the catalog file read,
    * avoiding a second content fingerprint pass. A caller-supplied `assetHash`
-   * remains supported with an omitted `assetHashType` or
-   * `AssetHashType.CUSTOM`; other hash modes are rejected for cataloged
-   * directories. Pass `embeddedCatalog:false` to delegate packaging and hash
-   * modes to CDK when bundling or symlink handling is needed; that fallback
-   * remains deployable but cannot use trusted catalog skips. Local ZIP files
-   * always delegate to CDK and must come from a trusted producer.
+   * is supported with an omitted `assetHashType` or `AssetHashType.CUSTOM`;
+   * other hash modes are rejected for cataloged directories. The caller must
+   * change a custom hash whenever packaged content changes. Shin does not add
+   * a content-derived identity when a custom hash is supplied, so reusing one
+   * can reuse an old staged asset.
+   *
+   * Pass `embeddedCatalog:false` to delegate packaging and hash modes to CDK
+   * when bundling or symlink handling is needed. This source remains deployable
+   * but cannot use trusted catalog skips. Local ZIP files always delegate to
+   * CDK without adding an authenticated catalog and must come from a trusted
+   * producer.
    *
    * @param path Path to a local directory or ZIP archive.
    * @param options Asset and authenticated-catalog options.
@@ -196,10 +196,8 @@ export class Source {
 
         validateCatalogedDirectoryHashOptions(scope, options);
         const stagingDirectory = catalogedSourceStagingDirectory(sourcePath, options);
-        // Wipe the previous materialization first so files removed or renamed in
-        // the source tree cannot linger in the staged directory. The directory
-        // itself is deliberately kept (it is the AssetStaging cache key); only
-        // its contents are refreshed per bind.
+        // Remove the staging directory before rewalking and hashing the source,
+        // so removed or renamed files cannot survive the new materialization.
         catalogedSourceFileSystem.rmSync(stagingDirectory, { recursive: true, force: true });
         const materialized = materializeCatalogedDirectory(
           sourcePath,
@@ -355,13 +353,7 @@ function materializeCatalogedDirectory(
   assetHashSalt?: unknown,
 ): MaterializedDirectory {
   const directory = join(tempDir, "asset");
-  // The deterministic staging parent is kept across binds but wiped at the
-  // start of each bind, so it may not exist on the first bind (or after an
-  // OS temp cleanup). Create it explicitly so the parent matches the 0o700
-  // asset subdirectory (a recursive mkdir alone would leave the parent at the
-  // umask default; the hard-linked copies themselves live in the 0o700 leaf,
-  // so this is parity with the old mkdtempSync behavior rather than a content
-  // exposure fix).
+  // Recreate both the staging parent and asset directory with private permissions.
   fs.mkdirSync(tempDir, { recursive: true, mode: 0o700 });
   fs.mkdirSync(directory, { mode: 0o700 });
   const files = collectAssetFiles(sourcePath, options);
@@ -670,10 +662,10 @@ function validateSnapshots(snapshots: FileSnapshot[]): void {
  * Deterministic staging directory for one cataloged source.
  *
  * Keyed by the resolved source path and the options that change the
- * materialized tree (`exclude`, `ignoreMode`), so repeated binds of the same
- * source land at the same path and hit CDK's process-global `AssetStaging`
- * cache instead of re-walking, re-hashing, and re-copying the tree. Scoped to
- * this process so concurrent processes cannot interleave materialization.
+ * materialized tree (`exclude`, `ignoreMode`). Each bind rewalks and hashes
+ * the source at this path; CDK's process-global `AssetStaging` cache can reuse
+ * later staging work when the path and hash match. Scoped to this process so
+ * concurrent processes cannot interleave materialization.
  *
  * @internal
  */
@@ -697,16 +689,6 @@ function nextCatalogedAssetId(scope: Construct): number {
 }
 
 function compareUtf8(left: string, right: string): number {
-  // String comparison orders UTF-16 code units. That agrees with code-point
-  // order (and therefore with UTF-8 byte order) for ASCII, BMP characters
-  // below U+E000, and astral planes, but diverges for BMP characters in
-  // U+E000–U+FFFF versus astral characters (a high surrogate 0xD800–0xDBFF
-  // sorts below e.g. U+FFFD in UTF-16 while its code point sorts above). The
-  // previous Buffer-per-comparison form produced true UTF-8 byte order at the
-  // cost of two allocations per comparison. The catalog is consumed as a
-  // SHA-verified blob, so only the exact sort of such mixed trees differs;
-  // both orderings are deterministic. The lone-surrogate case (invalid UTF-8
-  // filename) behaves the same way: Buffer.from would replace the surrogate
-  // with U+FFFD, while string comparison keeps the surrogate value.
+  // UTF-16 code-unit ordering makes catalog serialization independent of locale.
   return left < right ? -1 : left > right ? 1 : 0;
 }

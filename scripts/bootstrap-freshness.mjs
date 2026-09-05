@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 // Deploy-time freshness gate for the staged prebuilt provider archives.
 //
-// `src/provider.ts` prefers `assets/bootstrap-<arch>/bootstrap.zip` and only
-// compiles the Rust provider when no archive exists, so a staged archive older
-// than the current `rust/` source is selected silently. This gate refuses to
-// start a deployment that would ship such an archive.
+// `src/provider.ts` requires `assets/bootstrap-<arch>/bootstrap.zip` unless
+// localBuild explicitly selects compilation. This gate refuses to start a
+// deployment with a staged archive whose build recipe or bytes are stale.
 //
 // Freshness is decided by comparing the recorded build recipe with the current
 // one, reusing the exact implementations that staged the archive:
@@ -66,9 +65,10 @@ const DIGEST_SHORT_LENGTH = 12;
  * from the current ones, or its bytes do not match the digest recorded in its
  * build provenance. Throws with a fix instruction otherwise.
  *
- * Only archives that actually exist are checked: when no archive is staged the
- * construct compiles from source and there is nothing to gate. Directories that
- * are not `bootstrap-<arch>` are ignored. When `architectures` is given, only
+ * Only archives that actually exist are checked. A missing archive is rejected
+ * by the construct unless localBuild explicitly selects compilation; this gate
+ * does not select a build mode. Directories that are not `bootstrap-<arch>` are
+ * ignored. When `architectures` is given, only
  * staged archives for those architectures are checked — the caller (the
  * scenario runner) knows which architectures its deploy runs can select and
  * must not gate an architecture no run deploys. An explicitly empty selection
