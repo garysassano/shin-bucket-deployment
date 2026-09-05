@@ -344,6 +344,16 @@ export function validateDeploymentProps(scope: Construct, props: ShinBucketDeplo
     );
   }
   if (
+    props.providerLambda?.localBuild !== undefined &&
+    props.providerLambda.sharing === ProviderSharing.STACK
+  ) {
+    throw new ValidationError(
+      "ShinBucketDeploymentLocalProviderBuildSharing",
+      "providerLambda.localBuild requires ProviderSharing.DEPLOYMENT. Omit providerLambda.sharing or set it to ProviderSharing.DEPLOYMENT.",
+      scope,
+    );
+  }
+  if (
     props.providerLambda?.failureDiagnostics !== undefined &&
     !Object.values(FailureDiagnostics).includes(props.providerLambda.failureDiagnostics)
   ) {

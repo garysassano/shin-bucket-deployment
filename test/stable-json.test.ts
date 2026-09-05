@@ -21,12 +21,7 @@ describe("stableStringify", () => {
   });
 
   test("reorders a mixed-case caller key map relative to ICU collation", () => {
-    // This is the shape that actually changes a deployed handler identity:
-    // `providerLambda.localBuild.bundling.environment` is a caller-supplied
-    // Record<string, string> that reaches the hash. ICU collates
-    // case-insensitively at the primary level and puts "cargoHome" first;
-    // code-unit order puts "RUSTFLAGS" first. Conventional all-caps names are
-    // unaffected, which is why the exposure is narrow rather than universal.
+    // Mixed-case maps keep deterministic ordering at every call site.
     expect(stableStringify({ cargoHome: "/tmp", RUSTFLAGS: "-C x" })).toBe(
       '{"RUSTFLAGS":"-C x","cargoHome":"/tmp"}',
     );
@@ -53,7 +48,7 @@ describe("stableStringify", () => {
     expect(stableStringify({ a: 1 })).not.toBe(stableStringify({ a: 1, b: null }));
   });
 
-  test("serializes functions by source, so equivalent closures differ", () => {
+  test("serializes function source without claiming to identify captured values", () => {
     const first = stableStringify({ fn: () => 1 });
     const second = stableStringify({ fn: () => 1 });
     const third = stableStringify({ fn: () => 2 });

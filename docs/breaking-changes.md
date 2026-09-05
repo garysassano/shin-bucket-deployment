@@ -4,6 +4,14 @@ This file holds release-note text for `ShinBucketDeployment` changes that break 
 
 ## Unreleased
 
+### Local provider compilation is explicit and deployment-scoped
+
+`providerLambda.localBuild` now defaults to `ProviderSharing.DEPLOYMENT`. Explicit `ProviderSharing.STACK` with `localBuild` fails before resource creation with `ShinBucketDeploymentLocalProviderBuildSharing`; omit `sharing` or select `DEPLOYMENT`. Separate local source trees and captured bundling-hook values can no longer silently reuse the first deployment's compiled provider.
+
+Affected: deployments that used `localBuild` with omitted sharing previously used stack-shared handlers. On upgrade they receive distinct deployment-scoped handlers, generated execution roles, and custom-resource identities. CloudFormation replaces those custom resources because their service tokens change. The destination ownership tag moves to the new generation before the old generation is deleted; the previous handler sees the overlapping owner and retains the live namespace even with `onDelete.deleteCurrentObjects` enabled. Caller-supplied roles and log groups remain caller-owned and may still be shared. Local builds already using `ProviderSharing.DEPLOYMENT` keep their handler and custom-resource identities, and later local source edits or checkout moves update code in place.
+
+A missing prebuilt archive now fails synthesis with `ShinBucketDeploymentPrebuiltProviderArchiveMissing` instead of implicitly compiling Rust. This affects source checkouts without the requested `assets/bootstrap-<arch>/bootstrap.zip` and incomplete package installations. Run `pnpm build:bootstrap` in the checkout, or explicitly configure `providerLambda.localBuild` and the optional `cargo-lambda-cdk` dependency. Ordinary prebuilt installations retain their existing sharing and artifact-based handler identity and need no Rust toolchain.
+
 ### Repeated sources now take precedence at their last position
 
 Deployments that repeat a source with another source in between now honor the documented last-source-wins order. For example, `[A, B, A]` previously emitted `[A, B]` and deployed B's contents for overlapping keys; it now emits `[B, A]` and deploys A's contents. This also applies to incremental `addSource()` calls and distinct marker-free sources with equivalent bound configurations, including their authenticated catalogs. Repeated marker-bearing objects reuse their original binding and move to the last position; distinct marker bindings remain separate.

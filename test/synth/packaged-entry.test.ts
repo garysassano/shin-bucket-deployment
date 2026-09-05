@@ -19,11 +19,11 @@ const packagedEntry = join(__dirname, "..", "..", "lib", "index.js");
 const packagedBuildPresent = existsSync(packagedEntry);
 // Synthesizing with the prebuilt provider needs the bootstrap archive, which is
 // produced by the Bootstrap jobs, not by `pnpm build:package` alone. Without it
-// synth falls back to compiling the Rust provider, which is not available in the
-// Node CI job — skip the synth smoke test when no prebuilt archive is present.
-const prebuiltArchivePresent =
-  existsSync(join(__dirname, "..", "..", "assets", "bootstrap-arm64", "bootstrap.zip")) ||
-  existsSync(join(__dirname, "..", "..", "assets", "bootstrap-x86_64", "bootstrap.zip"));
+// synth fails with a missing-archive error — skip this smoke test when its
+// requested arm64 archive is absent; verify-package exercises the failure path.
+const prebuiltArchivePresent = existsSync(
+  join(__dirname, "..", "..", "assets", "bootstrap-arm64", "bootstrap.zip"),
+);
 
 const cleanupDirectories: string[] = [];
 afterEach(() => {

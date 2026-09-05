@@ -8,7 +8,8 @@ import { Construct } from "constructs";
  * - `undefined` entries inside objects are dropped; a top-level `undefined`
  *   stays `undefined` (JSON.stringify renders it as absent).
  * - Functions serialize as `{__function__: <source>}`, so identity changes
- *   when a function's source changes and differs between equivalent closures.
+ *   when a function's source changes. Captured values are not represented; local
+ *   bundling callbacks never enter shared-handler identity.
  * - Constructs serialize as `{__construct__: <node.addr>}`, so identity
  *   follows the construct tree, not the object identity.
  * - Object keys are sorted by UTF-16 code unit, the same ordering

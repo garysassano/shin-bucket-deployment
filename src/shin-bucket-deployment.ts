@@ -551,7 +551,10 @@ export interface ShinBucketDeploymentProviderLambdaOptions {
    * must not accumulate permissions on one shared role, for example when
    * they need distinct trust or ownership boundaries.
    *
-   * @default ProviderSharing.STACK
+   * Local builds always use `ProviderSharing.DEPLOYMENT`; explicitly combining
+   * `localBuild` with `ProviderSharing.STACK` is rejected before resource creation.
+   *
+   * @default - ProviderSharing.DEPLOYMENT with localBuild; ProviderSharing.STACK otherwise
    */
   readonly sharing?: ProviderSharing;
 
@@ -605,8 +608,8 @@ export interface ShinBucketDeploymentProviderLambdaOptions {
   /**
    * Existing execution role for the provider Lambda.
    *
-   * Deployments with the same provider configuration share a handler and role
-   * by default. Source, destination, and CloudFront permissions from every
+   * Prebuilt deployments with the same provider configuration share a handler
+   * and role by default. Source, destination, and CloudFront permissions from every
    * sharing deployment accumulate on that role. A caller-supplied role remains
    * caller-owned even with `sharing: ProviderSharing.DEPLOYMENT`.
    *
@@ -673,6 +676,10 @@ export interface ShinBucketDeploymentProviderLambdaOptions {
    *
    * Use it to compile the provider from a local checkout instead of the
    * prebuilt binary, for example while developing the provider itself.
+   * Each deployment receives its own handler and generated role; explicit
+   * `ProviderSharing.STACK` is rejected. Source or bundling changes update the
+   * stable deployment-scoped handler's code without changing its identity.
+   * A missing prebuilt archive never triggers compilation implicitly.
    *
    * @default - the prebuilt provider binary shipped with the package
    */
@@ -980,14 +987,14 @@ export interface ShinBucketDeploymentProps {
  * shipped with the package, so consumers do not need a Rust toolchain. Passing
  * `providerLambda.localBuild` opts into compiling the provider locally.
  *
- * By default, deployments with the same handler identity settings in one stack
+ * By default, prebuilt deployments with the same handler identity settings in one stack
  * reuse a single Lambda function. Its role accumulates permissions for every
  * source, destination, and CloudFront distribution used by those
  * deployments. `providerLambda` settings and the package/provider identity
  * participate in shared identity; request-level `transfer` settings do not and
  * can differ between sharing deployments. Set
  * `providerLambda.sharing: ProviderSharing.DEPLOYMENT` for a deployment-scoped
- * function and generated role.
+ * function and generated role. Local builds always use this isolation mode.
  *
  * @example
  * import { Bucket } from "aws-cdk-lib/aws-s3";
@@ -1029,8 +1036,8 @@ export class ShinBucketDeployment extends Construct {
   /**
    * The backing Rust Lambda function.
    *
-   * This is shared by default and deployment-scoped when
-   * `providerLambda.sharing` is `ProviderSharing.DEPLOYMENT`.
+   * Prebuilt handlers are shared by default. A local build or explicit
+   * `providerLambda.sharing: ProviderSharing.DEPLOYMENT` is deployment-scoped.
    */
   public readonly handlerFunction: LambdaFunction;
 
@@ -1114,7 +1121,10 @@ export class ShinBucketDeployment extends Construct {
 
     if (
       previousBucket &&
-      (providerLambda.sharing ?? ProviderSharing.STACK) === ProviderSharing.STACK
+      (providerLambda.sharing ??
+        (providerLambda.localBuild === undefined
+          ? ProviderSharing.STACK
+          : ProviderSharing.DEPLOYMENT)) === ProviderSharing.STACK
     ) {
       Validations.of(this).addWarning(
         "ShinBucketDeploymentSharedRoleBucketWideDelete",
