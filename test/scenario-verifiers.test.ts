@@ -1,6 +1,7 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { S3Client } from "@aws-sdk/client-s3";
 import { Stack } from "aws-cdk-lib";
 import { Template } from "aws-cdk-lib/assertions";
 import { Bucket } from "aws-cdk-lib/aws-s3";
@@ -11,8 +12,13 @@ import {
   VERIFY_DESTROY_ORDER,
   VERIFY_SCENARIOS,
 } from "../scenarios/catalog";
+import {
+  LISTING_EDGE_KEYS,
+  LISTING_EXCLUDED_KEY,
+  listingKeyBody,
+} from "../scenarios/listing-key-fixture";
 import type { ObjectMetadata, VerificationApi } from "../scenarios/verifiers/aws";
-import { bucketListingProvesAbsence } from "../scenarios/verifiers/aws";
+import { AwsVerificationApi, bucketListingProvesAbsence } from "../scenarios/verifiers/aws";
 import { requiredOutput, stackOutputs } from "../scenarios/verifiers/outputs";
 import { expectedScenarioNames, verifyScenarioState } from "../scenarios/verifiers/scenario-state";
 import { verifyStackAbsent } from "../scenarios/verifiers/stack-absent";
@@ -40,6 +46,127 @@ afterEach(() => {
 });
 
 describe("scenario state verifier", () => {
+  it("preserves exact URL-encoded keys through real SDK XML parsing and opaque pagination", async () => {
+    const firstKeys = [
+      "site/carriage\rreturn.txt",
+      "site/literal%2Fsegment.txt",
+      "site/plus+sign.txt",
+    ];
+    const secondKeys = ["site/日本語.txt", "site/xml&<>\"'.txt", "site/control\u0001.txt"];
+    const { api, requests } = replayVerificationApi([
+      listPageXml(firstKeys, "opaque%2F+token"),
+      listPageXml(secondKeys),
+    ]);
+
+    await expect(api.listObjects("destination", "site/")).resolves.toEqual([
+      ...firstKeys,
+      ...secondKeys,
+    ]);
+    expect(requests).toEqual([
+      expect.objectContaining({ "encoding-type": "url", prefix: "site/" }),
+      expect.objectContaining({ "encoding-type": "url", "continuation-token": "opaque%2F+token" }),
+    ]);
+  });
+
+  it.each(["bad%", "bad%2", "bad%GG", "bad%FF", "bad%C3%28"])(
+    "rejects malformed listing key %s without retrying the page",
+    async (key) => {
+      const { api, requests } = replayVerificationApi([
+        `<ListBucketResult><EncodingType>url</EncodingType><Contents><Key>valid.txt</Key></Contents><Contents><Key>${key}</Key></Contents></ListBucketResult>`,
+      ]);
+      await expect(api.listObjects("destination")).rejects.toThrow(URIError);
+      expect(requests).toHaveLength(1);
+    },
+  );
+
+  it("checks unusual included source keys and the excluded source key in filters", async () => {
+    vi.stubEnv("AWS_REGION", "eu-central-1");
+    const api = new FakeVerificationApi();
+    api.putObject("destination", "filtered-site/index.html", FIXTURE_INDEX);
+    api.putObject(
+      "destination",
+      "filtered-site/runtime/probe.txt",
+      `stack=${STACK_NAME}\nregion=${region()}\nmode=include-exclude`,
+    );
+    for (const key of LISTING_EDGE_KEYS) {
+      api.putObject("destination", `filtered-site/runtime/listing/${key}`, listingKeyBody(key));
+    }
+    const outputs = outputsFile({ BucketName: "destination" });
+    await expect(verifyScenarioState(STACK_NAME, "filters", outputs, api)).resolves.toBeUndefined();
+    api.putObject(
+      "destination",
+      `filtered-site/${LISTING_EXCLUDED_KEY}`,
+      "unexpected filtered object",
+    );
+    await expect(verifyScenarioState(STACK_NAME, "filters", outputs, api)).rejects.toThrow(
+      "exact expected keys",
+    );
+  });
+
+  it("requires exact retained, excluded, and deleted keys across the stale-cleanup update", async () => {
+    const api = new FakeVerificationApi();
+    const outputs = outputsFile({ BucketName: "destination" });
+    putFixture(api, "destination", "stale-cleanup-site");
+    api.putObject(
+      "destination",
+      "stale-cleanup-site/runtime/legacy.txt",
+      "remove this by deploying stale-object-cleanup-updated",
+    );
+    api.putObject(
+      "destination",
+      `stale-cleanup-site/${LISTING_EXCLUDED_KEY}`,
+      "excluded synthetic key\n",
+    );
+    for (const key of LISTING_EDGE_KEYS) {
+      api.putObject(
+        "destination",
+        `stale-cleanup-site/runtime/listing/keep/${key}`,
+        listingKeyBody(key),
+      );
+      api.putObject(
+        "destination",
+        `stale-cleanup-site/runtime/listing/stale/${key}`,
+        listingKeyBody(key),
+      );
+    }
+    api.putObject(
+      "destination",
+      "stale-cleanup-site/runtime/current.txt",
+      `stack=${STACK_NAME}\nphase=initial\nstate=current-and-legacy-exist`,
+    );
+    await expect(
+      verifyScenarioState(STACK_NAME, "stale-object-cleanup-initial", outputs, api),
+    ).resolves.toBeUndefined();
+
+    api.objects.delete(objectId("destination", "stale-cleanup-site/runtime/legacy.txt"));
+    for (const key of LISTING_EDGE_KEYS) {
+      api.objects.delete(
+        objectId("destination", `stale-cleanup-site/runtime/listing/stale/${key}`),
+      );
+    }
+    api.putObject(
+      "destination",
+      "stale-cleanup-site/runtime/current.txt",
+      `stack=${STACK_NAME}\nphase=updated\nstate=legacy-should-be-deleted`,
+    );
+    await expect(
+      verifyScenarioState(STACK_NAME, "stale-object-cleanup-updated", outputs, api),
+    ).resolves.toBeUndefined();
+
+    const staleKey = "stale-cleanup-site/runtime/listing/stale/plus+sign.txt";
+    api.putObject("destination", staleKey, "stale key was not removed");
+    await expect(
+      verifyScenarioState(STACK_NAME, "stale-object-cleanup-updated", outputs, api),
+    ).rejects.toThrow("exact expected keys");
+    api.objects.delete(objectId("destination", staleKey));
+    api.objects.delete(
+      objectId("destination", "stale-cleanup-site/runtime/listing/keep/literal%2Fsegment.txt"),
+    );
+    await expect(
+      verifyScenarioState(STACK_NAME, "stale-object-cleanup-updated", outputs, api),
+    ).rejects.toThrow("exact expected keys");
+  });
+
   it("defines an assertion for every cataloged verification phase", () => {
     expect(expectedScenarioNames()).toEqual(Object.keys(VERIFY_SCENARIOS));
     expect(
@@ -333,6 +460,37 @@ describe("cleanup verifier", () => {
     ).rejects.toThrow("unexpected response shape");
   });
 });
+
+function listPageXml(keys: readonly string[], continuationToken?: string): string {
+  return `<ListBucketResult><EncodingType>url</EncodingType><IsTruncated>${continuationToken !== undefined}</IsTruncated>${continuationToken === undefined ? "" : `<NextContinuationToken>${continuationToken}</NextContinuationToken>`}${keys.map((key) => `<Contents><Key>${encodeURIComponent(key)}</Key></Contents>`).join("")}</ListBucketResult>`;
+}
+
+function replayVerificationApi(responses: string[]): {
+  api: AwsVerificationApi;
+  requests: unknown[];
+} {
+  const requests: unknown[] = [];
+  const client = new S3Client({
+    region: "us-east-1",
+    credentials: { accessKeyId: "synthetic-access", secretAccessKey: "synthetic-secret" },
+    maxAttempts: 1,
+    requestHandler: {
+      handle: async (request: { query: unknown }) => {
+        requests.push(request.query);
+        const body = responses.shift();
+        if (body === undefined) throw new Error("Unexpected replay request");
+        return {
+          response: {
+            statusCode: 200,
+            headers: { "content-type": "application/xml" },
+            body: Buffer.from(body),
+          },
+        };
+      },
+    },
+  });
+  return { api: new AwsVerificationApi(client), requests };
+}
 
 class FakeVerificationApi implements VerificationApi {
   readonly objects = new Map<string, Uint8Array>();

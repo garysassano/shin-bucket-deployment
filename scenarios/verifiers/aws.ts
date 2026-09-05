@@ -26,8 +26,9 @@ export interface VerificationApi {
 }
 
 export class AwsVerificationApi implements VerificationApi {
-  private readonly s3 = new S3Client({});
   private readonly cloudFront = new CloudFrontClient({});
+
+  public constructor(private readonly s3 = new S3Client({})) {}
 
   public async getObject(bucket: string, key: string): Promise<Uint8Array> {
     const response = await this.s3.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
@@ -57,6 +58,7 @@ export class AwsVerificationApi implements VerificationApi {
       const response = await this.s3.send(
         new ListObjectsV2Command({
           Bucket: bucket,
+          EncodingType: "url",
           ...(prefix ? { Prefix: prefix } : {}),
           ...(continuationToken ? { ContinuationToken: continuationToken } : {}),
         }),
@@ -65,7 +67,9 @@ export class AwsVerificationApi implements VerificationApi {
         if (!object.Key) {
           throw new Error("Listing destination objects returned an object without a key.");
         }
-        keys.push(object.Key);
+        // The JS SDK leaves explicitly encoded keys untouched. In particular,
+        // parsing unencoded XML normalizes CR to LF and cannot prove exact keys.
+        keys.push(decodeURIComponent(object.Key));
       }
       if (response.IsTruncated && !response.NextContinuationToken) {
         throw new Error("Listing destination objects returned a truncated page without a token.");

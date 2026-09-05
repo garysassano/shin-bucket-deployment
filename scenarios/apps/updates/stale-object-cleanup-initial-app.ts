@@ -1,6 +1,7 @@
 import { App, Aws, CfnOutput, RemovalPolicy, Stack, type StackProps } from "aws-cdk-lib";
 import { Bucket } from "aws-cdk-lib/aws-s3";
 import { ShinBucketDeployment, Source } from "../../../src";
+import { LISTING_EDGE_KEYS, LISTING_EXCLUDED_KEY, listingKeyBody } from "../../listing-key-fixture";
 import { grantVerifierRead } from "../verification-access";
 
 class StaleObjectCleanupShinBucketDeploymentStack extends Stack {
@@ -21,6 +22,11 @@ class StaleObjectCleanupShinBucketDeploymentStack extends Stack {
           [`stack=${Aws.STACK_NAME}`, "phase=initial", "state=current-and-legacy-exist"].join("\n"),
         ),
         Source.data("runtime/legacy.txt", "remove this by deploying stale-object-cleanup-updated"),
+        ...LISTING_EDGE_KEYS.flatMap((key) => [
+          Source.data(`runtime/listing/keep/${key}`, listingKeyBody(key)),
+          Source.data(`runtime/listing/stale/${key}`, listingKeyBody(key)),
+        ]),
+        Source.data(LISTING_EXCLUDED_KEY, "excluded synthetic key\n"),
       ],
       destination: {
         bucket: websiteBucket,
