@@ -70,6 +70,19 @@ export function getOrCreateHandler(scope: Construct, config: ProviderLambdaConfi
   // Evaluate caller filters once. Lambda receives these same subnet objects so
   // its placement, connectivity dependencies, and validation match the identity.
   const selectedSubnets = config.vpc?.selectSubnets(config.vpcSubnets);
+  if (selectedSubnets && config.vpc) {
+    // Lambda validates public placement by subnet ID, not SelectedSubnets.hasPublic.
+    // Repeat that check before reuse, where Lambda's constructor does not run.
+    // Like Lambda, the check does not exempt pending lookup selections.
+    const publicSubnetIds = new Set(config.vpc.publicSubnets.map((subnet) => subnet.subnetId));
+    if (selectedSubnets.subnetIds.some((subnetId) => publicSubnetIds.has(subnetId))) {
+      throw new ValidationError(
+        "ShinBucketDeploymentProviderPublicSubnet",
+        "Lambda Functions in a public subnet can NOT access the internet. Select private subnets for the provider Lambda.",
+        scope,
+      );
+    }
+  }
 
   // Local builds are isolated: neither a manifest nor a serialized callback
   // identifies the source tree and captured state that the bundler will use.

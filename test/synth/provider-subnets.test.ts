@@ -327,6 +327,56 @@ describe("effective provider subnet selection", () => {
     ).toThrow(/subnetType.*subnets|subnets.*subnetType/);
   });
 
+  test("rejects an imported view carrying the identical public subnet ID", () => {
+    const stack = new Stack();
+    const vpc = new Vpc(stack, "Vpc", { maxAzs: 2, natGateways: 0 });
+    const publicSubnet = vpc.publicSubnets[0];
+    if (publicSubnet === undefined) throw new Error("Public subnet missing");
+    const imported = Subnet.fromSubnetAttributes(stack, "ImportedPublic", {
+      subnetId: publicSubnet.subnetId,
+      availabilityZone: publicSubnet.availabilityZone,
+      routeTableId: publicSubnet.routeTable.routeTableId,
+    });
+    expect(vpc.selectSubnets({ subnets: [imported] }).hasPublic).toBe(false);
+    expect(() => deploy(stack, "Imported", { vpc, vpcSubnets: { subnets: [imported] } })).toThrow(
+      /Lambda Functions in a public subnet/,
+    );
+  });
+
+  test.each([false, true])(
+    "rejects an actual public subnet after an equivalent token view created the handler (pending lookup: %s)",
+    (isPendingLookup) => {
+      const stack = new Stack();
+      const vpc = new Vpc(stack, "Vpc", { maxAzs: 2, natGateways: 0 });
+      const selectSubnets = vpc.selectSubnets.bind(vpc);
+      vi.spyOn(vpc, "selectSubnets").mockImplementation((selection) => ({
+        ...selectSubnets(selection),
+        isPendingLookup,
+      }));
+      const publicSubnet = vpc.publicSubnets[0];
+      if (publicSubnet === undefined) throw new Error("Public subnet missing");
+      const imported = Subnet.fromSubnetAttributes(stack, "ImportedPublic", {
+        subnetId: Token.asString({ resolve: () => stack.resolve(publicSubnet.subnetId) }),
+        availabilityZone: publicSubnet.availabilityZone,
+        routeTableId: publicSubnet.routeTable.routeTableId,
+      });
+      expect(imported.subnetId).not.toBe(publicSubnet.subnetId);
+      expect(stack.resolve(imported.subnetId)).toEqual(stack.resolve(publicSubnet.subnetId));
+      expect(vpc.selectSubnets({ subnets: [imported] }).hasPublic).toBe(false);
+      expect(vpc.selectSubnets({ subnets: [publicSubnet] }).hasPublic).toBe(true);
+      deploy(stack, "Imported", { vpc, vpcSubnets: { subnets: [imported] } });
+
+      expect(() =>
+        deploy(stack, "ActualPublic", { vpc, vpcSubnets: { subnets: [publicSubnet] } }),
+      ).toThrow(
+        expect.objectContaining({
+          code: "ShinBucketDeploymentProviderPublicSubnet",
+          message: expect.stringContaining("Lambda Functions in a public subnet"),
+        }),
+      );
+    },
+  );
+
   test("rejects subnet selection without a VPC even after a default handler exists", () => {
     const stack = new Stack();
     deploy(stack, "Default", {});
