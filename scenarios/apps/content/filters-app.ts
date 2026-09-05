@@ -1,6 +1,7 @@
 import { App, Aws, CfnOutput, RemovalPolicy, Stack, type StackProps } from "aws-cdk-lib";
 import { Bucket } from "aws-cdk-lib/aws-s3";
 import { ShinBucketDeployment, Source } from "../../../src";
+import { LISTING_EDGE_KEYS, LISTING_EXCLUDED_KEY, listingKeyBody } from "../../listing-key-fixture";
 import { grantVerifierRead } from "../verification-access";
 
 class FiltersShinBucketDeploymentStack extends Stack {
@@ -16,6 +17,10 @@ class FiltersShinBucketDeploymentStack extends Stack {
     new ShinBucketDeployment(this, "FilteredDeployment", {
       sources: [
         Source.asset("test/fixtures/my-website"),
+        ...LISTING_EDGE_KEYS.map((key) =>
+          Source.data(`runtime/listing/${key}`, listingKeyBody(key)),
+        ),
+        Source.data(LISTING_EXCLUDED_KEY, "excluded synthetic key\n"),
         Source.data(
           "runtime/probe.txt",
           [`stack=${Aws.STACK_NAME}`, `region=${Aws.REGION}`, "mode=include-exclude"].join("\n"),

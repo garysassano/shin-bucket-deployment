@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { LISTING_EDGE_KEYS, LISTING_EXCLUDED_KEY, listingKeyBody } from "../listing-key-fixture";
 import { AwsVerificationApi, type ObjectMetadata, type VerificationApi } from "./aws";
 import { requiredOutput, stackOutputs } from "./outputs";
 
@@ -121,6 +122,7 @@ const SCENARIO_ASSERTIONS: Readonly<Record<string, ScenarioAssertion>> = {
     await assertExactKeys(api, bucket, "filtered-site/", [
       "filtered-site/index.html",
       "filtered-site/runtime/probe.txt",
+      ...LISTING_EDGE_KEYS.map((key) => `filtered-site/runtime/listing/${key}`),
     ]);
     await Promise.all([
       assertObjectBody(api, bucket, "filtered-site/index.html", FIXTURE_INDEX),
@@ -131,6 +133,10 @@ const SCENARIO_ASSERTIONS: Readonly<Record<string, ScenarioAssertion>> = {
         `stack=${stackName}\nregion=${region()}\nmode=include-exclude`,
       ),
       assertObjectMissing(api, bucket, "filtered-site/app.js"),
+      assertObjectMissing(api, bucket, `filtered-site/${LISTING_EXCLUDED_KEY}`),
+      ...LISTING_EDGE_KEYS.map((key) =>
+        assertObjectBody(api, bucket, `filtered-site/runtime/listing/${key}`, listingKeyBody(key)),
+      ),
     ]);
   },
   "source-overwrite-order": singleObjectScenario(
@@ -422,11 +428,42 @@ function staleCleanupScenario(phase: "initial" | "updated"): ScenarioAssertion {
       "stale-cleanup-site/app.js",
       "stale-cleanup-site/index.html",
       "stale-cleanup-site/runtime/current.txt",
+      `stale-cleanup-site/${LISTING_EXCLUDED_KEY}`,
+      ...LISTING_EDGE_KEYS.map((key) => `stale-cleanup-site/runtime/listing/keep/${key}`),
     ];
-    if (phase === "initial") keys.push("stale-cleanup-site/runtime/legacy.txt");
+    if (phase === "initial") {
+      keys.push(
+        "stale-cleanup-site/runtime/legacy.txt",
+        ...LISTING_EDGE_KEYS.map((key) => `stale-cleanup-site/runtime/listing/stale/${key}`),
+      );
+    }
     await assertExactKeys(api, bucket, "stale-cleanup-site/", keys);
     await Promise.all([
       assertFixtureBodies(api, bucket, "stale-cleanup-site"),
+      assertObjectBody(
+        api,
+        bucket,
+        `stale-cleanup-site/${LISTING_EXCLUDED_KEY}`,
+        "excluded synthetic key\n",
+      ),
+      ...LISTING_EDGE_KEYS.map((key) =>
+        assertObjectBody(
+          api,
+          bucket,
+          `stale-cleanup-site/runtime/listing/keep/${key}`,
+          listingKeyBody(key),
+        ),
+      ),
+      ...(phase === "initial"
+        ? LISTING_EDGE_KEYS.map((key) =>
+            assertObjectBody(
+              api,
+              bucket,
+              `stale-cleanup-site/runtime/listing/stale/${key}`,
+              listingKeyBody(key),
+            ),
+          )
+        : []),
       assertObjectBody(
         api,
         bucket,

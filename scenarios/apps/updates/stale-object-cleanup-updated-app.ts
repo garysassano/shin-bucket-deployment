@@ -1,6 +1,7 @@
 import { App, Aws, CfnOutput, RemovalPolicy, Stack, type StackProps } from "aws-cdk-lib";
 import { Bucket } from "aws-cdk-lib/aws-s3";
 import { ShinBucketDeployment, Source } from "../../../src";
+import { LISTING_EDGE_KEYS, listingKeyBody } from "../../listing-key-fixture";
 import { grantVerifierRead } from "../verification-access";
 
 class StaleObjectCleanupShinBucketDeploymentStack extends Stack {
@@ -16,6 +17,9 @@ class StaleObjectCleanupShinBucketDeploymentStack extends Stack {
     new ShinBucketDeployment(this, "DeployWebsite", {
       sources: [
         Source.asset("test/fixtures/my-website"),
+        ...LISTING_EDGE_KEYS.map((key) =>
+          Source.data(`runtime/listing/keep/${key}`, listingKeyBody(key)),
+        ),
         Source.data(
           "runtime/current.txt",
           [`stack=${Aws.STACK_NAME}`, "phase=updated", "state=legacy-should-be-deleted"].join("\n"),
@@ -24,6 +28,9 @@ class StaleObjectCleanupShinBucketDeploymentStack extends Stack {
       destination: {
         bucket: websiteBucket,
         keyPrefix: "stale-cleanup-site",
+      },
+      sourceProcessing: {
+        exclude: ["excluded/**"],
       },
     });
 

@@ -6,7 +6,7 @@ use anyhow::{Context, Result, anyhow};
 use aws_sdk_s3::config::retry::RetryConfig;
 use aws_sdk_s3::error::ProvideErrorMetadata;
 use aws_sdk_s3::error::SdkError;
-use aws_sdk_s3::types::{Delete, ObjectIdentifier};
+use aws_sdk_s3::types::{Delete, EncodingType, ObjectIdentifier};
 use tokio::time::Instant;
 use tracing::warn;
 
@@ -654,11 +654,12 @@ impl<'a> DestinationListPager<'a> {
             .destination_s3
             .list_objects_v2()
             .bucket(self.bucket)
+            .encoding_type(EncodingType::Url)
             .set_prefix(self.prefix.map(ToOwned::to_owned))
             .set_start_after(self.start_after.take())
             .send()
             .await;
-        let response = match response {
+        let mut response = match response {
             Ok(response) => response,
             Err(error)
                 if self.missing_bucket_is_empty
@@ -684,18 +685,64 @@ impl<'a> DestinationListPager<'a> {
             }
         };
 
-        let last_key = response
-            .contents()
-            .iter()
-            .filter_map(|object| object.key())
-            .next_back()
-            .map(ToOwned::to_owned);
+        // The Rust SDK leaves URL-encoded key text untouched. Decode each bounded
+        // page before any predicate or deletion sees it, including the cursor.
+        // A bad key therefore fails the whole page without acting on its siblings.
+        let mut last_key = None;
+        for object in response.contents.iter_mut().flatten() {
+            if let Some(key) = object.key.take() {
+                object.key = Some(decode_destination_key(key)?);
+                last_key = object.key.as_deref();
+            }
+        }
+        let last_key = last_key.map(ToOwned::to_owned);
         if !response.is_truncated().unwrap_or(false) || last_key.is_none() {
             self.finished = true;
         } else {
             self.start_after = last_key;
         }
         Ok(Some(response))
+    }
+}
+
+/// Decode once in the SDK string's allocation. `urlencoding::decode` preserves
+/// `+` but tolerates malformed percent escapes; rejecting those would require a
+/// separate validation scan and it allocates a second buffer for encoded keys.
+fn decode_destination_key(key: String) -> Result<String> {
+    let Some(first_escape) = key.find('%') else {
+        return Ok(key);
+    };
+    let mut bytes = key.into_bytes();
+    let mut read = first_escape;
+    let mut write = first_escape;
+    while read < bytes.len() {
+        let byte = if bytes[read] == b'%' {
+            let hex = bytes
+                .get(read + 1..read + 3)
+                .and_then(|pair| Some((hex_digit(pair[0])?, hex_digit(pair[1])?)))
+                .ok_or_else(|| {
+                    anyhow!("invalid URL-encoded destination key: malformed percent escape")
+                })?;
+            read += 3;
+            (hex.0 << 4) | hex.1
+        } else {
+            let byte = bytes[read];
+            read += 1;
+            byte
+        };
+        bytes[write] = byte;
+        write += 1;
+    }
+    bytes.truncate(write);
+    String::from_utf8(bytes).context("invalid URL-encoded destination key: invalid UTF-8")
+}
+
+fn hex_digit(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
     }
 }
 
@@ -1153,6 +1200,276 @@ mod tests {
     use crate::diagnostics::DeploymentStats;
     use crate::request::{compile_filters, strip_destination_prefix};
     use crate::state::AppState;
+
+    #[test]
+    fn listing_decoder_reuses_the_sdk_string_and_never_decodes_twice() {
+        for (encoded, expected) in [
+            ("site/plain.txt", "site/plain.txt"),
+            ("site/a+b.txt", "site/a+b.txt"),
+            ("site/a%252Fb.txt", "site/a%2Fb.txt"),
+            ("site/%25GG%2b%00", "site/%GG+\0"),
+        ] {
+            let key = encoded.to_string();
+            let allocation = key.as_ptr();
+            let decoded = super::decode_destination_key(key).unwrap();
+            assert_eq!(decoded, expected);
+            assert_eq!(decoded.as_ptr(), allocation);
+        }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn listing_decoder_round_trips_utf8_keys(key in proptest::prelude::any::<String>()) {
+            let encoded = urlencoding::encode(&key).into_owned();
+            proptest::prop_assert_eq!(super::decode_destination_key(encoded).unwrap(), key);
+        }
+    }
+
+    // Pin the SDK boundary: it preserves valid unencoded keys, rejects literal
+    // XML-incompatible controls, and leaves explicitly URL-encoded keys encoded.
+    #[tokio::test]
+    async fn sdk_listing_preserves_xml_keys_but_requires_explicit_url_decoding() {
+        for (wire_key, original) in [
+            ("site/a\rb.txt", "site/a\rb.txt"),
+            ("site/a&#x1;b.txt", "site/a\u{1}b.txt"),
+            ("site/a%2Fb.txt", "site/a%2Fb.txt"),
+            ("site/a+b.txt", "site/a+b.txt"),
+            ("site/日本語.txt", "site/日本語.txt"),
+            ("site/a&amp;&lt;&gt;&quot;&apos;.txt", "site/a&<>\"'.txt"),
+        ] {
+            let replay = StaticReplayClient::new(vec![list_page_event(wire_key, false)]);
+            let state = replay_app_state(replay.clone());
+            let page = state
+                .destination_s3
+                .list_objects_v2()
+                .bucket("destination")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(page.contents()[0].key(), Some(original));
+            assert!(
+                !replay
+                    .actual_requests()
+                    .next()
+                    .unwrap()
+                    .uri()
+                    .contains("encoding-type")
+            );
+        }
+        let replay = StaticReplayClient::new(vec![list_page_event("site/a\u{1}b.txt", false)]);
+        let state = replay_app_state(replay.clone());
+        state
+            .destination_s3
+            .list_objects_v2()
+            .bucket("destination")
+            .send()
+            .await
+            .expect_err("literal XML control must fail parsing");
+        assert_eq!(replay.actual_requests().count(), 1);
+
+        let encoded = "site/a%252Fb%2B%0D%01.txt";
+        let replay = StaticReplayClient::new(vec![encoded_list_page_event(&[encoded], false)]);
+        let state = replay_app_state(replay);
+        let page = state
+            .destination_s3
+            .list_objects_v2()
+            .bucket("destination")
+            .encoding_type(aws_sdk_s3::types::EncodingType::Url)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(page.contents()[0].key(), Some(encoded));
+    }
+
+    #[tokio::test]
+    async fn listing_decodes_exact_keys_and_start_after_once() {
+        let first = ["site/a%0Db.txt", "site/a%01b.txt", "site/a%252Fb.txt"];
+        let second = [
+            "site/a+b.txt",
+            "site/%E6%97%A5%E6%9C%AC%E8%AA%9E.txt",
+            "site/a%26%3C%3E%22%27.txt",
+        ];
+        let replay = StaticReplayClient::new(vec![
+            encoded_list_page_event(&first, true),
+            encoded_list_page_event(&second, false),
+        ]);
+        let state = replay_app_state(replay.clone());
+        let mut pager = super::DestinationListPager::new(&state, "destination", Some("site/"));
+        let first = pager.next_page().await.unwrap().unwrap();
+        assert_eq!(
+            first
+                .contents()
+                .iter()
+                .filter_map(|object| object.key())
+                .collect::<Vec<_>>(),
+            ["site/a\rb.txt", "site/a\u{1}b.txt", "site/a%2Fb.txt"]
+        );
+        let second = pager.next_page().await.unwrap().unwrap();
+        assert_eq!(
+            second
+                .contents()
+                .iter()
+                .filter_map(|object| object.key())
+                .collect::<Vec<_>>(),
+            ["site/a+b.txt", "site/日本語.txt", "site/a&<>\"'.txt"]
+        );
+        assert!(pager.next_page().await.unwrap().is_none());
+        let requests = replay.actual_requests().collect::<Vec<_>>();
+        assert_eq!(requests.len(), 2);
+        assert!(
+            requests
+                .iter()
+                .all(|request| request.uri().contains("encoding-type=url"))
+        );
+        assert!(requests[1].uri().contains("start-after=site%2Fa%252Fb.txt"));
+        assert!(!requests[1].uri().contains("continuation-token"));
+    }
+
+    #[tokio::test]
+    async fn listed_keys_keep_filters_manifest_and_retained_or_relisted_deletion_exact() {
+        let keys = [
+            "site%2B%25/a%252Fb.txt",
+            "site%2B%25/a%2Fb.txt",
+            "site%2B%25/cr%0D.txt",
+            "site%2B%25/skip%01.txt",
+            "site%2B%25/plus%2B.txt",
+            "site%2B%25/%E6%97%A5%E6%9C%AC%E8%AA%9E.txt",
+            "site%2B%25/xml%26%3C%3E%22%27.txt",
+        ];
+        for overflow in [false, true] {
+            let mut events = vec![encoded_list_page_event(&keys, false)];
+            if overflow {
+                events.push(encoded_list_page_event(&keys, false));
+            }
+            events.push(delete_success_event());
+            let replay = StaticReplayClient::new(events);
+            let state = replay_app_state(replay.clone());
+            let mut request = DeploymentRequest::for_test();
+            request.dest_bucket_prefix = "site+%".to_string();
+            let stats = DeploymentStats::default();
+            let filters = compile_filters(&["skip*".to_string()], &[]).unwrap();
+            let mut manifest = DeploymentManifest::new();
+            manifest.insert(
+                "a%2Fb.txt".to_string(),
+                PlannedObject {
+                    relative_key: "a%2Fb.txt".to_string(),
+                    expected_etag: None,
+                    action: PlannedAction::CopyObject {
+                        source_index: 0,
+                        size: Some(1),
+                    },
+                },
+            );
+            let mut plan =
+                super::plan_destination(&state, &request, None, None, &filters, &manifest, &stats)
+                    .await
+                    .unwrap();
+            assert_eq!(plan.objects.len(), 1);
+            assert_eq!(plan.objects.get("a%2Fb.txt").unwrap().size, Some(1));
+            assert_eq!(
+                plan.current_stale.keys().unwrap(),
+                [
+                    "site+%/a/b.txt",
+                    "site+%/cr\r.txt",
+                    "site+%/plus+.txt",
+                    "site+%/日本語.txt",
+                    "site+%/xml&<>\"'.txt"
+                ]
+            );
+            if overflow {
+                plan.current_stale = DeletionCandidates::Overflow;
+            }
+            let (deleted, _) = super::delete_stale_objects_with_retry(
+                &state,
+                &request,
+                None,
+                None,
+                true,
+                false,
+                &filters,
+                &manifest,
+                &plan,
+                &stats,
+                &retry_options(1, 0),
+                &RetryCoordinator::new(),
+                tokio::time::Instant::now() + Duration::from_secs(10),
+            )
+            .await
+            .unwrap();
+            assert_eq!(deleted, 5);
+            let requests = replay.actual_requests().collect::<Vec<_>>();
+            assert_eq!(
+                requests
+                    .iter()
+                    .filter(|request| request.method() == "GET")
+                    .count(),
+                if overflow { 2 } else { 1 }
+            );
+            let delete = request_body(requests.last().unwrap());
+            for expected in [
+                "site+%/a/b.txt",
+                "site+%/cr&#xD;.txt",
+                "site+%/plus+.txt",
+                "site+%/日本語.txt",
+                "site+%/xml&amp;&lt;&gt;&quot;&apos;.txt",
+            ] {
+                assert!(
+                    delete.contains(&format!("<Key>{expected}</Key>")),
+                    "{delete}"
+                );
+            }
+            assert!(!delete.contains("a%2Fb.txt"));
+            assert!(!delete.contains("skip"));
+        }
+    }
+
+    #[tokio::test]
+    async fn malformed_listing_fails_before_predicates_or_deleting_any_key_on_that_page() {
+        for malformed in [
+            "site/bad%",
+            "site/bad%2",
+            "site/bad%GG",
+            "site/bad%0G",
+            "site/bad%FF",
+            "site/bad%C3%28",
+        ] {
+            let replay = StaticReplayClient::new(vec![encoded_list_page_event(
+                &["site/valid.txt", malformed],
+                false,
+            )]);
+            let state = replay_app_state(replay.clone());
+            let error = delete_listed_objects(
+                &state,
+                "destination",
+                Some("site/"),
+                None,
+                &retry_options(3, 0),
+                tokio::time::Instant::now() + Duration::from_secs(10),
+                |_| panic!("a malformed page must not reach predicates"),
+            )
+            .await
+            .expect_err("malformed encoding must fail");
+            assert!(format!("{error:#}").contains("invalid URL-encoded destination key"));
+            assert_eq!(replay.actual_requests().count(), 1);
+        }
+        let replay = StaticReplayClient::new(vec![replay_event(
+            200,
+            "<ListBucketResult><EncodingType>url</EncodingType><Contents><Key>site/valid.txt</Key></Contents><Contents><Key>site/bad\u{1}.txt</Key></Contents></ListBucketResult>",
+        )]);
+        let state = replay_app_state(replay.clone());
+        delete_listed_objects(
+            &state,
+            "destination",
+            Some("site/"),
+            None,
+            &retry_options(3, 0),
+            tokio::time::Instant::now() + Duration::from_secs(10),
+            |_| panic!("invalid XML must not reach predicates"),
+        )
+        .await
+        .expect_err("invalid XML must fail");
+        assert_eq!(replay.actual_requests().count(), 1);
+    }
 
     #[test]
     fn fused_per_key_checks_match_the_original_two_predicate_path() {
@@ -2173,6 +2490,19 @@ mod tests {
             200,
             format!(
                 "<ListBucketResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"><Name>destination</Name><Prefix>site/</Prefix><MaxKeys>1000</MaxKeys><IsTruncated>{truncated}</IsTruncated><Contents><Key>{key}</Key><Size>1</Size></Contents></ListBucketResult>"
+            ),
+        )
+    }
+
+    fn encoded_list_page_event(keys: &[&str], truncated: bool) -> ReplayEvent {
+        let contents = keys
+            .iter()
+            .map(|key| format!("<Contents><Key>{key}</Key><Size>1</Size></Contents>"))
+            .collect::<String>();
+        replay_event(
+            200,
+            format!(
+                "<ListBucketResult><EncodingType>url</EncodingType><IsTruncated>{truncated}</IsTruncated>{contents}</ListBucketResult>"
             ),
         )
     }
