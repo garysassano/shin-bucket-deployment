@@ -1,6 +1,6 @@
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { ShinBucketDeploymentLocalBuildOptions } from "../../src";
+import type { ShinBucketDeploymentLocalBuildOptions } from "../../src/local-build";
 
 export function testLocalProviderBuild(): ShinBucketDeploymentLocalBuildOptions {
   return {

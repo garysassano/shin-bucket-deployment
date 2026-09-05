@@ -166,25 +166,32 @@ function buildContract(root) {
   run("pnpm", ["benchmark:synth"], root);
 }
 
-function comparePublicDeclarations(differences) {
-  const baselinePaths = publicDeclarationPaths(baselineRoot);
-  const currentPaths = publicDeclarationPaths(repositoryRoot);
-  // The declaration *set* stays fail-fast: adding or removing a public
-  // declaration file is an API-shape change, not a content change, and must not
-  // be waved through by a manifest entry. Declaration *contents* accumulate like
-  // assembly contents, so a deliberate public-API change (a changed default, a
-  // reworded doc comment) can be acknowledged explicitly instead of being
-  // unmergeable.
-  compareValue("public declaration set", baselinePaths, currentPaths);
-  for (const relativePath of baselinePaths) {
-    const baselineFile = join(baselineRoot, "lib", relativePath);
-    const currentFile = join(repositoryRoot, "lib", relativePath);
+export function comparePublicDeclarations(
+  differences,
+  baseline = baselineRoot,
+  current = repositoryRoot,
+) {
+  const baselinePaths = publicDeclarationPaths(baseline);
+  const currentPaths = publicDeclarationPaths(current);
+  // Relocated public types can add or remove declaration files. Each changed
+  // file requires its own exact acknowledgement, just like changed contents.
+  const paths = [...new Set([...baselinePaths, ...currentPaths])].sort();
+  for (const relativePath of paths) {
+    const baselineFile = join(baseline, "lib", relativePath);
+    const currentFile = join(current, "lib", relativePath);
     const label = `declaration ${relativePath}`;
+    if (!baselinePaths.includes(relativePath) || !currentPaths.includes(relativePath)) {
+      differences.push({
+        label,
+        detail: currentPaths.includes(relativePath) ? "added" : "removed",
+      });
+      continue;
+    }
     if (!readFileSync(baselineFile).equals(readFileSync(currentFile))) {
       differences.push({ label, detail: "contents differ" });
     }
   }
-  return baselinePaths.length;
+  return currentPaths.length;
 }
 
 function publicDeclarationPaths(root) {

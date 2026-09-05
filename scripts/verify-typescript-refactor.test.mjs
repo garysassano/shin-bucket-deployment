@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 import {
   collectAssemblyDifferences,
+  comparePublicDeclarations,
   evaluateSynthesisContract,
   prepareBootstrapArchives,
 } from "./verify-typescript-refactor.mjs";
@@ -211,3 +212,43 @@ test("prepareBootstrapArchives resolves its defaults the way the CLI calls it", 
 
   assert.doesNotThrow(() => prepareBootstrapArchives(root));
 });
+
+for (const direction of ["added", "removed"]) {
+  test(`public declaration ${direction} requires its exact acknowledgement`, (t) => {
+    const original = {
+      "package.json": JSON.stringify({ files: ["lib/index.d.ts"] }),
+      "lib/index.d.ts": "export {};",
+      // A build may emit an internal declaration that the package does not publish.
+      "lib/local-build.d.ts": "export interface LocalBuild {}",
+    };
+    const expanded = {
+      ...original,
+      "package.json": JSON.stringify({ files: ["lib/index.d.ts", "lib/local-build.d.ts"] }),
+      "lib/local-build.d.ts": "export interface LocalBuild {}",
+    };
+    const { baseline, current } =
+      direction === "added" ? fixturePair(original, expanded) : fixturePair(expanded, original);
+    t.after(() => {
+      rmSync(baseline, { recursive: true, force: true });
+      rmSync(current, { recursive: true, force: true });
+    });
+    const differences = [];
+    comparePublicDeclarations(differences, baseline, current);
+    assert.deepEqual(differences, [{ label: "declaration local-build.d.ts", detail: direction }]);
+    assert.throws(() => evaluateSynthesisContract(differences, undefined), /local-build/);
+    assert.throws(() => evaluateSynthesisContract(differences, {}), /local-build/);
+    assert.doesNotThrow(() =>
+      evaluateSynthesisContract(differences, {
+        "declaration local-build.d.ts": "Move the local build interfaces.",
+      }),
+    );
+    assert.throws(
+      () =>
+        evaluateSynthesisContract(differences, {
+          "declaration local-build.d.ts": "Move the local build interfaces.",
+          "declaration index.d.ts": "Stale acknowledgement.",
+        }),
+      /did not change/,
+    );
+  });
+}

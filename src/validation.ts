@@ -5,15 +5,17 @@ import { DestinationWriteRetryJitter, FailureDiagnostics, ProviderSharing } from
 import { ValidationError } from "./errors";
 import { globSyntaxError } from "./glob";
 import type {
-  ShinBucketDeploymentAdvancedTransferTuning,
   ShinBucketDeploymentBundlingCommandHooks,
   ShinBucketDeploymentBundlingDockerOptions,
   ShinBucketDeploymentBundlingOptions,
+  ShinBucketDeploymentLocalBuildOptions,
+} from "./local-build";
+import type {
+  ShinBucketDeploymentAdvancedTransferTuning,
   ShinBucketDeploymentCloudFrontInvalidation,
   ShinBucketDeploymentDestination,
   ShinBucketDeploymentDestinationLifecycle,
   ShinBucketDeploymentDestinationWriteRetryTuning,
-  ShinBucketDeploymentLocalBuildOptions,
   ShinBucketDeploymentProps,
   ShinBucketDeploymentProviderLambdaOptions,
   ShinBucketDeploymentSourceProcessingOptions,

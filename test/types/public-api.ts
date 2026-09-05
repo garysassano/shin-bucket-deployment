@@ -8,6 +8,9 @@ import {
   type ISource,
   ProviderSharing,
   type ShinBucketDeploymentAdvancedTransferTuning,
+  type ShinBucketDeploymentBundlingCommandHooks,
+  type ShinBucketDeploymentBundlingDockerOptions,
+  type ShinBucketDeploymentBundlingOptions,
   type ShinBucketDeploymentDestination,
   type ShinBucketDeploymentLocalBuildOptions,
   type ShinBucketDeploymentProps,
@@ -28,7 +31,13 @@ const sourceProcessing: ShinBucketDeploymentSourceProcessingOptions = {
   include: ["*.html"],
   exclude: ["*.map"],
 };
-const localBuild: ShinBucketDeploymentLocalBuildOptions = { projectPath: "rust" };
+const commandHooks: ShinBucketDeploymentBundlingCommandHooks = {
+  beforeBundling: () => [],
+  afterBundling: () => [],
+};
+const dockerOptions: ShinBucketDeploymentBundlingDockerOptions = { network: "host" };
+const bundling: ShinBucketDeploymentBundlingOptions = { commandHooks, dockerOptions };
+const localBuild: ShinBucketDeploymentLocalBuildOptions = { projectPath: "rust", bundling };
 const providerLambda: ShinBucketDeploymentProviderLambdaOptions = {
   sharing: ProviderSharing.DEPLOYMENT,
   architecture: Architecture.X86_64,
