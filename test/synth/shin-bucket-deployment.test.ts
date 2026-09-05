@@ -12,7 +12,7 @@ import { Architecture } from "aws-cdk-lib/aws-lambda";
 import { LogGroup } from "aws-cdk-lib/aws-logs";
 import { Bucket, BucketEncryption, BucketNamespace, CfnBucket } from "aws-cdk-lib/aws-s3";
 import type { IConstruct } from "constructs";
-import { afterAll, beforeAll, expect, test } from "vitest";
+import { expect, test } from "vitest";
 import {
   DEFAULT_MAX_COMPRESSION_RATIO,
   DEFAULT_MAX_UNCOMPRESSED_ENTRY_BYTES,
@@ -29,15 +29,6 @@ import {
 import { renderHandlerConfigHashInput } from "../../src/provider";
 import { stableStringify } from "../../src/stable-json";
 import { testLocalProviderBuild } from "../support/bundling";
-import { ensurePrebuiltBootstrapAssets } from "../support/prebuilt-assets";
-
-let cleanupPrebuiltAssets: () => void;
-beforeAll(() => {
-  cleanupPrebuiltAssets = ensurePrebuiltBootstrapAssets();
-});
-afterAll(() => {
-  cleanupPrebuiltAssets();
-});
 
 interface FileAssetManifestEntry {
   displayName?: string;
@@ -105,60 +96,49 @@ test("renders a Rust-backed custom resource", () => {
 }, 120_000);
 
 test("uses the packaged arm64 prebuilt provider by default", () => {
-  const cleanup = ensurePrebuiltBootstrapAssets();
-  try {
-    const stack = new Stack();
-    const destinationBucket = new Bucket(stack, "Dest");
+  const stack = new Stack();
+  const destinationBucket = new Bucket(stack, "Dest");
 
-    new ShinBucketDeployment(stack, "Deploy", {
-      sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
-      destination: {
-        bucket: destinationBucket,
-      },
-    });
+  new ShinBucketDeployment(stack, "Deploy", {
+    sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
+    destination: {
+      bucket: destinationBucket,
+    },
+  });
 
-    const template = Template.fromStack(stack);
+  const template = Template.fromStack(stack);
 
-    template.hasResourceProperties("AWS::Lambda::Function", {
-      Runtime: "provided.al2023",
-      Handler: "bootstrap",
-      Architectures: ["arm64"],
-    });
-  } finally {
-    cleanup();
-  }
+  template.hasResourceProperties("AWS::Lambda::Function", {
+    Runtime: "provided.al2023",
+    Handler: "bootstrap",
+    Architectures: ["arm64"],
+  });
 });
 
 test("uses the packaged x86_64 prebuilt provider when requested", () => {
-  const cleanup = ensurePrebuiltBootstrapAssets();
-  try {
-    const stack = new Stack();
-    const destinationBucket = new Bucket(stack, "Dest");
+  const stack = new Stack();
+  const destinationBucket = new Bucket(stack, "Dest");
 
-    new ShinBucketDeployment(stack, "Deploy", {
-      sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
-      destination: {
-        bucket: destinationBucket,
-      },
-      providerLambda: {
-        architecture: Architecture.X86_64,
-      },
-    });
+  new ShinBucketDeployment(stack, "Deploy", {
+    sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
+    destination: {
+      bucket: destinationBucket,
+    },
+    providerLambda: {
+      architecture: Architecture.X86_64,
+    },
+  });
 
-    const template = Template.fromStack(stack);
+  const template = Template.fromStack(stack);
 
-    template.hasResourceProperties("AWS::Lambda::Function", {
-      Runtime: "provided.al2023",
-      Handler: "bootstrap",
-      Architectures: ["x86_64"],
-    });
-  } finally {
-    cleanup();
-  }
+  template.hasResourceProperties("AWS::Lambda::Function", {
+    Runtime: "provided.al2023",
+    Handler: "bootstrap",
+    Architectures: ["x86_64"],
+  });
 });
 
 test("stages the packaged provider archive byte-for-byte as a file asset", () => {
-  const cleanupAssets = ensurePrebuiltBootstrapAssets();
   const outdir = mkdtempSync(join(tmpdir(), "shin-prebuilt-synth-"));
   try {
     const app = new App({ outdir });
@@ -190,83 +170,72 @@ test("stages the packaged provider archive byte-for-byte as a file asset", () =>
 
     expect(matchingAssets).toHaveLength(1);
   } finally {
-    cleanupAssets();
     rmSync(outdir, { recursive: true, force: true });
   }
 });
 
 test("reuses a shared prebuilt handler for identical provider configuration", () => {
-  const cleanup = ensurePrebuiltBootstrapAssets();
-  try {
-    const stack = new Stack();
-    const firstBucket = new Bucket(stack, "FirstDest");
-    const secondBucket = new Bucket(stack, "SecondDest");
+  const stack = new Stack();
+  const firstBucket = new Bucket(stack, "FirstDest");
+  const secondBucket = new Bucket(stack, "SecondDest");
 
-    const first = new ShinBucketDeployment(stack, "FirstDeploy", {
-      sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
-      destination: {
-        bucket: firstBucket,
-      },
-    });
+  const first = new ShinBucketDeployment(stack, "FirstDeploy", {
+    sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
+    destination: {
+      bucket: firstBucket,
+    },
+  });
 
-    const second = new ShinBucketDeployment(stack, "SecondDeploy", {
-      sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
-      destination: {
-        bucket: secondBucket,
-      },
-      providerLambda: {
-        sharing: ProviderSharing.STACK,
-      },
-    });
+  const second = new ShinBucketDeployment(stack, "SecondDeploy", {
+    sources: [Source.asset(join(__dirname, "..", "fixtures", "my-website"))],
+    destination: {
+      bucket: secondBucket,
+    },
+    providerLambda: {
+      sharing: ProviderSharing.STACK,
+    },
+  });
 
-    expect(first.handlerFunction).toBe(second.handlerFunction);
+  expect(first.handlerFunction).toBe(second.handlerFunction);
 
-    const lambdaFunctions = Template.fromStack(stack).findResources("AWS::Lambda::Function");
-    expect(Object.keys(lambdaFunctions)).toHaveLength(1);
-  } finally {
-    cleanup();
-  }
+  const lambdaFunctions = Template.fromStack(stack).findResources("AWS::Lambda::Function");
+  expect(Object.keys(lambdaFunctions)).toHaveLength(1);
 });
 
 test("binds shared prebuilt handler identity to the package version and archive bytes", () => {
-  const cleanup = ensurePrebuiltBootstrapAssets();
-  try {
-    const stack = new Stack();
-    const destinationBucket = new Bucket(stack, "Dest");
-    const deployment = new ShinBucketDeployment(stack, "Deploy", {
-      sources: [Source.data("index.html", "ok")],
-      destination: {
-        bucket: destinationBucket,
-      },
-    });
-    const manifest = JSON.parse(
-      readFileSync(join(__dirname, "..", "..", "package.json"), "utf8"),
-    ) as { version: string };
-    const bootstrapArchive = readFileSync(
-      join(__dirname, "..", "..", "assets", "bootstrap-arm64", "bootstrap.zip"),
-    );
-    const handlerHash = createHash("sha256")
-      .update(
-        stableStringify({
+  const stack = new Stack();
+  const destinationBucket = new Bucket(stack, "Dest");
+  const deployment = new ShinBucketDeployment(stack, "Deploy", {
+    sources: [Source.data("index.html", "ok")],
+    destination: {
+      bucket: destinationBucket,
+    },
+  });
+  const manifest = JSON.parse(
+    readFileSync(join(__dirname, "..", "..", "package.json"), "utf8"),
+  ) as { version: string };
+  const bootstrapArchive = readFileSync(
+    join(__dirname, "..", "..", "assets", "bootstrap-arm64", "bootstrap.zip"),
+  );
+  const handlerHash = createHash("sha256")
+    .update(
+      stableStringify({
+        architecture: "arm64",
+        failureDiagnostics: FailureDiagnostics.STANDARD,
+        handlerSource: {
+          kind: "prebuilt",
+          packageVersion: manifest.version,
           architecture: "arm64",
-          failureDiagnostics: FailureDiagnostics.STANDARD,
-          handlerSource: {
-            kind: "prebuilt",
-            packageVersion: manifest.version,
-            architecture: "arm64",
-            bootstrapArchiveSha256: createHash("sha256").update(bootstrapArchive).digest("hex"),
-          },
-          memoryLimit: 2048,
-          stack: stack.node.addr,
-        }),
-      )
-      .digest("hex")
-      .slice(0, 16);
+          bootstrapArchiveSha256: createHash("sha256").update(bootstrapArchive).digest("hex"),
+        },
+        memoryLimit: 2048,
+        stack: stack.node.addr,
+      }),
+    )
+    .digest("hex")
+    .slice(0, 16);
 
-    expect(deployment.handlerFunction.node.id).toBe(`ShinBucketDeploymentHandler${handlerHash}`);
-  } finally {
-    cleanup();
-  }
+  expect(deployment.handlerFunction.node.id).toBe(`ShinBucketDeploymentHandler${handlerHash}`);
 });
 
 test("serializes the prebuilt handler configuration canonically", () => {
@@ -557,31 +526,26 @@ test("keeps omitted and explicit stack-scoped provider templates identical", () 
 });
 
 test("treats an empty providerLambda group as exact omission", () => {
-  const cleanup = ensurePrebuiltBootstrapAssets();
-  try {
-    function synth(providerLambda: Record<string, never> | undefined): {
-      readonly handlerId: string;
-      readonly template: Record<string, unknown>;
-    } {
-      const stack = new Stack();
-      const deployment = new ShinBucketDeployment(stack, "Deploy", {
-        sources: [Source.data("index.html", "ok")],
-        destination: { bucket: new Bucket(stack, "Dest") },
-        ...(providerLambda === undefined ? {} : { providerLambda }),
-      });
-      return {
-        handlerId: deployment.handlerFunction.node.id,
-        template: Template.fromStack(stack).toJSON(),
-      };
-    }
-
-    const omitted = synth(undefined);
-    const empty = synth({});
-    expect(empty.handlerId).toBe(omitted.handlerId);
-    expect(empty.template).toEqual(omitted.template);
-  } finally {
-    cleanup();
+  function synth(providerLambda: Record<string, never> | undefined): {
+    readonly handlerId: string;
+    readonly template: Record<string, unknown>;
+  } {
+    const stack = new Stack();
+    const deployment = new ShinBucketDeployment(stack, "Deploy", {
+      sources: [Source.data("index.html", "ok")],
+      destination: { bucket: new Bucket(stack, "Dest") },
+      ...(providerLambda === undefined ? {} : { providerLambda }),
+    });
+    return {
+      handlerId: deployment.handlerFunction.node.id,
+      template: Template.fromStack(stack).toJSON(),
+    };
   }
+
+  const omitted = synth(undefined);
+  const empty = synth({});
+  expect(empty.handlerId).toBe(omitted.handlerId);
+  expect(empty.template).toEqual(omitted.template);
 });
 
 test("creates separate handlers when the provider configuration differs", () => {

@@ -12,7 +12,6 @@ import {
   type ShinBucketDeploymentLocalBuildOptions,
   Source,
 } from "../../src";
-import { ensurePrebuiltBootstrapAssets } from "../support/prebuilt-assets";
 
 const scratchDirectories: string[] = [];
 afterEach(() => {
@@ -197,41 +196,36 @@ test("keeps local handler identities stable across checkout moves and source or 
 });
 
 test("replaces a shared provider with an isolated local build and a distinct ownership tag", () => {
-  const cleanup = ensurePrebuiltBootstrapAssets();
-  try {
-    function synth(local: boolean) {
-      const root = scratch();
-      const stack = new Stack(new App({ outdir: join(root, "assembly") }), "ReplacementStack");
-      new ShinBucketDeployment(stack, "Deploy", {
-        sources: [Source.data("index.txt", "ok")],
-        destination: { bucket: new Bucket(stack, "Bucket"), keyPrefix: "site" },
-        destinationLifecycle: { onDelete: { deleteCurrentObjects: true } },
-        providerLambda: local
-          ? { localBuild: localBuild(project(root, "provider", "fn main() {}"), "hook", []) }
-          : {},
-      });
-      const template = Template.fromStack(stack);
-      const resource = Object.entries(
-        template.findResources("AWS::CloudFormation::CustomResource"),
-      )[0];
-      const bucket = Object.values(template.findResources("AWS::S3::Bucket"))[0];
-      if (!resource || !bucket) throw new Error("Deployment resources not found");
-      return { resource, tags: bucket.Properties.Tags };
-    }
-    const previous = synth(false);
-    const isolated = synth(true);
-    expect(isolated.resource[0]).not.toBe(previous.resource[0]);
-    expect(isolated.resource[1].Properties.ServiceToken).not.toEqual(
-      previous.resource[1].Properties.ServiceToken,
-    );
-    const owner = isolated.resource[1].Properties.DestinationOwnerId;
-    expect(owner).not.toBe(previous.resource[1].Properties.DestinationOwnerId);
-    expect(isolated.tags).toContainEqual({ Key: `aws-cdk:cr-owned:site:${owner}`, Value: "true" });
-    expect(isolated.tags).not.toEqual(previous.tags);
-    expect(isolated.resource[1].Properties.DestinationLifecycle.OnDelete.DeleteCurrentObjects).toBe(
-      true,
-    );
-  } finally {
-    cleanup();
+  function synth(local: boolean) {
+    const root = scratch();
+    const stack = new Stack(new App({ outdir: join(root, "assembly") }), "ReplacementStack");
+    new ShinBucketDeployment(stack, "Deploy", {
+      sources: [Source.data("index.txt", "ok")],
+      destination: { bucket: new Bucket(stack, "Bucket"), keyPrefix: "site" },
+      destinationLifecycle: { onDelete: { deleteCurrentObjects: true } },
+      providerLambda: local
+        ? { localBuild: localBuild(project(root, "provider", "fn main() {}"), "hook", []) }
+        : {},
+    });
+    const template = Template.fromStack(stack);
+    const resource = Object.entries(
+      template.findResources("AWS::CloudFormation::CustomResource"),
+    )[0];
+    const bucket = Object.values(template.findResources("AWS::S3::Bucket"))[0];
+    if (!resource || !bucket) throw new Error("Deployment resources not found");
+    return { resource, tags: bucket.Properties.Tags };
   }
+  const previous = synth(false);
+  const isolated = synth(true);
+  expect(isolated.resource[0]).not.toBe(previous.resource[0]);
+  expect(isolated.resource[1].Properties.ServiceToken).not.toEqual(
+    previous.resource[1].Properties.ServiceToken,
+  );
+  const owner = isolated.resource[1].Properties.DestinationOwnerId;
+  expect(owner).not.toBe(previous.resource[1].Properties.DestinationOwnerId);
+  expect(isolated.tags).toContainEqual({ Key: `aws-cdk:cr-owned:site:${owner}`, Value: "true" });
+  expect(isolated.tags).not.toEqual(previous.tags);
+  expect(isolated.resource[1].Properties.DestinationLifecycle.OnDelete.DeleteCurrentObjects).toBe(
+    true,
+  );
 });

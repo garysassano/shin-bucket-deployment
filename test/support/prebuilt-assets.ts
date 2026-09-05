@@ -3,7 +3,9 @@ import { dirname, join } from "node:path";
 
 const repoRoot = join(__dirname, "..", "..");
 
-export function ensurePrebuiltBootstrapAssets(): () => void {
+// Own fixture archives for the entire Vitest run: a suite that finishes early
+// must not delete archives still in use by another worker.
+export default function setupPrebuiltBootstrapAssets(): () => void {
   const created: string[] = [];
 
   for (const arch of ["arm64", "x86_64"]) {
@@ -20,7 +22,6 @@ export function ensurePrebuiltBootstrapAssets(): () => void {
   return () => {
     for (const archivePath of created) {
       rmSync(archivePath, { force: true });
-      rmSync(dirname(archivePath), { recursive: true, force: true });
     }
   };
 }
