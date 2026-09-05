@@ -6,19 +6,45 @@ Runbooks, evidence collection rules, schema guidance, and sanitization rules liv
 
 Provider-summary schema-5 result rows, their generated reports, and their chart live in `archive/` and are not current evidence.
 
-## Runtime dependency BEFORE baseline
+## Runtime dependency maintenance decision
 
-Run `ab9ac956-af55-40a0-9139-23bace5acb4c` is the complete BEFORE baseline for the M03 runtime dependency refresh. It measured clean `main` commit `339da0427002b56614c8dd54ab33c403cc5af1d4`, before the runtime change in `b499009c157b468fb521bec0de683bf03acdeaa4`. The run records retain decision `stabilization-runtime-dependencies-20260905`, comparison variant `before`, exact provider provenance, and cleanup status.
+Retain the [reviewed runtime dependency refresh](runtime-dependency-review.md) with its measured performance tradeoff. The benefits are corrected compression-buffer position/bounds handling, LRU lifetime and panic-safety corrections, SDK clock-skew correction, and Lambda invocation-ID handling. The pair does not establish a speedup or zero regression. No numerical acceptance threshold was prespecified for this maintenance update; the decision considers these correctness benefits alongside every measured workload, its spread, and the upstream controls.
 
-The baseline includes 240 samples: Shin and upstream AWS CDK `BucketDeployment`, three profiles, two Lambda configurations, four phases, and five repetitions per cell. Shin used `DETAILED` diagnostics. All 60 planned stacks reached `DELETE_COMPLETE`, and independent cleanup probes confirmed that all 60 captured buckets no longer existed, with no cleanup errors.
+| Side   | Run UUID                               | Exact measured clean `main` commit         |
+| ------ | -------------------------------------- | ------------------------------------------ |
+| BEFORE | `ab9ac956-af55-40a0-9139-23bace5acb4c` | `339da0427002b56614c8dd54ab33c403cc5af1d4` |
+| AFTER  | `57536204-0786-4c2f-8b51-1708dd98a59c` | `b499009c157b468fb521bec0de683bf03acdeaa4` |
 
-The generated comparisons below describe this baseline only. M03 performance acceptance remains pending comparable completed AFTER evidence, review of the before/after results and telemetry, and publication of both validated ledgers on `main`. The earlier incomplete attempt is excluded. Repetitions ran concurrently, so local wall and CDK deployment times must not be compared directly with older sequential runs.
+Both runs retain decision `stabilization-runtime-dependencies-20260905` and their original `before`/`after` variant, exact provider provenance, telemetry, and cleanup records. Each contains 240 samples: Shin and upstream AWS CDK `BucketDeployment`, three profiles, two Lambda configurations, four phases, and five concurrent repetitions per cell. Shin used `DETAILED` diagnostics. Configuration, asset digests, installed dependencies, application build, toolchain, execution environment, and upstream provider code matched. The original configuration digests differ because they include the intended variant label; each was independently recomputed and validated.
+
+Provider-duration medians increased in 16 of 24 cells and decreased in eight. The largest absolute increase was 103 ms for `tiny-many` cold-create at 1024 MiB / 32 transfers; the largest percentage increase was 8.59% for `mixed` pruned-update at 2048 MiB / 64 transfers. Billed-duration medians increased by at most 6.38%, and peak-memory medians changed by −10 to +2 MiB. Shin's AFTER provider medians remain 4.67–53.53 times faster than upstream in these cells, but that advantage does not cancel the regressions. The [complete before/after comparison](../benchmarks/runtime-dependency-comparison.md) retains all 24 cells, quartiles, ranges, initialization, billing, memory, and end-to-end timings.
+
+The table includes all six provider-median increases of at least 5%, the largest absolute increase, and the largest percentage improvement. This is a review aid, not a newly imposed acceptance threshold.
+
+| Profile / MiB / transfers | Phase            | Provider s, before → after | Δ provider | Δ billed | AWS Δ provider | Before IQR s | After IQR s |
+| ------------------------- | ---------------- | -------------------------: | ---------: | -------: | -------------: | -----------: | ----------: |
+| mixed / 1024 / 32         | pruned-update    |              1.071 → 1.125 |     +5.04% |   +4.37% |         -0.51% |  1.064–1.108 |  1.11–1.172 |
+| mixed / 2048 / 64         | changed-update   |              0.359 → 0.382 |     +6.41% |   +5.83% |         +1.18% |  0.353–0.362 | 0.373–0.414 |
+| mixed / 2048 / 64         | pruned-update    |              1.024 → 1.112 |     +8.59% |   +6.38% |         -0.76% |  1.022–1.078 | 1.028–1.122 |
+| tiny-many / 1024 / 32     | cold-create      |               2.607 → 2.71 |     +3.95% |   +3.74% |         -6.06% |  2.534–2.615 | 2.502–2.734 |
+| tiny-many / 1024 / 32     | unchanged-update |              0.468 → 0.507 |     +8.33% |   +2.19% |         +0.98% |  0.463–0.505 | 0.475–0.523 |
+| tiny-many / 2048 / 64     | changed-update   |              0.564 → 0.597 |     +5.85% |   +3.90% |         +1.41% |  0.563–0.579 | 0.588–0.617 |
+| large-few / 2048 / 64     | changed-update   |              0.419 → 0.387 |     -7.64% |   -6.04% |         -1.43% |  0.412–0.454 | 0.375–0.402 |
+| large-few / 2048 / 64     | pruned-update    |              0.454 → 0.483 |     +6.39% |   +5.37% |         +0.81% |  0.447–0.459 | 0.462–0.504 |
+
+Four of those six slower cells have non-overlapping IQRs: `mixed` 1024 MiB pruned-update, `mixed` 2048 MiB changed-update, `tiny-many` 2048 MiB changed-update, and `large-few` 2048 MiB pruned-update. All observed provider-duration ranges overlap, which does not establish that an effect is absent. Five samples from separate time windows support descriptive comparison, not a significance claim. Upstream movement is reported alongside Shin; it is not a causal correction.
+
+Telemetry locates the measured time without identifying its cause. At 1024 MiB, `mixed` pruned-update deletion time rises from a 653 ms median to 729 ms, while `tiny-many` unchanged-update destination listing rises from 195 to 234 ms with no transfers. At 2048 MiB, `mixed` changed-update planning rises from 136 to 149 ms; `tiny-many` changed-update planning and transfer each rise by 10 ms; and `large-few` pruned-update planning and transfer rise by 13 and 16 ms. Conversely, `large-few` changed-update transfer falls from 188 to 162 ms. The largest percentage regression, `mixed` 2048 MiB pruned-update, includes AFTER deletion spans of 710 and 752 ms in two slower samples and a 227 ms planning span in the slowest sample. Its overall median cannot be reconstructed by adding independent phase medians. These observations do not distinguish dependency overhead from request-latency variation.
+
+Object, byte, catalog, deletion, and callback work counters and fetched source bytes match across every corresponding sample. Source/transfer/delete/callback retries, errors and throttles, block refetches, body replays, replay-after-release events, transfer failures/cancellations/panics, and release anomalies are all zero in both runs. Initialization medians change by −11 to +4 ms; the runner forces a fresh provider environment for every phase, so unchanged-update does not measure warm handler reuse. The bounded memory changes and unchanged work/pressure counters support retaining the maintenance fix, without proving that its latency cost is zero or attributing it to a particular crate.
+
+Independent cleanup confirmed all 60 planned stacks reached `DELETE_COMPLETE` and all 60 captured buckets returned `NoSuchBucket` for each run, with no cleanup errors. Both validated sample sets and matching run records are retained in the ledger; the earlier incomplete attempt remains excluded. This decision covers the measured arm64 M03 provider commit, not the later complete release candidate or x86 performance. The rebuilt x86 artifact has separate local correctness coverage, and deployed correctness/replacement verification remains a separate release gate. Repetitions ran concurrently, so local wall and CDK deployment times must not be compared directly with older sequential runs.
 
 <!-- benchmark-ci:start -->
 
 ## Latest CI benchmark
 
-The latest complete canonical five-repetition run was collected by GitHub Actions on 2026-09-05 from source commit `339da04`. It contains five independently collected parallel repetitions of all canonical profiles across all four phases. The sanitized run UUID is `ab9ac956-af55-40a0-9139-23bace5acb4c`; raw AWS output remains outside git.
+The latest complete canonical five-repetition run was collected by GitHub Actions on 2026-09-05 from source commit `b499009`. It contains five independently collected parallel repetitions of all canonical profiles across all four phases. The sanitized run UUID is `57536204-0786-4c2f-8b51-1708dd98a59c`; raw AWS output remains outside git.
 
 | Field                 | Value                                                      |
 | --------------------- | ---------------------------------------------------------- |
@@ -29,30 +55,30 @@ The latest complete canonical five-repetition run was collected by GitHub Action
 
 | Profile     |  MiB | Max concurrency | Phase              |   n | Provider s, Shin / AWS | AWS/Shin | Local wall s, Shin / AWS | Max MiB, Shin / AWS |
 | ----------- | ---: | --------------: | ------------------ | --: | ---------------------: | -------: | -----------------------: | ------------------: |
-| `large-few` | 1024 |              32 | `cold-create`      |   5 |              2 / 9.429 |   4.715x |          71.923 / 77.685 |           126 / 447 |
-| `large-few` | 1024 |              32 | `unchanged-update` |   5 |          0.239 / 9.447 |  39.527x |          35.099 / 43.903 |            32 / 447 |
-| `large-few` | 1024 |              32 | `changed-update`   |   5 |          0.493 / 9.472 |  19.213x |          38.442 / 50.504 |            41 / 447 |
-| `large-few` | 1024 |              32 | `pruned-update`    |   5 |           0.511 / 8.96 |  17.534x |          40.944 / 49.825 |            39 / 416 |
-| `large-few` | 2048 |              64 | `cold-create`      |   5 |          1.162 / 5.163 |   4.443x |          77.189 / 71.583 |           193 / 447 |
-| `large-few` | 2048 |              64 | `unchanged-update` |   5 |          0.222 / 5.171 |  23.293x |          33.359 / 38.646 |            32 / 447 |
-| `large-few` | 2048 |              64 | `changed-update`   |   5 |           0.419 / 5.24 |  12.506x |          40.057 / 43.148 |            40 / 447 |
-| `large-few` | 2048 |              64 | `pruned-update`    |   5 |          0.454 / 4.948 |  10.899x |           39.76 / 44.456 |            40 / 417 |
-| `mixed`     | 1024 |              32 | `cold-create`      |   5 |          1.262 / 9.866 |   7.818x |          70.977 / 79.957 |           107 / 281 |
-| `mixed`     | 1024 |              32 | `unchanged-update` |   5 |          0.28 / 10.283 |  36.725x |          33.557 / 44.943 |            33 / 281 |
-| `mixed`     | 1024 |              32 | `changed-update`   |   5 |          0.402 / 10.35 |  25.746x |          38.957 / 49.331 |            37 / 281 |
-| `mixed`     | 1024 |              32 | `pruned-update`    |   5 |         1.071 / 10.179 |   9.504x |          38.451 / 62.992 |            38 / 273 |
-| `mixed`     | 2048 |              64 | `cold-create`      |   5 |          0.827 / 5.747 |   6.949x |          70.185 / 74.439 |           117 / 283 |
-| `mixed`     | 2048 |              64 | `unchanged-update` |   5 |          0.261 / 5.887 |  22.556x |          33.054 / 38.515 |            33 / 282 |
-| `mixed`     | 2048 |              64 | `changed-update`   |   5 |          0.359 / 5.758 |  16.039x |          39.151 / 43.873 |            37 / 282 |
-| `mixed`     | 2048 |              64 | `pruned-update`    |   5 |          1.024 / 5.643 |   5.511x |          34.409 / 44.295 |            37 / 275 |
-| `tiny-many` | 1024 |              32 | `cold-create`      |   5 |         2.607 / 26.425 |  10.136x |          72.051 / 97.331 |            57 / 219 |
-| `tiny-many` | 1024 |              32 | `unchanged-update` |   5 |         0.468 / 26.875 |  57.425x |          33.749 / 62.479 |            35 / 212 |
-| `tiny-many` | 1024 |              32 | `changed-update`   |   5 |         0.583 / 26.869 |  46.087x |          39.926 / 69.843 |            36 / 214 |
-| `tiny-many` | 1024 |              32 | `pruned-update`    |   5 |          1.35 / 26.667 |  19.753x |          38.567 / 70.315 |            35 / 213 |
-| `tiny-many` | 2048 |              64 | `cold-create`      |   5 |         1.515 / 15.324 |  10.115x |          70.928 / 82.337 |            69 / 223 |
-| `tiny-many` | 2048 |              64 | `unchanged-update` |   5 |         0.483 / 15.216 |  31.503x |          33.326 / 49.231 |            35 / 222 |
-| `tiny-many` | 2048 |              64 | `changed-update`   |   5 |         0.564 / 15.344 |  27.206x |          38.792 / 54.421 |            36 / 222 |
-| `tiny-many` | 2048 |              64 | `pruned-update`    |   5 |         1.306 / 14.844 |  11.366x |           39.79 / 54.325 |            36 / 219 |
+| `large-few` | 1024 |              32 | `cold-create`      |   5 |          1.925 / 9.152 |   4.754x |          74.504 / 80.657 |           116 / 447 |
+| `large-few` | 1024 |              32 | `unchanged-update` |   5 |           0.24 / 9.552 |    39.8x |           37.686 / 46.36 |            33 / 447 |
+| `large-few` | 1024 |              32 | `changed-update`   |   5 |          0.469 / 9.556 |  20.375x |           40.91 / 53.672 |            41 / 447 |
+| `large-few` | 1024 |              32 | `pruned-update`    |   5 |          0.508 / 8.989 |  17.695x |          41.816 / 51.394 |            41 / 417 |
+| `large-few` | 2048 |              64 | `cold-create`      |   5 |          1.142 / 5.333 |    4.67x |          71.895 / 73.125 |           186 / 447 |
+| `large-few` | 2048 |              64 | `unchanged-update` |   5 |          0.209 / 5.226 |  25.005x |          35.159 / 41.579 |            33 / 447 |
+| `large-few` | 2048 |              64 | `changed-update`   |   5 |          0.387 / 5.165 |  13.346x |          41.867 / 46.313 |            40 / 447 |
+| `large-few` | 2048 |              64 | `pruned-update`    |   5 |          0.483 / 4.988 |  10.327x |          37.441 / 45.515 |            40 / 417 |
+| `mixed`     | 1024 |              32 | `cold-create`      |   5 |          1.299 / 9.946 |   7.657x |          74.565 / 80.996 |           105 / 281 |
+| `mixed`     | 1024 |              32 | `unchanged-update` |   5 |         0.282 / 10.366 |  36.759x |          34.679 / 45.133 |            33 / 280 |
+| `mixed`     | 1024 |              32 | `changed-update`   |   5 |          0.41 / 10.429 |  25.437x |          40.717 / 50.085 |            37 / 281 |
+| `mixed`     | 1024 |              32 | `pruned-update`    |   5 |         1.125 / 10.127 |   9.002x |          40.105 / 50.221 |            38 / 273 |
+| `mixed`     | 2048 |              64 | `cold-create`      |   5 |          0.834 / 5.741 |   6.884x |          71.371 / 76.604 |           119 / 283 |
+| `mixed`     | 2048 |              64 | `unchanged-update` |   5 |           0.25 / 5.682 |  22.728x |          35.483 / 39.933 |            33 / 282 |
+| `mixed`     | 2048 |              64 | `changed-update`   |   5 |          0.382 / 5.826 |  15.251x |          37.097 / 46.844 |            37 / 283 |
+| `mixed`     | 2048 |              64 | `pruned-update`    |   5 |            1.112 / 5.6 |   5.036x |          40.337 / 45.783 |            37 / 275 |
+| `tiny-many` | 1024 |              32 | `cold-create`      |   5 |          2.71 / 24.823 |    9.16x |          71.904 / 96.555 |            57 / 220 |
+| `tiny-many` | 1024 |              32 | `unchanged-update` |   5 |         0.507 / 27.138 |  53.527x |          34.514 / 63.351 |            35 / 213 |
+| `tiny-many` | 1024 |              32 | `changed-update`   |   5 |         0.604 / 27.138 |   44.93x |          38.005 / 69.194 |            36 / 212 |
+| `tiny-many` | 1024 |              32 | `pruned-update`    |   5 |          1.373 / 26.46 |  19.272x |          38.112 / 67.986 |            36 / 209 |
+| `tiny-many` | 2048 |              64 | `cold-create`      |   5 |          1.54 / 14.882 |   9.664x |          71.578 / 84.885 |            68 / 223 |
+| `tiny-many` | 2048 |              64 | `unchanged-update` |   5 |         0.454 / 15.627 |  34.421x |          34.635 / 50.975 |            36 / 222 |
+| `tiny-many` | 2048 |              64 | `changed-update`   |   5 |         0.597 / 15.561 |  26.065x |          38.064 / 55.613 |            36 / 222 |
+| `tiny-many` | 2048 |              64 | `pruned-update`    |   5 |         1.358 / 14.973 |  11.026x |          39.699 / 56.874 |            36 / 219 |
 
 The [complete generated report](../benchmarks/ci-report.md) includes quartiles, end-to-end timings, and per-phase deltas. [Provider telemetry](../benchmarks/ci-telemetry.md) contains the sanitized Shin diagnostic tables.
 
