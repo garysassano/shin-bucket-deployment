@@ -60,9 +60,39 @@ describe("benchmark repetition shard merge", () => {
       }),
     ).toThrow("five independently completed repetition shards");
   });
+
+  test("retained failure evidence cannot satisfy the five-repetition publication gate", () => {
+    const fixture = createShards(5);
+    rmSync(join(fixture.shardsDirectory, "repetition-5", "results.jsonl"));
+    expect(() =>
+      mergeBenchmarkShards({
+        configFile: fixture.configFile,
+        inputDirectory: fixture.shardsDirectory,
+        outputFile: join(fixture.root, "merged", "results.jsonl"),
+        runId: fixture.runId,
+        scratchRoot: join(fixture.root, "merged", "scratch"),
+      }),
+    ).toThrow("does not contain the exact sanitized set");
+  });
+
+  test("all five artifacts still require every planned phase", () => {
+    const fixture = createShards(5, true);
+    expect(() =>
+      mergeBenchmarkShards({
+        configFile: fixture.configFile,
+        inputDirectory: fixture.shardsDirectory,
+        outputFile: join(fixture.root, "merged", "results.jsonl"),
+        runId: fixture.runId,
+        scratchRoot: join(fixture.root, "merged", "scratch"),
+      }),
+    ).toThrow("missing planned sample/phase");
+  });
 });
 
-function createShards(count: number): {
+function createShards(
+  count: number,
+  incompleteFinalShard = false,
+): {
   readonly configFile: string;
   readonly root: string;
   readonly runId: string;
@@ -119,7 +149,11 @@ function createShards(count: number): {
       repositoryRoot: root,
     });
     try {
-      session.persist(samples, "destroyed", runs);
+      session.persist(
+        incompleteFinalShard && repetition === count ? samples.slice(1) : samples,
+        "destroyed",
+        runs,
+      );
     } finally {
       session.close();
     }

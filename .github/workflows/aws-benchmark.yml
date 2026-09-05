@@ -240,23 +240,26 @@ jobs:
             --comparison-variant "$COMPARISON_VARIANT"
 
       - name: Stage sanitized repetition evidence
+        if: ${{ always() && env.EVIDENCE_ROOT != '' }}
         run: |
           shard="$RUNNER_TEMP/benchmark-shard"
           mkdir -p "$shard"
-          cp "$RESULTS_FILE" "$shard/results.jsonl"
-          cp "$EVIDENCE_ROOT/runs.jsonl" "$shard/runs.jsonl"
-          cp "$SCRATCH_ROOT/benchmark-run-manifest.json" "$shard/benchmark-run-manifest.json"
-          diff -u \
-            <(printf '%s\n' benchmark-run-manifest.json results.jsonl runs.jsonl | sort) \
-            <(find "$shard" -type f -printf '%P\n' | sort)
-          test -z "$(find "$shard" -type f -empty -print -quit)"
+          for source in \
+            "$RESULTS_FILE" \
+            "$EVIDENCE_ROOT/runs.jsonl" \
+            "$SCRATCH_ROOT/benchmark-run-manifest.json"; do
+            if [[ -f "$source" ]]; then
+              cp "$source" "$shard/"
+            fi
+          done
 
       - name: Upload sanitized repetition evidence
+        if: ${{ always() && env.EVIDENCE_ROOT != '' }}
         uses: actions/upload-artifact@v7
         with:
           name: benchmark-shard-${{ inputs.run_id }}-${{ github.run_attempt }}-r${{ matrix.repetition }}
           path: ${{ runner.temp }}/benchmark-shard
-          if-no-files-found: error
+          if-no-files-found: ignore
           retention-days: 14
 
   aggregate:

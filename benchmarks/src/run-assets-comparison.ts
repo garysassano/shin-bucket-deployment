@@ -118,48 +118,23 @@ async function main(signal: AbortSignal): Promise<void> {
       console.log(`resuming with ${completed.size} completed sample(s)`);
     }
     const startedAtMs = Date.now();
-    // Samples sharing a memory configuration reuse the same stack shape and must stay
-    // ordered; different memory configurations are independent stacks and can overlap.
-    // Provider duration and peak memory come from the CloudWatch REPORT record, so they
-    // stay comparable across concurrent configurations.
-    const configurationQueue = groupRunsByMemoryConfiguration(runs);
-    let capReached = false;
-    let failure: unknown;
-    const worker = async (): Promise<void> => {
-      for (;;) {
-        const group = configurationQueue.shift();
-        if (group === undefined) return;
-        for (const run of group) {
-          if (capReached || failure !== undefined || signal.aborted) return;
-          if (wallClockCapReached(startedAtMs, options.maxWallClockMinutes)) {
-            capReached = true;
-            return;
-          }
-          await assertSourceUnchanged(sourceMetadata, options);
-          try {
-            await runBenchmarkStack({
-              sourceMetadata,
-              options,
-              run,
-              resumeSession,
-              bundles,
-              signal,
-              startedAtMs,
-            });
-          } catch (error) {
-            if (error instanceof WallClockCapError) {
-              capReached = true;
-              return;
-            }
-            failure = error;
-            return;
-          }
-        }
-      }
-    };
-    const workers = Math.max(1, Math.min(options.concurrency, configurationQueue.length));
-    await Promise.all(Array.from({ length: workers }, () => worker()));
-    if (failure !== undefined) throw failure;
+    const { capReached } = await runBenchmarkWorkers({
+      runs,
+      concurrency: options.concurrency,
+      signal,
+      capReached: () => wallClockCapReached(startedAtMs, options.maxWallClockMinutes),
+      assertSourceUnchanged: () => assertSourceUnchanged(sourceMetadata, options),
+      runStack: (run) =>
+        runBenchmarkStack({
+          sourceMetadata,
+          options,
+          run,
+          resumeSession,
+          bundles,
+          signal,
+          startedAtMs,
+        }),
+    });
     if (capReached) {
       console.log("benchmark wall-clock cap reached; no additional stack was started");
     }
@@ -167,6 +142,49 @@ async function main(signal: AbortSignal): Promise<void> {
   } finally {
     resumeSession.close();
   }
+}
+
+export async function runBenchmarkWorkers(args: {
+  readonly runs: readonly PlannedBenchmarkRun[];
+  readonly concurrency: number;
+  readonly signal: AbortSignal;
+  readonly capReached: () => boolean;
+  readonly assertSourceUnchanged: () => Promise<void>;
+  readonly runStack: (run: PlannedBenchmarkRun) => Promise<unknown>;
+}): Promise<{ readonly capReached: boolean }> {
+  // Each configuration owns one ordered stack; independent configurations overlap.
+  const configurationQueue = groupRunsByMemoryConfiguration(args.runs);
+  let capReached = false;
+  let failure: unknown;
+  const worker = async (): Promise<void> => {
+    for (;;) {
+      const group = configurationQueue.shift();
+      if (group === undefined) return;
+      for (const run of group) {
+        if (capReached || failure !== undefined || args.signal.aborted) return;
+        if (args.capReached()) {
+          capReached = true;
+          return;
+        }
+        try {
+          await args.assertSourceUnchanged();
+          if (capReached || failure !== undefined || args.signal.aborted) return;
+          await args.runStack(run);
+        } catch (error) {
+          if (error instanceof WallClockCapError) {
+            capReached = true;
+            return;
+          }
+          failure = error;
+          return;
+        }
+      }
+    }
+  };
+  const workers = Math.max(1, Math.min(args.concurrency, configurationQueue.length));
+  await Promise.all(Array.from({ length: workers }, () => worker()));
+  if (failure !== undefined) throw failure;
+  return { capReached };
 }
 
 /**
