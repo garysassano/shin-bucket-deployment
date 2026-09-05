@@ -38,6 +38,7 @@
     "lib/enums.d.ts",
     "lib/errors.d.ts",
     "lib/index.d.ts",
+    "lib/local-build.d.ts",
     "lib/shin-bucket-deployment.d.ts",
     "assets/bootstrap-arm64/bootstrap.zip",
     "assets/bootstrap-arm64/build-provenance.json",

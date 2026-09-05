@@ -7,7 +7,7 @@ import type {
   ShinBucketDeploymentBundlingCommandHooks,
   ShinBucketDeploymentBundlingDockerOptions,
   ShinBucketDeploymentBundlingOptions,
-} from "../../src";
+} from "../../src/local-build";
 
 /**
  * Type-level structural assertions linking Shin's forked bundling interfaces

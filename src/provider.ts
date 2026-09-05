@@ -10,10 +10,8 @@ import type { Construct } from "constructs";
 import { DEFAULT_FAILURE_DIAGNOSTICS, DEFAULT_PROVIDER_LAMBDA_MEMORY_SIZE_MIB } from "./defaults";
 import { FailureDiagnostics, ProviderSharing } from "./enums";
 import { ValidationError } from "./errors";
-import type {
-  ShinBucketDeploymentLocalBuildOptions,
-  ShinBucketDeploymentProviderLambdaOptions,
-} from "./shin-bucket-deployment";
+import type { ShinBucketDeploymentLocalBuildOptions } from "./local-build";
+import type { ShinBucketDeploymentProviderLambdaOptions } from "./shin-bucket-deployment";
 import { normalizeSingletonValue, stableStringify } from "./stable-json";
 
 const HANDLER_BINARY_NAME = "shin-bucket-deployment-handler";
