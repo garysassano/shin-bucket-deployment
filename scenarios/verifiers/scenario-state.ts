@@ -137,7 +137,7 @@ const SCENARIO_ASSERTIONS: Readonly<Record<string, ScenarioAssertion>> = {
     "BucketName",
     "multi-source/",
     "multi-source/runtime/overlap.txt",
-    "second-source\n",
+    "first-source\n",
   ),
   "external-zips": async ({ outputs, api }) => {
     const bucket = requiredOutput(outputs, "BucketName");

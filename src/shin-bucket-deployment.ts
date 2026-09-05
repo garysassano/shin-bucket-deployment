@@ -1013,7 +1013,7 @@ export class ShinBucketDeployment extends Construct {
   private readonly cr: CustomResource;
   private readonly destinationBucket: Bucket;
   private readonly sources: SourceConfig[];
-  private readonly boundSources: ISource[];
+  private readonly boundSources: Map<ISource, SourceConfig>;
   private _deployedBucket?: IBucket;
   private requestDestinationArn = false;
   private requestObjectKeys = false;
@@ -1090,16 +1090,14 @@ export class ShinBucketDeployment extends Construct {
     }
     this.handlerRole = handlerRole;
 
-    // Track the original source objects as they are bound, so an identical source
-    // object is never bound twice: binding materializes catalogs and creates `Asset`
-    // constructs, and a duplicate later dropped by the config-equality dedup would
-    // leave an orphan staged asset behind. Constructor and incremental sources share
-    // `addSource` so both paths retain the same binding and deduplication behavior.
+    // Cache each source object's binding so reordering it never materializes another
+    // catalog or stages another `Asset`. Constructor and incremental sources share
+    // `addSource` so both paths preserve last-source precedence.
     //
     // Two *distinct* objects that bind to equal configs still stage an asset before
     // the equality check can see them; config equality is only knowable after
     // binding, so that case is inherent rather than an oversight.
-    this.boundSources = [];
+    this.boundSources = new Map();
     this.sources = [];
     for (const source of props.sources) {
       this.addSource(source);
@@ -1326,22 +1324,26 @@ export class ShinBucketDeployment extends Construct {
   /**
    * Add a deployment source after construction.
    *
-   * The source is bound immediately and receives read permissions on the
-   * shared provider role. An equivalent marker-free source already present in
-   * the deployment is not added twice. Re-adding the exact same source object
-   * (one already bound through `sources` or a previous `addSource` call) is
-   * skipped before binding, so no catalog materialization or `Asset` staging
-   * happens for it.
+   * A new source is bound immediately and receives read permissions on the
+   * provider role. Re-adding the same object reuses its binding without another
+   * catalog materialization or `Asset` staging. An existing occurrence of that
+   * object, or an equivalent marker-free source, moves to the last position so
+   * its contents take precedence over earlier sources. Adjacent repeats of the
+   * same object have no effect.
    */
   public addSource(source: ISource): void {
-    if (this.boundSources.includes(source)) {
-      return;
+    let config = this.boundSources.get(source);
+    if (config === undefined) {
+      config = source.bind(this, { handlerRole: this.handlerRole });
+      this.boundSources.set(source, config);
     }
-    const config = source.bind(this, { handlerRole: this.handlerRole });
-    this.boundSources.push(source);
-    if (!this.sources.some((c) => sourceConfigEqual(Stack.of(this), c, config))) {
-      this.sources.push(config);
+    const earlier = this.sources.findIndex(
+      (entry) => entry === config || sourceConfigEqual(Stack.of(this), entry, config),
+    );
+    if (earlier !== -1) {
+      this.sources.splice(earlier, 1);
     }
+    this.sources.push(config);
   }
 }
 
