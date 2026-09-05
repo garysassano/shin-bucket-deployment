@@ -1,8 +1,14 @@
 # Breaking Changes
 
-This file holds release-note text for `ShinBucketDeployment` changes that break adopters' deployed state or in-repo contracts. Releases are published with `gh release create --generate-notes`, which lists pull request titles only; commit bodies never reach the published notes. The repository policy requires deployed-state breakage to be named in the release notes, so when a release is cut, the `## Unreleased` entries below are the text to carry into the notes.
+This file holds authored release notes for `ShinBucketDeployment` changes that break adopters' deployed state or in-repo contracts. During release preparation, rename `## Unreleased` to the exact package version and start a new Unreleased section for later work. The release workflow requires a nonempty section matching the release tag before publication and uses only that section as the GitHub release body, including on reruns; historical notes and pull request titles are not appended.
 
 ## Unreleased
+
+### All stack-shared prebuilt handlers advance to the new provider identity
+
+Affected: every deployment using the packaged provider with omitted sharing or explicit `ProviderSharing.STACK`, on arm64 and x86_64, with or without a VPC. The package version and provider archive SHA-256 both participate in the shared handler identity, so upgrading to this release changes the handler logical ID even when consumer settings are unchanged. CloudFormation creates new generated execution roles and custom resources, and new generated security groups where applicable. The new custom-resource generation has a distinct destination owner and physical resource ID.
+
+The destination ownership tag advances before the old generation is deleted. The old handler detects the overlapping owner and retains the live namespace, including when `onDelete.deleteCurrentObjects` is enabled; the new deployment still applies its normal source comparison and writes. Prebuilt deployments using `ProviderSharing.DEPLOYMENT` keep their handler and custom-resource identities and update provider code in place. Caller-supplied roles, security groups, and log groups remain caller-owned. The local-build change below describes its separate isolation consequences.
 
 ### Local provider compilation is explicit and deployment-scoped
 
@@ -10,7 +16,7 @@ This file holds release-note text for `ShinBucketDeployment` changes that break 
 
 Affected: deployments that used `localBuild` with omitted sharing previously used stack-shared handlers. On upgrade they receive distinct deployment-scoped handlers, generated execution roles, and custom-resource identities. CloudFormation replaces those custom resources because their service tokens change. The destination ownership tag moves to the new generation before the old generation is deleted; the previous handler sees the overlapping owner and retains the live namespace even with `onDelete.deleteCurrentObjects` enabled. Caller-supplied roles and log groups remain caller-owned and may still be shared. Local builds already using `ProviderSharing.DEPLOYMENT` keep their handler and custom-resource identities, and later local source edits or checkout moves update code in place.
 
-A missing prebuilt archive now fails synthesis with `ShinBucketDeploymentPrebuiltProviderArchiveMissing` instead of implicitly compiling Rust. This affects source checkouts without the requested `assets/bootstrap-<arch>/bootstrap.zip` and incomplete package installations. Run `pnpm build:bootstrap` in the checkout, or explicitly configure `providerLambda.localBuild` and the optional `cargo-lambda-cdk` dependency. Ordinary prebuilt installations retain their existing sharing and artifact-based handler identity and need no Rust toolchain.
+A missing prebuilt archive now fails synthesis with `ShinBucketDeploymentPrebuiltProviderArchiveMissing` instead of implicitly compiling Rust. This affects source checkouts without the requested `assets/bootstrap-<arch>/bootstrap.zip` and incomplete package installations. Run `pnpm build:bootstrap` in the checkout, or explicitly configure `providerLambda.localBuild` and the optional `cargo-lambda-cdk` dependency. Ordinary prebuilt installations retain their sharing policy and need no Rust toolchain; their release-wide identity change is described above.
 
 ### Repeated sources now take precedence at their last position
 
