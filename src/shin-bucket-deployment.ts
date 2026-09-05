@@ -655,7 +655,10 @@ export interface ShinBucketDeploymentProviderLambdaOptions {
    * VPC subnet selection.
    *
    * Choose specific subnets when the VPC spans multiple availability zones or
-   * mixes public and private subnets.
+   * mixes public and private subnets. Requires `vpc`. Selectors are evaluated
+   * once per deployment, and the selected subnet IDs in their emitted order
+   * determine stack-shared handler identity. Equivalent selections share a
+   * handler even when expressed with different filters or subnet objects.
    *
    * @default - the VPC default selection
    */
