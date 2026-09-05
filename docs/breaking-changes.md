@@ -16,6 +16,14 @@ Synthesis now validates the destination bucket's rendered `Tags` array after CDK
 
 Affected: applications overriding the entire destination tag set or removing Shin ownership tags through CDK tagging aspects. Preserve the tags added by every deployment sharing the bucket. Valid templates, handler identities, lifecycle behavior, and provider execution are unchanged; this validation does not coordinate arbitrary external writers.
 
+### Reviewed runtime dependencies change prebuilt shared-handler identity
+
+The reviewed Rust runtime refresh changes the rebuilt provider archive on both arm64 and x86_64. With the default `ProviderSharing.STACK` and a prebuilt provider, the archive digest participates in the shared-handler identity, so upgrading creates a new Lambda logical ID and changes the service token. CloudFormation therefore replaces each affected deployment custom resource, even if its destination and source configuration are unchanged.
+
+The existing ownership protection retains the live destination namespace during this replacement: the new generation's ownership tag is applied before deletion of the previous generation, and the previous handler sees the overlapping owner and skips namespace deletion, including when `onDelete.deleteCurrentObjects` is enabled. The destination-derived physical resource ID algorithm, lifecycle settings, and provider wire contract do not change. The replacement can invoke normal deployment work; this is not a promise that no object writes occur.
+
+`ProviderSharing.DEPLOYMENT` keeps its stable handler logical ID and service token; the archive update changes Lambda code in place without forcing custom-resource replacement. This lockfile-only runtime change does not alter the local-build manifest hash, although a separately changed package version or local-build configuration can change handler identity. No compatibility handler is retained. See the [runtime dependency review](runtime-dependency-review.md) for upstream changes and the pending performance-acceptance boundary.
+
 ## 0.13.0
 
 ### Stack-shared handlers advance to the 0.13.0 provider identity

@@ -1,3 +1,0 @@
-{
-  "declaration shin-bucket-deployment.d.ts": "Document the rendered destination tag validation and the requirement that complete Tags overrides preserve every deployment ownership tag with value true."
-}
