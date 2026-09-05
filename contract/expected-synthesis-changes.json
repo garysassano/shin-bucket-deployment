@@ -1,3 +1,0 @@
-{
-  "declaration shin-bucket-deployment.d.ts": "Document single evaluation of provider subnet selectors and stack-shared identity from the effective ordered subnet IDs. Existing verification and benchmark scenarios do not configure a VPC and remain unchanged. Focused VPC templates intentionally change shared-handler/custom-resource identities and preserve the union of each equivalent selection's connectivity dependencies, without adding unselected subnet dependencies."
-}

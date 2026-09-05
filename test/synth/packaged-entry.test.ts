@@ -17,13 +17,8 @@ import { afterEach, describe, expect, test } from "vitest";
 // check run.
 const packagedEntry = join(__dirname, "..", "..", "lib", "index.js");
 const packagedBuildPresent = existsSync(packagedEntry);
-// Synthesizing with the prebuilt provider needs the bootstrap archive, which is
-// produced by the Bootstrap jobs, not by `pnpm build:package` alone. Without it
-// synth fails with a missing-archive error — skip this smoke test when its
-// requested arm64 archive is absent; verify-package exercises the failure path.
-const prebuiltArchivePresent = existsSync(
-  join(__dirname, "..", "..", "assets", "bootstrap-arm64", "bootstrap.zip"),
-);
+// Global setup supplies synthesis-only archive fixtures when real prebuilt
+// archives are absent. verify-package exercises the missing-archive failure.
 
 const cleanupDirectories: string[] = [];
 afterEach(() => {
@@ -34,43 +29,39 @@ afterEach(() => {
 });
 
 describe.skipIf(!packagedBuildPresent)("packaged entry smoke test", () => {
-  test.skipIf(!prebuiltArchivePresent)(
-    "the packaged entry synthesizes a deployment with the prebuilt provider",
-    () => {
-      const packaged = require(packagedEntry) as typeof import("../../src");
-      const outdir = mkdtempSync(join(tmpdir(), "shin-packaged-smoke-"));
-      cleanupDirectories.push(outdir);
-      const app = new App({ outdir });
-      const stack = new Stack(app, "PackagedSmoke");
-      const destinationBucket = new Bucket(stack, "Dest");
+  test("the packaged entry synthesizes a deployment with the prebuilt provider", () => {
+    const packaged = require(packagedEntry) as typeof import("../../src");
+    const outdir = mkdtempSync(join(tmpdir(), "shin-packaged-smoke-"));
+    cleanupDirectories.push(outdir);
+    const app = new App({ outdir });
+    const stack = new Stack(app, "PackagedSmoke");
+    const destinationBucket = new Bucket(stack, "Dest");
 
-      new packaged.ShinBucketDeployment(stack, "Deploy", {
-        sources: [packaged.Source.data("index.html", "ok")],
-        destination: { bucket: destinationBucket },
-      });
+    new packaged.ShinBucketDeployment(stack, "Deploy", {
+      sources: [packaged.Source.data("index.html", "ok")],
+      destination: { bucket: destinationBucket },
+    });
 
-      const template = Template.fromStack(stack).toJSON() as {
-        Resources?: Record<string, unknown>;
-      };
-      const customResource = Object.values(template.Resources ?? {}).find(
-        (resource) =>
-          (resource as { Type?: string }).Type === "AWS::CloudFormation::CustomResource",
-      ) as { Properties?: Record<string, unknown> } | undefined;
-      const destination = customResource?.Properties?.Destination as
-        | { BucketName?: unknown }
-        | undefined;
-      expect(destination?.BucketName).toEqual({
-        Ref: expect.stringMatching(/^Dest/),
-      });
-      // The packaged entry must resolve the prebuilt bootstrap archive relative
-      // to lib/, or no Lambda function would render.
-      expect(
-        Object.values(template.Resources ?? {}).some(
-          (resource) => (resource as { Type?: string }).Type === "AWS::Lambda::Function",
-        ),
-      ).toBe(true);
-    },
-  );
+    const template = Template.fromStack(stack).toJSON() as {
+      Resources?: Record<string, unknown>;
+    };
+    const customResource = Object.values(template.Resources ?? {}).find(
+      (resource) => (resource as { Type?: string }).Type === "AWS::CloudFormation::CustomResource",
+    ) as { Properties?: Record<string, unknown> } | undefined;
+    const destination = customResource?.Properties?.Destination as
+      | { BucketName?: unknown }
+      | undefined;
+    expect(destination?.BucketName).toEqual({
+      Ref: expect.stringMatching(/^Dest/),
+    });
+    // The packaged entry must resolve the prebuilt bootstrap archive relative
+    // to lib/, or no Lambda function would render.
+    expect(
+      Object.values(template.Resources ?? {}).some(
+        (resource) => (resource as { Type?: string }).Type === "AWS::Lambda::Function",
+      ),
+    ).toBe(true);
+  });
 
   test("the packaged entry exports the public API surface", () => {
     const packaged = require(packagedEntry) as typeof import("../../src");

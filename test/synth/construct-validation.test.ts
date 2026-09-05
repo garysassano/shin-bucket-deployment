@@ -6,7 +6,7 @@ import { AllowedMethods, Distribution, ViewerProtocolPolicy } from "aws-cdk-lib/
 import { S3BucketOrigin } from "aws-cdk-lib/aws-cloudfront-origins";
 import { Role } from "aws-cdk-lib/aws-iam";
 import { Bucket, type CfnBucket } from "aws-cdk-lib/aws-s3";
-import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { describe, expect, test } from "vitest";
 import {
   DEFAULT_MAX_COMPRESSION_RATIO,
   DEFAULT_MAX_UNCOMPRESSED_ENTRY_BYTES,
@@ -18,15 +18,6 @@ import {
   type ValidationError,
 } from "../../src";
 import { testLocalProviderBuild } from "../support/bundling";
-import { ensurePrebuiltBootstrapAssets } from "../support/prebuilt-assets";
-
-let cleanupPrebuiltAssets: () => void;
-beforeAll(() => {
-  cleanupPrebuiltAssets = ensurePrebuiltBootstrapAssets();
-});
-afterAll(() => {
-  cleanupPrebuiltAssets();
-});
 
 function customResourceProperties(stack: Stack) {
   const template = Template.fromStack(stack).toJSON() as {
