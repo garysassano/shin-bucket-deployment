@@ -1,3 +1,4 @@
+import { randomBytes, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -843,7 +844,7 @@ describe("benchmark methodology", () => {
     const repositoryRoot = "/repository";
     const expected = { ...sourceMetadata(), gitDirty: false, changedPaths: [] };
     const current = {
-      ...sourceMetadata(),
+      ...expected,
       gitDirty: true,
       changedPaths: [" M benchmarks/results.jsonl", " M benchmarks/runs.jsonl"],
     };
@@ -1070,11 +1071,11 @@ describe("benchmark methodology", () => {
 
   test("binds resume to source, configuration, and runner-owned ledger changes", () => {
     const repositoryRoot = mkdtempSync(join(tmpdir(), "shin-benchmark-resume-"));
-    const scratchRoot = join(repositoryRoot, "..", `scratch-${Date.now()}`);
+    const scratchRoot = join(repositoryRoot, "scratch");
     mkdirSync(scratchRoot, { recursive: true });
     const outputFile = join(repositoryRoot, "results.jsonl");
     const options: BenchmarkRunOptions = {
-      ...parseBenchmarkRunOptions(["--run-id", "00000000-0000-4000-a000-000000000002"]),
+      ...parseBenchmarkRunOptions(["--run-id", randomUUID()]),
       outputFile,
       scratchRoot,
     };
@@ -1165,7 +1166,7 @@ describe("benchmark methodology", () => {
     mkdirSync(scratchRoot, { recursive: true });
     const outputFile = join(repositoryRoot, "results.jsonl");
     const options: BenchmarkRunOptions = {
-      ...parseBenchmarkRunOptions(["--run-id", "00000000-0000-4000-a000-000000000004"]),
+      ...parseBenchmarkRunOptions(["--run-id", randomUUID()]),
       outputFile,
       scratchRoot,
     };
@@ -1203,7 +1204,8 @@ describe("benchmark methodology", () => {
     const scratchRoot = join(repositoryRoot, "scratch");
     mkdirSync(scratchRoot, { recursive: true });
     const outputFile = join(repositoryRoot, "results.jsonl");
-    const runId = "00000000-0000-4000-a000-00000000000d";
+    const runId = randomUUID();
+    const metadata = sourceMetadata();
     const options: BenchmarkRunOptions = {
       ...parseBenchmarkRunOptions([
         "--config",
@@ -1218,7 +1220,7 @@ describe("benchmark methodology", () => {
     };
     const session = openResumeSession({
       options,
-      sourceMetadata: sourceMetadata(),
+      sourceMetadata: metadata,
       repositoryRoot,
     });
     const records = createBenchmarkPlan(options).flatMap((sample) =>
@@ -1248,9 +1250,9 @@ describe("benchmark methodology", () => {
     );
     writeFileSync(runsFile, `${tampered.map((run) => JSON.stringify(run)).join("\n")}\n`);
 
-    expect(() =>
-      openResumeSession({ options, sourceMetadata: sourceMetadata(), repositoryRoot }),
-    ).toThrow("runs ledger changed");
+    expect(() => openResumeSession({ options, sourceMetadata: metadata, repositoryRoot })).toThrow(
+      "runs ledger changed",
+    );
     expect(() =>
       selectValidatedBenchmarkRun({
         runs: readBenchmarkRunRecords(runsFile),
@@ -1363,7 +1365,7 @@ describe("benchmark methodology", () => {
     const repositoryRoot = mkdtempSync(join(tmpdir(), "shin-benchmark-complete-publication-"));
     const outputFile = join(repositoryRoot, "results.jsonl");
     const scratchRoot = join(repositoryRoot, "scratch");
-    const runId = "00000000-0000-4000-a000-000000000005";
+    const runId = randomUUID();
     const options: BenchmarkRunOptions = {
       ...parseBenchmarkRunOptions([
         "--config",
@@ -1440,7 +1442,8 @@ function sourceMetadata(): BenchmarkSourceMetadata {
     providerBootstrapZigVersion: "1.0.0",
     providerBootstrapBuildToolchainSha256: "8".repeat(64),
     providerBootstrapBuildEnvironmentSha256: "7".repeat(64),
-    credentialAccountSha256: "e".repeat(64),
+    // Independent fixtures must not contend on the account/region run lock.
+    credentialAccountSha256: randomBytes(32).toString("hex"),
     credentialIdentitySha256: "4".repeat(64),
   };
 }

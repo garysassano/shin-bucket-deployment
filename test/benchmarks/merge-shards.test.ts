@@ -1,3 +1,4 @@
+import { randomBytes, randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -83,7 +84,8 @@ function createShards(count: number): {
       lambdaConfigs: [{ memoryMb: 1024, parallel: 32 }],
     })}\n`,
   );
-  const runId = "00000000-0000-4000-a000-000000000051";
+  const runId = randomUUID();
+  const metadata = sourceMetadata();
 
   for (let repetition = 1; repetition <= count; repetition += 1) {
     const shardDirectory = join(shardsDirectory, `repetition-${repetition}`);
@@ -113,11 +115,14 @@ function createShards(count: number): {
     const runs = canonicalRuns(options) as BenchmarkRunRecord[];
     const session = openResumeSession({
       options,
-      sourceMetadata: sourceMetadata(),
+      sourceMetadata: metadata,
       repositoryRoot: root,
     });
-    session.persist(samples, "destroyed", runs);
-    session.close();
+    try {
+      session.persist(samples, "destroyed", runs);
+    } finally {
+      session.close();
+    }
   }
   return { configFile, root, runId, shardsDirectory };
 }
@@ -153,7 +158,8 @@ function sourceMetadata(): BenchmarkSourceMetadata {
     providerBootstrapZigVersion: "1.0.0",
     providerBootstrapBuildToolchainSha256: "6".repeat(64),
     providerBootstrapBuildEnvironmentSha256: "5".repeat(64),
-    credentialAccountSha256: "e".repeat(64),
+    // Independent fixtures must not contend on the account/region run lock.
+    credentialAccountSha256: randomBytes(32).toString("hex"),
     credentialIdentitySha256: "4".repeat(64),
   };
 }

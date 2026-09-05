@@ -1,7 +1,8 @@
 const { App, Stack } = require("aws-cdk-lib");
 const { Role, ServicePrincipal } = require("aws-cdk-lib/aws-iam");
-const { writeFileSync } = require("node:fs");
+const { rmSync, writeFileSync } = require("node:fs");
 const { Source } = require("../../dist/src");
+const { catalogedSourceStagingDirectory } = require("../../dist/src/cataloged-source");
 
 const [sourceDirectory, outdir, resultPath] = process.argv.slice(2);
 if (!sourceDirectory || !outdir || !resultPath) {
@@ -13,7 +14,10 @@ const stack = new Stack(app, "MemoryStack");
 const handlerRole = new Role(stack, "HandlerRole", {
   assumedBy: new ServicePrincipal("lambda.amazonaws.com"),
 });
-Source.asset(sourceDirectory).bind(stack, { handlerRole });
-app.synth();
-
-writeFileSync(resultPath, JSON.stringify({ maxRssKb: process.resourceUsage().maxRSS }));
+try {
+  Source.asset(sourceDirectory).bind(stack, { handlerRole });
+  app.synth();
+  writeFileSync(resultPath, JSON.stringify({ maxRssKb: process.resourceUsage().maxRSS }));
+} finally {
+  rmSync(catalogedSourceStagingDirectory(sourceDirectory), { recursive: true, force: true });
+}
