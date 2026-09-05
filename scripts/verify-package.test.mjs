@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import { crc32 } from "node:zlib";
 import { verifyBootstrapProvenance } from "./verify-package.mjs";
 
@@ -15,6 +17,46 @@ const TARGET_BY_ARCH = {
   arm64: "aarch64-unknown-linux-gnu",
   x86_64: "x86_64-unknown-linux-gnu",
 };
+
+test("prepared tarball verification runs without a contributor checkout", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "shin-package-consumer-only-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const verifier = join(dir, "verify-package.mjs");
+  copyFileSync(new URL("./verify-package.mjs", import.meta.url), verifier);
+  const tarball = join(dir, "invalid.tgz");
+  writeFileSync(tarball, "not a tarball");
+
+  const result = spawnSync(process.execPath, [verifier, "--tarball", tarball], {
+    cwd: dir,
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 1);
+  // It must inspect the supplied archive, without trying to build, pack, or read
+  // local lib/assets first. Archive errors must still fail the consumer-only gate.
+  assert.match(result.stderr, /Command failed .*tar -tf/);
+  assert.match(result.stdout, /tarball SHA-256: [a-f0-9]{64}/);
+  assert.equal(existsSync(join(dir, "node_modules")), false);
+});
+
+test("consumer-only mode rejects options that would also pack a new artifact", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "shin-package-conflicting-options-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const packDir = join(dir, "pack");
+  const result = spawnSync(
+    process.execPath,
+    [
+      fileURLToPath(new URL("./verify-package.mjs", import.meta.url)),
+      "--tarball",
+      join(dir, "consumer.tgz"),
+      "--pack-destination",
+      packDir,
+    ],
+    { encoding: "utf8" },
+  );
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /cannot be combined with --pack-destination/);
+  assert.equal(existsSync(packDir), false);
+});
 
 function elfBytes(machine) {
   const elf = Buffer.alloc(64);

@@ -356,7 +356,15 @@ jobs:
           path: assets/bootstrap-x86_64
 
       - name: Verify package contract
-        run: pnpm verify:package
+        run: pnpm verify:package -- --pack-destination "$RUNNER_TEMP/npm-pack"
+
+      - name: Upload verified consumer tarball
+        uses: actions/upload-artifact@v7
+        with:
+          name: consumer-package
+          path: ${{ runner.temp }}/npm-pack/*.tgz
+          if-no-files-found: error
+          retention-days: 1
 
       - name: Verify wire contract schema
         run: pnpm verify:wire-contract
@@ -384,6 +392,37 @@ jobs:
       - name: Verify TypeScript contract self-check
         if: github.event_name != 'pull_request'
         run: pnpm verify:typescript-contract -- --baseline-ref HEAD
+
+  package-node22:
+    name: Package consumer (Node 22)
+    needs: package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install latest patched Node.js 22
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          check-latest: true
+          package-manager-cache: false
+
+      - name: Download verified consumer tarball
+        uses: actions/download-artifact@v8
+        with:
+          name: consumer-package
+          path: ${{ runner.temp }}/npm-pack
+
+      # The contributor job builds and verifies this exact tarball once. This
+      # job installs only consumer peers, with no pnpm or Rust build toolchain.
+      - name: Verify packed Node 22 consumer
+        run: |
+          tarballs=("$RUNNER_TEMP"/npm-pack/*.tgz)
+          test "${#tarballs[@]}" -eq 1
+          node scripts/verify-package.mjs --tarball "${tarballs[0]}"
 
   synth:
     name: Synth verification scenarios
