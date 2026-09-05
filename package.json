@@ -118,7 +118,7 @@
     "ajv": "8.20.0",
     "ajv-formats": "3.0.1",
     "aws-cdk": "2.1139.0",
-    "aws-cdk-lib": "2.266.0",
+    "aws-cdk-lib": "2.267.0",
     "cargo-lambda-cdk": "0.0.36",
     "constructs": "10.8.1",
     "prettier": "3.9.6",
