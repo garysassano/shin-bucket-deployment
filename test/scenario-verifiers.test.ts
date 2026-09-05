@@ -51,6 +51,8 @@ describe("scenario state verifier", () => {
       "site/carriage\rreturn.txt",
       "site/literal%2Fsegment.txt",
       "site/plus+sign.txt",
+      "site/plus sign.txt",
+      "site/line\nfeed.txt",
     ];
     const secondKeys = ["site/日本語.txt", "site/xml&<>\"'.txt", "site/control\u0001.txt"];
     const { api, requests } = replayVerificationApi([
@@ -65,6 +67,17 @@ describe("scenario state verifier", () => {
     expect(requests).toEqual([
       expect.objectContaining({ "encoding-type": "url", prefix: "site/" }),
       expect.objectContaining({ "encoding-type": "url", "continuation-token": "opaque%2F+token" }),
+    ]);
+  });
+
+  it("decodes the observed S3 space and literal-plus wire spellings exactly once", async () => {
+    const { api } = replayVerificationApi([
+      "<ListBucketResult><EncodingType>url</EncodingType><Contents><Key>site/plus+sign.txt</Key></Contents><Contents><Key>site/plus%2Bsign.txt</Key></Contents><Contents><Key>site/literal%252Fsegment.txt</Key></Contents></ListBucketResult>",
+    ]);
+    await expect(api.listObjects("destination")).resolves.toEqual([
+      "site/plus sign.txt",
+      "site/plus+sign.txt",
+      "site/literal%2Fsegment.txt",
     ]);
   });
 
@@ -462,7 +475,7 @@ describe("cleanup verifier", () => {
 });
 
 function listPageXml(keys: readonly string[], continuationToken?: string): string {
-  return `<ListBucketResult><EncodingType>url</EncodingType><IsTruncated>${continuationToken !== undefined}</IsTruncated>${continuationToken === undefined ? "" : `<NextContinuationToken>${continuationToken}</NextContinuationToken>`}${keys.map((key) => `<Contents><Key>${encodeURIComponent(key)}</Key></Contents>`).join("")}</ListBucketResult>`;
+  return `<ListBucketResult><EncodingType>url</EncodingType><IsTruncated>${continuationToken !== undefined}</IsTruncated>${continuationToken === undefined ? "" : `<NextContinuationToken>${continuationToken}</NextContinuationToken>`}${keys.map((key) => `<Contents><Key>${encodeURIComponent(key).replace(/%20/g, "+")}</Key></Contents>`).join("")}</ListBucketResult>`;
 }
 
 function replayVerificationApi(responses: string[]): {
