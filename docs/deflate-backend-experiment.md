@@ -1,0 +1,33 @@
+# DEFLATE backend experiment
+
+P02 rejects adopting `zlib-rs` for the current workloads. Repetitive-content preparation is faster locally, but the bounded CPU saving does not establish material cold-create benefit in the canonical profiles. Keep `miniz_oxide`; no experimental dependency, feature, decoder branch or provider change remains. No AWS run was selected or performed.
+
+## Controlled comparison
+
+The baseline was clean commit `01889da5fba6b69bf3cc34191d441e8f04324fb1`, after the selected runtime dependency refresh and P01 harness. The clean experimental commit was `0140c631aaeaf8efcf2a4e197e14e962df60af42`. Its only changes were a feature-only direct `flate2` dependency enabling `zlib-rs`, the documented cargo-machete exemption, and the lockfile addition of `zlib-rs 0.6.7`. All existing runtime versions remained fixed, including `flate2 1.1.9`. The candidate was reverted after measurement.
+
+The [flate2 1.1.9 documentation](https://docs.rs/flate2/1.1.9/flate2/) and installed crate feature/backend source confirm that this is a supported selection: `zlib-rs` enables `any_zlib`, which excludes the miniz implementation even though its default feature remains transitively enabled. No C backend was enabled. The normal and dev graphs agreed on both provider architectures and the host. This adds an upstream unsafe implementation and a feature-unification maintenance obligation; the provider's own `unsafe_code = "forbid"` stayed unchanged. No source parser, checksum, scheduler, retry setting or runtime algorithm changed.
+
+All six runs used the same 16 immutable P01 ZIP archives, checked by SHA-256 for every case. Candidate fixture generation was not performed: changing the writer could change the compressed bytes. Each run contains seven samples for all 112 cases, with one runtime thread, resident source blocks, concurrency/spool setting 64, and the same Rust/Cargo 1.97.1 thin-LTO release build on a Ryzen 5 7600X under WSL2. Build jobs were capped at two. See the [P01 method](transfer-preparation-benchmark.md) for measured validation, allocation accounting and excluded setup.
+
+The [full local summaries](../benchmarks/local/deflate-backend-experiment.jsonl) retain all six build records and all 672 case distributions, including the noisy candidate repeat. Build records bind source commit, input/lock/compiler hashes, selected features, machine, flags and executable SHA-256 to each sample summary. Baseline executable SHA-256 was `7ede278dc8673183cd0280d2982a1e6c6cc0ed2d9b780aa8132bd8407018bd74`; candidate was `8d13fa2f41f6afe21aea2321333d5cbd5950b833b042ecec410a1ddc80dc19f3`. The fresh baseline reproduced the original binary hash. The final candidate run reused its preserved identical executable and embedded provenance.
+
+## Results and decision
+
+These are cataloged 2 MiB entry medians. Positive reductions mean the candidate was faster. The first comparison uses P01's first baseline; the final comparison uses the fresh baseline immediately preceding the final candidate run.
+
+| Operation                             | First baseline ms | First candidate ms | Reduction | Fresh baseline ms | Final candidate ms | Reduction |
+| ------------------------------------- | ----------------: | -----------------: | --------: | ----------------: | -----------------: | --------: |
+| Repetitive Deflate validation         |             3.600 |              2.915 |    19.02% |             3.597 |              3.052 |    15.16% |
+| Repetitive Deflate cold create        |             3.606 |              2.903 |    19.51% |             3.608 |              3.052 |    15.43% |
+| Repetitive Deflate marker cold create |            11.714 |             10.438 |    10.89% |            11.892 |             10.616 |    10.73% |
+| High-entropy Deflate cold create      |             2.294 |              2.225 |     3.02% |             2.346 |              2.355 |    -0.37% |
+| Repetitive Stored cold create         |             2.219 |              2.132 |     3.90% |             2.199 |              2.191 |     0.34% |
+
+The intermediate candidate repeat had a 3.351 ms repetitive Deflate cold-create median, only 7.06% below the original baseline; Stored controls also slowed by up to about 7%. The final run's high-entropy Stored cold-create control remained 5.48% slower than its fresh baseline while the repetitive Stored control differed only 0.34%. Host variation therefore prevents declaring the full matrix regression-free. The repeated larger repetitive-content gains justify the narrow observation that this backend can reduce CPU cost, without treating all differences as codec effects. Small-entry timings remain especially noisy. Cataloged marker-free unchanged entries decoded zero bytes with both backends.
+
+The focused cold-create saving is approximately 0.28–0.35 ms per decoded MiB on this host. The canonical `large-few` generator contains approximately 37.13 MiB of text, 20.13 MiB of JSON and 80.15 MiB of binary payload, plus small root files. Even assuming that all its text and JSON behave like this repetitive fixture gives only about 16–20 ms of native CPU savings. This is an illustrative workload extrapolation, not a measured upper bound: actual JSON/text shapes, architecture, CPU allocation and concurrency differ. For scale, P01 recorded a historical 2048 MiB/64 large-few cold-create median of 1249 ms; native CPU time cannot be subtracted from Lambda duration or converted into an established Lambda percentage. Summed transfer spans are not a wall-clock CPU partition.
+
+This evidence does not establish the prerequisite material cold-create potential for spending on a canonical AWS comparison. No independently selected larger repetitive-content workload changes that conclusion. The extra dependency/feature maintenance is unwarranted for the current target. Reconsider only when a concrete workload and CPU evidence support a material saving; a future selected implementation still needs exact-main paired AWS evidence, a repeatable 5% provider-duration or billed-cost improvement, and no greater than 3% canonical regression before acceptance.
+
+Candidate exact-body/branch checks for all 112 cases and the harness CRC, declared-size, trusted-MD5 and truncation rejection checks passed. The later full malformed/ZIP64/marker/cancellation/replay suite, both packaged architecture builds, startup and resident-memory comparison were deliberately not run after rejecting at the workload-materiality gate. Incremental live heap is recorded in the matrix and is not process RSS. This is a completed rejection experiment, not a provider correctness certification or a performance-accepted optimization. No README, AWS benchmark ledger or correctness snapshot was changed.
