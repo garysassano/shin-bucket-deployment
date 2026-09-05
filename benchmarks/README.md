@@ -44,7 +44,7 @@ Only README-linked snapshot SVGs are committed under `benchmarks/snapshots`. The
 
 ## Latest Canonical CI Benchmark
 
-GitHub Actions last published a complete five-repetition canonical run dated 2026-09-05 (run `57536204-0786-4c2f-8b51-1708dd98a59c`).
+GitHub Actions last published a complete five-repetition canonical run dated 2026-09-05 (run `ad8b41e3-b7dc-4be0-a087-dfcce4581cc0`).
 
 - [Comparison report](ci-report.md)
 - [Shin provider telemetry](ci-telemetry.md)
