@@ -29,7 +29,8 @@ test = false
 # rather than leaving a standing false positive that trains the reader to skip the
 # tool's output.
 [package.metadata.cargo-machete]
-ignored = ["md-5"]
+# flate2 is feature-only: select the supported decoder used through async-compression.
+ignored = ["md-5", "flate2"]
 
 [lints.rust]
 unsafe_code = "forbid"
@@ -107,6 +108,8 @@ aws-sdk-s3 = { version = "1", default-features = false, features = [
 bytes = "1"
 crc32fast = "1"
 fastrand = "2"
+# Feature selection for the P02 DEFLATE backend experiment; no direct API calls.
+flate2 = { version = "1.1.9", default-features = false, features = ["zlib-rs"] }
 futures-util = "0.3"
 globset = "0.4"
 http-body = "1"
