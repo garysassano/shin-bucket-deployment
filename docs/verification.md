@@ -2,6 +2,10 @@
 
 This page records the latest combined AWS correctness baseline and subsequent targeted or local validation for `ShinBucketDeployment`. Performance evidence and AWS CDK `BucketDeployment` comparisons remain separate in [benchmark](./benchmark.md). Runbooks and sanitization rules live in the `shin-verification` skill at `.agents/skills/shin-verification/SKILL.md`.
 
+## Current Snapshot
+
+This snapshot describes `shin-bucket-deployment@0.13.0`. The full-suite baseline and subsequent checks below identify which implementation each result covers.
+
 ## Latest Combined AWS Baseline
 
 The latest recorded full-suite run is the 2026-08-26 `0.13.0` release-candidate run at implementation commit `fd6de8f`. It passed all 33 verification phases across 20 groups. This baseline does not certify later changes on `main`; their evidence and remaining gaps are identified below.
@@ -37,7 +41,7 @@ The package contract job builds and packs on the contributor Node LTS runtime, v
 
 The latest-patch job covers the Node 22 release line; it does not test every minor release. The published contract remains Node `>=22.0.0`, ES2022 output, and CommonJS with the existing root exports. New Node APIs still require review against Node 22.0.0. This is local/CI package verification and creates no AWS resources. All 11 checks passed for [PR #190](https://github.com/garysassano/shin-bucket-deployment/pull/190), including the Node 22 consumer job in [CI run 33960633868](https://github.com/garysassano/shin-bucket-deployment/actions/runs/33960633868); the change merged as `16d050c`.
 
-## Coverage and Evidence Boundaries
+## Current Coverage and Evidence Boundaries
 
 | Area                                     | Coverage                                                                                                                                                         | Evidence boundary                                                                                                                                        |
 | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
