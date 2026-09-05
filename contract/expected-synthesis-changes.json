@@ -1,3 +1,4 @@
 {
-  "declaration shin-bucket-deployment.d.ts": "Document single evaluation of provider subnet selectors and stack-shared identity from the effective ordered subnet IDs. Existing verification and benchmark scenarios do not configure a VPC and remain unchanged. Focused VPC templates intentionally change shared-handler/custom-resource identities and preserve the union of each equivalent selection's connectivity dependencies, without adding unselected subnet dependencies."
+  "declaration cataloged-source.d.ts": "Clarify caller-owned custom asset hashes and the distinct cataloged-directory, upstream ZIP, and explicit upstream packaging behaviors; public types are unchanged.",
+  "declaration shin-bucket-deployment.d.ts": "Clarify output sequencing and archive keys, last-source ordering, shared-role permissions and replacement, SSE-S3 and versioning limits, expansion heuristics, and nontransactional lifecycle behavior; public types and synthesized resources are unchanged."
 }
