@@ -4,7 +4,7 @@ This page records the latest combined AWS correctness baseline and subsequent ta
 
 ## Current Snapshot
 
-This snapshot describes `shin-bucket-deployment@0.13.0`. The full-suite baseline and subsequent checks below identify which implementation each result covers.
+This snapshot tracks the `shin-bucket-deployment@0.14.0` release candidate. Final integrated correctness verification is pending; the historical full-suite baseline and subsequent checks below identify which implementation each recorded result covers.
 
 ## Latest Combined AWS Baseline
 
