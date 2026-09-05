@@ -423,7 +423,7 @@ function collectAssetFiles(sourcePath: string, options?: CatalogedOptions): Sour
   const pendingDirectories: string[] = [sourcePath];
   while (pendingDirectories.length > 0) {
     const directory = pendingDirectories.pop() as string;
-    const names = fs.readdirSync(directory).sort(compareUtf8);
+    const names = fs.readdirSync(directory).sort(compareCodeUnits);
     for (const name of names) {
       const absolutePath = join(directory, name);
       const stat = fs.lstatSync(absolutePath);
@@ -458,7 +458,7 @@ function collectAssetFiles(sourcePath: string, options?: CatalogedOptions): Sour
     }
   }
 
-  result.sort((left, right) => compareUtf8(left.catalogPath, right.catalogPath));
+  result.sort((left, right) => compareCodeUnits(left.catalogPath, right.catalogPath));
   return result;
 }
 
@@ -688,7 +688,7 @@ function nextCatalogedAssetId(scope: Construct): number {
   return next;
 }
 
-function compareUtf8(left: string, right: string): number {
+function compareCodeUnits(left: string, right: string): number {
   // UTF-16 code-unit ordering makes catalog serialization independent of locale.
   return left < right ? -1 : left > right ? 1 : 0;
 }

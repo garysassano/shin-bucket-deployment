@@ -10,7 +10,10 @@ import type { Construct } from "constructs";
 import { DEFAULT_FAILURE_DIAGNOSTICS, DEFAULT_PROVIDER_LAMBDA_MEMORY_SIZE_MIB } from "./defaults";
 import { FailureDiagnostics, ProviderSharing } from "./enums";
 import { ValidationError } from "./errors";
-import type { ShinBucketDeploymentLocalBuildOptions } from "./shin-bucket-deployment";
+import type {
+  ShinBucketDeploymentLocalBuildOptions,
+  ShinBucketDeploymentProviderLambdaOptions,
+} from "./shin-bucket-deployment";
 import { normalizeSingletonValue, stableStringify } from "./stable-json";
 
 const HANDLER_BINARY_NAME = "shin-bucket-deployment-handler";
@@ -42,21 +45,10 @@ interface HandlerOptions {
   readonly logGroup?: ILogGroupRef;
 }
 
-/** Provider-only internal configuration used for handler selection and creation. */
-export interface ProviderLambdaConfig {
-  readonly sharing?: ProviderSharing;
-  readonly architecture?: Architecture;
-  readonly memorySize?: number;
-  readonly failureDiagnostics?: FailureDiagnostics;
-  readonly role?: IRole;
-  readonly logGroup?: ILogGroupRef;
-  readonly vpc?: IVpc;
-  readonly vpcSubnets?: SubnetSelection;
-  readonly securityGroups?: ISecurityGroup[];
-  readonly localBuild?: ShinBucketDeploymentLocalBuildOptions;
-}
-
-export function getOrCreateHandler(scope: Construct, config: ProviderLambdaConfig): LambdaFunction {
+export function getOrCreateHandler(
+  scope: Construct,
+  config: ShinBucketDeploymentProviderLambdaOptions,
+): LambdaFunction {
   const stack = Stack.of(scope);
   const architecture = config.architecture ?? Architecture.ARM_64;
 
@@ -325,7 +317,7 @@ function loadCargoLambdaCdk(scope: Construct): typeof import("cargo-lambda-cdk")
 
 function renderHandlerConfigHash(
   stack: Stack,
-  config: ProviderLambdaConfig,
+  config: ShinBucketDeploymentProviderLambdaOptions,
   architecture: Architecture,
   handlerSource: Record<string, string>,
   selectedSubnetIds: string[] | undefined,
@@ -341,7 +333,7 @@ function renderHandlerConfigHash(
 /** Exact canonical serialization hashed for an identically configured stack-scoped handler. */
 export function renderHandlerConfigHashInput(
   stack: Stack,
-  config: ProviderLambdaConfig,
+  config: ShinBucketDeploymentProviderLambdaOptions,
   architecture: Architecture,
   handlerSource: Record<string, string>,
   selectedSubnetIds: string[] | undefined,
