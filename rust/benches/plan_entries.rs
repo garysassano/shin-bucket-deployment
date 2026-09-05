@@ -39,7 +39,7 @@
 //!
 //! # Running
 //!
-//! `cargo bench --manifest-path rust/Cargo.toml --features bench-internals` (or
+//! `cargo bench --manifest-path rust/Cargo.toml --bench plan_entries --features bench-internals` (or
 //! `pnpm rust:bench`). The bench is dev-only: `criterion` is a dev-dependency, the
 //! `bench-internals` feature is off by default, and no gate runs `cargo bench`.
 
