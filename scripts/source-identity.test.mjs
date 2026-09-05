@@ -36,6 +36,10 @@ test("source identity binds tracked contents, untracked contents, modes, and exc
 
   const clean = collectSourceIdentity(repository);
   assert.equal(clean.dirty, false);
+  const temporaryLookingSource = join(repository, "_tmp_1234_abcdefgh");
+  writeFileSync(temporaryLookingSource, "untracked source is still source\n");
+  assert.equal(collectSourceIdentity(repository).dirty, true);
+  execFileSync("rm", [temporaryLookingSource]);
   writeFileSync(source, "first change\n");
   const firstTrackedChange = collectSourceIdentity(repository);
   writeFileSync(source, "second change\n");
