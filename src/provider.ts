@@ -60,6 +60,30 @@ export function getOrCreateHandler(scope: Construct, config: ProviderLambdaConfi
   const stack = Stack.of(scope);
   const architecture = config.architecture ?? Architecture.ARM_64;
 
+  if (config.vpcSubnets !== undefined && config.vpc === undefined) {
+    throw new ValidationError(
+      "ShinBucketDeploymentProviderVpcRequired",
+      "Cannot configure 'vpcSubnets' without configuring a VPC",
+      scope,
+    );
+  }
+  // Evaluate caller filters once. Lambda receives these same subnet objects so
+  // its placement, connectivity dependencies, and validation match the identity.
+  const selectedSubnets = config.vpc?.selectSubnets(config.vpcSubnets);
+  if (selectedSubnets && config.vpc) {
+    // Lambda validates public placement by subnet ID, not SelectedSubnets.hasPublic.
+    // Repeat that check before reuse, where Lambda's constructor does not run.
+    // Like Lambda, the check does not exempt pending lookup selections.
+    const publicSubnetIds = new Set(config.vpc.publicSubnets.map((subnet) => subnet.subnetId));
+    if (selectedSubnets.subnetIds.some((subnetId) => publicSubnetIds.has(subnetId))) {
+      throw new ValidationError(
+        "ShinBucketDeploymentProviderPublicSubnet",
+        "Lambda Functions in a public subnet can NOT access the internet. Select private subnets for the provider Lambda.",
+        scope,
+      );
+    }
+  }
+
   // Local builds are isolated: neither a manifest nor a serialized callback
   // identifies the source tree and captured state that the bundler will use.
   const wantsCompile = config.localBuild !== undefined;
@@ -75,6 +99,7 @@ export function getOrCreateHandler(scope: Construct, config: ProviderLambdaConfi
         config,
         architecture,
         prebuiltHandlerSourceIdentity(scope, architecture, prebuiltBootstrapArchive as string),
+        selectedSubnets?.subnetIds,
       )}`
     : ISOLATED_HANDLER_ID;
   const handlerScope = stackScoped ? stack : scope;
@@ -88,6 +113,11 @@ export function getOrCreateHandler(scope: Construct, config: ProviderLambdaConfi
         scope,
       );
     }
+    // Equivalent imported subnet views can contribute different connectivity
+    // dependencies. Retain the dependencies from every caller's selection.
+    if (selectedSubnets) {
+      existing.node.addDependency(selectedSubnets.internetConnectivityEstablished);
+    }
     return existing;
   }
 
@@ -97,7 +127,7 @@ export function getOrCreateHandler(scope: Construct, config: ProviderLambdaConfi
     memorySize: config.memorySize ?? DEFAULT_PROVIDER_LAMBDA_MEMORY_SIZE_MIB,
     role: config.role,
     vpc: config.vpc,
-    vpcSubnets: config.vpcSubnets,
+    vpcSubnets: selectedSubnets && { subnets: selectedSubnets.subnets },
     securityGroups:
       config.securityGroups && config.securityGroups.length > 0 ? config.securityGroups : undefined,
     environment:
@@ -298,9 +328,12 @@ function renderHandlerConfigHash(
   config: ProviderLambdaConfig,
   architecture: Architecture,
   handlerSource: Record<string, string>,
+  selectedSubnetIds: string[] | undefined,
 ): string {
   return createHash("sha256")
-    .update(renderHandlerConfigHashInput(stack, config, architecture, handlerSource))
+    .update(
+      renderHandlerConfigHashInput(stack, config, architecture, handlerSource, selectedSubnetIds),
+    )
     .digest("hex")
     .slice(0, 16);
 }
@@ -311,6 +344,7 @@ export function renderHandlerConfigHashInput(
   config: ProviderLambdaConfig,
   architecture: Architecture,
   handlerSource: Record<string, string>,
+  selectedSubnetIds: string[] | undefined,
 ): string {
   const hashInput = {
     architecture: architecture.name,
@@ -329,7 +363,9 @@ export function renderHandlerConfigHashInput(
         : undefined,
     stack: stack.node.addr,
     vpc: normalizeSingletonValue(config.vpc),
-    vpcSubnets: normalizeSingletonValue(config.vpcSubnets),
+    // Resolve tokens to their CloudFormation expressions before hashing, and
+    // preserve the subnet order emitted to Lambda.
+    vpcSubnets: selectedSubnetIds === undefined ? undefined : stack.resolve(selectedSubnetIds),
   };
   return stableStringify(hashInput);
 }

@@ -4,6 +4,14 @@ This file holds release-note text for `ShinBucketDeployment` changes that break 
 
 ## Unreleased
 
+### Shared VPC handlers use the effective subnet selection
+
+Stack-shared provider handlers now identify subnet placement by the selected subnet IDs resolved to CloudFormation expressions, preserving the order passed to Lambda. Filters with identical executable source but different captured values or prototype methods can no longer place the second deployment in the first deployment's subnets. Equivalent effective selections share a handler, whether specified through VPC defaults, CDK filters, or explicit subnet objects. Each deployment's selectors run once; Lambda receives the same selected subnet objects and retains CDK's public-subnet validation and connectivity dependencies. When a later equivalent selection contributes connectivity dependencies missing from an imported subnet view, the reused handler also gains those dependencies; unselected subnet dependencies are not added.
+
+Affected: every existing deployment with `providerLambda.vpc` using the default or explicit `ProviderSharing.STACK`, including omitted `vpcSubnets`, explicit lists, filters, and imported VPCs or unresolved subnet IDs. On upgrade, the handler identity changes, generated execution roles and security groups are recreated, and CloudFormation replaces the custom resource because its service token and logical ID change. The destination ownership tag moves to the new generation before the old generation is deleted; the old handler retains the live namespace when it sees the overlapping owner, including when `onDelete.deleteCurrentObjects` is enabled. Caller-supplied roles, security groups, and log groups remain caller-owned. Deployments that previously collided now use their own requested subnet placement; equivalent configurations can consolidate onto one shared handler.
+
+This change preserves identities for non-VPC deployments and for `ProviderSharing.DEPLOYMENT`, including explicit local builds. Deployment-scoped VPC handlers receive the evaluated subnet placement in place. Changing the effective subnet order still selects a different shared handler because the emitted Lambda configuration preserves that order. Supplying `vpcSubnets` without `vpc` continues to fail, now before handler reuse with `ShinBucketDeploymentProviderVpcRequired`.
+
 ### Local provider compilation is explicit and deployment-scoped
 
 `providerLambda.localBuild` now defaults to `ProviderSharing.DEPLOYMENT`. Explicit `ProviderSharing.STACK` with `localBuild` fails before resource creation with `ShinBucketDeploymentLocalProviderBuildSharing`; omit `sharing` or select `DEPLOYMENT`. Separate local source trees and captured bundling-hook values can no longer silently reuse the first deployment's compiled provider.
