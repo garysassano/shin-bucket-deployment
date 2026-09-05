@@ -32,7 +32,7 @@ import type { DestinationWriteRetryJitter, FailureDiagnostics } from "./enums";
 import { ProviderSharing } from "./enums";
 import { ValidationError } from "./errors";
 import { grantDestinationPermissions } from "./iam";
-import { PROVIDER_TIMEOUT, type ProviderLambdaConfig, getOrCreateHandler } from "./provider";
+import { PROVIDER_TIMEOUT, getOrCreateHandler } from "./provider";
 import {
   sourceCatalogs,
   sourceConfigEqual,
@@ -1079,18 +1079,6 @@ export class ShinBucketDeployment extends Construct {
     const transfer = props.transfer ?? {};
     const advancedTuning = transfer.advancedTuning ?? {};
     const destinationWriteRetryTuning = advancedTuning.destinationWriteRetry ?? {};
-    const providerLambdaConfig: ProviderLambdaConfig = {
-      sharing: providerLambda.sharing,
-      architecture: providerLambda.architecture,
-      memorySize: providerLambda.memorySize,
-      failureDiagnostics: providerLambda.failureDiagnostics,
-      role: providerLambda.role,
-      logGroup: providerLambda.logGroup,
-      vpc: providerLambda.vpc,
-      vpcSubnets: providerLambda.vpcSubnets,
-      securityGroups: providerLambda.securityGroups,
-      localBuild: providerLambda.localBuild,
-    };
 
     this.destinationBucket = destination.bucket;
     const destinationBucketResource = inspectableDestinationBucketResource(
@@ -1113,7 +1101,7 @@ export class ShinBucketDeployment extends Construct {
       this.node.addDependency(providerLambda.vpc);
     }
 
-    this.handlerFunction = getOrCreateHandler(this, providerLambdaConfig);
+    this.handlerFunction = getOrCreateHandler(this, providerLambda);
 
     const handlerRole = this.handlerFunction.role;
     if (!handlerRole) {
