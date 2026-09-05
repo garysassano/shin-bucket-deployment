@@ -279,7 +279,7 @@ async function runBenchmarkStack(args: {
       await runWithFailedDeployEvidence({
         deploy: async () => {
           await runCommand({
-            command: "pnpm",
+            command: process.execPath,
             args: benchmarkDeployArgs(cdkOutput, options.runId, run.sampleId),
             env: benchmarkEnv({ options, phase, run, stackSuffix }),
             logFile: deployLog,
@@ -573,8 +573,9 @@ export function benchmarkStackCleanupDisposition(args: {
 
 export function benchmarkDeployArgs(cdkOutput: string, runId: string, sampleId: string): string[] {
   return [
-    "exec",
-    "cdk",
+    // Use the same installed CDK whose contents are bound into source metadata.
+    // Starting pnpm here would race its temporary files against other workers' scans.
+    resolve("node_modules", "aws-cdk", "bin", "cdk"),
     "deploy",
     "--app",
     `node ${JSON.stringify(resolve("dist", "benchmarks", "apps", "assets-app.js"))}`,

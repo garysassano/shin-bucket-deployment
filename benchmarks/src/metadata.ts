@@ -66,9 +66,27 @@ export type BenchmarkSourceMetadata = {
   readonly changedPaths: readonly string[];
 };
 
-export async function collectBenchmarkSourceMetadata(
+// pnpm probes can briefly write a project-root temporary file. Keep each probe
+// ahead of its source scan and prevent other workers from probing during it.
+let pendingMetadataCollection: Promise<void> = Promise.resolve();
+
+export function collectBenchmarkSourceMetadata(
   repositoryRoot = process.cwd(),
   evidenceOutputFile: string | undefined = undefined,
+): Promise<BenchmarkSourceMetadata> {
+  const collection = pendingMetadataCollection.then(() =>
+    collectSourceMetadata(repositoryRoot, evidenceOutputFile),
+  );
+  pendingMetadataCollection = collection.then(
+    () => {},
+    () => {},
+  );
+  return collection;
+}
+
+async function collectSourceMetadata(
+  repositoryRoot: string,
+  evidenceOutputFile: string | undefined,
 ): Promise<BenchmarkSourceMetadata> {
   const packageJson = readJson<PackageJson>(join(repositoryRoot, "package.json"));
   const cdkPackage = readJson<PackageJson>(
@@ -96,24 +114,31 @@ export async function collectBenchmarkSourceMetadata(
       "Missing benchmark provider bootstrap or build provenance; run node scripts/build-bootstrap.mjs --benchmark arm64.",
     );
   }
-  const [commit, subject, status, bootstrap, identityText, pnpmVersion, sourceIdentityText] =
-    await Promise.all([
-      commandText("git", ["rev-parse", "HEAD"], repositoryRoot),
-      commandText("git", ["log", "-1", "--format=%s"], repositoryRoot),
-      commandRawText("git", ["status", "--porcelain", "--untracked-files=all"], repositoryRoot),
-      commandBytes("unzip", ["-p", bootstrapArchive, "bootstrap"], repositoryRoot),
-      commandText("aws", ["sts", "get-caller-identity", "--output", "json"], repositoryRoot),
-      commandText("pnpm", ["--version"], repositoryRoot),
-      commandText(
-        "node",
-        [
-          join(repositoryRoot, "scripts", "source-identity.mjs"),
-          repositoryRoot,
-          ...evidenceRelativePaths,
-        ],
+  const pnpmVersion = await commandText("pnpm", ["--version"], repositoryRoot);
+  const metadataCommands = [
+    commandText("git", ["rev-parse", "HEAD"], repositoryRoot),
+    commandText("git", ["log", "-1", "--format=%s"], repositoryRoot),
+    commandRawText("git", ["status", "--porcelain", "--untracked-files=all"], repositoryRoot),
+    commandBytes("unzip", ["-p", bootstrapArchive, "bootstrap"], repositoryRoot),
+    commandText("aws", ["sts", "get-caller-identity", "--output", "json"], repositoryRoot),
+    commandText(
+      "node",
+      [
+        join(repositoryRoot, "scripts", "source-identity.mjs"),
         repositoryRoot,
-      ),
-    ]);
+        ...evidenceRelativePaths,
+      ],
+      repositoryRoot,
+    ),
+  ] as const;
+  const [commit, subject, status, bootstrap, identityText, sourceIdentityText] = await Promise.all(
+    metadataCommands,
+  ).catch(async (error: unknown) => {
+    // A failed credential/Git command must not release the queue while a
+    // concurrent source scan is still reading the working tree.
+    await Promise.allSettled(metadataCommands);
+    throw error;
+  });
   const identity = JSON.parse(identityText) as { Account?: string; Arn?: string };
   if (!identity.Account || !identity.Arn) throw new Error("AWS caller identity is incomplete.");
   const selectedProfile =

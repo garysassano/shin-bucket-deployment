@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { describe, expect, test } from "vitest";
 import {
   aggregateMetric,
@@ -446,6 +446,10 @@ describe("benchmark methodology", () => {
   });
 
   test("retains a failed benchmark stack until telemetry capture and owned cleanup", () => {
+    expect(benchmarkDeployArgs("cdk.out", "run", "sample").slice(0, 2)).toEqual([
+      resolve("node_modules", "aws-cdk", "bin", "cdk"),
+      "deploy",
+    ]);
     expect(benchmarkDeployArgs("cdk.out", "run", "sample")).toContain("--no-rollback");
     expect(
       benchmarkStackCleanupDisposition({
