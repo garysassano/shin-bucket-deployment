@@ -10,6 +10,12 @@ Deployments that repeat a source with another source in between now honor the do
 
 Affected: existing deployments with non-adjacent repeated sources. Their next deployment updates the source sequence in place and can overwrite overlapping destination objects with the last source's contents. This change itself preserves the provider, custom-resource, and destination ownership identities. Each source object is still bound only once, and adjacent repeats of the same object remain idempotent.
 
+### Destination tag overrides must preserve ownership
+
+Synthesis now validates the destination bucket's rendered `Tags` array after CDK aspects and escape-hatch overrides. A complete `Tags` replacement must preserve every Shin deployment's ownership tag with the literal value `"true"`, use unique keys, and stay within S3's 50-tag quota. Overrides that removed, renamed, or disabled an ownership tag previously passed synthesis and now fail with `ShinBucketDeploymentDestinationOwnershipTagRequired`; malformed arrays, duplicate keys, and quota violations also fail before deployment.
+
+Affected: applications overriding the entire destination tag set or removing Shin ownership tags through CDK tagging aspects. Preserve the tags added by every deployment sharing the bucket. Valid templates, handler identities, lifecycle behavior, and provider execution are unchanged; this validation does not coordinate arbitrary external writers.
+
 ## 0.13.0
 
 ### Stack-shared handlers advance to the 0.13.0 provider identity

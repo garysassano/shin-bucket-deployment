@@ -3,6 +3,9 @@ import { type Bucket, CfnBucket } from "aws-cdk-lib/aws-s3";
 import type { Construct } from "constructs";
 import { ValidationError } from "./errors";
 
+// https://docs.aws.amazon.com/AmazonS3/latest/userguide/tagging.html
+const MAX_S3_BUCKET_TAGS = 50;
+
 export function inspectableDestinationBucketResource(scope: Construct, bucket: Bucket): CfnBucket {
   const resource = bucket.node.defaultChild;
   if (!CfnBucket.isCfnBucket(resource)) {
@@ -24,8 +27,9 @@ export function inspectableDestinationBucketResource(scope: Construct, bucket: B
  * properties report `undefined` (or the pre-override value) for a bucket
  * configured purely by escape hatch. Trusting them would silently classify a
  * KMS bucket as SSE-S3 and accept a destination that cannot support
- * incremental deployment, or miss versioning enabled by override. The rendered
- * form is the only representation of what actually deploys.
+ * incremental deployment, miss versioning enabled by override, or accept a tag
+ * override that drops ownership protection. The rendered form is the only
+ * representation of what actually deploys.
  *
  * `_toCloudFormation` is CDK-internal, so a rendering failure is converted into a
  * distinct, stable error rather than surfacing as a raw `TypeError`. Note CDK
@@ -113,6 +117,68 @@ export function validateDestinationEncryption(
     default:
       throw unsupportedDestinationEncryption(scope);
   }
+}
+
+/** Validates the final tag set without undoing consumer escape-hatch overrides. */
+export function validateDestinationTags(
+  scope: Construct,
+  resource: Record<string, unknown>,
+  ownershipTagKey: string,
+): void {
+  const properties = resource.Properties;
+  const renderedTags = isRecord(properties) ? properties.Tags : undefined;
+  const tags = renderedTags === undefined ? [] : renderedTags;
+  if (!Array.isArray(tags)) {
+    throw unsupportedDestinationTags(scope);
+  }
+  if (tags.length > MAX_S3_BUCKET_TAGS) {
+    throw new ValidationError(
+      "ShinBucketDeploymentDestinationTagQuota",
+      `The destination bucket has ${tags.length} synthesized tags, exceeding Amazon S3's ${MAX_S3_BUCKET_TAGS}-tag limit. Each ShinBucketDeployment requires one ownership tag; reduce bucket, stack, aspect, auto-delete, or deployment ownership tags.`,
+      scope,
+    );
+  }
+  const keys = new Set<string>();
+  let ownsDestination = false;
+  for (const tag of tags) {
+    if (!isRecord(tag) || !isTagScalar(tag.Key) || !isTagScalar(tag.Value)) {
+      throw unsupportedDestinationTags(scope);
+    }
+    // Keep ordinary scalar CloudFormation tokens supported. Identical rendered
+    // expressions are duplicates; different expressions can only be compared
+    // after CloudFormation resolves them. Ownership itself must be literal.
+    const key = JSON.stringify(tag.Key);
+    if (keys.has(key)) {
+      throw new ValidationError(
+        "ShinBucketDeploymentDestinationTagKeysUnique",
+        "destination.bucket must synthesize unique tag keys; remove duplicate entries from the rendered Tags array.",
+        scope,
+      );
+    }
+    keys.add(key);
+    if (tag.Key === ownershipTagKey && tag.Value === "true") {
+      ownsDestination = true;
+    }
+  }
+  if (!ownsDestination) {
+    throw new ValidationError(
+      "ShinBucketDeploymentDestinationOwnershipTagRequired",
+      `destination.bucket must synthesize this deployment's ownership tag ${JSON.stringify(ownershipTagKey)} with the value "true". Preserve every ShinBucketDeployment ownership tag when overriding Tags.`,
+      scope,
+    );
+  }
+}
+
+function isTagScalar(value: unknown): boolean {
+  return typeof value === "string" || (isRecord(value) && !Array.isArray(value));
+}
+
+function unsupportedDestinationTags(scope: Construct): ValidationError {
+  return new ValidationError(
+    "ShinBucketDeploymentDestinationTagsUnsupported",
+    "destination.bucket must synthesize an inspectable Tags array of Key/Value pairs.",
+    scope,
+  );
 }
 
 /**

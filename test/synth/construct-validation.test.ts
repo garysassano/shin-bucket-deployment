@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { App, Aws, CfnParameter, RemovalPolicy, Stack, Tags } from "aws-cdk-lib";
+import { App, Aws, CfnParameter, Lazy, RemovalPolicy, Stack, Tags } from "aws-cdk-lib";
 import { Annotations, Match, Template } from "aws-cdk-lib/assertions";
 import type { IDistributionRef } from "aws-cdk-lib/aws-cloudfront";
 import { AllowedMethods, Distribution, ViewerProtocolPolicy } from "aws-cdk-lib/aws-cloudfront";
@@ -994,7 +994,7 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     expect(() => app.synth()).toThrow(/51 synthesized tags.*50-tag limit/);
   });
 
-  test("deduplicates equivalent ownership tags across CDK and raw tag sources", () => {
+  test("preserves rendered ownership when late raw tags use the same key", () => {
     const app = new App();
     const stack = new Stack(app, "DeduplicatedTagLimit");
     const destinationBucket = new Bucket(stack, "Dest");
@@ -1014,6 +1014,199 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     bucketResource.tagsRaw = [{ key: ownershipTagKey, value: "duplicate" }];
 
     expect(() => app.synth()).not.toThrow();
+    Template.fromStack(stack).hasResourceProperties("AWS::S3::Bucket", {
+      Tags: Match.arrayWith([{ Key: ownershipTagKey, Value: "true" }]),
+    });
+  });
+
+  describe("rendered destination tags", () => {
+    function fixture() {
+      const app = new App();
+      const stack = new Stack(app, "RenderedTags");
+      const bucket = new Bucket(stack, "Dest");
+      const deployment = new ShinBucketDeployment(stack, "Deploy", {
+        sources: [Source.data("index.html", "ok")],
+        destination: { bucket },
+        providerLambda: { localBuild: testLocalProviderBuild() },
+      });
+      const resource = bucket.node.defaultChild as CfnBucket;
+      // Resolve only after the deferred Tags aspect has visited the bucket.
+      const owners = Lazy.uncachedAny({
+        produce: () =>
+          (resource.tags.renderTags() ?? []).map(
+            ({ key, value }: { key: string; value: string }) => ({ Key: key, Value: value }),
+          ),
+      });
+      return { app, stack, bucket, deployment, resource, owners };
+    }
+
+    test.each([49, 50])("checks a complete Tags replacement with %i ordinary tags", (count) => {
+      const { app, stack, resource, owners } = fixture();
+      resource.addPropertyOverride(
+        "Tags",
+        Lazy.uncachedAny({
+          produce: () => [
+            ...stack.resolve(owners),
+            ...Array.from({ length: count }, (_, index) => ({
+              Key: `application:${index}`,
+              Value: "true",
+            })),
+          ],
+        }),
+      );
+
+      if (count === 49) {
+        expect(() => app.synth()).not.toThrow();
+        const renderedBucket = Object.values(
+          Template.fromStack(stack).findResources("AWS::S3::Bucket"),
+        )[0];
+        if (!renderedBucket) throw new Error("Destination bucket not found");
+        const tags = renderedBucket.Properties.Tags;
+        expect(tags).toHaveLength(50);
+        expect(
+          tags.filter(({ Key }: { Key: string }) => Key.startsWith("aws-cdk:cr-owned:")),
+        ).toHaveLength(1);
+      } else {
+        expect(() => app.synth()).toThrow(/51 synthesized tags.*50-tag limit/);
+      }
+    });
+
+    test.each(["missing", "renamed", "disabled", "deleted", "aspect-removed"])(
+      "rejects a %s ownership tag",
+      (change) => {
+        const { app, stack, bucket, deployment, resource, owners } = fixture();
+        if (change === "deleted") {
+          resource.addPropertyDeletionOverride("Tags");
+        } else if (change === "aspect-removed") {
+          // An aspect can remove even a tag installed by this construct.
+          const customResource = deployment.node.findChild("CustomResource").node.children[0];
+          if (!customResource) throw new Error("Shin custom resource not found");
+          Tags.of(bucket).remove(`aws-cdk:cr-owned:${customResource.node.addr.slice(-16)}`);
+        } else {
+          resource.addPropertyOverride(
+            "Tags",
+            Lazy.uncachedAny({
+              produce: () =>
+                change === "missing"
+                  ? []
+                  : stack.resolve(owners).map((tag: { Key: string; Value: string }) => ({
+                      Key: change === "renamed" ? `${tag.Key}:renamed` : tag.Key,
+                      Value: change === "disabled" ? "false" : tag.Value,
+                    })),
+            }),
+          );
+        }
+
+        expect(() => app.synth()).toThrow(
+          expect.objectContaining({ code: "ShinBucketDeploymentDestinationOwnershipTagRequired" }),
+        );
+      },
+    );
+
+    test.each([
+      { tags: null },
+      { tags: "invalid" },
+      { tags: [null] },
+      { tags: [{ Value: "true" }] },
+    ])("rejects an uninspectable Tags replacement: %j", ({ tags }) => {
+      const { app, resource } = fixture();
+      resource.addPropertyOverride("Tags", Lazy.uncachedAny({ produce: () => tags }));
+
+      expect(() => app.synth()).toThrow(
+        expect.objectContaining({ code: "ShinBucketDeploymentDestinationTagsUnsupported" }),
+      );
+    });
+
+    test("rejects a late replacement with 51 ordinary tags and no owner", () => {
+      const { app, resource } = fixture();
+      resource.addPropertyOverride(
+        "Tags",
+        Array.from({ length: 51 }, (_, index) => ({
+          Key: `application:${index}`,
+          Value: "true",
+        })),
+      );
+
+      expect(() => app.synth()).toThrow(
+        expect.objectContaining({ code: "ShinBucketDeploymentDestinationTagQuota" }),
+      );
+    });
+
+    test.each(["ordinary", "owner"])("rejects duplicate rendered %s keys", (kind) => {
+      const { app, stack, resource, owners } = fixture();
+      resource.addPropertyOverride(
+        "Tags",
+        Lazy.uncachedAny({
+          produce: () => {
+            const tags = stack.resolve(owners);
+            const duplicate = kind === "owner" ? tags[0] : { Key: "application", Value: "ok" };
+            return [...tags, duplicate, { ...duplicate, Value: "false" }];
+          },
+        }),
+      );
+
+      expect(() => app.synth()).toThrow(
+        expect.objectContaining({ code: "ShinBucketDeploymentDestinationTagKeysUnique" }),
+      );
+    });
+
+    test("does not count late tagsRaw entries that CDK excludes from the final template", () => {
+      const { app, stack, resource } = fixture();
+      resource.tagsRaw = Array.from({ length: 50 }, (_, index) => ({
+        key: `raw:${index}`,
+        value: "true",
+      }));
+
+      expect(() => app.synth()).not.toThrow();
+      Template.fromStack(stack).hasResourceProperties("AWS::S3::Bucket", {
+        Tags: Match.arrayEquals([
+          { Key: Match.stringLikeRegexp("^aws-cdk:cr-owned:"), Value: "true" },
+        ]),
+      });
+    });
+
+    test.each([true, false])("requires every shared owner, preserve all: %s", (preserveAll) => {
+      const { app, stack, bucket, resource, owners } = fixture();
+      new ShinBucketDeployment(stack, "Second", {
+        sources: [Source.data("second.html", "ok")],
+        destination: { bucket, keyPrefix: "second" },
+        providerLambda: { localBuild: testLocalProviderBuild() },
+      });
+      resource.addPropertyOverride(
+        "Tags",
+        Lazy.uncachedAny({
+          produce: () =>
+            stack
+              .resolve(owners)
+              .filter(
+                (tag: { Key: string }) =>
+                  preserveAll || !tag.Key.startsWith("aws-cdk:cr-owned:second:"),
+              ),
+        }),
+      );
+
+      if (preserveAll) {
+        expect(() => app.synth()).not.toThrow();
+        Template.fromStack(stack).hasResourceProperties("AWS::S3::Bucket", {
+          Tags: stack.resolve(owners),
+        });
+      } else {
+        expect(() => app.synth()).toThrow(
+          expect.objectContaining({ code: "ShinBucketDeploymentDestinationOwnershipTagRequired" }),
+        );
+      }
+    });
+
+    test("preserves ordinary tokenized tag keys and values", () => {
+      const { app, stack, bucket } = fixture();
+      const key = new CfnParameter(stack, "TagKey");
+      Tags.of(bucket).add(key.valueAsString, Aws.REGION);
+
+      expect(() => app.synth()).not.toThrow();
+      Template.fromStack(stack).hasResourceProperties("AWS::S3::Bucket", {
+        Tags: Match.arrayWith([{ Key: { Ref: "TagKey" }, Value: { Ref: "AWS::Region" } }]),
+      });
+    });
   });
 
   test("renders CloudFront properties and permissions", () => {
