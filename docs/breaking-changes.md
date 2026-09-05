@@ -4,11 +4,13 @@ This file holds authored release notes for `ShinBucketDeployment` changes that b
 
 ## Unreleased
 
+## 0.14.0
+
 ### All stack-shared prebuilt handlers advance to the new provider identity
 
 Affected: every deployment using the packaged provider with omitted sharing or explicit `ProviderSharing.STACK`, on arm64 and x86_64, with or without a VPC. The package version and provider archive SHA-256 both participate in the shared handler identity, so upgrading to this release changes the handler logical ID even when consumer settings are unchanged. CloudFormation creates new generated execution roles and custom resources, and new generated security groups where applicable. The new custom-resource generation has a distinct destination owner and physical resource ID.
 
-The destination ownership tag advances before the old generation is deleted. The old handler detects the overlapping owner and retains the live namespace, including when `onDelete.deleteCurrentObjects` is enabled; the new deployment still applies its normal source comparison and writes. Prebuilt deployments using `ProviderSharing.DEPLOYMENT` keep their handler and custom-resource identities and update provider code in place. Caller-supplied roles, security groups, and log groups remain caller-owned. The local-build change below describes its separate isolation consequences.
+The destination ownership tag advances before the old generation is deleted. The old handler detects the overlapping owner and retains the live namespace, including when `onDelete.deleteCurrentObjects` is enabled; the new deployment still applies its normal source comparison and writes. Prebuilt deployments using `ProviderSharing.DEPLOYMENT` keep their handler and custom-resource identities and update provider code in place. Caller-supplied roles, security groups, and log groups remain caller-owned. The local-build change below describes its separate isolation consequences. The reviewed runtime dependency refresh also changes the provider archive on both architectures; it uses this same replacement path and introduces no separate local-build manifest identity.
 
 ### Shared VPC handlers use the effective subnet selection
 
@@ -38,13 +40,11 @@ Synthesis now validates the destination bucket's rendered `Tags` array after CDK
 
 Affected: applications overriding the entire destination tag set or removing Shin ownership tags through CDK tagging aspects. Preserve the tags added by every deployment sharing the bucket. Valid templates, handler identities, lifecycle behavior, and provider execution are unchanged; this validation does not coordinate arbitrary external writers.
 
-### Reviewed runtime dependencies change prebuilt shared-handler identity
+### Destination listings preserve exact object keys
 
-The reviewed Rust runtime refresh changes the rebuilt provider archive on both arm64 and x86_64. With the default `ProviderSharing.STACK` and a prebuilt provider, the archive digest participates in the shared-handler identity, so upgrading creates a new Lambda logical ID and changes the service token. CloudFormation therefore replaces each affected deployment custom resource, even if its destination and source configuration are unchanged.
+Destination planning and cleanup now request URL-encoded S3 listings and decode each key exactly once before filtering, comparison, pagination, or deletion. This fixes listing failures for XML-incompatible key text and preserves distinct literal-percent, slash, plus, space, carriage-return, and line-feed keys. For example, a literal `a%2Fb.txt` key remains distinct from `a/b.txt`; excluded keys cannot redirect deletion to another spelling.
 
-The existing ownership protection retains the live destination namespace during this replacement: the new generation's ownership tag is applied before deletion of the previous generation, and the previous handler sees the overlapping owner and skips namespace deletion, including when `onDelete.deleteCurrentObjects` is enabled. The destination-derived physical resource ID algorithm, lifecycle settings, and provider wire contract do not change. The replacement can invoke normal deployment work; this is not a promise that no object writes occur.
-
-`ProviderSharing.DEPLOYMENT` keeps its stable handler logical ID and service token; the archive update changes Lambda code in place without forcing custom-resource replacement. This lockfile-only runtime change does not alter the local-build manifest hash, although a separately changed package version or local-build configuration can change handler identity. No compatibility handler is retained. See the [runtime dependency review](runtime-dependency-review.md) for upstream changes and the pending performance-acceptance boundary.
+Affected: deployments whose destination contains keys that an unencoded XML listing could not represent. Malformed percent escapes or invalid UTF-8 in an encoded listing now fail the page before its keys reach predicates or deletion. Work from earlier valid pages may already have completed; this does not make deployment transactional. The change does not alter the destination identity formula or lifecycle controls, and it does not add a deletion fallback for XML-incompatible control characters. The release-wide provider replacement described above still applies.
 
 ## 0.13.0
 
