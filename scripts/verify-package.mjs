@@ -126,6 +126,7 @@ function assert(condition, message) {
 
 function parseOptions(args) {
   let packDestination;
+  let tarball;
 
   for (let index = 0; index < args.length; index++) {
     const arg = args[index];
@@ -134,20 +135,32 @@ function parseOptions(args) {
     }
     if (arg === "--pack-destination") {
       const value = args[index + 1];
-      assert(value, "--pack-destination requires a directory path.");
+      assert(value && !value.startsWith("--"), "--pack-destination requires a directory path.");
       assert(packDestination === undefined, "--pack-destination may only be specified once.");
       packDestination = resolve(value);
+      index++;
+      continue;
+    }
+    if (arg === "--tarball") {
+      const value = args[index + 1];
+      assert(value && !value.startsWith("--"), "--tarball requires a file path.");
+      assert(tarball === undefined, "--tarball may only be specified once.");
+      tarball = resolve(value);
       index++;
       continue;
     }
     throw new Error(`Unknown option: ${arg}`);
   }
 
-  return { packDestination };
+  assert(
+    tarball === undefined || packDestination === undefined,
+    "--tarball consumes a prepared package and cannot be combined with --pack-destination.",
+  );
+  return { packDestination, tarball };
 }
 
-function verifyDeclarations() {
-  const declarationFiles = walkFiles(join(repoRoot, "lib")).filter((file) =>
+function verifyDeclarations(packageRoot) {
+  const declarationFiles = walkFiles(join(packageRoot, "lib")).filter((file) =>
     file.endsWith(".d.ts"),
   );
   assert(declarationFiles.length > 0, "No package declaration files were emitted.");
@@ -160,7 +173,7 @@ function verifyDeclarations() {
     assert(!contents.includes("sourceMappingURL"), `${file} references an unpublished source map.`);
   }
 
-  for (const file of walkFiles(join(repoRoot, "lib")).filter((entry) => entry.endsWith(".js"))) {
+  for (const file of walkFiles(join(packageRoot, "lib")).filter((entry) => entry.endsWith(".js"))) {
     const contents = readFileSync(file, "utf8");
     assert(!contents.includes("sourceMappingURL"), `${file} references an unpublished source map.`);
   }
@@ -368,6 +381,7 @@ function verifyTarball(tarball, workDir) {
   const extractDir = join(workDir, "extract");
   mkdirSync(extractDir, { recursive: true });
   run("tar", ["-xzf", tarball, "-C", extractDir]);
+  verifyDeclarations(join(extractDir, "package"));
 
   for (const arch of ["arm64", "x86_64"]) {
     const bootstrapDir = join(extractDir, "package", "assets", `bootstrap-${arch}`);
@@ -397,7 +411,7 @@ function verifyTarball(tarball, workDir) {
   );
 }
 
-function verifyStagedProviderArchive(consumerDir, assemblyDir) {
+function verifyStagedProviderArchive(consumerDir, assemblyDir, arch) {
   const manifest = JSON.parse(readFileSync(join(assemblyDir, "ConsumerStack.assets.json"), "utf8"));
   const fileAssets = Object.values(manifest.files ?? {}).filter(
     (asset) => asset.source?.packaging === "file",
@@ -407,7 +421,7 @@ function verifyStagedProviderArchive(consumerDir, assemblyDir) {
     "node_modules",
     packageName,
     "assets",
-    "bootstrap-arm64",
+    `bootstrap-${arch}`,
     "bootstrap.zip",
   );
   const packagedDigest = sha256File(packagedArchive);
@@ -421,7 +435,7 @@ function verifyStagedProviderArchive(consumerDir, assemblyDir) {
   });
   assert(
     matchingAssets.length === 1,
-    `Expected one exact staged provider archive, found ${matchingAssets.length}.`,
+    `Expected one exact staged ${arch} provider archive, found ${matchingAssets.length}.`,
   );
 }
 
@@ -566,13 +580,18 @@ function verifyConsumerInstall(tarball, workDir) {
       "",
     ].join("\n"),
   );
-  run("npx", ["tsc", "--noEmit"], { cwd: consumerDir });
+  // Use the verifier's runtime for declarations and both consumers, even if PATH
+  // also contains a contributor Node installation. process.execPath predates Node 22.0.0.
+  run(process.execPath, [join(consumerDir, "node_modules/typescript/bin/tsc"), "--noEmit"], {
+    cwd: consumerDir,
+  });
 
   const synthLines = [
     'const assert = require("node:assert/strict");',
     'const { App, Stack } = require("aws-cdk-lib");',
     'const { Template } = require("aws-cdk-lib/assertions");',
     'const { Bucket } = require("aws-cdk-lib/aws-s3");',
+    'const { Architecture } = require("aws-cdk-lib/aws-lambda");',
     `const { DEFAULT_FAILURE_DIAGNOSTICS, DEFAULT_PROVIDER_LAMBDA_MEMORY_SIZE_MIB, DEFAULT_TRANSFER_MAX_CONCURRENCY, DestinationWriteRetryJitter, FailureDiagnostics, ProviderSharing, ShinBucketDeployment, Source, ValidationError } = require("${packageName}");`,
     "",
     "assert.equal(DEFAULT_PROVIDER_LAMBDA_MEMORY_SIZE_MIB, 2048);",
@@ -589,6 +608,7 @@ function verifyConsumerInstall(tarball, workDir) {
     '  sources: [Source.data("index.txt", "isolated")],',
     '  destination: { bucket, keyPrefix: "isolated" },',
     "  providerLambda: {",
+    "    architecture: Architecture.X86_64,",
     "    sharing: ProviderSharing.DEPLOYMENT,",
     "    failureDiagnostics: FailureDiagnostics.STANDARD,",
     "  },",
@@ -597,6 +617,8 @@ function verifyConsumerInstall(tarball, workDir) {
     "  },",
     "});",
     'assert.equal(Object.keys(Template.fromStack(stack).findResources("AWS::Lambda::Function")).length, 2);',
+    'Template.fromStack(stack).hasResourceProperties("AWS::Lambda::Function", { Architectures: ["arm64"] });',
+    'Template.fromStack(stack).hasResourceProperties("AWS::Lambda::Function", { Architectures: ["x86_64"] });',
     "app.synth();",
     'const validationStack = new Stack(app, "ValidationStack");',
     'const validationBucket = new Bucket(validationStack, "Bucket");',
@@ -617,8 +639,10 @@ function verifyConsumerInstall(tarball, workDir) {
     "",
   ];
   writeFileSync(join(consumerDir, "synth.cjs"), synthLines.join("\n"));
-  run("node", ["synth.cjs"], { cwd: consumerDir });
-  verifyStagedProviderArchive(consumerDir, join(workDir, "cdk.out-cjs"));
+  run(process.execPath, ["synth.cjs"], { cwd: consumerDir });
+  for (const arch of ["arm64", "x86_64"]) {
+    verifyStagedProviderArchive(consumerDir, join(workDir, "cdk.out-cjs"), arch);
+  }
   verifyCatalogedConsumerAsset(join(workDir, "cdk.out-cjs"));
 
   writeFileSync(
@@ -628,6 +652,7 @@ function verifyConsumerInstall(tarball, workDir) {
       'import { App, Stack } from "aws-cdk-lib";',
       'import { Template } from "aws-cdk-lib/assertions";',
       'import { Bucket } from "aws-cdk-lib/aws-s3";',
+      'import { Architecture } from "aws-cdk-lib/aws-lambda";',
       `import { DEFAULT_FAILURE_DIAGNOSTICS, DEFAULT_PROVIDER_LAMBDA_MEMORY_SIZE_MIB, DEFAULT_TRANSFER_MAX_CONCURRENCY, DestinationWriteRetryJitter, FailureDiagnostics, ProviderSharing, ShinBucketDeployment, Source, ValidationError } from "${packageName}";`,
       "",
       "assert.equal(DEFAULT_PROVIDER_LAMBDA_MEMORY_SIZE_MIB, 2048);",
@@ -644,6 +669,7 @@ function verifyConsumerInstall(tarball, workDir) {
       '  sources: [Source.data("index.txt", "isolated")],',
       '  destination: { bucket, keyPrefix: "isolated" },',
       "  providerLambda: {",
+      "    architecture: Architecture.X86_64,",
       "    sharing: ProviderSharing.DEPLOYMENT,",
       "    failureDiagnostics: FailureDiagnostics.STANDARD,",
       "  },",
@@ -652,6 +678,8 @@ function verifyConsumerInstall(tarball, workDir) {
       "  },",
       "});",
       'assert.equal(Object.keys(Template.fromStack(stack).findResources("AWS::Lambda::Function")).length, 2);',
+      'Template.fromStack(stack).hasResourceProperties("AWS::Lambda::Function", { Architectures: ["arm64"] });',
+      'Template.fromStack(stack).hasResourceProperties("AWS::Lambda::Function", { Architectures: ["x86_64"] });',
       "app.synth();",
       'const validationStack = new Stack(app, "ValidationStack");',
       'const validationBucket = new Bucket(validationStack, "Bucket");',
@@ -672,8 +700,10 @@ function verifyConsumerInstall(tarball, workDir) {
       "",
     ].join("\n"),
   );
-  run("node", ["synth.mjs"], { cwd: consumerDir });
-  verifyStagedProviderArchive(consumerDir, join(workDir, "cdk.out-esm"));
+  run(process.execPath, ["synth.mjs"], { cwd: consumerDir });
+  for (const arch of ["arm64", "x86_64"]) {
+    verifyStagedProviderArchive(consumerDir, join(workDir, "cdk.out-esm"), arch);
+  }
   verifyCatalogedConsumerAsset(join(workDir, "cdk.out-esm"));
 }
 
@@ -681,16 +711,21 @@ function main() {
   const options = parseOptions(process.argv.slice(2));
   const workDir = mkdtempSync(join(tmpdir(), "shin-package-"));
   try {
-    for (const arch of ["arm64", "x86_64"]) {
-      const bootstrapDir = join(repoRoot, "assets", `bootstrap-${arch}`);
-      verifyBootstrapProvenance(
-        join(bootstrapDir, "bootstrap.zip"),
-        join(bootstrapDir, "build-provenance.json"),
-        arch,
-      );
+    if (!options.tarball) {
+      for (const arch of ["arm64", "x86_64"]) {
+        const bootstrapDir = join(repoRoot, "assets", `bootstrap-${arch}`);
+        verifyBootstrapProvenance(
+          join(bootstrapDir, "bootstrap.zip"),
+          join(bootstrapDir, "build-provenance.json"),
+          arch,
+        );
+      }
     }
-    const tarball = packTarball(workDir, options.packDestination);
-    verifyDeclarations();
+    // A prepared tarball needs no contributor dependencies or local bootstrap assets.
+    const tarball = options.tarball ?? packTarball(workDir, options.packDestination);
+    console.log(
+      `Verifying ${packageName} on Node ${process.version}; tarball SHA-256: ${sha256File(tarball)}`,
+    );
     verifyTarball(tarball, workDir);
     verifyConsumerInstall(tarball, workDir);
     console.log(`Verified ${packageName} package smoke test.`);
