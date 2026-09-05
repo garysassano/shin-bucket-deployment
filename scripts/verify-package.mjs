@@ -760,6 +760,56 @@ function verifyConsumerInstall(tarball, workDir) {
     ].join("\n"),
   );
   run("node", ["build-modes.cjs"], { cwd: consumerDir });
+
+  writeFileSync(
+    join(consumerDir, "provider-subnets.cjs"),
+    [
+      'const assert = require("node:assert/strict");',
+      'const { App, Fn, Stack, Token } = require("aws-cdk-lib");',
+      'const { Template } = require("aws-cdk-lib/assertions");',
+      'const { Subnet, SubnetType, Vpc } = require("aws-cdk-lib/aws-ec2");',
+      'const { Bucket } = require("aws-cdk-lib/aws-s3");',
+      `const { ShinBucketDeployment, Source } = require("${packageName}");`,
+      `const app = new App({ outdir: ${JSON.stringify(join(workDir, "cdk.out-provider-subnets"))} });`,
+      'const stack = new Stack(app, "SubnetStack");',
+      'const vpc = new Vpc(stack, "Vpc", {',
+      '  availabilityZones: ["eu-central-1a", "eu-central-1b"], natGateways: 0,',
+      '  subnetConfiguration: [{ name: "App", subnetType: SubnetType.PRIVATE_ISOLATED }],',
+      "});",
+      "function deploy(id, providerLambda) {",
+      "  return new ShinBucketDeployment(stack, id, {",
+      '    sources: [Source.data("index.txt", "subnets")],',
+      '    destination: { bucket: new Bucket(stack, id + "Bucket") }, providerLambda,',
+      "  });",
+      "}",
+      "let filterCalls = 0;",
+      "const filter = (index) => ({ selectSubnets: (subnets) => { filterCalls++; return subnets.slice(index, index + 1); } });",
+      'const first = deploy("First", { vpc, vpcSubnets: { subnetFilters: [filter(0)] } });',
+      'const second = deploy("Second", { vpc, vpcSubnets: { subnetFilters: [filter(1)] } });',
+      'const equivalent = deploy("Equivalent", { vpc, vpcSubnets: { subnets: vpc.isolatedSubnets.slice(0, 1) } });',
+      "assert.notEqual(first.handlerFunction, second.handlerFunction);",
+      "assert.equal(first.handlerFunction, equivalent.handlerFunction);",
+      "assert.equal(filterCalls, 2);",
+      'const importedVpc = Vpc.fromVpcAttributes(stack, "ImportedVpc", {',
+      '  vpcId: "vpc-imported", availabilityZones: ["eu-central-1a"],',
+      '  isolatedSubnetIds: [Fn.ref("SubnetId")], isolatedSubnetRouteTableIds: ["rtb-imported"],',
+      "});",
+      'const sameSubnet = Subnet.fromSubnetAttributes(stack, "SameSubnet", {',
+      '  subnetId: Token.asString({ resolve: () => ({ Ref: "SubnetId" }) }),',
+      '  availabilityZone: "eu-central-1a", routeTableId: "rtb-imported",',
+      "});",
+      'const imported = deploy("Imported", { vpc: importedVpc });',
+      'const same = deploy("Same", { vpc: importedVpc, vpcSubnets: { subnets: [sameSubnet] } });',
+      "assert.equal(imported.handlerFunction, same.handlerFunction);",
+      'const handlers = Template.fromStack(stack).findResources("AWS::Lambda::Function");',
+      'for (const [deployment, expected] of [[first, stack.resolve([vpc.isolatedSubnets[0].subnetId])], [second, stack.resolve([vpc.isolatedSubnets[1].subnetId])], [imported, [{ Ref: "SubnetId" }]]]) {',
+      "  assert.deepEqual(handlers[stack.getLogicalId(deployment.handlerFunction.node.defaultChild)].Properties.VpcConfig.SubnetIds, expected);",
+      "}",
+      "app.synth();",
+      "",
+    ].join("\n"),
+  );
+  run(process.execPath, ["provider-subnets.cjs"], { cwd: consumerDir });
 }
 
 function main() {

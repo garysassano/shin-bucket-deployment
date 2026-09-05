@@ -7,9 +7,8 @@ import { Construct } from "constructs";
  * Documented edge cases:
  * - `undefined` entries inside objects are dropped; a top-level `undefined`
  *   stays `undefined` (JSON.stringify renders it as absent).
- * - Functions serialize as `{__function__: <source>}`, so identity changes
- *   when a function's source changes. Captured values are not represented; local
- *   bundling callbacks never enter shared-handler identity.
+ * - Functions are rejected: executable source cannot identify captured state.
+ *   Callers supply evaluated configuration instead of callbacks or selectors.
  * - Constructs serialize as `{__construct__: <node.addr>}`, so identity
  *   follows the construct tree, not the object identity.
  * - Object keys are sorted by UTF-16 code unit, the same ordering
@@ -33,9 +32,7 @@ export function normalizeSingletonValue(value: unknown): unknown {
   }
 
   if (typeof value === "function") {
-    return {
-      __function__: value.toString(),
-    };
+    throw new TypeError("Functions cannot be normalized into a stable identity.");
   }
 
   if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {

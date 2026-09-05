@@ -48,13 +48,13 @@ describe("stableStringify", () => {
     expect(stableStringify({ a: 1 })).not.toBe(stableStringify({ a: 1, b: null }));
   });
 
-  test("serializes function source without claiming to identify captured values", () => {
-    const first = stableStringify({ fn: () => 1 });
-    const second = stableStringify({ fn: () => 1 });
-    const third = stableStringify({ fn: () => 2 });
-
-    expect(first).toBe(second);
-    expect(first).not.toBe(third);
+  test("rejects executable values instead of claiming their source identifies captured state", () => {
+    const fn = () => 1;
+    for (const value of [fn, { fn }, [fn], { nested: { fn } }]) {
+      expect(() => stableStringify(value)).toThrow(
+        "Functions cannot be normalized into a stable identity.",
+      );
+    }
   });
 
   test("serializes constructs by tree address rather than object identity", () => {
