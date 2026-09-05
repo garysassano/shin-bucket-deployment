@@ -22,6 +22,7 @@ Do not mark a performance-relevant change ready to merge or release from local c
 
 - `docs/benchmark.md` is the human benchmark page.
 - `benchmarks/results.jsonl` contains sanitized current benchmark result rows used by report and profile-snapshot tooling.
+- `benchmarks/runs.jsonl` contains matching run-level configuration, provenance, and cleanup records.
 - `docs/verification.md` owns correctness verification and must not use benchmark rows as verification evidence.
 - Deployable benchmark apps live in `benchmarks/apps/**` and are run through `pnpm benchmark`.
 - Raw AWS logs, CloudWatch extracts, and scratch outputs must stay outside git.
@@ -57,23 +58,15 @@ Committed benchmark records may include:
 
 ## Benchmark Runner
 
-> **Any change under `rust/` requires a current provider archive staged before collecting benchmark evidence.**
->
-> Benchmark deploys use the same construct path as verification: the construct requires `assets/bootstrap-<arch>/bootstrap.zip` unless `providerLambda.localBuild` explicitly selects compilation (`src/provider.ts`). Missing archives fail synthesis; compilation is never an implicit fallback, and explicit local builds require deployment-scoped handlers. A stale archive is selected silently, so rows would measure the previous provider binary while recording the new commit's `provider.bootstrap` digests and `provider.implementationCommit` — evidence that misdescribes what ran.
->
-> Who stages the archive differs by entry point:
->
-> - `pnpm benchmark deploy assets` (the manual benchmark path) never rebuilds: run `pnpm build:bootstrap` (it stages both arm64 and x86_64 archives) after any `rust/` change, before the first benchmark deploy of a session.
-> - `pnpm benchmark:run-assets` builds its own arm64 artifact when neither a resume manifest nor a prebuilt benchmark artifact is present. The hosted AWS benchmark workflow prepares the artifact once with `scripts/build-bootstrap.mjs --benchmark --evidence-output <ledger> arm64`, then gives the exact archive and provenance file to all five repetition jobs. The build requires a clean source tree, uses a detached worktree at the current commit, verifies the local application build matches it, and stages `assets/bootstrap-arm64/bootstrap.zip`.
->
-> Since F-7, `pnpm benchmark deploy` refuses to start when a staged archive's
-> `build-provenance.json` does not match the current provider build recipe —
-> the provider-build inputs, the resolved build toolchain, or the build
-> environment — or when the provenance file is missing, so the manual path is
-> gated exactly like verification. The `benchmark:run-assets` path already
-> refuses through its own full provenance assertion
-> (`assertBootstrapBuildProvenance`). For a deliberately stale deployment, set
-> `SHIN_ALLOW_STALE_BOOTSTRAP=1`; the refusal message names the same variable.
+Benchmark deploys require `assets/bootstrap-<arch>/bootstrap.zip` unless `providerLambda.localBuild` explicitly selects compilation (`src/provider.ts`). Missing archives fail synthesis; compilation is never an implicit fallback. Explicit local builds default to deployment-scoped handlers and reject `ProviderSharing.STACK`.
+
+Artifact preparation and freshness checks depend on the entry point:
+
+- Manual `pnpm benchmark deploy assets` does not rebuild archives. Run `pnpm build:bootstrap` after provider source or build-recipe changes; it stages both arm64 and x86_64. Before deployment, the scenario runner checks the selected staged archive's provider-input, toolchain, environment, and archive/binary digests against `build-provenance.json`. Missing provenance or a mismatch fails before deployment. Unrelated documentation or evidence edits do not invalidate the provider-input identity.
+- `pnpm benchmark:run-assets` builds its own arm64 artifact when neither a resume manifest nor a prebuilt benchmark artifact is present. The hosted workflow prepares it once with `node scripts/build-bootstrap.mjs --benchmark --evidence-output <ledger> arm64` and supplies that exact archive and provenance to all five repetition jobs. The build requires clean source, uses a detached worktree at the measured commit, and checks the local application build. The runner's `assertBootstrapBuildProvenance` additionally binds source commit/tree, application build, toolchain, environment, and archive identity to the run.
+- Synthesis and destroy do not run the scenario runner's deploy-time freshness check. Synthesis still needs the selected archive unless local compilation is explicit. Upstream-only benchmark deployments require no Shin archive. A scenario that compiles locally or deploys no Shin provider declares `providerArchitectures: []`; other scenarios declare the architectures they deploy, defaulting to arm64 when omitted.
+
+`SHIN_ALLOW_STALE_BOOTSTRAP=1` deliberately bypasses the manual deploy-time freshness check. It does not bypass the automated benchmark provenance assertion or make stale artifacts valid acceptance evidence. Direct CDK use outside the scenario runner does not gain its freshness check.
 
 Benchmark mode runs only the selected benchmark scenario and expands the requested config matrix:
 
@@ -96,7 +89,7 @@ When the matrix has multiple Lambda configs and `SHIN_BENCH_STACK_SUFFIX` is not
 
 ## Benchmark Workflow
 
-Do not finalize timing-only benchmark rows when provider telemetry is expected. For every provider-invoking deploy/update/delete phase, capture the Lambda CloudWatch `REPORT` line and the sanitized `shin_deployment_summary` line before destroying the stack or otherwise deleting provider log groups. If telemetry cannot be captured, either rerun the phase or clearly mark the record as incomplete with `null` provider fields and explain why.
+Do not finalize timing-only benchmark rows when provider telemetry is expected. For every provider-invoking deploy/update/delete phase, capture the Lambda CloudWatch `REPORT` line and the sanitized `shin_deployment_summary` line before destroying the stack or otherwise deleting provider log groups. If telemetry cannot be captured, keep the incomplete recovery material in external scratch, omit unavailable fields, and explain the gap in the human summary. Rerun or recover the required metrics before publication; `null` values cannot replace missing evidence.
 
 Prefer the automated asset comparison runner for Shin-vs-AWS asset benchmarks:
 
@@ -119,7 +112,7 @@ Choose benchmark configs deliberately. Paired Shin vs AWS comparisons should use
 - same states and phase sequence
 - same destination prefix
 - same memory setting
-- the selected Shin max-concurrency setting, recorded for Shin and stored as `null` for upstream AWS
+- the selected Shin max-concurrency setting, recorded as `parallel` for Shin and omitted for upstream AWS
 - same repetition count
 - same stack suffix pattern
 
@@ -201,7 +194,7 @@ Do not parse `summary=...` tracing lines by hand. If parsing fails, fix `benchma
 
 Write one JSON object per measured phase to `benchmarks/results.jsonl`, and one per (`runId` × `implementation`) to `benchmarks/runs.jsonl`. Both are current-result data for reports and profile snapshots, not append-only history. Samples are upserted by their run, sample, repetition, implementation, configuration, phase, and state identity. There is one evidence shape; records that do not conform are not readable and belong in `archive/`.
 
-`AGENTS.md` owns the evidence persistence and provenance policy. Operationally: benchmark the implementation commit once it is on `main`, then open a follow-up evidence PR containing the updated `benchmarks/results.jsonl` and human benchmark page. Accepted evidence must not remain only in external scratch.
+`AGENTS.md` owns the evidence persistence and provenance policy. Operationally: benchmark the implementation commit once it is on `main`, then open a follow-up evidence PR containing the updated `benchmarks/results.jsonl`, matching `benchmarks/runs.jsonl`, and human benchmark page. This includes completed diagnostic AWS runs used to evaluate a change; their sanitized evidence must not remain only in external scratch.
 
 Evidence lives in **two** files. `benchmarks/runs.jsonl` holds one record per (`runId` × `implementation`) with everything constant across that run's samples; `benchmarks/results.jsonl` holds one record per sample with only what varies. A sample's `runId` must resolve to a run record.
 
@@ -213,7 +206,7 @@ Sample record (`results.jsonl`): `runId`, `sampleId`, `implementation`, `profile
 
 **Omit absent fields; never write `null`.** Do not invent data. Put narrative interpretation in `docs/benchmark.md`.
 
-For Shin records with provider invocation, prefer a record with both CloudWatch `REPORT` metrics and `providerSummary`. Missing provider telemetry is acceptable only when the provider was not invoked or when the record notes why capture was impossible.
+For Shin records with provider invocation, publication requires the CloudWatch `REPORT` metrics and sanitized `providerSummary` expected by the ledger validator. Keep an unexplained or incomplete capture out of completed acceptance evidence. Explain capture failures in the human page, not in invented ledger fields.
 
 ## Telemetry Interpretation
 
@@ -254,7 +247,7 @@ The comparison table should show, per phase and metric:
 Generate reports with:
 
 ```bash
-pnpm benchmark:comparison-report -- --input-file benchmarks/results.jsonl --asset-profile tiny-many --lambda-memory-mb 2048 --transfer-max-concurrency 64
+pnpm benchmark:comparison-report -- --input-file benchmarks/results.jsonl --run-id <run-uuid> --config <matching-config.json> --scratch-root <external-run-directory> --asset-profile mixed --lambda-memory-mb 2048 --transfer-max-concurrency 64
 ```
 
 ## Final Checks
@@ -262,11 +255,13 @@ pnpm benchmark:comparison-report -- --input-file benchmarks/results.jsonl --asse
 Before committing benchmark updates:
 
 ```bash
-pnpm benchmark:comparison-report -- --input-file benchmarks/results.jsonl --preview true --output-file /tmp/benchmark-report-check.md
+pnpm benchmark:comparison-report -- --input-file benchmarks/results.jsonl --run-id <run-uuid> --config <matching-config.json> --preview true --output-file /tmp/benchmark-report-check.md
 git diff --check
 pnpm exec vitest run test/benchmarks/collector.test.ts
 ```
 
 Run broader `pnpm typecheck`, `pnpm lint`, and `pnpm test` if report scripts, collector scripts, or validation-sensitive source changed.
+
+Preview validates records without the publication manifest and may include an incomplete matrix; it does not establish acceptance. Final rendering requires the external run manifest through `--scratch-root`. Use the configuration that produced the selected run, since the current canonical configuration may have changed since that evidence was collected.
 
 Only commit sanitized docs, JSONL result rows, source, tests, and scenarios. Never commit scratch raw output.

@@ -65,9 +65,9 @@ Benchmark rows and AWS `BucketDeployment` comparison rows belong in `benchmarks/
 Run local unit/static gates first:
 
 ```bash
-pnpm rust:fmt
+pnpm rust:fmt:check
 pnpm rust:check
-cargo test --manifest-path rust/Cargo.toml
+pnpm rust:test
 pnpm build
 pnpm typecheck
 pnpm lint
@@ -85,26 +85,13 @@ Do not include benchmark configs in correctness verification unless the task is 
 
 ## AWS End-To-End Verification
 
-> **Any change under `rust/` requires `pnpm build:bootstrap` before `pnpm verify deploy`.**
->
-> The construct requires a prebuilt provider archive (`assets/bootstrap-<arch>/bootstrap.zip`) unless `providerLambda.localBuild` explicitly selects compilation (`src/provider.ts`). A missing archive fails synthesis with an actionable error; it never triggers an implicit compile. Explicit local builds use deployment-scoped handlers and reject `ProviderSharing.STACK`.
-> `pnpm verify` does not rebuild that archive — only `pnpm build:bootstrap` does — and a stale archive is selected silently, with no freshness warning.
-> Deploying after a `rust/` change without rebuilding therefore runs the previous provider binary: on the PR-B run every stack failed with `unknown field CloudfrontInvalidation, expected one of …`, which looked like a provider bug when it was actually a build that predated the new wire schema.
-> Run `pnpm build:bootstrap` (it stages both arm64 and x86_64 archives) after any `rust/` change, before the first `pnpm verify deploy` of a session.
->
-> Since F-7, `pnpm verify deploy` refuses to start when a staged archive's
-> `build-provenance.json` does not match the current provider build recipe —
-> the provider-build inputs (rust sources, manifests, lockfile, toolchain
-> pins), the resolved build toolchain, or the build environment (RUSTFLAGS,
-> `CARGO_HOME`, ...) — or when the provenance file is missing, so a stale
-> archive can no longer be deployed silently. The error names the
-> architecture, the digest that drifted, and the fix. For a deliberately
-> stale deployment, set `SHIN_ALLOW_STALE_BOOTSTRAP=1`; the message names the
-> same variable. The gate only runs for `deploy` actions — `synth` and
-> `destroy` are unaffected, and a deploy scenario that compiles the provider
-> from source (`providerLambda.localBuild`) must declare
-> `providerArchitectures: []` in the scenario catalog, otherwise the gate
-> checks the prebuilt arm64 archive for it.
+The construct requires `assets/bootstrap-<arch>/bootstrap.zip` unless `providerLambda.localBuild` explicitly selects compilation (`src/provider.ts`). A missing archive fails synthesis with an actionable error; it never triggers an implicit compile. Explicit local builds default to deployment-scoped handlers and reject `ProviderSharing.STACK`.
+
+`pnpm verify deploy` does not rebuild archives. Run `pnpm build:bootstrap` after changes to provider sources or the build recipe and before deploying; it stages both arm64 and x86_64 archives. The runner checks each selected staged archive against `build-provenance.json` before starting deployment: provider-input, resolved toolchain, environment, archive, and binary digests must match. Missing provenance or drift fails with an architecture-specific reason and rebuild instruction. Unrelated documentation changes do not invalidate the provider-input identity.
+
+The deploy-time freshness check does not run for `synth` or `destroy`. Synthesis still needs the selected archive unless local compilation is explicit. A scenario that compiles the provider locally or deploys no Shin provider declares `providerArchitectures: []`; other scenarios declare the architectures they deploy, defaulting to arm64 when omitted. Direct CDK deployments outside this runner do not gain its freshness check.
+
+`SHIN_ALLOW_STALE_BOOTSTRAP=1` explicitly bypasses the runner's freshness check for a deliberately stale deployment. Record that choice when describing the run; it does not prove the current provider was exercised. Automated benchmark artifact preparation and its stronger provenance assertions are described in the `shin-benchmark` skill.
 
 AWS end-to-end verification is opt-in because it creates billable AWS resources and requests. Never run it automatically for every push or pull request. Run local gates first, then choose the smallest AWS scope that can validate the changed boundary.
 
@@ -138,7 +125,7 @@ pnpm verify deploy --concurrency 4
 pnpm verify destroy --concurrency 4
 ```
 
-Use the same group selector for deploy and destroy; destroy selects each group's terminal phase. If a deploy is interrupted or fails, run the cleanup commands printed by the runner. The runner preserves ordered update chains such as `*-initial` before `*-updated`, while running independent groups concurrently. Scenario phases use these suffixes rather than release-like `v1`/`v2` or `alpha`/`beta` labels. Use `--concurrency 1` for serial debugging. Keep canonical benchmark runs sequential under the benchmark workflow so concurrent resource contention does not invalidate comparisons.
+Use the same group selector for deploy and destroy; destroy selects each group's terminal phase. If a deploy is interrupted or fails, run the cleanup commands printed by the runner. The runner preserves ordered update chains such as `*-initial` before `*-updated`, while running independent groups concurrently. Scenario phases use these suffixes rather than release-like `v1`/`v2` or `alpha`/`beta` labels. Use `--concurrency 1` for serial debugging. Benchmark concurrency follows the separately recorded benchmark configuration: the current canonical workflow runs five repetition jobs in parallel and orders each stack's phases serially. Do not compare contended benchmark wall times with sequential runs.
 
 The default suite includes:
 
@@ -171,7 +158,7 @@ Keep the destination-move protocol tests and scenario synthesis in the normal lo
 
 Changes outside those boundaries do not require this targeted matrix merely because they share a release. Before a release, require a current successful destination-move AWS run only if one of the boundaries changed after the latest recorded successful run. Record the sanitized result and confirmed cleanup in `docs/verification.md`.
 
-Always destroy every started AWS verification stack and independently verify its scoped resources are absent before finalizing `docs/verification.md`. Cleanup probes must be resource-scoped and definitive: exact not-found responses prove absence; authorization, network, and ambiguous service errors fail cleanup. Do not require account-wide bucket listing merely to prove a captured bucket is absent. Cleanup failure is a failed verification run, not a warning. Raw AWS logs and resource identifiers stay in scratch only.
+Always destroy every started AWS verification stack and independently verify its scoped resources are absent before finalizing `docs/verification.md`. Cleanup probes must be resource-scoped and definitive: exact not-found responses prove absence; authorization, network, and ambiguous service errors fail cleanup. Do not require account-wide bucket listing merely to prove a captured bucket is absent. Cleanup failure is a failed verification run, not a warning. Partial cleanup records are recovery material; they cannot be published as a completed pass. Omit unavailable optional values in evidence summaries rather than writing `null`, and never infer a missing result. Raw AWS logs and resource identifiers stay in scratch only.
 
 ## Verification Human Page
 
