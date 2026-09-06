@@ -16,9 +16,25 @@ export function releaseNotes(markdown, tag) {
   return `${body}\n`;
 }
 
+export function releaseBody(markdown, tag, generated) {
+  const authored = releaseNotes(markdown, tag);
+  assert(
+    typeof generated?.body === "string" && generated.body.trim().length > 0,
+    "GitHub generated release notes must contain a nonempty body.",
+  );
+  return `## Upgrade notes\n\n${authored}\n${generated.body.trim()}\n`;
+}
+
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
-  assert.equal(process.argv.length, 3, "Usage: node scripts/release-notes.mjs <version-or-tag>");
+  assert(
+    process.argv.length === 3 || process.argv.length === 4,
+    "Usage: node scripts/release-notes.mjs <version-or-tag> [generated-notes.json]",
+  );
+  const markdown = readFileSync("docs/breaking-changes.md", "utf8");
+  const tag = process.argv[2];
   process.stdout.write(
-    releaseNotes(readFileSync("docs/breaking-changes.md", "utf8"), process.argv[2]),
+    process.argv[3]
+      ? releaseBody(markdown, tag, JSON.parse(readFileSync(process.argv[3], "utf8")))
+      : releaseNotes(markdown, tag),
   );
 }
