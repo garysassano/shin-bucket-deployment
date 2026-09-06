@@ -693,41 +693,79 @@ async fn streaming_an_entry_always_records_its_md5() {
 async fn direct_stream_frames_preserve_body_boundaries() {
     let frame_bytes = crate::s3::ZIP_ENTRY_BODY_CHUNK_BYTES;
     for (size, expected_frames) in [
+        (0, vec![(false, 0)]),
+        (1, vec![(false, 1)]),
+        (4096, vec![(false, 4096)]),
+        (16384, vec![(false, 16384)]),
         (frame_bytes - 1, vec![(false, frame_bytes - 1)]),
         (frame_bytes, vec![(false, frame_bytes)]),
+        (frame_bytes + 1, vec![(true, frame_bytes), (false, 1)]),
         (
             frame_bytes * 2 + 17,
             vec![(true, frame_bytes), (true, frame_bytes), (false, 17)],
         ),
     ] {
-        let contents = vec![b'x'; size];
-        let zip = zip_from_entry("boundaries.bin", &contents);
-        let plan = zip_plan_from_archive(&zip, "boundaries.bin");
-        let store = ready_store_for_plan(&zip, &plan);
-        let (sender, mut receiver) = tokio::sync::mpsc::channel(expected_frames.len());
+        let contents = marker_forward_body(size);
+        for archive in [
+            zip_from_entry("boundaries.bin", &contents),
+            stored_zip_from_entry("boundaries.bin", &contents),
+        ] {
+            let plan = zip_plan_from_archive(&archive, "boundaries.bin");
+            let store = ready_store_for_plan_with_block_bytes(&archive, &plan, 4096);
+            let (sender, mut receiver) = tokio::sync::mpsc::channel(expected_frames.len());
+            let state = Arc::new(UploadBodyState::default());
 
-        send_zip_entry_chunks(
-            store,
-            plan,
-            sender,
-            Arc::new(UploadBodyState::default()),
-            None,
-        )
-        .await
-        .expect("direct stream");
+            send_zip_entry_chunks(store, plan, sender, Arc::clone(&state), None)
+                .await
+                .expect("direct stream");
 
-        let mut actual_frames = Vec::new();
-        while let Ok(frame) = receiver.try_recv() {
-            let frame = frame.expect("valid body frame");
-            let classification = match frame {
-                BodyFrame::Data(bytes) => (true, bytes.len()),
-                BodyFrame::Final(bytes) => (false, bytes.len()),
-                BodyFrame::Complete => (false, 0),
-            };
-            assert!(classification.1 <= frame_bytes);
-            actual_frames.push(classification);
+            let mut actual_frames = Vec::new();
+            let mut actual_body = Vec::new();
+            while let Ok(frame) = receiver.try_recv() {
+                let (data, bytes) = match frame.expect("valid body frame") {
+                    BodyFrame::Data(bytes) => (true, bytes),
+                    BodyFrame::Final(bytes) => (false, bytes),
+                    BodyFrame::Complete => (false, Bytes::new()),
+                };
+                assert!(bytes.len() <= frame_bytes);
+                actual_frames.push((data, bytes.len()));
+                actual_body.extend_from_slice(&bytes);
+            }
+            assert_eq!(actual_frames, expected_frames, "entry size {size}");
+            assert_eq!(actual_body, contents, "entry size {size}");
+            let mut md5 = Md5::new();
+            md5.update(&contents);
+            let expected_md5 = finalize_digest(md5);
+            assert_eq!(state.etag_md5(), Some(expected_md5.as_str()));
         }
-        assert_eq!(actual_frames, expected_frames, "entry size {size}");
+    }
+}
+
+#[tokio::test]
+async fn direct_stream_rejects_one_excess_byte_before_completing_the_body() {
+    let frame_bytes = crate::s3::ZIP_ENTRY_BODY_CHUNK_BYTES;
+    for declared_size in [0, 1, 16384, frame_bytes - 1, frame_bytes, frame_bytes * 2] {
+        let contents = marker_forward_body(declared_size + 1);
+        for archive in [
+            zip_from_entry("excess.bin", &contents),
+            stored_zip_from_entry("excess.bin", &contents),
+        ] {
+            let mut plan = zip_plan_from_archive(&archive, "excess.bin");
+            plan.size = declared_size as u64;
+            let store = ready_store_for_plan_with_block_bytes(&archive, &plan, 4096);
+            let (sender, mut receiver) =
+                tokio::sync::mpsc::channel(declared_size / frame_bytes + 2);
+            let state = Arc::new(UploadBodyState::default());
+
+            send_zip_entry_chunks(store, plan, sender, Arc::clone(&state), None)
+                .await
+                .expect_err("an exact declared length must not bypass the EOF check");
+
+            while let Ok(frame) = receiver.try_recv() {
+                assert!(matches!(frame.unwrap(), BodyFrame::Data(_)));
+            }
+            assert!(state.etag_md5().is_none());
+        }
     }
 }
 
@@ -1540,107 +1578,111 @@ async fn dropped_upload_body_cancels_ranged_get_and_replays() {
     let expected = (0..512)
         .map(|index| (index % 251) as u8)
         .collect::<Vec<_>>();
-    let zip = stored_zip_from_entry("range.txt", &expected);
-    let plan = zip_plan_from_archive(&zip, "range.txt");
-    let blocks = plan_source_blocks(
-        zip.len() as u64,
-        std::slice::from_ref(&plan),
-        BLOCK_BYTES,
-        0,
-    )
-    .expect("planning succeeds");
-    assert!(blocks.len() > 2);
-    let get_started = Arc::new(AtomicBool::new(false));
-    let get_dropped = Arc::new(AtomicBool::new(false));
-    let replay_get_started = Arc::new(AtomicBool::new(false));
-    let replay_get_released = Arc::new(AtomicBool::new(false));
-    let replay_get_waker = Arc::new(AtomicWaker::new());
-    let mut events = vec![
-        get_block_success_event(&zip, blocks[0]),
-        get_pending_range_event(
-            usize::try_from(blocks[1].len()).unwrap(),
-            blocks[1].start,
+    for zip in [
+        stored_zip_from_entry("range.txt", &expected),
+        zip_from_entry("range.txt", &expected),
+    ] {
+        let plan = zip_plan_from_archive(&zip, "range.txt");
+        let blocks = plan_source_blocks(
             zip.len() as u64,
-            Arc::clone(&get_started),
-            Arc::clone(&get_dropped),
-        ),
-        get_gated_range_event(
-            &zip,
-            blocks[0],
-            Arc::clone(&replay_get_started),
-            Arc::clone(&replay_get_released),
-            Arc::clone(&replay_get_waker),
-        ),
-    ];
-    events.extend(
-        blocks
-            .iter()
-            .skip(1)
-            .copied()
-            .map(|block| get_block_success_event(&zip, block)),
-    );
-    let expected_requests = events.len();
-    let replay = StaticReplayClient::new(events);
-    let stats = Arc::new(DeploymentStats::default());
-    let budget = SourceByteBudget::new(BLOCK_BYTES, Arc::clone(&stats), false)
-        .expect("valid test source budget");
-    let store = pending_replay_store(&zip, &plan, replay.clone(), budget, BLOCK_BYTES);
-    let body = zip_entry_body(
-        Arc::clone(&store),
-        plan.clone(),
-        plan.size,
-        Arc::new(UploadBodyState::default()),
-        Arc::new(AtomicUsize::new(0)),
-        None,
-    );
-    let mut first = body.into_inner();
-    let mut replay_body = first.try_clone().expect("retryable ZIP body");
+            std::slice::from_ref(&plan),
+            BLOCK_BYTES,
+            0,
+        )
+        .expect("planning succeeds");
+        assert!(blocks.len() > 2);
+        let get_started = Arc::new(AtomicBool::new(false));
+        let get_dropped = Arc::new(AtomicBool::new(false));
+        let replay_get_started = Arc::new(AtomicBool::new(false));
+        let replay_get_released = Arc::new(AtomicBool::new(false));
+        let replay_get_waker = Arc::new(AtomicWaker::new());
+        let mut events = vec![
+            get_block_success_event(&zip, blocks[0]),
+            get_pending_range_event(
+                usize::try_from(blocks[1].len()).unwrap(),
+                blocks[1].start,
+                zip.len() as u64,
+                Arc::clone(&get_started),
+                Arc::clone(&get_dropped),
+            ),
+            get_gated_range_event(
+                &zip,
+                blocks[0],
+                Arc::clone(&replay_get_started),
+                Arc::clone(&replay_get_released),
+                Arc::clone(&replay_get_waker),
+            ),
+        ];
+        events.extend(
+            blocks
+                .iter()
+                .skip(1)
+                .copied()
+                .map(|block| get_block_success_event(&zip, block)),
+        );
+        let expected_requests = events.len();
+        let replay = StaticReplayClient::new(events);
+        let stats = Arc::new(DeploymentStats::default());
+        let budget = SourceByteBudget::new(BLOCK_BYTES, Arc::clone(&stats), false)
+            .expect("valid test source budget");
+        let store = pending_replay_store(&zip, &plan, replay.clone(), budget, BLOCK_BYTES);
+        let body = zip_entry_body(
+            Arc::clone(&store),
+            plan.clone(),
+            plan.size,
+            Arc::new(UploadBodyState::default()),
+            Arc::new(AtomicUsize::new(0)),
+            None,
+        );
+        let mut first = body.into_inner();
+        let mut replay_body = first.try_clone().expect("retryable ZIP body");
 
-    poll_body_once(&mut first);
-    wait_for_test_condition(|| {
-        get_started.load(Ordering::Acquire)
-            && matches!(
-                store.state.lock().expect("source block state").slots[1].status,
-                SourceBlockStatus::Fetching
-            )
-    })
-    .await;
-    assert_eq!(stats.source_global_memory_for_test().1, BLOCK_BYTES as u64);
-    drop(first);
-    poll_body_once(&mut replay_body);
-    wait_for_test_condition(|| {
-        get_dropped.load(Ordering::Acquire) && replay_get_started.load(Ordering::Acquire)
-    })
-    .await;
-    {
-        let state = store.state.lock().expect("source block state");
-        assert!(matches!(state.slots[0].status, SourceBlockStatus::Fetching));
-        assert_eq!(state.slots[0].remaining_claims, 1);
-        assert_eq!(state.slots[0].live_claims, 0);
-        for slot in &state.slots[1..] {
-            assert!(matches!(slot.status, SourceBlockStatus::Pending));
-            assert_eq!(slot.remaining_claims, 1);
-            assert_eq!(slot.live_claims, 0);
-            assert!(slot.replay_priority);
+        poll_body_once(&mut first);
+        wait_for_test_condition(|| {
+            get_started.load(Ordering::Acquire)
+                && matches!(
+                    store.state.lock().expect("source block state").slots[1].status,
+                    SourceBlockStatus::Fetching
+                )
+        })
+        .await;
+        assert_eq!(stats.source_global_memory_for_test().1, BLOCK_BYTES as u64);
+        drop(first);
+        poll_body_once(&mut replay_body);
+        wait_for_test_condition(|| {
+            get_dropped.load(Ordering::Acquire) && replay_get_started.load(Ordering::Acquire)
+        })
+        .await;
+        {
+            let state = store.state.lock().expect("source block state");
+            assert!(matches!(state.slots[0].status, SourceBlockStatus::Fetching));
+            assert_eq!(state.slots[0].remaining_claims, 1);
+            assert_eq!(state.slots[0].live_claims, 0);
+            for slot in &state.slots[1..] {
+                assert!(matches!(slot.status, SourceBlockStatus::Pending));
+                assert_eq!(slot.remaining_claims, 1);
+                assert_eq!(slot.live_claims, 0);
+                assert!(slot.replay_priority);
+            }
         }
+        replay_get_released.store(true, Ordering::Release);
+        replay_get_waker.wake();
+
+        let bytes = tokio::time::timeout(
+            Duration::from_secs(1),
+            aws_sdk_s3::primitives::ByteStream::new(replay_body).collect(),
+        )
+        .await
+        .expect("replayed body should not hang after ranged GET cancellation")
+        .expect("replayed body after ranged GET cancellation")
+        .into_bytes();
+
+        assert_eq!(bytes.as_ref(), expected);
+        assert!(get_dropped.load(Ordering::Acquire));
+        assert_eq!(replay.actual_requests().count(), expected_requests);
+        assert_eq!(stats.source_global_memory_for_test().1, 0);
+        assert_replayed_body_released(&store);
     }
-    replay_get_released.store(true, Ordering::Release);
-    replay_get_waker.wake();
-
-    let bytes = tokio::time::timeout(
-        Duration::from_secs(1),
-        aws_sdk_s3::primitives::ByteStream::new(replay_body).collect(),
-    )
-    .await
-    .expect("replayed body should not hang after ranged GET cancellation")
-    .expect("replayed body after ranged GET cancellation")
-    .into_bytes();
-
-    assert_eq!(bytes.as_ref(), expected);
-    assert!(get_dropped.load(Ordering::Acquire));
-    assert_eq!(replay.actual_requests().count(), expected_requests);
-    assert_eq!(stats.source_global_memory_for_test().1, 0);
-    assert_replayed_body_released(&store);
 }
 
 #[tokio::test]
