@@ -121,11 +121,11 @@ interface ShinBucketDeploymentProps {
 
   // Lambda resource, identity, sharing, networking, and build configuration.
   readonly providerLambda?: {
-    readonly sharing?: ProviderSharing; // Default: ProviderSharing.STACK
+    readonly sharing?: ProviderSharing; // Default: STACK for prebuilt; DEPLOYMENT for localBuild
     readonly architecture?: Architecture; // Default: Architecture.ARM_64
     readonly memorySize?: number; // Default: 2048 MiB
     readonly failureDiagnostics?: FailureDiagnostics; // Default: STANDARD
-    readonly role?: IRole; // Default: create a shared provider role
+    readonly role?: IRole; // Default: create a role following the handler sharing mode
     readonly logGroup?: ILogGroupRef; // Default: Lambda-managed log group
     readonly vpc?: IVpc; // Default: no VPC
     readonly vpcSubnets?: SubnetSelection; // Default: VPC default selection
@@ -158,7 +158,7 @@ interface ShinBucketDeploymentProps {
 }
 ```
 
-Most consumers should omit `providerLambda.localBuild` and use the packaged provider. See [Building from source](docs/building-from-source.md) when you need to compile it yourself.
+Most consumers should omit `providerLambda.localBuild` and use the packaged provider, which defaults to `ProviderSharing.STACK`. Local builds use `ProviderSharing.DEPLOYMENT`; explicitly combining `localBuild` with `ProviderSharing.STACK` fails synthesis. See [Building from source](docs/building-from-source.md) when you need to compile it yourself.
 
 ### Outputs and Methods
 
