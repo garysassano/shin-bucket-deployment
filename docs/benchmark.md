@@ -179,6 +179,10 @@ The accepted 2026-08-26 comparison used Node.js 24.19.0 and `aws-cdk-lib` 2.260.
 
 The read-byte reduction is approximately one included-tree pass in both profiles: Shin now computes the catalog MD5 and collision-resistant asset SHA-256 during the same file read and no longer asks CDK to source-fingerprint the materialized tree. CDK still performs its staging copy, so this is not a zero-copy path. The cache probe changed from `catalogIdentityChanged=true, unrelatedCacheRetained=false` on the baseline to both values `true` on the candidate, proving changed catalog content gets a fresh asset identity without the previous process-global cache clear. Upstream remains faster because it does not generate or authenticate Shin's catalog and does not perform Shin's materialization and stability checks; this change removes the redundant fingerprint work rather than that required feature cost.
 
+## Local stability and performance experiments
+
+The [2026-09-06 buffer and borrowed-input experiments](stability-performance-experiments.md) retain 9,408 local samples summarized across three comparison blocks per candidate. Both reduce allocations and improve a small-file operation, but neither establishes a worthwhile deployment-level gain under the selected stability criteria. Keep the current provider and the expanded regression tests. No AWS run or default change was selected.
+
 ## Local destination-key allocation
 
 The planner's normal 442-entry Criterion fixture remains the regression guard for canonical workloads. The `plan_entries/key_lifecycle_100000` group adds a fixed-width 100,000-key profile that builds the real deployment manifest and derives the real ZIP transfer plans. `pnpm rust:bench:allocations` runs the same lifecycle for five samples under the dev-only `allocation-counter` allocator and reports median allocation count, total allocated bytes, peak live bytes, and Linux process high-water RSS. Fixture construction and one warm-up run are outside the measured allocation samples; RSS is the deliberately conservative whole-process high-water mark.
