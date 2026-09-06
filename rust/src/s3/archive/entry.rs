@@ -12,7 +12,7 @@ use crc32fast::Hasher as Crc32Hasher;
 use futures_util::FutureExt;
 use http_body::{Body, Frame, SizeHint};
 use md5::{Digest as Md5Digest, Md5};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, ReadBuf};
+use tokio::io::{AsyncBufRead, AsyncRead, AsyncReadExt, AsyncWrite, ReadBuf};
 use tokio::sync::mpsc;
 use tokio::task::AbortHandle;
 
@@ -323,14 +323,8 @@ impl ZipEntryAsyncReader {
             stats,
         }
     }
-}
 
-impl AsyncRead for ZipEntryAsyncReader {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut TaskContext<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
+    fn poll_reader(&mut self, cx: &mut TaskContext<'_>) -> Poll<io::Result<&mut EntryDataReader>> {
         if self.reader.is_none() {
             if self.init.is_none() {
                 let store = self.store.clone();
@@ -365,11 +359,39 @@ impl AsyncRead for ZipEntryAsyncReader {
             self.init = None;
         }
 
-        match self.reader.as_mut() {
-            Some(reader) => Pin::new(reader).poll_read(cx, buf),
-            None => Poll::Ready(Err(io::Error::other(
-                "ZIP entry reader did not initialize its data reader",
-            ))),
+        Poll::Ready(
+            self.reader.as_mut().ok_or_else(|| {
+                io::Error::other("ZIP entry reader did not initialize its data reader")
+            }),
+        )
+    }
+}
+
+impl AsyncRead for ZipEntryAsyncReader {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut TaskContext<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        let reader = std::task::ready!(self.get_mut().poll_reader(cx))?;
+        Pin::new(reader).poll_read(cx, buf)
+    }
+}
+
+impl AsyncBufRead for ZipEntryAsyncReader {
+    fn poll_fill_buf(self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<io::Result<&[u8]>> {
+        let reader = std::task::ready!(self.get_mut().poll_reader(cx))?;
+        Pin::new(reader).poll_fill_buf(cx)
+    }
+
+    fn consume(self: Pin<&mut Self>, amount: usize) {
+        if let Some(reader) = self.get_mut().reader.as_mut() {
+            Pin::new(reader).consume(amount);
+        } else {
+            assert_eq!(
+                amount, 0,
+                "cannot consume an uninitialized ZIP entry reader"
+            );
         }
     }
 }
@@ -540,7 +562,10 @@ impl EntryDataReader {
         let buffer_end = self.buffer_start.saturating_add(self.buffer.len() as u64);
         if self.position >= self.buffer_start && self.position < buffer_end {
             let offset = (self.position - self.buffer_start) as usize;
-            Some(&self.buffer[offset..])
+            let remaining =
+                usize::try_from(self.end_exclusive - self.position).unwrap_or(usize::MAX);
+            let end = offset + remaining.min(self.buffer.len() - offset);
+            Some(&self.buffer[offset..end])
         } else {
             None
         }
@@ -662,26 +687,43 @@ impl AsyncRead for EntryDataReader {
         cx: &mut TaskContext<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
-        if self.position >= self.end_exclusive || buf.remaining() == 0 {
+        if buf.remaining() == 0 {
             self.clear_consumed_buffer();
             self.release_finished_blocks();
             return Poll::Ready(Ok(()));
         }
 
-        if self.available().is_none() {
-            self.clear_consumed_buffer();
-            self.release_finished_blocks();
-            std::task::ready!(self.poll_fetch(cx))?;
-        }
-
-        let available = self.available().unwrap_or_default();
-        let remaining = usize::try_from(self.end_exclusive - self.position).unwrap_or(usize::MAX);
-        let len = available.len().min(remaining).min(buf.remaining());
+        let available = std::task::ready!(self.as_mut().poll_fill_buf(cx))?;
+        let len = available.len().min(buf.remaining());
         buf.put_slice(&available[..len]);
-        self.position += len as u64;
-        self.clear_consumed_buffer();
-        self.release_finished_blocks();
+        self.consume(len);
         Poll::Ready(Ok(()))
+    }
+}
+
+impl AsyncBufRead for EntryDataReader {
+    fn poll_fill_buf(self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<io::Result<&[u8]>> {
+        let reader = self.get_mut();
+        if reader.position >= reader.end_exclusive {
+            reader.clear_consumed_buffer();
+            reader.release_finished_blocks();
+            return Poll::Ready(Ok(&[]));
+        }
+        if reader.available().is_none() {
+            reader.clear_consumed_buffer();
+            reader.release_finished_blocks();
+            std::task::ready!(reader.poll_fetch(cx))?;
+        }
+        Poll::Ready(Ok(reader.available().unwrap_or_default()))
+    }
+
+    fn consume(self: Pin<&mut Self>, amount: usize) {
+        let reader = self.get_mut();
+        assert!(amount <= reader.available().unwrap_or_default().len());
+        reader.position += amount as u64;
+        // Drop the borrowed block view before returning its memory permit.
+        reader.clear_consumed_buffer();
+        reader.release_finished_blocks();
     }
 }
 
@@ -902,19 +944,9 @@ fn zip_entry_reader_inner(
     };
     match plan.compression_code {
         0 => Ok(Box::pin(reader)),
-        8 => {
-            // Size the decompression input buffer to the entry's compressed span,
-            // clamped so tiny entries do not under-size and huge entries do not
-            // over-allocate a fixed multi-megabyte buffer per active reader.
-            let capacity = usize::try_from(plan.compressed_size)
-                .unwrap_or(0)
-                .clamp(8 * 1024, 64 * 1024);
-            Ok(Box::pin(
-                async_compression::tokio::bufread::DeflateDecoder::new(
-                    tokio::io::BufReader::with_capacity(capacity, reader),
-                ),
-            ))
-        }
+        8 => Ok(Box::pin(
+            async_compression::tokio::bufread::DeflateDecoder::new(reader),
+        )),
         _ => Err(invalid_entry(
             &plan,
             format!("unsupported compression method {}", plan.compression_code),

@@ -16,7 +16,7 @@ use futures_util::task::AtomicWaker;
 use http::{Request, Response};
 use http_body::{Body as _, Frame, SizeHint};
 use proptest::prelude::*;
-use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::Semaphore;
 use tokio::time::Instant;
 use zip::write::{SimpleFileOptions, ZipWriter};
@@ -327,6 +327,66 @@ async fn completed_entry_reader_drops_its_source_block_slice_before_releasing_ca
 
     assert!(!compressed.is_empty());
     assert_eq!(reader.buffered_source_bytes_for_test(), 0);
+}
+
+#[tokio::test]
+async fn buffered_entry_reads_preserve_borrowed_bytes_and_stop_at_entry_end() {
+    for contents in [Vec::new(), marker_forward_body(12_345)] {
+        for archive in [
+            stored_zip_from_entry("borrowed.bin", &contents),
+            zip_from_entry("borrowed.bin", &contents),
+        ] {
+            let plan = zip_plan_from_archive(&archive, "borrowed.bin");
+            let start = (plan.source_span_end_exclusive - plan.compressed_size) as usize;
+            let expected = &archive[start..plan.source_span_end_exclusive as usize];
+            for block_bytes in [64, 4096, archive.len()] {
+                let store = if block_bytes == archive.len() {
+                    // Include the following ZIP directory in the same resident block.
+                    ready_store(
+                        archive.len() as u64,
+                        vec![SourceBlockRange {
+                            start: 0,
+                            end_exclusive: archive.len() as u64,
+                        }],
+                        vec![1],
+                        vec![Bytes::copy_from_slice(&archive)],
+                    )
+                } else {
+                    ready_store_for_plan_with_block_bytes(&archive, &plan, block_bytes)
+                };
+                let mut reader = open_entry_data_reader(Arc::clone(&store), plan.clone(), None)
+                    .await
+                    .expect("entry data reader");
+                let mut output = Vec::new();
+                loop {
+                    let (pointer, bytes) = {
+                        let bytes = reader.fill_buf().await.unwrap();
+                        (bytes.as_ptr(), bytes.to_vec())
+                    };
+                    assert_eq!(reader.fill_buf().await.unwrap(), bytes);
+                    assert_eq!(reader.fill_buf().await.unwrap().as_ptr(), pointer);
+                    reader.consume(0);
+                    assert_eq!(reader.fill_buf().await.unwrap(), bytes);
+                    if bytes.is_empty() {
+                        break;
+                    }
+                    assert!(bytes.len() <= expected.len() - output.len());
+                    let consumed = bytes.len().min(17);
+                    output.extend_from_slice(&bytes[..consumed]);
+                    reader.consume(consumed);
+                    // Yield with a partially consumed block, as a slow decoder would.
+                    tokio::task::yield_now().await;
+                }
+                assert_eq!(output, expected);
+                assert_eq!(reader.buffered_source_bytes_for_test(), 0);
+                assert!(reader.fill_buf().await.unwrap().is_empty());
+                drop(reader);
+                let state = store.state.lock().unwrap();
+                assert!(state.slots.iter().all(|slot| slot.live_claims == 0));
+                assert_eq!(store.source.diagnostics.snapshot().block_refetches, 0);
+            }
+        }
+    }
 }
 
 impl Drop for DropSignal {
@@ -1540,107 +1600,111 @@ async fn dropped_upload_body_cancels_ranged_get_and_replays() {
     let expected = (0..512)
         .map(|index| (index % 251) as u8)
         .collect::<Vec<_>>();
-    let zip = stored_zip_from_entry("range.txt", &expected);
-    let plan = zip_plan_from_archive(&zip, "range.txt");
-    let blocks = plan_source_blocks(
-        zip.len() as u64,
-        std::slice::from_ref(&plan),
-        BLOCK_BYTES,
-        0,
-    )
-    .expect("planning succeeds");
-    assert!(blocks.len() > 2);
-    let get_started = Arc::new(AtomicBool::new(false));
-    let get_dropped = Arc::new(AtomicBool::new(false));
-    let replay_get_started = Arc::new(AtomicBool::new(false));
-    let replay_get_released = Arc::new(AtomicBool::new(false));
-    let replay_get_waker = Arc::new(AtomicWaker::new());
-    let mut events = vec![
-        get_block_success_event(&zip, blocks[0]),
-        get_pending_range_event(
-            usize::try_from(blocks[1].len()).unwrap(),
-            blocks[1].start,
+    for zip in [
+        stored_zip_from_entry("range.txt", &expected),
+        zip_from_entry("range.txt", &expected),
+    ] {
+        let plan = zip_plan_from_archive(&zip, "range.txt");
+        let blocks = plan_source_blocks(
             zip.len() as u64,
-            Arc::clone(&get_started),
-            Arc::clone(&get_dropped),
-        ),
-        get_gated_range_event(
-            &zip,
-            blocks[0],
-            Arc::clone(&replay_get_started),
-            Arc::clone(&replay_get_released),
-            Arc::clone(&replay_get_waker),
-        ),
-    ];
-    events.extend(
-        blocks
-            .iter()
-            .skip(1)
-            .copied()
-            .map(|block| get_block_success_event(&zip, block)),
-    );
-    let expected_requests = events.len();
-    let replay = StaticReplayClient::new(events);
-    let stats = Arc::new(DeploymentStats::default());
-    let budget = SourceByteBudget::new(BLOCK_BYTES, Arc::clone(&stats), false)
-        .expect("valid test source budget");
-    let store = pending_replay_store(&zip, &plan, replay.clone(), budget, BLOCK_BYTES);
-    let body = zip_entry_body(
-        Arc::clone(&store),
-        plan.clone(),
-        plan.size,
-        Arc::new(UploadBodyState::default()),
-        Arc::new(AtomicUsize::new(0)),
-        None,
-    );
-    let mut first = body.into_inner();
-    let mut replay_body = first.try_clone().expect("retryable ZIP body");
+            std::slice::from_ref(&plan),
+            BLOCK_BYTES,
+            0,
+        )
+        .expect("planning succeeds");
+        assert!(blocks.len() > 2);
+        let get_started = Arc::new(AtomicBool::new(false));
+        let get_dropped = Arc::new(AtomicBool::new(false));
+        let replay_get_started = Arc::new(AtomicBool::new(false));
+        let replay_get_released = Arc::new(AtomicBool::new(false));
+        let replay_get_waker = Arc::new(AtomicWaker::new());
+        let mut events = vec![
+            get_block_success_event(&zip, blocks[0]),
+            get_pending_range_event(
+                usize::try_from(blocks[1].len()).unwrap(),
+                blocks[1].start,
+                zip.len() as u64,
+                Arc::clone(&get_started),
+                Arc::clone(&get_dropped),
+            ),
+            get_gated_range_event(
+                &zip,
+                blocks[0],
+                Arc::clone(&replay_get_started),
+                Arc::clone(&replay_get_released),
+                Arc::clone(&replay_get_waker),
+            ),
+        ];
+        events.extend(
+            blocks
+                .iter()
+                .skip(1)
+                .copied()
+                .map(|block| get_block_success_event(&zip, block)),
+        );
+        let expected_requests = events.len();
+        let replay = StaticReplayClient::new(events);
+        let stats = Arc::new(DeploymentStats::default());
+        let budget = SourceByteBudget::new(BLOCK_BYTES, Arc::clone(&stats), false)
+            .expect("valid test source budget");
+        let store = pending_replay_store(&zip, &plan, replay.clone(), budget, BLOCK_BYTES);
+        let body = zip_entry_body(
+            Arc::clone(&store),
+            plan.clone(),
+            plan.size,
+            Arc::new(UploadBodyState::default()),
+            Arc::new(AtomicUsize::new(0)),
+            None,
+        );
+        let mut first = body.into_inner();
+        let mut replay_body = first.try_clone().expect("retryable ZIP body");
 
-    poll_body_once(&mut first);
-    wait_for_test_condition(|| {
-        get_started.load(Ordering::Acquire)
-            && matches!(
-                store.state.lock().expect("source block state").slots[1].status,
-                SourceBlockStatus::Fetching
-            )
-    })
-    .await;
-    assert_eq!(stats.source_global_memory_for_test().1, BLOCK_BYTES as u64);
-    drop(first);
-    poll_body_once(&mut replay_body);
-    wait_for_test_condition(|| {
-        get_dropped.load(Ordering::Acquire) && replay_get_started.load(Ordering::Acquire)
-    })
-    .await;
-    {
-        let state = store.state.lock().expect("source block state");
-        assert!(matches!(state.slots[0].status, SourceBlockStatus::Fetching));
-        assert_eq!(state.slots[0].remaining_claims, 1);
-        assert_eq!(state.slots[0].live_claims, 0);
-        for slot in &state.slots[1..] {
-            assert!(matches!(slot.status, SourceBlockStatus::Pending));
-            assert_eq!(slot.remaining_claims, 1);
-            assert_eq!(slot.live_claims, 0);
-            assert!(slot.replay_priority);
+        poll_body_once(&mut first);
+        wait_for_test_condition(|| {
+            get_started.load(Ordering::Acquire)
+                && matches!(
+                    store.state.lock().expect("source block state").slots[1].status,
+                    SourceBlockStatus::Fetching
+                )
+        })
+        .await;
+        assert_eq!(stats.source_global_memory_for_test().1, BLOCK_BYTES as u64);
+        drop(first);
+        poll_body_once(&mut replay_body);
+        wait_for_test_condition(|| {
+            get_dropped.load(Ordering::Acquire) && replay_get_started.load(Ordering::Acquire)
+        })
+        .await;
+        {
+            let state = store.state.lock().expect("source block state");
+            assert!(matches!(state.slots[0].status, SourceBlockStatus::Fetching));
+            assert_eq!(state.slots[0].remaining_claims, 1);
+            assert_eq!(state.slots[0].live_claims, 0);
+            for slot in &state.slots[1..] {
+                assert!(matches!(slot.status, SourceBlockStatus::Pending));
+                assert_eq!(slot.remaining_claims, 1);
+                assert_eq!(slot.live_claims, 0);
+                assert!(slot.replay_priority);
+            }
         }
+        replay_get_released.store(true, Ordering::Release);
+        replay_get_waker.wake();
+
+        let bytes = tokio::time::timeout(
+            Duration::from_secs(1),
+            aws_sdk_s3::primitives::ByteStream::new(replay_body).collect(),
+        )
+        .await
+        .expect("replayed body should not hang after ranged GET cancellation")
+        .expect("replayed body after ranged GET cancellation")
+        .into_bytes();
+
+        assert_eq!(bytes.as_ref(), expected);
+        assert!(get_dropped.load(Ordering::Acquire));
+        assert_eq!(replay.actual_requests().count(), expected_requests);
+        assert_eq!(stats.source_global_memory_for_test().1, 0);
+        assert_replayed_body_released(&store);
     }
-    replay_get_released.store(true, Ordering::Release);
-    replay_get_waker.wake();
-
-    let bytes = tokio::time::timeout(
-        Duration::from_secs(1),
-        aws_sdk_s3::primitives::ByteStream::new(replay_body).collect(),
-    )
-    .await
-    .expect("replayed body should not hang after ranged GET cancellation")
-    .expect("replayed body after ranged GET cancellation")
-    .into_bytes();
-
-    assert_eq!(bytes.as_ref(), expected);
-    assert!(get_dropped.load(Ordering::Acquire));
-    assert_eq!(replay.actual_requests().count(), expected_requests);
-    assert_eq!(stats.source_global_memory_for_test().1, 0);
-    assert_replayed_body_released(&store);
 }
 
 #[tokio::test]
