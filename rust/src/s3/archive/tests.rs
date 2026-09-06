@@ -693,41 +693,79 @@ async fn streaming_an_entry_always_records_its_md5() {
 async fn direct_stream_frames_preserve_body_boundaries() {
     let frame_bytes = crate::s3::ZIP_ENTRY_BODY_CHUNK_BYTES;
     for (size, expected_frames) in [
+        (0, vec![(false, 0)]),
+        (1, vec![(false, 1)]),
+        (4096, vec![(false, 4096)]),
+        (16384, vec![(false, 16384)]),
         (frame_bytes - 1, vec![(false, frame_bytes - 1)]),
         (frame_bytes, vec![(false, frame_bytes)]),
+        (frame_bytes + 1, vec![(true, frame_bytes), (false, 1)]),
         (
             frame_bytes * 2 + 17,
             vec![(true, frame_bytes), (true, frame_bytes), (false, 17)],
         ),
     ] {
-        let contents = vec![b'x'; size];
-        let zip = zip_from_entry("boundaries.bin", &contents);
-        let plan = zip_plan_from_archive(&zip, "boundaries.bin");
-        let store = ready_store_for_plan(&zip, &plan);
-        let (sender, mut receiver) = tokio::sync::mpsc::channel(expected_frames.len());
+        let contents = marker_forward_body(size);
+        for archive in [
+            zip_from_entry("boundaries.bin", &contents),
+            stored_zip_from_entry("boundaries.bin", &contents),
+        ] {
+            let plan = zip_plan_from_archive(&archive, "boundaries.bin");
+            let store = ready_store_for_plan_with_block_bytes(&archive, &plan, 4096);
+            let (sender, mut receiver) = tokio::sync::mpsc::channel(expected_frames.len());
+            let state = Arc::new(UploadBodyState::default());
 
-        send_zip_entry_chunks(
-            store,
-            plan,
-            sender,
-            Arc::new(UploadBodyState::default()),
-            None,
-        )
-        .await
-        .expect("direct stream");
+            send_zip_entry_chunks(store, plan, sender, Arc::clone(&state), None)
+                .await
+                .expect("direct stream");
 
-        let mut actual_frames = Vec::new();
-        while let Ok(frame) = receiver.try_recv() {
-            let frame = frame.expect("valid body frame");
-            let classification = match frame {
-                BodyFrame::Data(bytes) => (true, bytes.len()),
-                BodyFrame::Final(bytes) => (false, bytes.len()),
-                BodyFrame::Complete => (false, 0),
-            };
-            assert!(classification.1 <= frame_bytes);
-            actual_frames.push(classification);
+            let mut actual_frames = Vec::new();
+            let mut actual_body = Vec::new();
+            while let Ok(frame) = receiver.try_recv() {
+                let (data, bytes) = match frame.expect("valid body frame") {
+                    BodyFrame::Data(bytes) => (true, bytes),
+                    BodyFrame::Final(bytes) => (false, bytes),
+                    BodyFrame::Complete => (false, Bytes::new()),
+                };
+                assert!(bytes.len() <= frame_bytes);
+                actual_frames.push((data, bytes.len()));
+                actual_body.extend_from_slice(&bytes);
+            }
+            assert_eq!(actual_frames, expected_frames, "entry size {size}");
+            assert_eq!(actual_body, contents, "entry size {size}");
+            let mut md5 = Md5::new();
+            md5.update(&contents);
+            let expected_md5 = finalize_digest(md5);
+            assert_eq!(state.etag_md5(), Some(expected_md5.as_str()));
         }
-        assert_eq!(actual_frames, expected_frames, "entry size {size}");
+    }
+}
+
+#[tokio::test]
+async fn direct_stream_rejects_one_excess_byte_before_completing_the_body() {
+    let frame_bytes = crate::s3::ZIP_ENTRY_BODY_CHUNK_BYTES;
+    for declared_size in [0, 1, 16384, frame_bytes - 1, frame_bytes, frame_bytes * 2] {
+        let contents = marker_forward_body(declared_size + 1);
+        for archive in [
+            zip_from_entry("excess.bin", &contents),
+            stored_zip_from_entry("excess.bin", &contents),
+        ] {
+            let mut plan = zip_plan_from_archive(&archive, "excess.bin");
+            plan.size = declared_size as u64;
+            let store = ready_store_for_plan_with_block_bytes(&archive, &plan, 4096);
+            let (sender, mut receiver) =
+                tokio::sync::mpsc::channel(declared_size / frame_bytes + 2);
+            let state = Arc::new(UploadBodyState::default());
+
+            send_zip_entry_chunks(store, plan, sender, Arc::clone(&state), None)
+                .await
+                .expect_err("an exact declared length must not bypass the EOF check");
+
+            while let Ok(frame) = receiver.try_recv() {
+                assert!(matches!(frame.unwrap(), BodyFrame::Data(_)));
+            }
+            assert!(state.etag_md5().is_none());
+        }
     }
 }
 

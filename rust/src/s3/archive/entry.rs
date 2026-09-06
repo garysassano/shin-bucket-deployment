@@ -957,7 +957,7 @@ async fn send_zip_entry_chunks_inner(
     let mut md5 = Md5::new();
     let mut crc32 = Crc32Hasher::new();
     let mut bytes = 0_u64;
-    let mut frame = BytesMut::with_capacity(ZIP_ENTRY_BODY_CHUNK_BYTES);
+    let mut frame = BytesMut::with_capacity(zip_entry_frame_capacity(plan.size));
     let mut held_frame = None;
 
     loop {
@@ -980,7 +980,7 @@ async fn send_zip_entry_chunks_inner(
         if frame.len() == ZIP_ENTRY_BODY_CHUNK_BYTES {
             let completed = std::mem::replace(
                 &mut frame,
-                BytesMut::with_capacity(ZIP_ENTRY_BODY_CHUNK_BYTES),
+                BytesMut::with_capacity(zip_entry_frame_capacity(plan.size - bytes)),
             )
             .freeze();
             if let Some(previous) = held_frame.replace(completed)
@@ -1025,6 +1025,14 @@ async fn send_zip_entry_chunks_inner(
     body_state.record_producer_stage(attempt_number, UploadProducerStage::Complete);
 
     Ok(())
+}
+
+fn zip_entry_frame_capacity(remaining_bytes: u64) -> usize {
+    // Leave room to observe EOF or reject excess output without growing a
+    // small final frame. Frame boundaries and final-frame validation stay fixed.
+    remaining_bytes
+        .saturating_add(1)
+        .min(ZIP_ENTRY_BODY_CHUNK_BYTES as u64) as usize
 }
 
 #[cfg(test)]
