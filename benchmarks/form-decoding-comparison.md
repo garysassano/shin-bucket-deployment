@@ -1,6 +1,6 @@
 # S3 form-decoding correction comparison
 
-Complete validated before/after evidence for the form-decoding correction. The [performance decision](../docs/benchmark.md#form-decoding-performance-review) retains the correction with its measured tradeoff; formal acceptance requires publication on main. Deployed correctness remains a separate pending boundary.
+Complete validated before/after evidence for the form-decoding correction. The [performance decision](../docs/benchmark.md#form-decoding-performance-review) retains the correction with its measured tradeoff; the validated ledgers are published on `main` through PRs #216 and #217, completing performance acceptance. Deployed correctness passed the integrated `c352d7b` full suite with independent cleanup recorded in [verification](../docs/verification.md).
 
 Before: `db54f56ef17836887e8396ee05174c67cd782cd7`, run `61e8b1e5-0ad9-437d-b75f-9c9e640f64c4`, workflow 33992919938.
 
@@ -233,6 +233,6 @@ Control-adjusted Δ = ((Shin after / Shin before) / (AWS after / AWS before) −
 - Source wait/refetch counters alone do not establish S3 throttling. Check source getRetries/getErrors and destination retryAttempts/throttledAttempts, plus fetched bytes, high-water memory, reader counts and callback attempts.
 - Max memory is the phase-local CloudWatch high-water mark, not average RSS. Local/CDK wall times are secondary observations from the same concurrent topology, not sequential latency controls.
 - The run provider architecture bounds the conclusion; the arm64 Shin matrix establishes no x86 provider performance result. Ordinary canonical profiles measure normal listing/cleanup work; they do not cover pathological long encoded keys or establish edge-key correctness.
-- Complete validated ledgers do not prove real-world CloudFormation replacement correctness. Both sanitized ledgers must be published on main, and separate deployed correctness must finish before release acceptance.
+- Complete validated ledgers do not prove real-world CloudFormation replacement correctness. Both sanitized ledgers are published on `main` through PRs #216 and #217; the separate deployed correctness run also passed with independent cleanup recorded in [verification](../docs/verification.md).
 
 Per-cell numeric telemetry with all statistics is in [form-decoding-telemetry.md](form-decoding-telemetry.md). Current AFTER standard reports are [ci-report.md](ci-report.md) and [ci-telemetry.md](ci-telemetry.md). Both original run/sample sets remain in the sanitized ledger.
