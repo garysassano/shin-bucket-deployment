@@ -1,6 +1,6 @@
 # Breaking Changes
 
-This file holds authored release notes for `ShinBucketDeployment` changes that break adopters' deployed state or in-repo contracts. During release preparation, rename `## Unreleased` to the exact package version and start a new Unreleased section for later work. The release workflow requires a nonempty section matching the release tag before publication and uses only that section as the GitHub release body, including on reruns; historical notes and pull request titles are not appended.
+This file holds authored release notes for `ShinBucketDeployment` changes that break adopters' deployed state or in-repo contracts. During release preparation, rename `## Unreleased` to the exact package version and start a new Unreleased section for later work. The release workflow requires a nonempty section matching the release tag before publication and places that section first under “Upgrade notes” in the GitHub release body, followed by GitHub-generated pull request notes and the full changelog link. Reruns regenerate and replace the complete body; historical authored sections are not included.
 
 ## Unreleased
 

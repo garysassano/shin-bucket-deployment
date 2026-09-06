@@ -181,7 +181,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          node scripts/release-notes.mjs "$GITHUB_REF_NAME" >"$RUNNER_TEMP/release-notes.md"
+          gh api --method POST "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
+            -f tag_name="$GITHUB_REF_NAME" >"$RUNNER_TEMP/generated-notes.json"
+          node scripts/release-notes.mjs "$GITHUB_REF_NAME" "$RUNNER_TEMP/generated-notes.json" >"$RUNNER_TEMP/release-notes.md"
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release edit "$GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/release-notes.md"
           else
