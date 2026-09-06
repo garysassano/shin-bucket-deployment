@@ -85,7 +85,7 @@ interface ShinBucketDeploymentProps {
   // Bound source-archive handling and object selection. Exclusions constrain stale deletion.
   readonly sourceProcessing?: {
     readonly extract?: boolean; // Default: true
-    readonly maxUncompressedEntryBytes?: number; // Default: 1073741824 (1 GiB)
+    readonly maxUncompressedEntryBytes?: number; // Default: 1 GiB
     readonly maxCompressionRatio?: number; // Default: 100
     readonly include?: string[]; // Default: include every non-excluded path
     readonly exclude?: string[]; // Default: exclude nothing
