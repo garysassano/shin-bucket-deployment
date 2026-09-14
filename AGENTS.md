@@ -2,11 +2,10 @@
 
 ## Engineering approach
 
-- While the package major version is `0`, backward compatibility is not a default requirement. Prefer removing obsolete paths over adding compatibility layers, fallbacks, aliases, or migrations. Breaking changes must still have a concrete benefit, and all in-repo callers, tests, and documentation must move to the new contract together. This policy expires when the package reaches `1.0.0`; from that point, preserve compatibility according to semantic versioning and documented commitments.
-- "Backward compatibility" here means only this package's own internal contracts: the construct's public API shape, the provider request and diagnostics schema, benchmark evidence schemas, and similar in-repo surfaces where supporting multiple concurrent versions is explicitly out of scope. It does **not** cover the consumer-facing migration guide from AWS CDK `BucketDeployment`. That guide is onboarding documentation for adopters, not a compatibility path — keep it accurate when the construct API changes, and never delete it as an "obsolete path."
-- The same pre-`1.0` licence covers changes that break adopters' **deployed** state, not only in-repo contracts. A change may alter the destination physical resource ID, force CloudFormation to replace the custom resource, or otherwise cause an update to delete and recreate deployed objects, and no compatibility path should be added to avoid that. Because the consequence lands on stacks that upgrade rather than on this repository, such a change must name the breakage explicitly in its PR description and in the release notes, and must say which existing configurations are affected.
-- Do not modify `README.md` without an explicit request. It is consumer-facing documentation, not a place to reflect in-repo contract changes automatically. When a change would make the README inaccurate, flag the specific update needed and ask, rather than editing or removing sections on your own initiative. **One standing exception:** regenerating the committed benchmark snapshot SVGs the README embeds from current evidence, and any matching update to the README's benchmark image embeds themselves, is always allowed without a separate request — these are generated evidence, not authored prose, and must track the latest published benchmark run. Do not name an example snapshot path in this file: the snapshot-inventory test in `test/benchmarks/assets.test.ts` scans every tracked Markdown file for benchmark image references and treats any it finds as one that must match a committed file.
-- Before designing a solution, check how upstream AWS CDK `BucketDeployment` and other established projects solve the same problem, and adopt proven patterns when they fit this package's constraints.
+- While the package major version is `0`, backward compatibility is not a default requirement for public APIs, internal evidence contracts, or deployed state. Prefer a clean break with a concrete benefit, and move all callers, tests, and documentation together. Name upgrade-time replacement or deletion effects in the PR and release notes. This policy expires at `1.0.0`.
+- The AWS CDK `BucketDeployment` migration guide is adopter onboarding, not a compatibility path; keep it accurate when the construct API changes.
+- Do not modify authored `README.md` prose without an explicit request. Report any update made necessary by a change. Regenerating benchmark snapshot SVGs and their README embeds is allowed; do not mention an example snapshot path in tracked Markdown because the snapshot-inventory test treats every such reference as required output.
+- For changes to construct behavior, public API, or provider architecture, check how upstream AWS CDK `BucketDeployment` and other established projects solve the same problem, and adopt proven patterns when they fit this package's constraints.
 - Pull requests are squash-merged, so `main` carries one commit per PR. Split work into separate PRs whenever changes need independent revert, release, blame, or bisect boundaries. Review and edit the squash message GitHub proposes for a multi-commit PR; the concatenated commit bodies are usually noisy.
 
 ## Required skills
@@ -16,51 +15,17 @@ Read the relevant repo-local skill before benchmark or verification work:
 - Benchmark and AWS CDK `BucketDeployment` comparison tasks: read `.agents/skills/shin-benchmark/SKILL.md`.
 - Correctness verification tasks: read `.agents/skills/shin-verification/SKILL.md`.
 
-## Correctness verification
+## Verification, benchmarks, and evidence
 
-AWS correctness verification is opt-in, cost-bearing, and maintainer-run through `pnpm verify`; there is no hosted full-matrix workflow. Run local gates first and use the smallest relevant named verification group for a narrow deployed change. Reserve the full suite for changes spanning several groups, shared provider/runner/assertion behavior, or an intentionally selected release candidate. Do not recreate automatic push, pull-request, merge, or schedule verification; a future hosted workflow requires an explicit maintainer decision covering cost, least-privilege deployment access, and definitive cleanup access. Do not run AWS for docs, formatting, workflow syntax, local validation, or synthesis-only changes whose deployed behavior is proven unchanged.
+AWS verification and benchmarks are opt-in, cost-bearing workflows. Do not run them unless the task calls for live AWS evidence; use the smallest relevant scope and follow the selected skill's cleanup and publication rules.
 
-Name ordered verification scenario templates with `-initial` and `-updated` suffixes. Do not use `v1`/`v2`, `alpha`/`beta`, or other release-like labels for scenario phases. Use a descriptive suffix such as `-bucket-only` for terminal shape changes.
+Keep raw AWS output and identifiers outside the repository. In committed material and final reports, refer to maintainer-supplied profile names only as the configured test profile.
 
-## Evidence handling
+Keep correctness evidence in `docs/verification.md` and performance or upstream-comparison evidence in `docs/benchmark.md` plus the benchmark JSONL records. Neither evidence class substitutes for the other.
 
-Keep benchmark evidence and verification evidence separate:
+Performance remains a product constraint. For performance-sensitive provider changes, avoid unmeasured per-byte or per-object work, reuse data already produced by the transfer path, and leave acceptance pending until comparable Shin and upstream evidence is committed through the benchmark workflow.
 
-- `docs/benchmark.md` and `benchmarks/results.jsonl` are for performance, efficiency, and upstream AWS CDK `BucketDeployment` comparisons.
-- `docs/verification.md` is the latest `ShinBucketDeployment` correctness snapshot.
-- Do not use benchmark rows or upstream AWS `BucketDeployment` comparison rows as verification evidence.
-
-Keep raw AWS output in scratch directories outside the repo. Commit only sanitized docs, benchmark result rows, source, tests, and scenarios.
-
-Never commit raw AWS evidence or identifiers:
-
-- account IDs
-- ARNs
-- bucket names
-- CloudFront distribution IDs
-- stack-specific physical IDs
-- request IDs
-- object keys from private/user data
-- ETags
-- raw CDK deploy logs
-- raw CloudWatch log exports
-- AWS profile names
-
-Treat maintainer-supplied AWS profile names as local-only command inputs. Do not repeat them in committed docs, PR text, evidence summaries, or final reports; refer to the configured test profile generically.
-
-## Performance and benchmarks
-
-Treat performance as a primary product constraint. Shin must materially outperform upstream AWS CDK `BucketDeployment` on its target workloads; correctness alone is not sufficient for a performance-sensitive data-path change.
-
-- Do not add an unmeasured per-byte or per-object pass, hash, network request, payload copy, allocation, or whole-entry materialization to a normal path.
-- Reuse bytes, digests, listings, and validation work already produced by the transfer path whenever possible.
-- Before merging or releasing a performance-relevant provider change, collect comparable before/after Shin evidence and an upstream AWS CDK baseline with the relevant provider telemetry. If evidence is still pending, say so explicitly instead of presenting the change as performance-accepted.
-- Persist every completed AWS benchmark run used to evaluate a change as validated sanitized sample rows in `benchmarks/results.jsonl` and matching run records in `benchmarks/runs.jsonl`. Each Shin run record must identify in `provider.implementationCommit` the exact clean commit on `main` that was measured, normally the squash commit produced by the implementation PR; samples resolve that provenance through `runId` and `implementation`. Run performance-acceptance benchmarks only after the implementation is merged, then promptly commit the validated sanitized evidence through a follow-up evidence PR. Do not call the workstream complete or performance-accepted until those records are committed on `main` and retain the run UUID, provenance, telemetry, and cleanup outcome.
-- Keep those measurements in benchmark evidence; correctness scenarios and `docs/verification.md` do not establish a performance win.
-
-Diagnostics levels are chosen by cost shape, not by how interesting the data is. Anything whose cost is O(deployment) or O(objects) with a small constant — counters, phase timings, aggregate high-water marks — is always on, because it is what triages a slow deployment that cannot be reproduced, and a flag would guarantee the data is absent exactly when it is wanted. Anything whose cost is O(attempts × retained state) — retained per-attempt structures, bounded string capture, per-attempt allocations — goes behind `FailureDiagnostics.DETAILED`. Phase timings (`phaseMs`) are always on by design and must not be gated. Benchmarks always run `DETAILED` because the runner refuses to disable it, so published benchmark numbers reflect the heavier configuration and understate the `STANDARD` default that consumers get.
-
-For benchmark telemetry interpretation, use the `docs/architecture.md` Diagnostics field reference. Do not infer S3 throttling from source block refetches or waits unless the provider summary also shows source `getRetries`/`getErrors` or destination `putObject.throttledAttempts`/`retryAttempts`.
+For diagnostics design changes, use the Diagnostics reference in `docs/architecture.md`: keep aggregate deployment or object counters and phase timings in standard mode, and retain per-attempt state only in `FailureDiagnostics.DETAILED`.
 
 ## Destination lifecycle API
 
