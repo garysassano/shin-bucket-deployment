@@ -111,19 +111,19 @@
     }
   },
   "devDependencies": {
-    "@aws-sdk/client-cloudfront": "3.1124.0",
-    "@aws-sdk/client-s3": "3.1124.0",
-    "@biomejs/biome": "2.5.11",
+    "@aws-sdk/client-cloudfront": "3.1136.0",
+    "@aws-sdk/client-s3": "3.1136.0",
+    "@biomejs/biome": "2.5.14",
     "@types/node": "24.13.3",
     "ajv": "8.20.0",
     "ajv-formats": "3.0.1",
-    "aws-cdk": "2.1139.0",
+    "aws-cdk": "2.1142.0",
     "aws-cdk-lib": "2.267.0",
     "cargo-lambda-cdk": "0.0.36",
     "constructs": "10.8.1",
-    "prettier": "3.9.6",
+    "prettier": "3.9.8",
     "typescript": "7.0.2",
-    "vitest": "5.0.0",
+    "vitest": "5.0.1",
     "zod": "4.6.5"
   }
 }
