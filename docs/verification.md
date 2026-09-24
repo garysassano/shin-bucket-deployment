@@ -4,7 +4,9 @@ This page records the latest combined AWS correctness baseline and subsequent ta
 
 ## Current Snapshot
 
-This snapshot tracks the `shin-bucket-deployment@0.14.0` release candidate. The integrated full suite passed on 2026-09-05 UTC at `c352d7bcb39aa70406c351d46d65cb7151e1bd8b`, with all 33 phase assertions and independent cleanup confirmed.
+This snapshot tracks the `shin-bucket-deployment@0.14.1` release candidate. Compared with the verified `0.14.0` candidate at `c352d7b`, the production provider changes only its locked `rustls` dependency from `0.23.43` to `0.23.45`; additional archive regression tests do not change runtime behavior. The custom-resource wire contract is unchanged. The latest combined AWS correctness baseline remains the 2026-09-05 `0.14.0` run below, with all 33 phase assertions and independent cleanup confirmed. The `0.14.1` release gates include both provider-archive builds, local checks, and a MinIO smoke that executes the real x86_64 provider binary. No arm64 AWS `deploy-smoke` run has been performed for this patch.
+
+For this candidate, both provider archives rebuilt locally, `pnpm check` passed 490 Vitest, 66 script, and 331 Rust tests plus the package, supply-chain, synthesis, and ledger gates, and the TypeScript contract comparison against `35bd33f` passed for 33 verification templates and two benchmark templates with the release identity changes acknowledged. The local run did not create AWS resources; the PR's hosted MinIO smoke is the binary execution gate.
 
 ## Latest Combined AWS Baseline
 
