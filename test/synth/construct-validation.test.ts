@@ -1370,12 +1370,12 @@ describe("ShinBucketDeployment validation and option coverage", () => {
     Annotations.fromStack(stack).hasWarning(
       "/HighConcurrency/Deploy",
       Match.stringLikeRegexp(
-        "transfer\\.maxConcurrency=65 is above the current measured guidance ceiling of 64.*128 slowed cold-create.*memory-dependent.*benchmarking your workload",
+        "transfer\\.maxConcurrency=65 is above the guidance threshold of 64.*Benchmark your workload.*inFlightHighWater.*docs/benchmark.md",
       ),
     );
   });
 
-  test("does not warn at the measured concurrency guidance boundary", () => {
+  test("does not warn at the concurrency guidance boundary", () => {
     const app = new App();
     const stack = new Stack(app, "GuidanceBoundary");
     const destinationBucket = new Bucket(stack, "Dest");

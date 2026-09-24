@@ -358,12 +358,10 @@ export interface ShinBucketDeploymentProviderLambdaOptions {
    * provider. A deployment-scoped provider updates this setting in place.
    * Must be in the inclusive range 128..10240.
    *
-   * The default pairs with `transfer.maxConcurrency` of 64. That combination
-   * measured 31-44% faster cold-create than 1024 MiB with 32 transfers on
-   * every canonical benchmark profile, at a peak usage well under either
-   * allocation. Lower it for cost-sensitive deployments that tolerate slower
-   * deploys; Lambda bills memory x duration, and the faster configuration is
-   * not always the cheaper one.
+   * The default pairs with `transfer.maxConcurrency` of 64. Benchmark your
+   * workload before changing these settings: Lambda bills memory x duration,
+   * so a faster deploy is not always cheaper. See docs/benchmark.md for
+   * measured comparisons.
    *
    * @default DEFAULT_PROVIDER_LAMBDA_MEMORY_SIZE_MIB (2048)
    */
@@ -480,14 +478,11 @@ export interface ShinBucketDeploymentTransferOptions {
    * objects proceed in parallel; lower it to reduce peak memory and
    * destination request pressure.
    *
-   * Values above 64 produce a synthesis warning. Measurements found that 128
-   * slowed cold-create at both 1024 MiB and 2048 MiB because the source
-   * pipeline did not feed the additional transfer tasks. That ceiling is
-   * memory-dependent: a later one-repetition sweep measured 128 transfers at
-   * 4096 MiB as materially faster than 64 at 2048 MiB on a large-object
-   * profile, so the warning should not be read as a ceiling at every memory
-   * size. Benchmark the actual workload before acknowledging the warning; 64
-   * is guidance, not a universal optimum.
+   * Values above 64 produce a synthesis warning. Benchmark the actual workload
+   * before acknowledging it; compare `inFlightHighWater`,
+   * `source.activeGetsHighWater`, and destination retry/throttle telemetry.
+   * The threshold is guidance, not a universal optimum. See
+   * docs/benchmark.md for measured comparisons.
    *
    * @default DEFAULT_TRANSFER_MAX_CONCURRENCY (64)
    */
