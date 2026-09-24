@@ -282,7 +282,7 @@ The latest generated report and telemetry above are the current comparison. The 
 
 ## Historical Performance Interpretation
 
-_Historical analysis of run `62f8ad5d` (2026-08-10 publish, provider `cd8953b`, three profiles, five repetitions each, configurations 1024 MiB/32 and 2048 MiB/64). Medians were derived from the then-current rows on 2026-08-12. Those Shin rows now live in the archive and are superseded as the active comparison by the 2026-08-26 run above. References to the matrix and telemetry in this section describe that historical experiment._
+_Historical analysis of run `62f8ad5d` (2026-08-10 publish, provider `cd8953b`, three profiles, five repetitions each, configurations 1024 MiB/32 and 2048 MiB/64). Medians were derived from the then-current rows on 2026-08-12. Those Shin rows now live in the archive and are superseded as the active comparison by the 2026-09-05 run above. References to the matrix and telemetry in this section describe that historical experiment._
 
 ### Where the time goes
 
@@ -315,7 +315,7 @@ The two canonical points (1024/32, 2048/64) vary memory and concurrency together
 
 ## Measurement Cadence
 
-- **Upstream AWS CDK `BucketDeployment` baselines are certified per chosen `aws-cdk-lib` release**, not continuously: the committed baseline was measured on `2.260.0` (run records carry `cdk.libVersion`). Re-measure the upstream side only when deliberately certifying a newer release; otherwise reuse the pinned baseline rather than re-paying its AWS cost.
+- **Upstream AWS CDK `BucketDeployment` baselines are certified per chosen `aws-cdk-lib` release**, not continuously: use the exact `cdk.libVersion` recorded for each upstream run rather than assuming one version for the active ledger. Re-measure the upstream side only when deliberately certifying a newer release; otherwise reuse the pinned baseline rather than re-paying its AWS cost.
 - **Shin rows are re-measured after merging a performance-relevant provider change or before a release**, per the `AGENTS.md` benchmark policy: implementation first, then a maintainer-approved AWS session, then the sanitized rows land through an evidence PR identifying the measured `main` commit.
 - **Diagnostic AWS sweeps used to evaluate a change require committed sanitized evidence**, including the measured configuration, run/sample identities, provider provenance, telemetry, and confirmed cleanup. Publish these through an evidence PR. Local experiments such as catalog synthesis and allocation microbenchmarks remain distinctly labeled local evidence.
 - **Incomplete runs are recovery evidence.** Retain scratch manifests and raw captures for recovery; `cleanup: partial` cannot establish completed acceptance, and missing values must be omitted rather than filled with `null`.
