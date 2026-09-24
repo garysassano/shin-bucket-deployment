@@ -42,6 +42,7 @@ const expectedLibraryFiles = [
   "package/lib/source-config.js",
   "package/lib/stable-json.js",
   "package/lib/validation.js",
+  "package/lib/wire-schema-identity.js",
 ].sort();
 const requiredFiles = [
   ...expectedLibraryFiles,

@@ -14,6 +14,18 @@ For the unreleased plain-text log change, both provider archives rebuilt locally
 
 For the unreleased catalog staging cleanup, `pnpm check` passed 493 Vitest, 66 script, and 331 Rust tests plus the package, supply-chain, synthesis, and ledger gates. The strict TypeScript contract comparison against the `0.14.1` release commit found unchanged declarations, 33 verification templates, and two benchmark templates. Focused tests cover success, materialization rejection, CDK asset failure, source mutation during staging, and a combined operation/cleanup failure; no AWS resources were created for this synthesis-only change.
 
+## Wire-Schema Handler Identity
+
+The 2026-09-25 targeted AWS run in `eu-central-1` verified that wire-contract changes no longer strand stacks. Each transition deployed one stack containing a deployment-scoped prebuilt handler and a `localBuild` handler, both arm64. Old and new sides used separate package checkouts and separately built provider binaries: an incompatible variant renamed the required `DestinationOwnerId` wire field, and an additive variant added an optional field. The three transitions ran concurrently.
+
+| Transition                                                                    | Result                                                                                                                                                         |
+| ----------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Control: `main` at `411d4b6` to the same code with the renamed field          | Reproduced the failure: both custom resources failed Update on the old `OldResourceProperties`, then failed rollback on the new ones; `UPDATE_ROLLBACK_FAILED` |
+| Wire-schema identity to the renamed field                                     | `UPDATE_COMPLETE`: new handlers and custom resources were created, and the old custom resources were deleted by the old handlers                               |
+| Wire-schema identity to the added field, plus a resource that fails on create | `UPDATE_ROLLBACK_COMPLETE`: the new custom resources were created, then deleted by the new handlers during rollback; the old generation was untouched          |
+
+Destination objects for both deployments were present after every initial deploy and after every transition. The control stack was recovered by skipping its two custom resources in `ContinueUpdateRollback`. All three stacks then reached `DELETE_COMPLETE`, with every custom-resource Delete succeeding. Independent probes confirmed every bucket and function absent. Each deleted or replaced function left its `/aws/lambda/` log group behind; those groups were deleted and confirmed absent. A first attempt using the same builds reached the same three stack outcomes, but its harness mis-parsed resource names; its resources were independently confirmed absent and its log groups deleted, and it is not counted as evidence.
+
 ## Latest Combined AWS Baseline
 
 The selected `0.14.0` release-candidate run at `c352d7b` passed all 33 verification phases across 20 groups on 2026-09-05 UTC. This combined run covers the integrated provider, handler identity, lifecycle, runner and exact listing-key boundaries. Subsequent changes through `75d645a` publish benchmark evidence and do not change the measured provider or verification scenarios.

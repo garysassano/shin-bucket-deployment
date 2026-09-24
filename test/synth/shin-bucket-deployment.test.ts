@@ -32,8 +32,9 @@ import {
   inspectDestinationBucket,
   validateDestinationEncryption,
 } from "../../src/destination";
-import { renderHandlerConfigHashInput } from "../../src/provider";
+import { isolatedHandlerId, renderHandlerConfigHashInput } from "../../src/provider";
 import { stableStringify } from "../../src/stable-json";
+import { WIRE_SCHEMA_ID } from "../../src/wire-schema-identity";
 import { testLocalProviderBuild } from "../support/bundling";
 
 interface FileAssetManifestEntry {
@@ -229,6 +230,7 @@ test("binds shared prebuilt handler identity to the package version and archive 
           kind: "prebuilt",
           architecture: "arm64",
           bootstrapArchiveSha256: createHash("sha256").update(bootstrapArchive).digest("hex"),
+          wireSchemaId: WIRE_SCHEMA_ID,
         },
         memoryLimit: 2048,
         stack: stack.node.addr,
@@ -756,7 +758,9 @@ test("keeps an isolated handler and service token stable across configuration up
   const initial = synthPhase(1024);
   const updated = synthPhase(2048);
 
-  expect(updated.handlerNodeId).toBe("ShinBucketDeploymentHandler");
+  expect(updated.handlerNodeId).toBe(isolatedHandlerId(WIRE_SCHEMA_ID));
+  expect(initial.handlerLogicalId).toContain(WIRE_SCHEMA_ID);
+  expect(initial.customResourceLogicalId).toContain(WIRE_SCHEMA_ID);
   expect(updated.handlerLogicalId).toBe(initial.handlerLogicalId);
   expect(updated.customResourceLogicalId).toBe(initial.customResourceLogicalId);
   expect(updated.customResourceProperties.ServiceToken).toEqual(
@@ -765,6 +769,10 @@ test("keeps an isolated handler and service token stable across configuration up
   expect(updated.customResourceProperties.DestinationOwnerId).toBe(
     initial.customResourceProperties.DestinationOwnerId,
   );
+});
+
+test("isolated handler identity changes with the wire schema digest", () => {
+  expect(isolatedHandlerId("0000000000000000")).not.toBe(isolatedHandlerId(WIRE_SCHEMA_ID));
 });
 
 test("scopes destination object permissions to the destination prefix", () => {

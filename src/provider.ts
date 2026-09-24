@@ -13,10 +13,15 @@ import { ValidationError } from "./errors";
 import type { ShinBucketDeploymentLocalBuildOptions } from "./local-build";
 import type { ShinBucketDeploymentProviderLambdaOptions } from "./shin-bucket-deployment";
 import { normalizeSingletonValue, stableStringify } from "./stable-json";
+import { WIRE_SCHEMA_ID } from "./wire-schema-identity";
 
 const HANDLER_BINARY_NAME = "shin-bucket-deployment-handler";
 const SHARED_HANDLER_ID_PREFIX = "ShinBucketDeploymentHandler";
-const ISOLATED_HANDLER_ID = "ShinBucketDeploymentHandler";
+const ISOLATED_HANDLER_ID = isolatedHandlerId(WIRE_SCHEMA_ID);
+
+export function isolatedHandlerId(schemaId: string): string {
+  return `${SHARED_HANDLER_ID_PREFIX}${schemaId}`;
+}
 // Handler identity is recomputed for every construct, so this memoizes digests of
 // the prebuilt bootstrap archives, which cannot change during a synthesis. The
 // cache lives for the whole process rather than per-`App`, which is correct for an
@@ -153,6 +158,7 @@ function prebuiltHandlerSourceIdentity(
     kind: "prebuilt",
     architecture: architecture.name,
     bootstrapArchiveSha256: fileSha256(prebuiltBootstrapArchive),
+    wireSchemaId: WIRE_SCHEMA_ID,
   };
 }
 

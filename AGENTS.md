@@ -38,6 +38,8 @@ Keep destructive destination behavior under the phase-oriented `destinationLifec
 
 Do not reintroduce the public `prune`, `retainOnDelete`, or flat lifecycle aliases. CloudFormation supplies the previous prefix at runtime through `OldResourceProperties`; changed previous buckets and distributions remain explicit synthesis-time inputs for IAM and dependencies.
 
+Any wire-contract change must change every provider handler identity so old and new custom-resource generations use code that understands their own properties.
+
 ## Toolchain and package compatibility
 
 This repo is a CDK construct library, not a bundled application. Keep local development defaults separate from the published npm package contract:
