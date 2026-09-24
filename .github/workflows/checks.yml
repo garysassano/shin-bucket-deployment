@@ -325,7 +325,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          fetch-depth: ${{ github.event_name == 'push' && 0 || 1 }}
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Install pnpm
@@ -366,9 +366,8 @@ jobs:
       - name: Verify wire contract schema
         run: pnpm verify:wire-contract
 
-      # actions/checkout fetches only the single checked-out commit, so the
-      # pull request base SHA is not in the local object store. Fetch just
-      # that commit instead of the full history (fetch-depth: 0).
+      # Fetch the exact pull request base even if it is not in the checked-out
+      # ref's history. Pushes use the full checkout above for their baseline.
       - name: Fetch pull request base for contract baseline
         if: github.event_name == 'pull_request'
         run: git fetch origin "${{ github.event.pull_request.base.sha }}"
