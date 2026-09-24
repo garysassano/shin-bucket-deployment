@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { App, Aspects, CfnParameter, Stack } from "aws-cdk-lib";
+import { App, Aspects, CfnParameter, Duration, Stack } from "aws-cdk-lib";
 import { Match, Template } from "aws-cdk-lib/assertions";
 import { AllowedMethods, Distribution, ViewerProtocolPolicy } from "aws-cdk-lib/aws-cloudfront";
 import { S3BucketOrigin } from "aws-cdk-lib/aws-cloudfront-origins";
@@ -10,7 +10,13 @@ import { SecurityGroup, SubnetType, Vpc } from "aws-cdk-lib/aws-ec2";
 import { Role, ServicePrincipal } from "aws-cdk-lib/aws-iam";
 import { Architecture } from "aws-cdk-lib/aws-lambda";
 import { LogGroup } from "aws-cdk-lib/aws-logs";
-import { Bucket, BucketEncryption, BucketNamespace, CfnBucket } from "aws-cdk-lib/aws-s3";
+import {
+  Bucket,
+  BucketEncryption,
+  BucketNamespace,
+  CfnBucket,
+  ObjectLockRetention,
+} from "aws-cdk-lib/aws-s3";
 import type { IConstruct } from "constructs";
 import { expect, test } from "vitest";
 import {
@@ -845,6 +851,57 @@ test.each([
   const stack = new Stack();
   const destinationBucket = new Bucket(stack, "Dest", encryption ? { encryption } : {});
 
+  new ShinBucketDeployment(stack, "Deploy", {
+    sources: [Source.data("index.html", "ok")],
+    destination: { bucket: destinationBucket },
+    providerLambda: { localBuild: testLocalProviderBuild() },
+  });
+
+  expect(() => customResourceProperties(stack)).not.toThrow();
+});
+
+test("refuses destination Object Lock default retention", () => {
+  const stack = new Stack();
+  const destinationBucket = new Bucket(stack, "Dest", {
+    objectLockEnabled: true,
+    objectLockDefaultRetention: ObjectLockRetention.governance(Duration.days(1)),
+  });
+  new ShinBucketDeployment(stack, "Deploy", {
+    sources: [Source.data("index.html", "ok")],
+    destination: { bucket: destinationBucket },
+    providerLambda: { localBuild: testLocalProviderBuild() },
+  });
+
+  expect(() => customResourceProperties(stack)).toThrow(
+    /must not have Object Lock default retention/,
+  );
+});
+
+test("refuses Object Lock default retention added by a late override", () => {
+  const stack = new Stack();
+  const destinationBucket = new Bucket(stack, "Dest", { objectLockEnabled: true });
+  new ShinBucketDeployment(stack, "Deploy", {
+    sources: [Source.data("index.html", "ok")],
+    destination: { bucket: destinationBucket },
+    providerLambda: { localBuild: testLocalProviderBuild() },
+  });
+  const resource = destinationBucket.node.defaultChild;
+  if (!CfnBucket.isCfnBucket(resource)) {
+    throw new Error("expected destination CfnBucket");
+  }
+  resource.addPropertyOverride("ObjectLockConfiguration.Rule.DefaultRetention", {
+    Mode: "GOVERNANCE",
+    Days: 1,
+  });
+
+  expect(() => customResourceProperties(stack)).toThrow(
+    /must not have Object Lock default retention/,
+  );
+});
+
+test("accepts Object Lock without default retention", () => {
+  const stack = new Stack();
+  const destinationBucket = new Bucket(stack, "Dest", { objectLockEnabled: true });
   new ShinBucketDeployment(stack, "Deploy", {
     sources: [Source.data("index.html", "ok")],
     destination: { bucket: destinationBucket },

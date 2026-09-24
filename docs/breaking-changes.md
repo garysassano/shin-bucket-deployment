@@ -4,6 +4,10 @@ This file holds authored release notes for `ShinBucketDeployment` changes that b
 
 ## Unreleased
 
+### Destination Object Lock default retention is rejected
+
+Destination buckets with Object Lock default retention now fail synthesis. S3 requires a checksum header for retained uploads, which the provider does not send. Remove the bucket's default retention to use it as a destination; Object Lock enabled without default retention remains accepted. Existing stacks with default retention previously reached a failing upload and now fail before deployment. Handler and custom-resource identities are unchanged.
+
 ### Provider request lifecycle is typed internally
 
 The provider now uses enums for Create, Update, Delete, and deployment summary status. The CloudFormation wire payload and `shin_deployment_summary` JSON are unchanged. Rebuilt provider archives advance stack-shared handler identities through the existing safe replacement path.

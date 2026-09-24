@@ -59,6 +59,7 @@ const EXPECTED_ERROR_CODES = [
   "ShinBucketDeploymentDestinationKeyPrefixTooLong",
   "ShinBucketDeploymentDestinationKeyPrefixUnresolved",
   "ShinBucketDeploymentDestinationKmsEncryptionUnsupported",
+  "ShinBucketDeploymentDestinationObjectLockRetentionUnsupported",
   "ShinBucketDeploymentDestinationOwnershipTagRequired",
   "ShinBucketDeploymentDestinationTagKeysUnique",
   "ShinBucketDeploymentDestinationTagQuota",
