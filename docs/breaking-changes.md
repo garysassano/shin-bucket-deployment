@@ -4,6 +4,10 @@ This file holds authored release notes for `ShinBucketDeployment` changes that b
 
 ## Unreleased
 
+### Default CloudFront invalidation paths encode spaces and non-ASCII characters
+
+Default invalidation paths now URL-encode spaces and non-ASCII destination-prefix characters. For example, `summer photos/café` produces `/summer%20photos/caf%C3%A9/*`. This fixes invalidations that previously used raw characters outside CloudFront's documented path format, for both current and previous destinations. Explicit paths remain caller-owned and unchanged. The provider archive bytes change, so stack-shared prebuilt handlers advance through the existing replacement path; the custom-resource wire contract is unchanged.
+
 ### Source buckets must be in the provider Region
 
 `Source.bucket` archives in another AWS Region are unsupported because the Rust S3 client does not follow bucket-region redirects. Source metadata failures now include the same-Region requirement. Move a cross-Region archive to a bucket in the deployment Region before using it as a source. This changes error text and provider archive bytes, but adds no new source lookup or transfer calls; stack-shared prebuilt handlers advance through the existing replacement path.

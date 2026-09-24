@@ -772,15 +772,22 @@ pub(crate) fn strip_destination_prefix(prefix: &str, key: &str) -> String {
 }
 
 fn default_distribution_path(dest_bucket_prefix: &str) -> String {
-    let mut prefix = dest_bucket_prefix.to_string();
-    if !prefix.ends_with('/') {
-        prefix.push('/');
+    let mut path = String::with_capacity(dest_bucket_prefix.len() + 3);
+    path.push('/');
+    for byte in dest_bucket_prefix.bytes() {
+        // The construct's prefix charset excludes other RFC 1738 unsafe ASCII.
+        // Preserve safe characters: CloudFront says encoding those misses objects.
+        if byte == b' ' || !byte.is_ascii() {
+            path.push_str(&format!("%{byte:02X}"));
+        } else {
+            path.push(char::from(byte));
+        }
     }
-    if !prefix.starts_with('/') {
-        prefix.insert(0, '/');
+    if !path.ends_with('/') {
+        path.push('/');
     }
-    prefix.push('*');
-    prefix
+    path.push('*');
+    path
 }
 
 fn default_true() -> bool {
@@ -1053,6 +1060,16 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn default_distribution_path_encodes_only_unsafe_prefix_characters() {
+        assert_eq!(default_distribution_path(""), "/*");
+        assert_eq!(default_distribution_path("a+b@c"), "/a+b@c/*");
+        assert_eq!(
+            default_distribution_path("summer photos/café"),
+            "/summer%20photos/caf%C3%A9/*"
+        );
+    }
 
     #[test]
     fn filters_keep_exclude_then_reinclude_semantics_while_short_circuiting() {
