@@ -78,6 +78,12 @@ jobs:
 
       - name: Build, pack, and verify the publish artifact
         run: |
+          for arch in arm64 x86_64; do
+            if ! jq -e '.sourceDirty == false' "assets/bootstrap-${arch}/build-provenance.json" >/dev/null; then
+              echo "Refusing to publish a ${arch} bootstrap built from a dirty source tree." >&2
+              exit 1
+            fi
+          done
           pnpm run verify:package -- --pack-destination "$RUNNER_TEMP/npm-pack"
           tarballs=("$RUNNER_TEMP"/npm-pack/*.tgz)
           test "${#tarballs[@]}" -eq 1
