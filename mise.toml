@@ -8,11 +8,11 @@ actionlint = "1.7.12"
 node = "24"
 pnpm = "12.6.0"
 ripgrep = "15.1.0"
-rust = "1.97.1"
+rust = "1.98.1"
 taplo = "0.10.0"
 zig = "0.16.0"
 cargo-binstall = "1.23.0"
-"cargo:cargo-lambda" = { version = "1.9.1", depends = ["cargo-binstall"] }
+"cargo:cargo-lambda" = { version = "1.9.2", depends = ["cargo-binstall"] }
 "aqua:rustsec/rustsec/cargo-audit" = "0.22.2"
 "cargo:cargo-deny" = { version = "0.19.9", depends = ["cargo-binstall"] }
 
