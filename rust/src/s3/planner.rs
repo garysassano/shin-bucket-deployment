@@ -382,8 +382,11 @@ async fn source_object_metadata(
         .send()
         .await;
     stats.add_plan_source_heads_micros(crate::util::duration_micros(started.elapsed()));
-    let response =
-        head.with_context(|| format!("failed to read source object metadata s3://{bucket}/{key}"))?;
+    let response = head.with_context(|| {
+        format!(
+            "failed to read source object metadata s3://{bucket}/{key}; source buckets must be in the provider's AWS Region"
+        )
+    })?;
 
     let size = response
         .content_length()

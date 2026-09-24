@@ -4,6 +4,10 @@ This file holds authored release notes for `ShinBucketDeployment` changes that b
 
 ## Unreleased
 
+### Source buckets must be in the provider Region
+
+`Source.bucket` archives in another AWS Region are unsupported because the Rust S3 client does not follow bucket-region redirects. Source metadata failures now include the same-Region requirement. Move a cross-Region archive to a bucket in the deployment Region before using it as a source. This changes error text and provider archive bytes, but adds no new source lookup or transfer calls; stack-shared prebuilt handlers advance through the existing replacement path.
+
 ### Destination Object Lock default retention is rejected
 
 Destination buckets with Object Lock default retention now fail synthesis. S3 requires a checksum header for retained uploads, which the provider does not send. Remove the bucket's default retention to use it as a destination; Object Lock enabled without default retention remains accepted. Existing stacks with default retention previously reached a failing upload and now fail before deployment. Handler and custom-resource identities are unchanged.
