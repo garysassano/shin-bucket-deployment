@@ -8,6 +8,8 @@ import { Bucket } from "aws-cdk-lib/aws-s3";
 import { afterEach, expect, test } from "vitest";
 import { ProviderSharing, ShinBucketDeployment, Source } from "../../src";
 import type { ShinBucketDeploymentLocalBuildOptions } from "../../src/local-build";
+import { isolatedHandlerId } from "../../src/provider";
+import { WIRE_SCHEMA_ID } from "../../src/wire-schema-identity";
 
 const scratchDirectories: string[] = [];
 afterEach(() => {
@@ -188,7 +190,7 @@ test("keeps local handler identities stable across checkout moves and source or 
   const updated = synth('fn main() { println!("changed"); }', "second-hook");
   expect(updated.code).not.toEqual(initial.code);
   expect({ ...updated, code: undefined }).toEqual({ ...initial, code: undefined });
-  expect(updated.handlerNodeId).toBe("ShinBucketDeploymentHandler");
+  expect(updated.handlerNodeId).toBe(isolatedHandlerId(WIRE_SCHEMA_ID));
 });
 
 test("replaces a shared provider with an isolated local build and a distinct ownership tag", () => {

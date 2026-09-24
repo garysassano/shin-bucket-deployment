@@ -5,11 +5,12 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { renderWireSchema } from "./generate-wire-schema.mjs";
+import { renderWireSchema, renderWireSchemaIdentity } from "./generate-wire-schema.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const scriptPath = join(__dirname, "generate-wire-schema.mjs");
 const artifactPath = join(__dirname, "..", "contract", "wire-schema.json");
+const identityPath = join(__dirname, "..", "src", "wire-schema-identity.ts");
 
 test("renderWireSchema is deterministic", () => {
   assert.equal(renderWireSchema(), renderWireSchema());
@@ -18,6 +19,11 @@ test("renderWireSchema is deterministic", () => {
 test("the committed artifact matches the wire contract schema", () => {
   const committed = readFileSync(artifactPath, "utf8");
   assert.equal(committed, renderWireSchema());
+});
+
+test("the generated handler identity follows the committed schema", () => {
+  assert.equal(readFileSync(identityPath, "utf8"), renderWireSchemaIdentity());
+  assert.notEqual(renderWireSchemaIdentity('{"changed":true}\n'), renderWireSchemaIdentity());
 });
 
 test("--check fails when the artifact drifted and passes when it matches", (t) => {
