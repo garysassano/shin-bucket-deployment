@@ -12,6 +12,10 @@ ZIP sources with directory entries such as `./`, `/`, or `.//` now skip those en
 
 The provider now emits plain-text tracing lines in CloudWatch Logs. This changes log formatting only; deployment behavior and resource identities are unchanged apart from the provider archive when this change is released. Log queries that match literal ANSI escape bytes should be updated.
 
+### Cataloged source staging directories are removed after each bind
+
+`Source.asset(directory)` now removes its temporary materialization tree after CDK stages the asset, including when construction fails. This prevents repeated synthesis from leaving copied source trees under the system temporary directory. Asset hashes, staged ZIP paths, synthesized templates, and deployed resource identities are unchanged.
+
 ## 0.14.1
 
 ### Update the packaged provider to rustls 0.23.45

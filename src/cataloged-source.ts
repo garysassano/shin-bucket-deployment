@@ -199,22 +199,37 @@ export class Source {
         // Remove the staging directory before rewalking and hashing the source,
         // so removed or renamed files cannot survive the new materialization.
         catalogedSourceFileSystem.rmSync(stagingDirectory, { recursive: true, force: true });
-        const materialized = materializeCatalogedDirectory(
-          sourcePath,
-          stagingDirectory,
-          options,
-          scope.node.tryGetContext(ASSET_HASH_SALT_CONTEXT_KEY),
-        );
-        const asset = new Asset(scope, `CatalogedAsset${nextCatalogedAssetId(scope)}`, {
-          path: materialized.directory,
-          assetHash: options?.assetHash ?? materialized.assetIdentity,
-          assetHashType: AssetHashType.CUSTOM,
-          readers: options?.readers,
-          deployTime: options?.deployTime,
-          sourceKMSKey: options?.sourceKMSKey,
-          displayName: options?.displayName,
-        });
-        validateSnapshots(materialized.snapshots);
+        let materialized: MaterializedDirectory;
+        let asset: Asset;
+        try {
+          materialized = materializeCatalogedDirectory(
+            sourcePath,
+            stagingDirectory,
+            options,
+            scope.node.tryGetContext(ASSET_HASH_SALT_CONTEXT_KEY),
+          );
+          asset = new Asset(scope, `CatalogedAsset${nextCatalogedAssetId(scope)}`, {
+            path: materialized.directory,
+            assetHash: options?.assetHash ?? materialized.assetIdentity,
+            assetHashType: AssetHashType.CUSTOM,
+            readers: options?.readers,
+            deployTime: options?.deployTime,
+            sourceKMSKey: options?.sourceKMSKey,
+            displayName: options?.displayName,
+          });
+          validateSnapshots(materialized.snapshots);
+        } catch (error) {
+          try {
+            catalogedSourceFileSystem.rmSync(stagingDirectory, { recursive: true, force: true });
+          } catch (cleanupError) {
+            throw new AggregateError(
+              [error, cleanupError],
+              "Cataloged asset staging and cleanup both failed.",
+            );
+          }
+          throw error;
+        }
+        catalogedSourceFileSystem.rmSync(stagingDirectory, { recursive: true, force: true });
         asset.grantRead(context.handlerRole);
         const config: SourceConfig = {
           bucket: asset.bucket,
