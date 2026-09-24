@@ -325,6 +325,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          fetch-depth: ${{ github.event_name == 'push' && 0 || 1 }}
           persist-credentials: false
 
       - name: Install pnpm
@@ -385,8 +386,32 @@ jobs:
             pnpm verify:typescript-contract -- --baseline-ref "${{ github.event.pull_request.base.sha }}"
           fi
 
+      - name: Verify TypeScript contract against previous push
+        if: github.event_name == 'push'
+        env:
+          CONTRACT_BEFORE: ${{ github.event.before }}
+        run: |
+          if [[ -z "$CONTRACT_BEFORE" ]]; then
+            echo "Push event has no before commit for the contract baseline." >&2
+            exit 1
+          fi
+          if [[ "$CONTRACT_BEFORE" =~ ^0+$ ]]; then
+            baseline_ref=HEAD
+          else
+            if ! git merge-base --is-ancestor "$CONTRACT_BEFORE" HEAD; then
+              echo "Push before commit is not an ancestor of HEAD: $CONTRACT_BEFORE" >&2
+              exit 1
+            fi
+            baseline_ref="$CONTRACT_BEFORE"
+          fi
+          if [[ -f contract/expected-synthesis-changes.json ]]; then
+            pnpm verify:typescript-contract -- --baseline-ref "$baseline_ref" --expect-changes contract/expected-synthesis-changes.json
+          else
+            pnpm verify:typescript-contract -- --baseline-ref "$baseline_ref"
+          fi
+
       - name: Verify TypeScript contract self-check
-        if: github.event_name != 'pull_request'
+        if: github.event_name == 'workflow_dispatch'
         run: pnpm verify:typescript-contract -- --baseline-ref HEAD
 
   package-node22:
