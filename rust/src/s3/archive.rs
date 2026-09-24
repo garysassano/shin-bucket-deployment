@@ -99,8 +99,11 @@ async fn head_source(
         .send()
         .await;
     stats.add_plan_source_heads_micros(crate::util::duration_micros(started.elapsed()));
-    let output = head
-        .with_context(|| format!("failed to read source archive metadata s3://{bucket}/{key}"))?;
+    let output = head.with_context(|| {
+        format!(
+            "failed to read source archive metadata s3://{bucket}/{key}; source buckets must be in the provider's AWS Region"
+        )
+    })?;
 
     let len = output
         .content_length()
