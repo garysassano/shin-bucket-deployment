@@ -94,12 +94,9 @@ jobs:
 
   provider-smoke:
     name: Provider smoke (S3 mock)
+    needs: bootstrap
     runs-on: ubuntu-24.04
     timeout-minutes: 20
-    env:
-      MISE_DATA_DIR: ${{ github.workspace }}/.mise
-      MISE_RUSTUP_HOME: ${{ github.workspace }}/.mise/rustup
-      CARGO_TARGET_DIR: ${{ github.workspace }}/rust/target
     steps:
       - uses: actions/checkout@v7
         with:
@@ -114,50 +111,33 @@ jobs:
           node-version: "lts/*"
           cache: pnpm
 
-      - name: Install Go
-        uses: actions/setup-go@v7
-        with:
-          go-version: "1.24.8"
-          cache: false
-
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Setup Rust toolchain and tools
-        uses: jdx/mise-action@v4
+      - name: Download x86_64 bootstrap
+        uses: actions/download-artifact@v8
         with:
-          cache: true
-          install_args: rust zig cargo:cargo-lambda
+          name: bootstrap-x86_64
+          path: assets/bootstrap-x86_64
 
-      - name: Install Rust target
-        run: rustup target add x86_64-unknown-linux-gnu
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: rust -> target
-          cache-targets: true
-          cache-workspace-crates: true
-          cache-all-crates: false
-          cache-bin: false
-          key: provider-smoke-x86_64
-
-      - name: Build MinIO server
-        # Pinned source-only test dependency, confined to the disposable smoke job.
-        # The commit is the final open-source security release. MinIO now recommends
-        # source builds instead of legacy community binaries:
-        # https://github.com/minio/minio#source-only-distribution
-        # To update, change the release commit and Go toolchain together, then rerun
-        # the provider lifecycle smoke.
-        # Evaluate a replacement separately against conditional PUT/COPY, ranged GET,
-        # listing, and delete semantics before switching the S3 mock.
-        env:
-          MINIO_RELEASE: RELEASE.2025-10-15T17-29-55Z
-          MINIO_COMMIT: 9e49d5e7a648f00e26f2246f4dc28e6b07f8c84a
+      - name: Extract provider bootstrap
         run: |
-          GOBIN="$RUNNER_TEMP" go install "github.com/minio/minio@${MINIO_COMMIT}"
-          "$RUNNER_TEMP/minio" --version
-          printf 'MinIO source: %s (%s)\n' "$MINIO_RELEASE" "$MINIO_COMMIT"
+          unzip -p assets/bootstrap-x86_64/bootstrap.zip bootstrap > "$RUNNER_TEMP/bootstrap"
+          chmod +x "$RUNNER_TEMP/bootstrap"
+
+      - name: Download RustFS S3 mock
+        # Pinned GA release and upstream archive checksum. This exact binary
+        # passed the provider's Create, Update, and Delete lifecycle smoke.
+        env:
+          RUSTFS_RELEASE: 1.0.0
+          RUSTFS_ARCHIVE_SHA256: 2d5059501745682664c3d345b22274b66079c952fbec7e1ce66980ef4515cd42
+        run: |
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/rustfs.zip" \
+            "https://github.com/rustfs/rustfs/releases/download/${RUSTFS_RELEASE}/rustfs-linux-x86_64-gnu-v${RUSTFS_RELEASE}.zip"
+          echo "${RUSTFS_ARCHIVE_SHA256}  ${RUNNER_TEMP}/rustfs.zip" | sha256sum -c -
+          unzip -p "$RUNNER_TEMP/rustfs.zip" rustfs > "$RUNNER_TEMP/rustfs"
+          chmod +x "$RUNNER_TEMP/rustfs"
+          "$RUNNER_TEMP/rustfs" --version
 
       - name: Download Lambda Runtime Interface Emulator
         # Upstream publishes no checksum asset, so the release is pinned and the
@@ -174,8 +154,9 @@ jobs:
       - name: Run provider smoke test against a local S3 mock
         run: node scripts/smoke-provider.mjs
         env:
-          MINIO_BIN: ${{ runner.temp }}/minio
+          RUSTFS_BIN: ${{ runner.temp }}/rustfs
           RIE_BIN: ${{ runner.temp }}/aws-lambda-rie
+          PROVIDER_BIN: ${{ runner.temp }}/bootstrap
 
   supply-chain:
     name: Supply chain (npm audit, cargo audit, cargo deny)
