@@ -917,12 +917,17 @@ fn stored_zip_file_path(stored: &StoredZipEntry) -> Result<Option<Cow<'_, str>>>
         .filename()
         .as_str()
         .map_err(|err| anyhow!("invalid UTF-8 ZIP entry path: {err}"))?;
-    let normalized = normalize_archive_key(raw_path)?;
     if raw_path.ends_with('/') {
-        Ok(None)
-    } else {
-        Ok(Some(normalized))
+        if raw_path
+            .split(['/', '\\'])
+            .all(|part| part.is_empty() || part == ".")
+        {
+            return Ok(None);
+        }
+        normalize_archive_key(raw_path)?;
+        return Ok(None);
     }
+    normalize_archive_key(raw_path).map(Some)
 }
 
 fn validate_stored_file_entry(
@@ -2126,6 +2131,88 @@ mod tests {
 
     fn zip_bytes_from_entries(entries: &[(&str, &[u8])], zip64: bool) -> Vec<u8> {
         zip_bytes_from_entries_with_compression(entries, zip64, CompressionMethod::Stored)
+    }
+
+    #[tokio::test]
+    async fn root_directory_entry_does_not_abort_zip_planning() {
+        let zip = zip_bytes_from_entries(
+            &[
+                ("./", b""),
+                ("./index.html", b"home"),
+                ("assets/app.js", b"app"),
+            ],
+            false,
+        );
+        let mut request = copy_request();
+        request.extract = true;
+        request.source_catalogs = vec![None];
+        let events = vec![
+            replay_head_event(zip.len() as u64),
+            replay_whole_zip_event(&zip),
+        ];
+        let state = crate::state::test_app_state_with_replay(StaticReplayClient::new(events));
+        let stats = Arc::new(DeploymentStats::default());
+        let budget = SourceByteBudget::new(256 * 1024 * 1024, Arc::clone(&stats), false)
+            .expect("valid test source budget");
+        let filters = compile_filters(&[], &[]).expect("empty filters compile");
+
+        let (_, manifest) = super::plan_deployment(&state, &request, &filters, &stats, budget)
+            .await
+            .expect("root directory must not abort deployment planning");
+        let mut keys: Vec<_> = manifest.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["assets/app.js", "index.html"]);
+
+        let reader = ZipFileReader::with_tokio(Cursor::new(zip)).await.unwrap();
+        let catalog = EmbeddedCatalog {
+            version: 1,
+            entries: [("index.html", 4), ("assets/app.js", 3)]
+                .into_iter()
+                .map(|(path, size)| EmbeddedCatalogEntry {
+                    path: path.to_string(),
+                    size,
+                    md5: "0".repeat(32),
+                })
+                .collect(),
+        };
+        let files =
+            validate_catalog_entries(catalog, reader.file().entries(), archive_expansion_limits())
+                .expect("directory entries are absent from the catalog mapping");
+        assert_eq!(files.len(), 2);
+        assert!(files.contains_key("index.html"));
+        assert!(files.contains_key("assets/app.js"));
+    }
+
+    #[tokio::test]
+    async fn root_directory_spellings_are_skipped_but_traversal_and_empty_files_are_rejected() {
+        for directory in ["/", ".//"] {
+            let zip = zip_bytes_from_entries(&[(directory, b""), ("index.html", b"home")], false);
+            let reader = ZipFileReader::with_tokio(Cursor::new(zip)).await.unwrap();
+            let paths = reader
+                .file()
+                .entries()
+                .iter()
+                .map(super::stored_zip_file_path)
+                .collect::<anyhow::Result<Vec<_>>>()
+                .expect("root directory is accepted");
+            assert_eq!(paths[0], None, "{directory}");
+            assert_eq!(paths[1].as_deref(), Some("index.html"));
+        }
+
+        for invalid in ["../", "."] {
+            let zip = zip_bytes_from_entries(&[(invalid, b"")], false);
+            let reader = ZipFileReader::with_tokio(Cursor::new(zip)).await.unwrap();
+            let error = super::stored_zip_file_path(&reader.file().entries()[0])
+                .expect_err("traversal directory or empty file must be rejected");
+            assert!(
+                error.to_string().contains(if invalid == "../" {
+                    "path traversal"
+                } else {
+                    "resolved to an empty key"
+                }),
+                "{invalid}: {error}"
+            );
+        }
     }
 
     fn zip_bytes_from_entries_with_compression(

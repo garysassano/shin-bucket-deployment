@@ -3,6 +3,7 @@ import test from "node:test";
 import { crc32 } from "node:zlib";
 import {
   SERVICE_TOKEN,
+  SMOKE_ARCHIVE_ENTRIES,
   SMOKE_ENTRIES,
   buildCreateEvent,
   buildSourceZip,
@@ -37,24 +38,24 @@ function readZipEntries(buffer) {
 }
 
 test("buildSourceZip produces a valid stored-entry archive", () => {
-  const archive = buildSourceZip(SMOKE_ENTRIES);
+  const archive = buildSourceZip(SMOKE_ARCHIVE_ENTRIES);
 
   const entries = readZipEntries(archive);
   assert.deepEqual(
     entries.map((entry) => entry.name),
-    SMOKE_ENTRIES.map((entry) => entry.path),
+    ["./", "./index.html", "assets/app.js"],
   );
   for (const [index, entry] of entries.entries()) {
     assert.equal(entry.method, 0, `${entry.name} must be stored, not compressed`);
-    const expected = Buffer.from(String(SMOKE_ENTRIES[index].content), "utf8");
+    const expected = Buffer.from(String(SMOKE_ARCHIVE_ENTRIES[index].content), "utf8");
     assert.ok(entry.data.equals(expected), `${entry.name} bytes must round-trip`);
     assert.equal(entry.expectedCrc, crc32(expected) >>> 0, `${entry.name} CRC32`);
   }
 
   const endOffset = archive.length - 22;
   assert.equal(archive.readUInt32LE(endOffset), ZIP_END_OF_CENTRAL_DIRECTORY);
-  assert.equal(archive.readUInt16LE(endOffset + 8), SMOKE_ENTRIES.length);
-  assert.equal(archive.readUInt16LE(endOffset + 10), SMOKE_ENTRIES.length);
+  assert.equal(archive.readUInt16LE(endOffset + 8), SMOKE_ARCHIVE_ENTRIES.length);
+  assert.equal(archive.readUInt16LE(endOffset + 10), SMOKE_ARCHIVE_ENTRIES.length);
 
   const centralOffset = archive.readUInt32LE(endOffset + 16);
   assert.equal(archive.readUInt32LE(centralOffset), ZIP_CENTRAL_DIRECTORY_HEADER);
@@ -109,4 +110,5 @@ test("the callback response URL passes the provider's host validation shape", ()
 
 test("expectedDestinationKeys reflects the deployed object set", () => {
   assert.deepEqual(expectedDestinationKeys(SMOKE_ENTRIES), ["assets/app.js", "index.html"]);
+  assert.ok(!expectedDestinationKeys(SMOKE_ENTRIES).includes("./"));
 });
