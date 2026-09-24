@@ -4,6 +4,10 @@ This file holds authored release notes for `ShinBucketDeployment` changes that b
 
 ## Unreleased
 
+### Provider archives are reproducible
+
+`pnpm build:bootstrap` now pins the `bootstrap` entry timestamp in each provider ZIP to 1980-01-01. The compiled executable was already byte-identical across clean builds, but the archive embedded the build time, so every rebuild produced a new archive digest and a new stack-shared handler identity. The next release's archive digests change once for this reason; stack-shared handlers and custom resources advance through the existing replacement path, and deployment-scoped handlers update code in place. The executable and the custom-resource wire contract are unchanged.
+
 ### Default CloudFront invalidation paths encode spaces and non-ASCII characters
 
 Default invalidation paths now URL-encode spaces and non-ASCII destination-prefix characters. For example, `summer photos/café` produces `/summer%20photos/caf%C3%A9/*`. This fixes invalidations that previously used raw characters outside CloudFront's documented path format, for both current and previous destinations. Explicit paths remain caller-owned and unchanged. The provider archive bytes change, so stack-shared prebuilt handlers advance through the existing replacement path; the custom-resource wire contract is unchanged.

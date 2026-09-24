@@ -15,7 +15,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
-  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -34,6 +33,7 @@ import {
   collectSourceIdentity,
   directorySha256,
 } from "./source-identity.mjs";
+import { pinBootstrapArchiveTimestamp, readBootstrapEntry } from "./verify-package.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(__dirname, "..");
@@ -62,21 +62,6 @@ function run(command, args, cwd = repoRoot, allowFailure = false) {
   if (result.status !== 0 && !allowFailure) {
     throw new Error(`Command failed (${result.status}): ${printable}`);
   }
-}
-
-function output(command, args, encoding = "utf8", cwd = repoRoot) {
-  const result = spawnSync(command, args, {
-    cwd,
-    encoding: encoding === null ? undefined : encoding,
-    maxBuffer: 64 * 1024 * 1024,
-  });
-  if (result.error) {
-    throw result.error;
-  }
-  if (result.status !== 0) {
-    throw new Error(`${command} ${args.join(" ")} failed: ${String(result.stderr ?? "").trim()}`);
-  }
-  return encoding === null ? Buffer.from(result.stdout) : result.stdout.trim();
 }
 
 function toolIdentity(root) {
@@ -187,9 +172,9 @@ function buildArch(
   rmSync(outDir, { recursive: true, force: true });
   mkdirSync(outDir, { recursive: true });
   const outFile = join(outDir, "bootstrap.zip");
-  copyFileSync(builtArchive, outFile);
-  const archive = readFileSync(outFile);
-  const bootstrap = output("unzip", ["-p", outFile, "bootstrap"], null, sourceRoot);
+  const archive = pinBootstrapArchiveTimestamp(readFileSync(builtArchive));
+  writeFileSync(outFile, archive);
+  const bootstrap = readBootstrapEntry(outFile, arch);
   const provenance = bootstrapProvenanceManifest({
     architecture: arch,
     binaryName,

@@ -208,6 +208,37 @@ function findEndOfCentralDirectory(archive) {
   throw new Error("Bootstrap archive is missing its ZIP end-of-central-directory record.");
 }
 
+// 1980-01-01 00:00:00, the earliest DOS timestamp. cargo-lambda stamps the
+// entry with the binary's mtime, so byte-identical builds produced different
+// archives and advanced stack-shared handler identities on every rebuild.
+const ZIP_FIXED_DOS_TIME = 0;
+const ZIP_FIXED_DOS_DATE = (1 << 5) | 1;
+
+/**
+ * Pins the single `bootstrap` entry's modification time in place, in both the
+ * local-file header and the central directory. The timestamp is outside the
+ * CRC and the compressed data, so the entry itself is unchanged.
+ */
+export function pinBootstrapArchiveTimestamp(archive) {
+  const eocdOffset = findEndOfCentralDirectory(archive);
+  assert(archive.readUInt16LE(eocdOffset + 10) === 1, "Bootstrap archive must have one entry.");
+  const centralOffset = archive.readUInt32LE(eocdOffset + 16);
+  assert(
+    archive.readUInt32LE(centralOffset) === ZIP_CENTRAL_DIRECTORY_SIGNATURE,
+    "Bootstrap archive has an invalid central-directory record.",
+  );
+  const localHeaderOffset = archive.readUInt32LE(centralOffset + 42);
+  assert(
+    archive.readUInt32LE(localHeaderOffset) === ZIP_LOCAL_FILE_HEADER_SIGNATURE,
+    "Bootstrap archive has an invalid local-file header.",
+  );
+  archive.writeUInt16LE(ZIP_FIXED_DOS_TIME, centralOffset + 12);
+  archive.writeUInt16LE(ZIP_FIXED_DOS_DATE, centralOffset + 14);
+  archive.writeUInt16LE(ZIP_FIXED_DOS_TIME, localHeaderOffset + 10);
+  archive.writeUInt16LE(ZIP_FIXED_DOS_DATE, localHeaderOffset + 12);
+  return archive;
+}
+
 /**
  * Extracts the `bootstrap` entry bytes from a staged provider archive.
  *
