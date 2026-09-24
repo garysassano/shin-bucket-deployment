@@ -13,6 +13,7 @@ import {
   inspectDestinationBucket,
   inspectableDestinationBucketResource,
   validateDestinationEncryption,
+  validateDestinationObjectLock,
   validateDestinationTags,
 } from "./destination";
 import type { DestinationWriteRetryJitter, FailureDiagnostics } from "./enums";
@@ -1059,12 +1060,13 @@ export class ShinBucketDeployment extends Construct {
 
     Tags.of(this.destinationBucket).add(tagKey, "true");
     // Deferred to synthesis rather than checked here: an escape hatch that switches the
-    // encryption, enables versioning, or replaces Tags may be applied after this
+    // encryption, enables default retention or versioning, or replaces Tags after this
     // construct is created, and only the rendered resource reflects it.
     this.node.addValidation({
       validate: () => {
         const destinationInspection = inspectDestinationBucket(this, destinationBucketResource);
         validateDestinationEncryption(this, destinationInspection);
+        validateDestinationObjectLock(this, destinationInspection);
         validateDestinationTags(this, destinationInspection, tagKey);
         for (const warning of destinationVersioningWarnings(destinationInspection)) {
           Validations.of(this).addWarning("ShinBucketDeploymentVersionedDestination", warning);

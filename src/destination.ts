@@ -119,6 +119,26 @@ export function validateDestinationEncryption(
   }
 }
 
+/** Object Lock default retention requires a checksum header on every upload. */
+export function validateDestinationObjectLock(
+  scope: Construct,
+  resource: Record<string, unknown>,
+): void {
+  const properties = resource.Properties;
+  const configuration = isRecord(properties) ? properties.ObjectLockConfiguration : undefined;
+  if (configuration === undefined) {
+    return;
+  }
+  if (!isRecord(configuration)) {
+    throw unsupportedDestinationObjectLock(scope);
+  }
+  // Rule's only CloudFormation member is DefaultRetention. An unresolved
+  // conditional configuration cannot prove that retention is absent.
+  if (Object.keys(configuration).some((key) => key !== "ObjectLockEnabled")) {
+    throw unsupportedDestinationObjectLock(scope);
+  }
+}
+
 /** Validates the final tag set without undoing consumer escape-hatch overrides. */
 export function validateDestinationTags(
   scope: Construct,
@@ -210,6 +230,14 @@ function unsupportedDestinationKmsEncryption(scope: Construct): ValidationError 
   return new ValidationError(
     "ShinBucketDeploymentDestinationKmsEncryptionUnsupported",
     "destination.bucket must use SSE-S3 (AES256) default encryption. ShinBucketDeployment does not support SSE-KMS or SSE-DSSE destinations: their object ETags are not plaintext MD5 digests, so identifying unchanged objects would require a per-object HeadObject instead of one bucket listing. Rather than carry that second reconciliation path, Shin refuses these buckets — otherwise every deployment would silently re-upload every object.",
+    scope,
+  );
+}
+
+function unsupportedDestinationObjectLock(scope: Construct): ValidationError {
+  return new ValidationError(
+    "ShinBucketDeploymentDestinationObjectLockRetentionUnsupported",
+    "destination.bucket must not have Object Lock default retention: S3 requires a checksum header for retained uploads, which the provider does not send.",
     scope,
   );
 }
