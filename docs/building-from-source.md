@@ -8,18 +8,14 @@ Use this page when you want to change the Rust provider, audit or rebuild the pr
 
 This path rebuilds the bootstrap assets that are included in the npm package.
 
-Prerequisites:
-
-- Node.js 24 or newer and pnpm for source development
-- Rust stable
-- `cargo-lambda` on `PATH`
-- Zig for cross-architecture bootstrap builds
+Install the contributor tools from `mise.toml` with `mise install`. It selects Node.js 24 and pnpm 12 and installs the exactly pinned Rust, `cargo-lambda`, and Zig versions used to build the provider archives.
 
 The published npm package supports Node.js 22 or newer. Source development uses Node.js 24 or newer through `mise.toml` so the repo stays on an active LTS while still emitting a Node.js 22-compatible construct package.
 
 From a source checkout:
 
 ```sh
+mise install
 pnpm install
 pnpm build:bootstrap
 pnpm verify:package
@@ -28,8 +24,8 @@ pnpm verify:package
 `pnpm build:bootstrap` stages the archives at `assets/bootstrap-arm64/bootstrap.zip` and `assets/bootstrap-x86_64/bootstrap.zip`. Each archive contains one executable root `bootstrap`. To build only one architecture, pass it through to the script:
 
 ```sh
-pnpm build:bootstrap -- arm64
-pnpm build:bootstrap -- x86_64
+pnpm build:bootstrap arm64
+pnpm build:bootstrap x86_64
 ```
 
 `pnpm verify:package` rebuilds the package output, creates one tarball, verifies that both archives contain an executable architecture-correct `bootstrap`, and smoke-tests CommonJS and ESM consumers without `cargo-lambda-cdk`.
