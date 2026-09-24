@@ -4,6 +4,10 @@ This file holds authored release notes for `ShinBucketDeployment` changes that b
 
 ## Unreleased
 
+### Provider request lifecycle is typed internally
+
+The provider now uses enums for Create, Update, Delete, and deployment summary status. The CloudFormation wire payload and `shin_deployment_summary` JSON are unchanged. Rebuilt provider archives advance stack-shared handler identities through the existing safe replacement path.
+
 ### Provider build toolchain updated
 
 Provider archives now build with Rust 1.98.1 and cargo-lambda 1.9.2. Their bytes and toolchain provenance change. On upgrade, stack-shared handlers and custom resources advance through the existing ownership-safe replacement path; deployment-scoped handlers update their code in place. The custom-resource wire contract is unchanged.

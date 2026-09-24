@@ -41,6 +41,38 @@ const RESOURCE_TYPE: &str = "AWS::CloudFormation::CustomResource";
 
 type RequestEnvelope = CloudFormationCustomResourceRequest<Value, Value>;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RequestType {
+    Create,
+    Update,
+    Delete,
+}
+
+impl RequestType {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Create => "Create",
+            Self::Update => "Update",
+            Self::Delete => "Delete",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum DeploymentStatus {
+    Success,
+    Failure,
+}
+
+impl DeploymentStatus {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Success => "success",
+            Self::Failure => "failure",
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 struct RequestIdentity<'a> {
     stack_id: &'a str,
@@ -79,7 +111,7 @@ struct RequestExecution<'a> {
 }
 
 struct DecodedRequest<'a> {
-    request_type: &'static str,
+    request_type: RequestType,
     identity: RequestIdentity<'a>,
     physical_resource_id: Option<&'a str>,
     resource_properties: RawDeploymentRequest,
@@ -87,7 +119,7 @@ struct DecodedRequest<'a> {
 }
 
 struct ProcessedRequest {
-    request_type: &'static str,
+    request_type: RequestType,
     request: crate::deployment::DeploymentRequest,
     stats: Arc<DeploymentStats>,
     result: Result<Vec<u8>>,
@@ -145,9 +177,9 @@ pub(crate) async fn handle_event(
     match processed {
         Ok(processed) => {
             let deployment_status = if processed.result.is_ok() {
-                "success"
+                DeploymentStatus::Success
             } else {
-                "failure"
+                DeploymentStatus::Failure
             };
             let callback_result = match processed.result {
                 Ok(success_body) => send_response(
@@ -296,7 +328,7 @@ async fn process_request_envelope(
 ) -> Result<ProcessedRequest> {
     let decoded = decode_deployment_request(request)?;
     tracing::info!(
-        request_type = decoded.request_type,
+        request_type = decoded.request_type.as_str(),
         logical_resource_id = decoded.identity.logical_resource_id,
         "processing request"
     );
@@ -323,7 +355,7 @@ fn decode_deployment_request(request: &RequestEnvelope) -> Result<DecodedRequest
     validate_resource_type(request)?;
     match request {
         CloudFormationCustomResourceRequest::Create(request) => Ok(DecodedRequest {
-            request_type: "Create",
+            request_type: RequestType::Create,
             identity: RequestIdentity {
                 stack_id: &request.stack_id,
                 request_id: &request.request_id,
@@ -337,7 +369,7 @@ fn decode_deployment_request(request: &RequestEnvelope) -> Result<DecodedRequest
             old_resource_properties: None,
         }),
         CloudFormationCustomResourceRequest::Update(request) => Ok(DecodedRequest {
-            request_type: "Update",
+            request_type: RequestType::Update,
             identity: RequestIdentity {
                 stack_id: &request.stack_id,
                 request_id: &request.request_id,
@@ -354,7 +386,7 @@ fn decode_deployment_request(request: &RequestEnvelope) -> Result<DecodedRequest
             )?),
         }),
         CloudFormationCustomResourceRequest::Delete(request) => Ok(DecodedRequest {
-            request_type: "Delete",
+            request_type: RequestType::Delete,
             identity: RequestIdentity {
                 stack_id: &request.stack_id,
                 request_id: &request.request_id,
@@ -375,7 +407,7 @@ fn decode_deployment_request(request: &RequestEnvelope) -> Result<DecodedRequest
 
 async fn process_request(
     state: &AppState,
-    request_type: &'static str,
+    request_type: RequestType,
     identity: RequestIdentity<'_>,
     physical_resource_id: Option<&str>,
     resource_properties: RawDeploymentRequest,
@@ -469,18 +501,18 @@ fn success_payload(
 }
 
 fn preflight_invalidation_requests(
-    request_type: &str,
+    request_type: RequestType,
     request: &crate::deployment::DeploymentRequest,
     previous: Option<&crate::deployment::PreviousDestination>,
 ) -> Result<()> {
-    let current_may_invalidate = matches!(request_type, "Create" | "Update")
-        || (request_type == "Delete" && request.delete_current_objects_on_delete);
+    let current_may_invalidate = matches!(request_type, RequestType::Create | RequestType::Update)
+        || (request_type == RequestType::Delete && request.delete_current_objects_on_delete);
     if current_may_invalidate && non_empty(request.distribution_id.as_deref()).is_some() {
         validate_invalidation_paths(&request.distribution_paths)
             .context("current CloudFront invalidation request is invalid")?;
     }
 
-    if request_type != "Update" {
+    if request_type != RequestType::Update {
         return Ok(());
     }
     let Some(previous) = previous else {
@@ -524,7 +556,7 @@ where
 
 async fn process_request_inner(
     state: &AppState,
-    request_type: &str,
+    request_type: RequestType,
     execution: RequestExecution<'_>,
     previous_destination: Option<&crate::deployment::PreviousDestination>,
     request: &crate::deployment::DeploymentRequest,
@@ -533,7 +565,7 @@ async fn process_request_inner(
     let deadlines = execution.deadlines;
     let mut deleted_current_destination = false;
     let mut cleaned_previous_destination = None;
-    let destination_change_cleanup = if request_type == "Update" {
+    let destination_change_cleanup = if request_type == RequestType::Update {
         previous_destination.map(|previous| plan_destination_change_cleanup(request, previous))
     } else {
         None
@@ -556,7 +588,7 @@ async fn process_request_inner(
             }
         });
 
-    if request_type == "Delete" && request.delete_current_objects_on_delete {
+    if request_type == RequestType::Delete && request.delete_current_objects_on_delete {
         match run_work(
             deadlines,
             "guarded current destination cleanup",
@@ -585,7 +617,7 @@ async fn process_request_inner(
         }
     }
 
-    if matches!(request_type, "Create" | "Update") {
+    if matches!(request_type, RequestType::Create | RequestType::Update) {
         deploy(
             state,
             request,
@@ -656,7 +688,7 @@ async fn process_request_inner(
 async fn invalidate_distributions(
     state: &AppState,
     execution: RequestExecution<'_>,
-    request_type: &str,
+    request_type: RequestType,
     previous_destination: Option<&crate::deployment::PreviousDestination>,
     request: &crate::deployment::DeploymentRequest,
     previous_destination_cleaned: bool,
@@ -664,9 +696,8 @@ async fn invalidate_distributions(
     stats: &DeploymentStats,
 ) -> Result<()> {
     let should_invalidate_current = match request_type {
-        "Create" | "Update" => true,
-        "Delete" => deleted_current_destination,
-        _ => false,
+        RequestType::Create | RequestType::Update => true,
+        RequestType::Delete => deleted_current_destination,
     };
 
     let previous_content_changed = previous_destination.is_some_and(|previous| {
@@ -718,7 +749,7 @@ async fn invalidate_distributions(
             distribution_id,
             &distribution_paths,
             request.wait_for_distribution_invalidation,
-            request_type == "Delete",
+            request_type == RequestType::Delete,
         )
         .await?
     } else {
@@ -823,16 +854,20 @@ fn destination_physical_resource_id(request: &crate::deployment::DeploymentReque
 }
 
 fn response_physical_resource_id(
-    request_type: &str,
+    request_type: RequestType,
     physical_resource_id: Option<&str>,
     request: &crate::deployment::DeploymentRequest,
 ) -> Result<String> {
     match request_type {
-        "Create" => Ok(destination_physical_resource_id(request)),
-        "Update" | "Delete" => physical_resource_id
-            .map(ToOwned::to_owned)
-            .ok_or_else(|| anyhow!("PhysicalResourceId is required for {request_type}")),
-        other => Err(anyhow!("Unsupported request type: {other}")),
+        RequestType::Create => Ok(destination_physical_resource_id(request)),
+        RequestType::Update | RequestType::Delete => {
+            physical_resource_id.map(ToOwned::to_owned).ok_or_else(|| {
+                anyhow!(
+                    "PhysicalResourceId is required for {}",
+                    request_type.as_str()
+                )
+            })
+        }
     }
 }
 
@@ -848,8 +883,8 @@ fn hash_caller_reference_field(hasher: &mut Md5, value: &str) {
 
 fn log_deployment_summary(
     stats: &DeploymentStats,
-    request_type: &str,
-    deployment_status: &str,
+    request_type: RequestType,
+    deployment_status: DeploymentStatus,
     request: &crate::deployment::DeploymentRequest,
 ) {
     if !tracing::enabled!(tracing::Level::INFO) {
@@ -857,7 +892,11 @@ fn log_deployment_summary(
         // it when the level is disabled is pure wasted work.
         return;
     }
-    match serde_json::to_string(&stats.snapshot(request_type, deployment_status, request)) {
+    match serde_json::to_string(&stats.snapshot(
+        request_type.as_str(),
+        deployment_status.as_str(),
+        request,
+    )) {
         Ok(summary) => tracing::info!(summary, "shin deployment summary"),
         Err(error) => {
             let error = sanitize_diagnostic(&error.to_string(), MAX_DIAGNOSTIC_VALUE_BYTES);
@@ -877,7 +916,7 @@ mod tests {
     use crate::state::AppState;
 
     use super::{
-        EnvelopeResponseTarget, RESOURCE_TYPE, RequestExecution, RequestIdentity,
+        EnvelopeResponseTarget, RESOURCE_TYPE, RequestExecution, RequestIdentity, RequestType,
         cloudfront_caller_reference, decode_deployment_request, decode_request_envelope,
         decode_resource_properties, destination_physical_resource_id, invalidate_distributions,
         merge_distribution_paths, preflight_invalidation_requests, response_physical_resource_id,
@@ -1187,7 +1226,7 @@ mod tests {
             ..PutObjectStats::default()
         });
 
-        let summary = serde_json::to_value(stats.snapshot("Create", "failed", &request))
+        let summary = serde_json::to_value(stats.snapshot("Create", "failure", &request))
             .expect("serializable summary");
         assert_eq!(summary["detailedFailureDiagnosticsEnabled"], false);
         assert_eq!(summary["putObject"]["failedAttempts"], 1);
@@ -1363,7 +1402,7 @@ mod tests {
         let request = deployment_request_with_paths(vec![format!("/{}", "a".repeat(4_000))]);
 
         assert!(
-            preflight_invalidation_requests("Create", &request, None)
+            preflight_invalidation_requests(RequestType::Create, &request, None)
                 .expect_err("oversized CloudFront path must fail preflight")
                 .to_string()
                 .contains("current CloudFront invalidation request is invalid")
@@ -1508,12 +1547,12 @@ mod tests {
         let derived_id = destination_physical_resource_id(&request);
 
         assert_eq!(
-            response_physical_resource_id("Create", None, &request)
+            response_physical_resource_id(RequestType::Create, None, &request)
                 .expect("Create physical resource ID"),
             derived_id
         );
         assert_eq!(
-            response_physical_resource_id("Delete", Some(&derived_id), &request)
+            response_physical_resource_id(RequestType::Delete, Some(&derived_id), &request)
                 .expect("Delete physical resource ID"),
             derived_id
         );
@@ -1837,7 +1876,7 @@ mod tests {
             invalidate_distributions(
                 &state,
                 execution,
-                "Update",
+                RequestType::Update,
                 Some(&previous),
                 &request,
                 true,
