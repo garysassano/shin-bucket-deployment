@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { Duration, Stack, Validations } from "aws-cdk-lib";
+import { Duration, Stack } from "aws-cdk-lib";
 import type { ISecurityGroup, IVpc, SubnetSelection } from "aws-cdk-lib/aws-ec2";
 import type { IRole } from "aws-cdk-lib/aws-iam";
 import { Architecture, Code, Function as LambdaFunction, Runtime } from "aws-cdk-lib/aws-lambda";
@@ -15,17 +15,15 @@ import type { ShinBucketDeploymentProviderLambdaOptions } from "./shin-bucket-de
 import { normalizeSingletonValue, stableStringify } from "./stable-json";
 
 const HANDLER_BINARY_NAME = "shin-bucket-deployment-handler";
-const PACKAGE_NAME = "shin-bucket-deployment";
 const SHARED_HANDLER_ID_PREFIX = "ShinBucketDeploymentHandler";
 const ISOLATED_HANDLER_ID = "ShinBucketDeploymentHandler";
-// Handler identity is recomputed for every construct, so these memoize reads of
-// files that cannot change during a synthesis: the installed package manifest and
-// the prebuilt bootstrap archives. Both caches live for the whole process rather
-// than per-`App`, which is correct for an installed package but means a long-lived
-// process that swaps package fixtures under the same path — a test runner, most
-// likely — keeps observing the first version and digest it read.
+// Handler identity is recomputed for every construct, so this memoizes digests of
+// the prebuilt bootstrap archives, which cannot change during a synthesis. The
+// cache lives for the whole process rather than per-`App`, which is correct for an
+// installed package but means a long-lived process that swaps archive fixtures
+// under the same path — a test runner, most likely — keeps observing the first
+// digest it read.
 const fileSha256Cache = new Map<string, string>();
-let packageVersionCache: string | undefined;
 
 // Lambda's documented invocation ceiling, 900 seconds:
 // https://docs.aws.amazon.com/lambda/latest/dg/gettingstarted-limits.html
@@ -88,7 +86,7 @@ export function getOrCreateHandler(
         stack,
         config,
         architecture,
-        prebuiltHandlerSourceIdentity(scope, architecture, prebuiltBootstrapArchive as string),
+        prebuiltHandlerSourceIdentity(architecture, prebuiltBootstrapArchive as string),
         selectedSubnets?.subnetIds,
       )}`
     : ISOLATED_HANDLER_ID;
@@ -148,57 +146,14 @@ export function getOrCreateHandler(
 }
 
 function prebuiltHandlerSourceIdentity(
-  scope: Construct,
   architecture: Architecture,
   prebuiltBootstrapArchive: string,
 ): Record<string, string> {
   return {
     kind: "prebuilt",
-    packageVersion: resolvePackageVersion(scope),
     architecture: architecture.name,
     bootstrapArchiveSha256: fileSha256(prebuiltBootstrapArchive),
   };
-}
-
-function resolvePackageVersion(scope: Construct): string {
-  if (packageVersionCache !== undefined) return packageVersionCache;
-  const candidates = [
-    join(__dirname, "..", "package.json"),
-    join(__dirname, "..", "..", "package.json"),
-  ];
-  for (const candidate of candidates) {
-    if (!existsSync(candidate)) continue;
-    let manifest: unknown;
-    try {
-      manifest = JSON.parse(readFileSync(candidate, "utf8"));
-    } catch (error) {
-      throw new ValidationError(
-        "ShinBucketDeploymentPackageManifest",
-        `Unable to parse ${PACKAGE_NAME} package metadata: ${(error as Error).message}`,
-        scope,
-      );
-    }
-    if (
-      typeof manifest === "object" &&
-      manifest !== null &&
-      (manifest as { name?: unknown }).name === PACKAGE_NAME &&
-      typeof (manifest as { version?: unknown }).version === "string" &&
-      (manifest as { version: string }).version.length > 0
-    ) {
-      packageVersionCache = (manifest as { version: string }).version;
-      return packageVersionCache;
-    }
-  }
-  // Bundlers (esbuild/webpack) may rewrite `__dirname` so neither candidate
-  // resolves at runtime. Fall back to a stable sentinel instead of failing
-  // synthesis: version participates only in handler identity, and a bundled
-  // consumer's version cannot change under them at runtime anyway.
-  packageVersionCache = `${PACKAGE_NAME}@bundled`;
-  Validations.of(scope).addWarning(
-    "ShinBucketDeploymentPackageVersionUnresolved",
-    `Unable to locate ${PACKAGE_NAME} package metadata. The provider handler identity falls back to a bundled-version sentinel; report this if you did not bundle ${PACKAGE_NAME} yourself.`,
-  );
-  return packageVersionCache;
 }
 
 function fileSha256(path: string): string {

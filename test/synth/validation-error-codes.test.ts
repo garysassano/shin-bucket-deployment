@@ -78,7 +78,6 @@ const EXPECTED_ERROR_CODES = [
   "ShinBucketDeploymentInvalidSourceWindowMemoryBudgetMiB",
   "ShinBucketDeploymentLocalProviderBuildProjectPath",
   "ShinBucketDeploymentLocalProviderBuildSharing",
-  "ShinBucketDeploymentPackageManifest",
   "ShinBucketDeploymentPrebuiltProviderArchiveMissing",
   "ShinBucketDeploymentPreviousBucketRequiresDeletePreviousObjects",
   "ShinBucketDeploymentProviderPublicSubnet",
@@ -96,7 +95,6 @@ const EXPECTED_ERROR_CODES = [
 const EXPECTED_WARNING_CODES = [
   "ShinBucketDeploymentHighTransferConcurrency",
   "ShinBucketDeploymentImportedRoleGrantDropped",
-  "ShinBucketDeploymentPackageVersionUnresolved",
   "ShinBucketDeploymentRootDelete",
   "ShinBucketDeploymentSharedRoleBucketWideDelete",
   "ShinBucketDeploymentVersionedDestination",
