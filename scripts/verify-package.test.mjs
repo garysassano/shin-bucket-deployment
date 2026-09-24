@@ -7,7 +7,11 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { crc32 } from "node:zlib";
-import { verifyBootstrapProvenance } from "./verify-package.mjs";
+import {
+  pinBootstrapArchiveTimestamp,
+  readBootstrapEntry,
+  verifyBootstrapProvenance,
+} from "./verify-package.mjs";
 
 const ZIP_LOCAL_FILE_HEADER = 0x04034b50;
 const ZIP_CENTRAL_DIRECTORY_HEADER = 0x02014b50;
@@ -100,6 +104,34 @@ function storedZip(entryName, content) {
   eocd.writeUInt32LE(local.length + name.length + content.length, 16);
   return Buffer.concat([local, name, content, centralDirectory, eocd]);
 }
+
+test("pins the bootstrap entry timestamp so identical binaries give identical archives", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "shin-pin-archive-timestamp-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const bootstrap = elfBytes(ELF_MACHINE_BY_ARCH.arm64);
+  const stamped = (time, date) => {
+    const archive = storedZip("bootstrap", bootstrap);
+    const centralOffset = 30 + "bootstrap".length + bootstrap.length;
+    for (const [offset, value] of [
+      [10, time],
+      [12, date],
+      [centralOffset + 12, time],
+      [centralOffset + 14, date],
+    ]) {
+      archive.writeUInt16LE(value, offset);
+    }
+    return archive;
+  };
+  const first = stamped(0x8a51, 0x5b38);
+  const second = stamped(0x9c22, 0x5b39);
+  assert.notDeepEqual(first, second);
+
+  const pinned = pinBootstrapArchiveTimestamp(first);
+  assert.deepEqual(pinned, pinBootstrapArchiveTimestamp(second));
+  const archivePath = join(dir, "arm64.zip");
+  writeFileSync(archivePath, pinned);
+  assert.deepEqual(readBootstrapEntry(archivePath, "arm64"), bootstrap);
+});
 
 test("accepts a build provenance manifest without the schemaVersion marker", () => {
   const dir = mkdtempSync(join(tmpdir(), "shin-verify-provenance-"));
