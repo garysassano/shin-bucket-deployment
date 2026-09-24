@@ -93,6 +93,13 @@ export const SMOKE_ENTRIES = [
   { path: "assets/app.js", content: 'console.log("shin smoke");\n' },
 ];
 
+/** The source ZIP also contains a root directory, which must not become an S3 object. */
+export const SMOKE_ARCHIVE_ENTRIES = [
+  { path: "./", content: "" },
+  { path: "./index.html", content: SMOKE_ENTRIES[0].content },
+  SMOKE_ENTRIES[1],
+];
+
 /**
  * Second-generation fixture for the `Update` invocation.
  *
@@ -438,7 +445,7 @@ async function seedMock(s3) {
     new PutObjectCommand({
       Bucket: SOURCE_BUCKET,
       Key: SOURCE_OBJECT_KEY,
-      Body: buildSourceZip(SMOKE_ENTRIES),
+      Body: buildSourceZip(SMOKE_ARCHIVE_ENTRIES),
     }),
   );
   await s3.send(
@@ -616,6 +623,9 @@ async function main() {
     await invokePhase("Create", buildCreateEvent());
     const created = await deployedDestination(s3);
     assertDeployed(SMOKE_ENTRIES, created);
+    if (created.some((object) => object.key === "./")) {
+      throw new Error("The ZIP root directory must not become a destination object.");
+    }
     console.log(
       `Create: ${created.length} objects deployed with the expected keys and bytes; ` +
         "seeded stale object deleted; overwrite replaced.",
