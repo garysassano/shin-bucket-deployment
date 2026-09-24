@@ -108,7 +108,7 @@ describe("benchmark result collector", () => {
         constructsInstalledSha256: "e".repeat(64),
         memoryMeasurementScope: "phase-local",
         providerPackageVersion: "2.260.0",
-        providerArchitecture: "x86_64",
+        providerArchitecture: "arm64",
         providerRuntime: "python3.13",
         providerHandler: "index.handler",
         providerCodeSha256: codeSha256("b".repeat(64)),
@@ -218,7 +218,7 @@ describe("benchmark result collector", () => {
       constructsInstalledSha256: "e".repeat(64),
       memoryMeasurementScope: "phase-local",
       providerPackageVersion: "2.260.0",
-      providerArchitecture: "x86_64",
+      providerArchitecture: "arm64",
       providerRuntime: "python3.13",
       providerHandler: "index.handler",
       providerCodeSha256,
@@ -239,7 +239,7 @@ describe("benchmark result collector", () => {
 
     expect(collected.run.provider).toEqual({
       packageVersion: "2.260.0",
-      architecture: "x86_64",
+      architecture: "arm64",
       runtime: "python3.13",
       handler: "index.handler",
       codeSha256: providerCodeSha256,

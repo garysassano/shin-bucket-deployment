@@ -546,7 +546,7 @@ describe("benchmark methodology", () => {
         detailedFailureDiagnostics: true,
         metadata: {
           ...base,
-          architecture: "x86_64",
+          architecture: "arm64",
           runtime: "python3.13",
           handler: "index.handler",
           detailedFailureDiagnosticsEnvironment: "true",
@@ -562,7 +562,7 @@ describe("benchmark methodology", () => {
         detailedFailureDiagnostics: true,
         metadata: {
           ...base,
-          architecture: "arm64",
+          architecture: "x86_64",
           runtime: "python3.13",
           handler: "index.handler",
           detailedFailureDiagnosticsEnvironment: undefined,
@@ -765,6 +765,16 @@ describe("benchmark methodology", () => {
       "unexpected AWS provider field bootstrap",
     );
 
+    const withArchitecture = (architecture: string) => ({
+      ...canonical,
+      provider: { ...(canonical.provider as Record<string, unknown>), architecture },
+    });
+    // Runs recorded before CDK 2.270.0 measured upstream on x86_64.
+    expect(benchmarkRunRecordErrors(withArchitecture("x86_64"))).toEqual([]);
+    expect(benchmarkRunRecordErrors(withArchitecture("sparc")).join("; ")).toContain(
+      "invalid AWS provider.architecture",
+    );
+
     const versionMismatch = {
       ...canonical,
       cdk: { ...(canonical.cdk as Record<string, unknown>), libVersion: "2.261.0" },
@@ -825,7 +835,7 @@ describe("benchmark methodology", () => {
 
   test("binds the upstream package to its exact lockfile integrity", () => {
     const lockfile = readFileSync(join(process.cwd(), "pnpm-lock.yaml"), "utf8");
-    expect(packageIntegrity(lockfile, "aws-cdk-lib", "2.267.0")).toMatch(/^sha512-/);
+    expect(packageIntegrity(lockfile, "aws-cdk-lib", "2.270.0")).toMatch(/^sha512-/);
   });
 
   test("does not mark a run dirty because it persisted the run ledger", () => {

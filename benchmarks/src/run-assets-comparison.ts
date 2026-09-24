@@ -1072,7 +1072,7 @@ export function assertProviderRuntimeMetadata(args: {
       );
     }
   } else if (
-    metadata.architecture !== "x86_64" ||
+    metadata.architecture !== "arm64" ||
     metadata.runtime !== "python3.13" ||
     metadata.handler !== "index.handler"
   ) {
