@@ -4,6 +4,14 @@ This file holds authored release notes for `ShinBucketDeployment` changes that b
 
 ## Unreleased
 
+## 0.14.1
+
+### Update the packaged provider to rustls 0.23.45
+
+The provider now uses `rustls 0.23.45`, which fixes [RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285.html). The custom-resource wire contract and deployment behavior are unchanged.
+
+Upgrading from `0.14.0` changes the package version and both provider archive digests. For packaged deployments using the default or explicit `ProviderSharing.STACK`, the handler identity advances and CloudFormation creates a new function, generated role, and custom resource (and a new generated security group when applicable). The destination ownership handoff preserves the live namespace, including when `onDelete.deleteCurrentObjects` is enabled. Deployments using `ProviderSharing.DEPLOYMENT` retain their handler and custom-resource identities and update the provider code in place. Caller-supplied roles, security groups, and log groups remain caller-owned.
+
 ## 0.14.0
 
 ### All stack-shared prebuilt handlers advance to the new provider identity
