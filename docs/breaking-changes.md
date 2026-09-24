@@ -4,6 +4,10 @@ This file holds authored release notes for `ShinBucketDeployment` changes that b
 
 ## Unreleased
 
+### Shared handler identity no longer includes the package version
+
+Stack-shared prebuilt handlers are now identified by architecture, provider archive SHA-256, and Lambda settings; the package version was removed. Provider archives are now reproducible, so a later release that changes only TypeScript keeps the existing handler, role, custom resource, and generated security group instead of replacing them. Upgrading to the release that introduces this still changes every stack-shared handler logical ID once, and CloudFormation replaces those resources through the existing ownership-safe handoff. Deployment-scoped handlers are unaffected. The `ShinBucketDeploymentPackageVersionUnresolved` warning and the `ShinBucketDeploymentPackageManifest` error are removed because synthesis no longer reads the package manifest.
+
 ### Provider archives are reproducible
 
 `pnpm build:bootstrap` now pins the `bootstrap` entry timestamp in each provider ZIP to 1980-01-01. The compiled executable was already byte-identical across clean builds, but the archive embedded the build time, so every rebuild produced a new archive digest and a new stack-shared handler identity. The next release's archive digests change once for this reason; stack-shared handlers and custom resources advance through the existing replacement path, and deployment-scoped handlers update code in place. The executable and the custom-resource wire contract are unchanged.

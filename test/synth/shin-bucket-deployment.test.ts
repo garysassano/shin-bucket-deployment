@@ -217,9 +217,6 @@ test("binds shared prebuilt handler identity to the package version and archive 
       bucket: destinationBucket,
     },
   });
-  const manifest = JSON.parse(
-    readFileSync(join(__dirname, "..", "..", "package.json"), "utf8"),
-  ) as { version: string };
   const bootstrapArchive = readFileSync(
     join(__dirname, "..", "..", "assets", "bootstrap-arm64", "bootstrap.zip"),
   );
@@ -230,7 +227,6 @@ test("binds shared prebuilt handler identity to the package version and archive 
         failureDiagnostics: FailureDiagnostics.STANDARD,
         handlerSource: {
           kind: "prebuilt",
-          packageVersion: manifest.version,
           architecture: "arm64",
           bootstrapArchiveSha256: createHash("sha256").update(bootstrapArchive).digest("hex"),
         },
@@ -255,14 +251,13 @@ test("serializes the prebuilt handler configuration canonically", () => {
     Architecture.X86_64,
     {
       kind: "prebuilt",
-      packageVersion: "0.9.0",
       bootstrapArchiveSha256: "archive-digest",
     },
     undefined,
   );
 
   expect(serialized).toBe(
-    `{"architecture":"x86_64","failureDiagnostics":"detailed","handlerSource":{"bootstrapArchiveSha256":"archive-digest","kind":"prebuilt","packageVersion":"0.9.0"},"memoryLimit":2048,"stack":"${stack.node.addr}"}`,
+    `{"architecture":"x86_64","failureDiagnostics":"detailed","handlerSource":{"bootstrapArchiveSha256":"archive-digest","kind":"prebuilt"},"memoryLimit":2048,"stack":"${stack.node.addr}"}`,
   );
 });
 
@@ -276,7 +271,6 @@ test("keeps every provider Lambda identity member in canonical handler selection
   const logGroup = new LogGroup(stack, "LogGroup");
   const sourceIdentity = {
     kind: "prebuilt",
-    packageVersion: "0.9.0",
     bootstrapArchiveSha256: "archive-digest",
   };
   const render = (
@@ -301,7 +295,7 @@ test("keeps every provider Lambda identity member in canonical handler selection
     render({ vpc, vpcSubnets: { subnetType: SubnetType.PUBLIC } }),
     render({ securityGroups: [securityGroup] }),
     render({}, Architecture.X86_64),
-    render({}, Architecture.ARM_64, { ...sourceIdentity, packageVersion: "0.9.1" }),
+    render({}, Architecture.ARM_64, { ...sourceIdentity, bootstrapArchiveSha256: "other-digest" }),
   ];
 
   expect(variants).toHaveLength(new Set(variants).size);
@@ -317,7 +311,6 @@ test("canonicalizes provider security group identity independently of caller ord
   const secondGroup = new SecurityGroup(stack, "SecondGroup", { vpc });
   const handlerSource = {
     kind: "prebuilt",
-    packageVersion: "0.9.0",
     bootstrapArchiveSha256: "archive-digest",
   };
 
