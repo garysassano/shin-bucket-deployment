@@ -4,6 +4,10 @@ This file holds authored release notes for `ShinBucketDeployment` changes that b
 
 ## Unreleased
 
+### Provider build toolchain updated
+
+Provider archives now build with Rust 1.98.1 and cargo-lambda 1.9.2. Their bytes and toolchain provenance change. On upgrade, stack-shared handlers and custom resources advance through the existing ownership-safe replacement path; deployment-scoped handlers update their code in place. The custom-resource wire contract is unchanged.
+
 ### Provider build tool now comes from its pinned release binary
 
 CI now installs the published `cargo-lambda 1.9.1` executable instead of compiling it from source. This changes the recorded build-toolchain digest. The next package release will rebuild both provider archives with this tool; if their digests change, stack-shared handlers and custom resources advance through the existing safe replacement path, while deployment-scoped handlers update code in place. The custom-resource wire contract and destination behavior are unchanged.
