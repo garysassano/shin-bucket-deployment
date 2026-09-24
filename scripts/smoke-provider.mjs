@@ -5,7 +5,7 @@
 // CloudFormation custom-resource event from the Lambda Runtime API and drives
 // S3 from it. Unit and synth tests stub the bootstrap with `exit 0`, so this
 // script closes that gap by running the real binary under the AWS Lambda
-// Runtime Interface Emulator (RIE) with an S3-compatible mock (MinIO) behind
+// Runtime Interface Emulator (RIE) with an S3-compatible mock (RustFS) behind
 // `AWS_ENDPOINT_URL_S3`.
 //
 // Three phases run through one emulator: `Create`, then `Update` against a
@@ -29,7 +29,7 @@
 //   node scripts/smoke-provider.mjs
 //
 // Environment:
-//   MINIO_BIN    Path to the MinIO server binary (default: `minio` on PATH).
+//   RUSTFS_BIN   Path to the RustFS server binary (default: `rustfs` on PATH).
 //   RIE_BIN      Path to the AWS Lambda Runtime Interface Emulator binary
 //                (default: `aws-lambda-rie` on PATH).
 //   PROVIDER_BIN Path to a prebuilt provider `bootstrap`; when unset, the
@@ -37,7 +37,15 @@
 //   SMOKE_KEEP   Set to 1 to keep the scratch directory on failure.
 
 import { spawn, spawnSync } from "node:child_process";
-import { accessSync, constants, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  accessSync,
+  constants,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -76,7 +84,7 @@ export const SERVICE_TOKEN = "arn:aws:lambda:us-east-1:000000000000:function:shi
 const CALLBACK_RESPONSE_URL =
   "https://cloudformation-custom-resource-response-useast99.s3.us-east-99.amazonaws.com/response?signature=shin-smoke";
 
-const MINIO_PORT = Number(process.env.SMOKE_MINIO_PORT ?? 9000);
+const S3_PORT = Number(process.env.SMOKE_S3_PORT ?? 9000);
 // The Runtime Interface Emulator serves its invoke endpoint on this port.
 const RIE_PORT = 8080;
 // Nothing listens on the discard port; the callback's HTTPS proxy connect
@@ -398,11 +406,11 @@ function sleep(ms) {
   return new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
 }
 
-async function waitForMinio(port, timeoutMs) {
+async function waitForRustfs(port, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(`http://127.0.0.1:${port}/minio/health/live`);
+      const response = await fetch(`http://127.0.0.1:${port}/health/ready`);
       if (response.ok) {
         return;
       }
@@ -411,7 +419,7 @@ async function waitForMinio(port, timeoutMs) {
     }
     await sleep(250);
   }
-  throw new Error(`MinIO did not become healthy on port ${port} within ${timeoutMs}ms`);
+  throw new Error(`RustFS did not become ready on port ${port} within ${timeoutMs}ms`);
 }
 
 function captureOutput(stream, buffer, limit = 4 * 1024 * 1024) {
@@ -504,44 +512,44 @@ function assertDeployed(entries, objects) {
 }
 
 async function main() {
-  const minioBin = resolveBinary("MINIO_BIN", "minio", "MinIO");
+  const rustfsBin = resolveBinary("RUSTFS_BIN", "rustfs", "RustFS");
   const rieBin = resolveBinary("RIE_BIN", "aws-lambda-rie", "Runtime Interface Emulator");
   const providerBin = process.env.PROVIDER_BIN ?? buildProvider();
   assertExecutable(providerBin, "Provider");
 
   const workDir = mkdtempSync(join(tmpdir(), "shin-provider-smoke-"));
-  const minioData = join(workDir, "minio-data");
+  const rustfsData = join(workDir, "rustfs-data");
   const eventPath = join(workDir, "event.json");
-  const minioLog = [];
+  const rustfsLog = [];
   const rieLog = [];
-  let minio;
+  let rustfs;
   let rie;
 
   try {
     console.log(`Scratch directory: ${workDir}`);
     console.log(`Provider binary: ${providerBin}`);
-    runOrThrow(minioBin, ["--version"], repoRoot, "MinIO version");
+    runOrThrow(rustfsBin, ["--version"], repoRoot, "RustFS version");
+    mkdirSync(rustfsData);
 
     const mockEnv = {
       ...process.env,
-      MINIO_BROWSER: "off",
-      MINIO_ROOT_USER: SMOKE_ACCESS_KEY,
-      MINIO_ROOT_PASSWORD: SMOKE_SECRET_KEY,
-      MINIO_REGION: "us-east-1",
+      RUSTFS_CONSOLE_ENABLE: "false",
+      RUSTFS_ACCESS_KEY: SMOKE_ACCESS_KEY,
+      RUSTFS_SECRET_KEY: SMOKE_SECRET_KEY,
+      RUSTFS_REGION: "us-east-1",
     };
-    minio = spawn(
-      minioBin,
-      ["server", minioData, "--address", `127.0.0.1:${MINIO_PORT}`, "--quiet"],
-      { env: mockEnv, stdio: ["ignore", "pipe", "pipe"] },
-    );
-    captureOutput(minio.stdout, minioLog);
-    captureOutput(minio.stderr, minioLog);
-    await waitForMinio(MINIO_PORT, 30_000);
-    console.log(`MinIO is healthy on port ${MINIO_PORT}`);
+    rustfs = spawn(rustfsBin, ["server", rustfsData, "--address", `127.0.0.1:${S3_PORT}`], {
+      env: mockEnv,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    captureOutput(rustfs.stdout, rustfsLog);
+    captureOutput(rustfs.stderr, rustfsLog);
+    await waitForRustfs(S3_PORT, 30_000);
+    console.log(`RustFS is ready on port ${S3_PORT}`);
 
     const s3 = new S3Client({
       region: "us-east-1",
-      endpoint: `http://127.0.0.1:${MINIO_PORT}`,
+      endpoint: `http://127.0.0.1:${S3_PORT}`,
       forcePathStyle: true,
       credentials: { accessKeyId: SMOKE_ACCESS_KEY, secretAccessKey: SMOKE_SECRET_KEY },
     });
@@ -558,7 +566,7 @@ async function main() {
       AWS_SECRET_ACCESS_KEY: SMOKE_SECRET_KEY,
       AWS_REGION: "us-east-1",
       AWS_DEFAULT_REGION: "us-east-1",
-      AWS_ENDPOINT_URL_S3: `http://127.0.0.1:${MINIO_PORT}`,
+      AWS_ENDPOINT_URL_S3: `http://127.0.0.1:${S3_PORT}`,
       AWS_LAMBDA_FUNCTION_MEMORY_SIZE: "1024",
       AWS_LAMBDA_FUNCTION_TIMEOUT: "900",
       // The CloudFormation callback requires HTTPS to a validated AWS host,
@@ -680,15 +688,15 @@ async function main() {
         "locally); the S3 side effects are the assertion.",
     );
   } catch (error) {
-    if (minioLog.length > 0) {
-      console.error(`--- MinIO output tail ---\n${outputTail(minioLog)}`);
+    if (rustfsLog.length > 0) {
+      console.error(`--- RustFS output tail ---\n${outputTail(rustfsLog)}`);
     }
     if (rieLog.length > 0) {
       console.error(`--- Runtime Interface Emulator output tail ---\n${outputTail(rieLog)}`);
     }
     throw error;
   } finally {
-    await Promise.all([stopProcess(rie), stopProcess(minio)]);
+    await Promise.all([stopProcess(rie), stopProcess(rustfs)]);
     if (process.env.SMOKE_KEEP !== "1") {
       rmSync(workDir, { recursive: true, force: true });
     }
