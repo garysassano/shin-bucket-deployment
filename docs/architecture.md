@@ -408,32 +408,32 @@ Whole-namespace cleanup reads and evaluates ownership tags immediately before li
 
 ## Engine Shape
 
-The provider reads the ZIP central directory and entry bodies through S3 ranges. It bounds classic and ZIP64 directory metadata before parser allocation, and supports external archives whose local extra fields differ from their central records. The parser uses `astral_async_zip` with a 0.0.20 version floor: bounded external-ZIP planning and the committed Info-ZIP/Python ZIP64 fixtures were validated against that Astral fork release, while upstream `async_zip` remains on 0.0.18. Because the dependency is pre-1.0 and parses untrusted metadata, upgrades track both projects and must retain malformed-metadata, external-fixture, audit, and dependency-policy gates. Directory assets use a compact v1 size/MD5 catalog with an additional template-bound SHA-256 trust layer. Entry source spans are planned into coalesced blocks, prefetched with bounded source GET concurrency, shared by concurrent readers, retained while claimed, and reopened for retryable upload bodies. Readers discard their final `Bytes` slice before the corresponding global permit is released. Source ZIP and marker-expanded entry size are independent of Lambda `/tmp` and whole-entry memory.
+The provider reads the ZIP central directory and entry bodies through S3 ranges. It bounds classic and ZIP64 directory metadata before parser allocation, and supports external archives whose local extra fields differ from their central records. The parser uses the pinned `astral_async_zip` fork in `rust/Cargo.toml`; because that pre-1.0 dependency parses untrusted metadata, upgrades must retain malformed-metadata, external-fixture, audit, and dependency-policy gates. Directory assets use a compact v1 size/MD5 catalog with an additional template-bound SHA-256 trust layer. Entry source spans are planned into coalesced blocks, prefetched with bounded source GET concurrency, shared by concurrent readers, retained while claimed, and reopened for retryable upload bodies. Readers discard their final `Bytes` slice before the corresponding global permit is released. Source ZIP and marker-expanded entry size are independent of Lambda `/tmp` and whole-entry memory.
 
-The current implementation:
+The provider:
 
-- avoid local archive staging
-- avoid full archive loading
-- treat the ZIP object as a random-access S3 source
-- read central-directory metadata through ranges
-- reopen entry streams from ranges so upload bodies are retryable
-- use separate S3 clients for source reads and destination writes
-- use authenticated embedded source MD5 catalogs for sparse unchanged skips
-- coalesce adjacent source spans into shared source blocks
-- prefetch source blocks with bounded source GET concurrency
-- bound aggregate resident source block data with one fair invocation-global budget and release permits by reader claims
-- locate source blocks for entry spans with indexed interval boundaries instead of scanning every block
-- use one SDK attempt per provider-owned ranged GET attempt and retry only typed transient, throttled, or incomplete-body failures
-- validate ZIP entry uncompressed size and CRC32 during hashing and upload
-- retain destination comparison metadata only for manifest keys and bounded stale-key lists, with page-streamed cleanup after retention overflow
-- use source-object `If-Match` guards for ranged archive reads
-- use destination `If-None-Match`/`If-Match` guards for extracted `PutObject` writes when listing data supports them
-- own `PutObject` and `CopyObject` retries explicitly, with one SDK attempt per provider attempt, capped backoff, shared throttle-aware delays, destination guards, and exact lost-response reconciliation
-- drain a bounded transfer task set continuously and abort outstanding work on the first observed error or panic
-- create retryable ZIP body work only when a body instance is actually polled
-- replace markers with deterministic simultaneous semantics using bounded planning and retryable streaming passes
-- derive source GET concurrency, the half-memory global cap, and local source windows from actual Lambda memory unless valid lower tuning is configured
-- emit structured source scheduler and destination `PutObject`/`CopyObject` diagnostics as provider logs
+- avoids local archive staging
+- avoids full archive loading
+- treats the ZIP object as a random-access S3 source
+- reads central-directory metadata through ranges
+- reopens entry streams from ranges so upload bodies are retryable
+- uses separate S3 clients for source reads and destination writes
+- uses authenticated embedded source MD5 catalogs for sparse unchanged skips
+- coalesces adjacent source spans into shared source blocks
+- prefetches source blocks with bounded source GET concurrency
+- bounds aggregate resident source block data with one fair invocation-global budget and releases permits by reader claims
+- locates source blocks for entry spans with indexed interval boundaries instead of scanning every block
+- uses one SDK attempt per provider-owned ranged GET attempt and retries only typed transient, throttled, or incomplete-body failures
+- validates ZIP entry uncompressed size and CRC32 during hashing and upload
+- retains destination comparison metadata only for manifest keys and bounded stale-key lists, with page-streamed cleanup after retention overflow
+- uses source-object `If-Match` guards for ranged archive reads
+- uses destination `If-None-Match`/`If-Match` guards for extracted `PutObject` writes when listing data supports them
+- owns `PutObject` and `CopyObject` retries explicitly, with one SDK attempt per provider attempt, capped backoff, shared throttle-aware delays, destination guards, and exact lost-response reconciliation
+- drains a bounded transfer task set continuously and aborts outstanding work on the first observed error or panic
+- creates retryable ZIP body work only when a body instance is actually polled
+- replaces markers with deterministic simultaneous semantics using bounded planning and retryable streaming passes
+- derives source GET concurrency, the half-memory global cap, and local source windows from actual Lambda memory unless valid lower tuning is configured
+- emits structured source scheduler and destination `PutObject`/`CopyObject` diagnostics as provider logs
 
 Cataloged directory assets are produced by this construct's `Source.asset` wrapper. If callers need CDK asset bundling or symlink-following behavior that the wrapper does not implement, they can pass `embeddedCatalog: false` and use the upstream CDK asset path without trusted catalog sparse skips.
 
@@ -689,10 +689,3 @@ CloudFormation callback diagnostics field reference:
 - A versioned destination bucket emits an acknowledgeable synthesis warning: object deletion only adds delete markers, so superseded content persists as noncurrent versions and keeps incurring storage cost.
 - Deployments are not transactional: valid object writes may finish before a later object fails, but stale deletion and CloudFront invalidation do not run after a transfer failure.
 - The provider is a static asset deployment engine, not a general-purpose sync engine with byte-range diffs or persistent manifests.
-
-## Next Architecture Targets
-
-The highest-value architecture work is now:
-
-1. Promote the benchmark methodology to repeated canonical runs and add CI regression checks that can detect provider-time, memory, transfer, retry, and request-count regressions without committing raw AWS evidence.
-2. Add cataloged packaging support for CDK asset bundling or keep `embeddedCatalog: false` as the explicit uncataloged path.
