@@ -1283,7 +1283,7 @@ describe("benchmark methodology", () => {
       options.phases.map((phase) => canonicalRecord(options, sample, phase)),
     );
     const runs = canonicalRuns(options);
-    expect(selectValidatedBenchmarkRun({ runs, samples: records, runId })).toHaveLength(120);
+    expect(selectValidatedBenchmarkRun({ runs, samples: records, runId })).toHaveLength(240);
     const previewRecords = records.filter((record) => record.repetition === 1);
     expect(
       selectValidatedBenchmarkPreview({
@@ -1291,7 +1291,7 @@ describe("benchmark methodology", () => {
         samples: previewRecords,
         runId,
       }),
-    ).toHaveLength(24);
+    ).toHaveLength(48);
     expect(() =>
       selectValidatedBenchmarkRun({
         runs,
@@ -1407,7 +1407,7 @@ describe("benchmark methodology", () => {
         inputFile: outputFile,
         scratchRoot,
       }),
-    ).toHaveLength(120);
+    ).toHaveLength(240);
   });
 });
 
