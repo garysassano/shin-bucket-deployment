@@ -51,8 +51,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
-      MISE_DATA_DIR: ${{ github.workspace }}/.mise
-      MISE_RUSTUP_HOME: ${{ github.workspace }}/.mise/rustup
+      MISE_DATA_DIR: /tmp/shin-mise
+      MISE_RUSTUP_HOME: /tmp/shin-mise/rustup
       CARGO_TARGET_DIR: ${{ github.workspace }}/rust/target
     steps:
       - uses: actions/checkout@v7
@@ -163,8 +163,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
-      MISE_DATA_DIR: ${{ github.workspace }}/.mise
-      MISE_RUSTUP_HOME: ${{ github.workspace }}/.mise/rustup
+      MISE_DATA_DIR: /tmp/shin-mise
+      MISE_RUSTUP_HOME: /tmp/shin-mise/rustup
     steps:
       - uses: actions/checkout@v7
         with:
@@ -229,7 +229,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
-      MISE_DATA_DIR: ${{ github.workspace }}/.mise
+      MISE_DATA_DIR: /tmp/shin-mise
     steps:
       - uses: actions/checkout@v7
         with:
@@ -272,8 +272,8 @@ jobs:
           - arch: x86_64
             target: x86_64-unknown-linux-gnu
     env:
-      MISE_DATA_DIR: ${{ github.workspace }}/.mise
-      MISE_RUSTUP_HOME: ${{ github.workspace }}/.mise/rustup
+      MISE_DATA_DIR: /tmp/shin-mise
+      MISE_RUSTUP_HOME: /tmp/shin-mise/rustup
       CARGO_TARGET_DIR: ${{ github.workspace }}/rust/target
     steps:
       - uses: actions/checkout@v7
