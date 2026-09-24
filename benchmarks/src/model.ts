@@ -527,8 +527,11 @@ export function benchmarkRunRecordErrors(run: BenchmarkRunRecord): string[] {
       if (provider.packageVersion !== cdk?.libVersion) {
         errors.push(`${label}: AWS provider package version must match cdk.libVersion`);
       }
-      if (provider.architecture !== "x86_64") {
-        errors.push(`${label}: AWS provider.architecture must be x86_64`);
+      // Recorded, like packageVersion: upstream's handler architecture follows
+      // the measured CDK version (x86_64 through 2.267.0, arm64 from 2.270.0).
+      // The runner enforces the architecture the current version deploys.
+      if (provider.architecture !== "arm64" && provider.architecture !== "x86_64") {
+        errors.push(`${label}: invalid AWS provider.architecture`);
       }
       if (provider.runtime !== "python3.13") {
         errors.push(`${label}: AWS provider.runtime must be python3.13`);

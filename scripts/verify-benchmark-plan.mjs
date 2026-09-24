@@ -93,7 +93,7 @@ function canonicalRunRecord(options, implementation) {
       : {
           provider: {
             packageVersion: "1.0.0",
-            architecture: "x86_64",
+            architecture: "arm64",
             runtime: "python3.13",
             handler: "index.handler",
             codeSha256: Buffer.from(archiveSha256, "hex").toString("base64"),
