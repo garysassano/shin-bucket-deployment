@@ -226,7 +226,7 @@ The current canonical publication workflow requires five independent repetitions
 
 Counters, phase timings, and aggregate high-water marks are always on. Retained per-attempt state, bounded string capture, and per-attempt allocations require `FailureDiagnostics.DETAILED`. Benchmarks always select `DETAILED` and cannot opt out, so they include costs absent from the `STANDARD` consumer default.
 
-The current `benchmarks/configs/canonical.json` selects `mixed` at 1024 MiB / 32, 2048 MiB / 64, and 4096 MiB / 128, with three concurrent stacks per repetition and five parallel repetition jobs. The latest published run above used the earlier sequential three-profile, two-configuration matrix. Its recorded configuration and timing scope remain authoritative for those measurements.
+The current `benchmarks/configs/canonical.json` selects `mixed`, `tiny-many`, and `large-few` at 1024 MiB / 32 and 2048 MiB / 64, with up to three concurrent stacks per repetition and five parallel repetition jobs. This is the matrix used by the latest published run above; its recorded configuration and timing scope remain authoritative for those measurements.
 
 AWS evidence remains approval-gated. Agree the matrix and a per-repetition wall-clock cap before dispatching the full workflow. Each repetition persists sanitized rows incrementally and verifies its own cleanup; raw AWS output remains outside the repository. The cap is enforced before stacks and between phases, at external-command granularity: an active CDK/AWS command may finish after the nominal deadline, after which cleanup begins. Signals terminate the active process group and also route the active stack through cleanup.
 

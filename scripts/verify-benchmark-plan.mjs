@@ -14,7 +14,7 @@ const options = parseBenchmarkRunOptions([
   runId,
 ]);
 const plan = createBenchmarkPlan(options);
-const expectedSamples = 5 * (3 + 3);
+const expectedSamples = 5 * 3 * 2 * 2;
 if (plan.length !== expectedSamples) {
   throw new Error(
     `Canonical benchmark plan has ${plan.length} samples; expected ${expectedSamples}.`,

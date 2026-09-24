@@ -226,7 +226,7 @@ jobs:
           SNAPSHOT_DATE: ${{ inputs.snapshot_date }}
         run: |
           pnpm benchmark:run-assets -- \
-            --config benchmarks/configs/readme-snapshots.json \
+            --config benchmarks/configs/canonical.json \
             --run-id "$RUN_ID" \
             --start-repetition "$REPETITION" \
             --repetitions 1 \
@@ -312,7 +312,7 @@ jobs:
       - name: Merge and validate repetition evidence
         run: |
           node dist/benchmarks/src/merge-shards.js \
-            --config benchmarks/configs/readme-snapshots.json \
+            --config benchmarks/configs/canonical.json \
             --input-directory "$RUNNER_TEMP/benchmark-shards" \
             --output-file "$RESULTS_FILE" \
             --run-id "${{ inputs.run_id }}" \
@@ -347,7 +347,7 @@ jobs:
       - name: Render Actions summary
         run: |
           node dist/benchmarks/src/render/ci-summary.js \
-            --config benchmarks/configs/readme-snapshots.json \
+            --config benchmarks/configs/canonical.json \
             --input-file "$RESULTS_FILE" \
             --output-file "$REPORT_ROOT/summary.md" \
             --run-id "${{ inputs.run_id }}" \
@@ -358,7 +358,7 @@ jobs:
       - name: Render comparison report
         run: |
           node dist/benchmarks/src/render/comparison-report.js \
-            --config benchmarks/configs/readme-snapshots.json \
+            --config benchmarks/configs/canonical.json \
             --input-file "$RESULTS_FILE" \
             --output-file "$REPORT_ROOT/report.md" \
             --run-id "${{ inputs.run_id }}" \
@@ -368,7 +368,7 @@ jobs:
       - name: Render provider telemetry
         run: |
           node dist/benchmarks/src/render/telemetry-table.js \
-            --config benchmarks/configs/readme-snapshots.json \
+            --config benchmarks/configs/canonical.json \
             --input-file "$RESULTS_FILE" \
             --output-file "$REPORT_ROOT/telemetry.md" \
             --run-id "${{ inputs.run_id }}" \
@@ -379,7 +379,7 @@ jobs:
         if: ${{ inputs.implementations == 'shin,aws' }}
         run: |
           node dist/benchmarks/src/render/readme-snapshot.js \
-            --config benchmarks/configs/readme-snapshots.json \
+            --config benchmarks/configs/canonical.json \
             --input-file "$RESULTS_FILE" \
             --output-directory "$REPORT_ROOT/snapshots" \
             --run-id "${{ inputs.run_id }}" \
@@ -481,7 +481,7 @@ jobs:
       - name: Merge validated structured evidence
         run: |
           node dist/benchmarks/src/publish-results.js \
-            --config benchmarks/configs/readme-snapshots.json \
+            --config benchmarks/configs/canonical.json \
             --input-file "$RESULTS_FILE" \
             --output-file benchmarks/results.jsonl \
             --run-id "${{ inputs.run_id }}" \
@@ -490,7 +490,7 @@ jobs:
       - name: Render committed comparison report
         run: |
           node dist/benchmarks/src/render/comparison-report.js \
-            --config benchmarks/configs/readme-snapshots.json \
+            --config benchmarks/configs/canonical.json \
             --input-file "$RESULTS_FILE" \
             --output-file benchmarks/ci-report.md \
             --run-id "${{ inputs.run_id }}" \
@@ -499,7 +499,7 @@ jobs:
       - name: Render committed provider telemetry
         run: |
           node dist/benchmarks/src/render/telemetry-table.js \
-            --config benchmarks/configs/readme-snapshots.json \
+            --config benchmarks/configs/canonical.json \
             --input-file "$RESULTS_FILE" \
             --output-file benchmarks/ci-telemetry.md \
             --run-id "${{ inputs.run_id }}" \
@@ -508,7 +508,7 @@ jobs:
       - name: Render committed profile snapshots
         run: |
           node dist/benchmarks/src/render/readme-snapshot.js \
-            --config benchmarks/configs/readme-snapshots.json \
+            --config benchmarks/configs/canonical.json \
             --input-file "$RESULTS_FILE" \
             --output-directory benchmarks/snapshots \
             --filename-prefix ci- \
@@ -517,7 +517,7 @@ jobs:
             --run-id "${{ inputs.run_id }}" \
             --scratch-root "$SCRATCH_ROOT"
           node dist/benchmarks/src/render/readme-snapshot.js \
-            --config benchmarks/configs/readme-snapshots.json \
+            --config benchmarks/configs/canonical.json \
             --input-file "$RESULTS_FILE" \
             --output-directory benchmarks/snapshots \
             --lambda-memory-mb 2048 \
@@ -530,7 +530,7 @@ jobs:
       - name: Update generated benchmark documentation
         run: |
           node dist/benchmarks/src/render/update-ci-docs.js \
-            --config benchmarks/configs/readme-snapshots.json \
+            --config benchmarks/configs/canonical.json \
             --input-file "$RESULTS_FILE" \
             --run-id "${{ inputs.run_id }}" \
             --scratch-root "$SCRATCH_ROOT" \
