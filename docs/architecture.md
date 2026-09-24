@@ -443,7 +443,7 @@ Cataloged asset packaging limitations:
 - Existing catalogs in caller-provided ZIPs are treated as untrusted metadata and never enable catalog sparse skips.
 - CDK asset `bundling` is not run by the cataloged wrapper. Use a pre-bundled directory or `embeddedCatalog: false`.
 - Symlinks and non-regular files are rejected by cataloged packaging until explicit materialization semantics are implemented.
-- The cataloged wrapper materializes into a deterministic per-source staging path, refreshes its contents on every bind, and supplies a content-derived custom identity to CDK. Unchanged binds can reuse the exact `AssetStaging` cache entry, while changed content gets a key-specific entry without clearing unrelated assets. CDK still owns ZIP and ZIP64 creation; the catalog changes the staged asset hash compared with upstream packaging.
+- The cataloged wrapper materializes into a deterministic per-source staging path, refreshes its contents on every bind, and supplies a content-derived custom identity to CDK. It removes the temporary tree after CDK stages the asset. Unchanged binds can reuse the exact `AssetStaging` cache entry, while changed content gets a key-specific entry without clearing unrelated assets. CDK still owns ZIP and ZIP64 creation; the catalog changes the staged asset hash compared with upstream packaging.
 - Authenticated catalog MD5 entries enable sparse skips only for marker-free files. Marker inputs are validated before replacement; final replaced MD5 is used for destination comparison.
 
 ## Diagnostics

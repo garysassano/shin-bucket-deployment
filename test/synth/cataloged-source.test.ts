@@ -221,6 +221,7 @@ describe("cataloged directory assets", () => {
     });
 
     const synthesized = synthesizeCatalog(source);
+    expect(existsSync(catalogedSourceStagingDirectory(source))).toBe(false);
 
     expect(synthesized.catalog).toBe(
       '{"version":1,"entries":[{"path":"a.txt","size":5,"md5":"5d41402abc4b2a76b9719d911017c592"},{"path":"z.txt","size":1,"md5":"fbade9e36a3f36d3d676c1b808451dd7"},{"path":"ä.txt","size":7,"md5":"8ab3b19e134f01fbaf94b8e15f3df090"}]}',
@@ -343,6 +344,7 @@ describe("cataloged directory assets", () => {
     const symlinkSource = writeFixture({ "target.txt": "target" });
     symlinkSync("target.txt", join(symlinkSource, "link.txt"));
     expect(() => synthesizeCatalog(symlinkSource)).toThrow(/symbolic links/);
+    expect(existsSync(catalogedSourceStagingDirectory(symlinkSource))).toBe(false);
 
     if (process.platform !== "win32") {
       const specialSource = writeFixture({ "regular.txt": "regular" });
@@ -350,6 +352,7 @@ describe("cataloged directory assets", () => {
       const result = spawnSync("mkfifo", [fifo], { encoding: "utf8" });
       expect(result.status, result.stderr).toBe(0);
       expect(() => synthesizeCatalog(specialSource)).toThrow(/only supports regular files/);
+      expect(existsSync(catalogedSourceStagingDirectory(specialSource))).toBe(false);
     }
   });
 
@@ -439,7 +442,7 @@ describe("cataloged directory assets", () => {
       },
     });
 
-    synthesizeCatalog(source);
+    const first = synthesizeCatalog(source);
     const firstBindLinks = linkedDestinations.length;
     expect(firstBindLinks).toBeGreaterThan(0);
     const firstDestination = linkedDestinations[0];
@@ -447,15 +450,22 @@ describe("cataloged directory assets", () => {
       throw new Error("expected at least one cataloged link destination");
     }
     const stagingDirectory = dirname(firstDestination);
+    expect(existsSync(catalogedSourceStagingDirectory(source))).toBe(false);
 
     // A second bind of the same source lands in the same staging directory, so
     // CDK's process-global AssetStaging cache can hit instead of re-walking,
     // re-hashing, and re-copying the tree.
-    synthesizeCatalog(source);
+    const second = synthesizeCatalog(source);
+    expect(second.assetHash).toBe(first.assetHash);
+    expect(second.manifestAsset.source?.path).toBe(first.manifestAsset.source?.path);
+    expect(Template.fromStack(second.stack).toJSON()).toEqual(
+      Template.fromStack(first.stack).toJSON(),
+    );
     expect(linkedDestinations.length).toBe(2 * firstBindLinks);
     for (const destination of linkedDestinations.slice(firstBindLinks)) {
       expect(dirname(destination)).toBe(stagingDirectory);
     }
+    expect(existsSync(catalogedSourceStagingDirectory(source))).toBe(false);
 
     // A different source gets its own staging directory.
     synthesizeCatalog(writeFixture({ "other.html": "other" }));
@@ -545,16 +555,85 @@ describe("cataloged directory assets", () => {
     expect(catalogedSourceStagingDirectory(other)).not.toBe(first);
   });
 
-  test("recovers from a failed bind because the next bind wipes the staging directory", () => {
+  test("removes scratch after a failed bind and permits another bind", () => {
     const source = writeFixture({ "index.html": "ok" });
     const invalid = writeFixture({ "index.html": "ok" });
     symlinkSync("index.html", join(invalid, "link.html"));
 
     const first = synthesizeCatalog(source);
-    // A failed bind leaves its staging directory behind (it is the cache), but
-    // the next bind of the same source wipes and re-materializes it.
     expect(() => synthesizeCatalog(invalid)).toThrow(/symbolic links/);
+    expect(existsSync(catalogedSourceStagingDirectory(invalid))).toBe(false);
     expect(synthesizeCatalog(source).catalogSha256).toBe(first.catalogSha256);
+  });
+
+  test("removes scratch when CDK asset construction fails", () => {
+    const source = writeFixture({ "index.html": "ok" });
+    const failure = new Error("induced asset staging failure");
+    const synthesizer = new (class extends DefaultStackSynthesizer {
+      public override addFileAsset(_asset: FileAssetSource): FileAssetLocation {
+        throw failure;
+      }
+    })();
+    const app = new App({ outdir: tempDirectory("shin-catalog-failed-asset-") });
+    const stack = new Stack(app, "FailedAssetStack", { synthesizer });
+    const handlerRole = new Role(stack, "HandlerRole", {
+      assumedBy: new ServicePrincipal("lambda.amazonaws.com"),
+    });
+
+    expect(() => Source.asset(source).bind(stack, { handlerRole })).toThrow(failure);
+    expect(existsSync(catalogedSourceStagingDirectory(source))).toBe(false);
+  });
+
+  test("removes scratch when the source changes during CDK staging", () => {
+    const source = writeFixture({ "index.html": "ok" });
+    const sourceFile = join(source, "index.html");
+    const synthesizer = new (class extends DefaultStackSynthesizer {
+      public override addFileAsset(asset: FileAssetSource): FileAssetLocation {
+        const location = super.addFileAsset(asset);
+        appendFileSync(sourceFile, "changed");
+        return location;
+      }
+    })();
+    const app = new App({ outdir: tempDirectory("shin-catalog-changed-asset-") });
+    const stack = new Stack(app, "ChangedAssetStack", { synthesizer });
+    const handlerRole = new Role(stack, "HandlerRole", {
+      assumedBy: new ServicePrincipal("lambda.amazonaws.com"),
+    });
+
+    expect(() => Source.asset(source).bind(stack, { handlerRole })).toThrow(
+      /changed while hashing or staging/,
+    );
+    expect(existsSync(catalogedSourceStagingDirectory(source))).toBe(false);
+  });
+
+  test("reports both a bind failure and a cleanup failure", () => {
+    const source = writeFixture({ "index.html": "ok" });
+    symlinkSync("index.html", join(source, "link.html"));
+    const stagingDirectory = catalogedSourceStagingDirectory(source);
+    const originalRemove = require("node:fs").rmSync as typeof import("node:fs").rmSync;
+    const cleanupFailure = new Error("induced cleanup failure");
+    let removals = 0;
+    restoreFileSystem = overrideCatalogedSourceFileSystemForTesting({
+      rmSync: (path, options) => {
+        if (String(path) === stagingDirectory && ++removals === 2) {
+          throw cleanupFailure;
+        }
+        return originalRemove(path, options);
+      },
+    });
+
+    let failure: unknown;
+    try {
+      synthesizeCatalog(source);
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(AggregateError);
+    const errors = (failure as AggregateError).errors as Error[];
+    expect(errors).toHaveLength(2);
+    expect(errors[0]?.message).toMatch(/symbolic links/);
+    expect(errors[1]).toBe(cleanupFailure);
+    expect(existsSync(stagingDirectory)).toBe(true);
   });
 
   test("surfaces staging-directory wipe failures as bind errors", () => {
