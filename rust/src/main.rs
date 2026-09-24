@@ -56,6 +56,7 @@ async fn main() -> Result<(), Error> {
     tracing_subscriber::fmt()
         .with_env_filter(callback_safe_log_filter()?)
         .without_time()
+        .with_ansi(false)
         .init();
 
     let config = aws_config::defaults(BehaviorVersion::latest()).load().await;
@@ -151,6 +152,33 @@ mod tests {
         fn make_writer(&'writer self) -> Self::Writer {
             TestWriterGuard(Arc::clone(&self.0))
         }
+    }
+
+    #[test]
+    fn production_log_format_has_no_ansi_escapes() {
+        let writer = TestWriter::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_env_filter(EnvFilter::new("info"))
+            .without_time()
+            .with_ansi(false)
+            .with_writer(writer.clone())
+            .finish();
+
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::info!(
+                summary = "{\"deploymentStatus\":\"success\"}",
+                "shin deployment summary"
+            );
+        });
+
+        let output = writer.0.lock().expect("test log buffer");
+        assert!(
+            !output.contains(&0x1b),
+            "logs must not contain ANSI escapes"
+        );
+        let output = String::from_utf8(output.clone()).expect("UTF-8 log output");
+        assert!(output.contains("shin deployment summary"));
+        assert!(output.contains("deploymentStatus"));
     }
 
     #[test]
