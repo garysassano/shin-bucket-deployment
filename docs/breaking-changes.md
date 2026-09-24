@@ -4,6 +4,10 @@ This file holds authored release notes for `ShinBucketDeployment` changes that b
 
 ## Unreleased
 
+### Provider build tool now comes from its pinned release binary
+
+CI now installs the published `cargo-lambda 1.9.1` executable instead of compiling it from source. This changes the recorded build-toolchain digest. The next package release will rebuild both provider archives with this tool; if their digests change, stack-shared handlers and custom resources advance through the existing safe replacement path, while deployment-scoped handlers update code in place. The custom-resource wire contract and destination behavior are unchanged.
+
 ### ZIP root directory entries no longer abort deployments
 
 ZIP sources with directory entries such as `./`, `/`, or `.//` now skip those entries and deploy their files. These archives previously failed planning with `archive entry resolved to an empty key`. Path traversal entries remain rejected, and a file whose path normalizes to an empty key still fails. The fix changes no construct or custom-resource identity beyond the provider archive change when it is released.

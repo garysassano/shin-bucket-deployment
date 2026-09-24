@@ -58,7 +58,7 @@ jobs:
       - name: Install Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: "lts/*"
+          node-version: "24"
           package-manager-cache: false
 
       - name: Install dependencies
@@ -111,7 +111,7 @@ jobs:
       - name: Install Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: "lts/*"
+          node-version: "24"
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
 
@@ -147,7 +147,7 @@ jobs:
       - name: Install Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: "lts/*"
+          node-version: "24"
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
 

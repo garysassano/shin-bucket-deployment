@@ -8,7 +8,7 @@ Use this page when you want to change the Rust provider, audit or rebuild the pr
 
 This path rebuilds the bootstrap assets that are included in the npm package.
 
-Install the contributor tools from `mise.toml` with `mise install`. It selects Node.js 24 and pnpm 12 and installs the exactly pinned Rust, `cargo-lambda`, and Zig versions used to build the provider archives.
+Install the contributor tools from `mise.toml` with `mise install`. It selects Node.js 24 and the pnpm version pinned in `package.json`, and installs the exactly pinned Rust, `cargo-lambda`, and Zig versions used to build the provider archives.
 
 The published npm package supports Node.js 22 or newer. Source development uses Node.js 24 or newer through `mise.toml` so the repo stays on an active LTS while still emitting a Node.js 22-compatible construct package.
 

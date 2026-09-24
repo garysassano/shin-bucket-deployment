@@ -68,7 +68,7 @@ jobs:
       - name: Install Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: "lts/*"
+          node-version: "24"
           cache: pnpm
 
       # The provider toolchain is not optional here: prebuild cross-compiles the
@@ -78,7 +78,7 @@ jobs:
         uses: jdx/mise-action@v4
         with:
           cache: true
-          install_args: rust zig cargo:cargo-lambda
+          install_args: rust zig cargo-binstall cargo:cargo-lambda
 
       - name: Install Rust target
         run: rustup target add aarch64-unknown-linux-gnu
@@ -100,8 +100,8 @@ jobs:
           role-to-assume: ${{ vars.AWS_BENCHMARKS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Build provider archives
-        run: pnpm build:bootstrap
+      - name: Build arm64 provider archive
+        run: pnpm build:bootstrap arm64
 
       - name: Deploy
         run: pnpm verify deploy "${{ inputs.group }}"

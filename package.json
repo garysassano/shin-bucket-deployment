@@ -45,7 +45,7 @@
     "assets/bootstrap-x86_64/bootstrap.zip",
     "assets/bootstrap-x86_64/build-provenance.json"
   ],
-  "packageManager": "pnpm@12.0.0",
+  "packageManager": "pnpm@12.6.0",
   "engines": {
     "node": ">=22.0.0"
   },
