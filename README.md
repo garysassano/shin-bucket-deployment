@@ -8,7 +8,7 @@ The published package ships prebuilt Rust provider binaries for both Lambda arch
 
 ## Quick Start
 
-Install the package in your CDK v2 project:
+Install the package in your CDK project:
 
 ```sh
 npm install shin-bucket-deployment
