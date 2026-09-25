@@ -6,6 +6,12 @@ Runbooks, evidence collection rules, schema guidance, and sanitization rules liv
 
 Provider-summary schema-5 result rows, their generated reports, and their chart live in `archive/` and are not current evidence.
 
+## Rust lockfile refresh decision
+
+Accept the [#243](https://github.com/garysassano/shin-bucket-deployment/pull/243) lockfile refresh (`aws-sdk-s3` 1.149.0, `aws-sdk-cloudfront` 1.133.0, `async-compression` 0.4.48, `flate2` 1.1.10 with `miniz_oxide` 0.9.1, `reqwest` 0.13.5) as a performance-neutral maintenance update. The [complete comparison](../benchmarks/rust-lockfile-refresh-comparison.md) pairs canonical run `98c176b7` at `0409b76` with run `082cd0d2` at `61df471`. The two measured commits differ in no Shin provider input other than `rust/Cargo.lock`, and both use the arm64 upstream baseline with `aws-cdk-lib` 2.270.0.
+
+Shin provider-duration medians move by −14.3% to +9.3% per cell, with a median change of −0.1%: 12 cells are faster and 12 slower. Billed-duration medians move by −13.2% to +10.4%. Four cells have disjoint, faster IQRs, three of them cold-creates, for example mixed 1024 MiB cold-create 1.429→1.224 s. One cell has a disjoint, slower IQR: large-few 1024 MiB changed-update 0.449→0.461 s, +12 ms / +2.7%. The largest relative increase, mixed 2048 MiB changed-update +33 ms / +9.3%, has overlapping IQRs. Cold-create peak memory falls in every cell, by 4–20 MiB, for example large-few 2048 MiB 187→167 MiB. The upstream control moved −6.4% to +8.9% between the same two runs, which bounds how much single-run movement to attribute to the refresh. Five separate-run observations per cell support no significance claim.
+
 ## Form-decoding performance review
 
 Retain the [form-decoding correction](listing-key-review.md) with its measured performance tradeoff. Reverting would restore the known confusion between space and literal-plus destination keys. This is a correctness correction, not an optimization or a zero-regression result. No numerical acceptance threshold was prespecified. The decision considers all 24 cells, spread, billing, memory and contemporaneous upstream controls; the validated evidence is on `main` through PRs #216 and #217, completing performance acceptance of this measured tradeoff. Deployed correctness passed the integrated `c352d7b` full suite with independent cleanup recorded in [verification](verification.md). The later fixture-cleanup changes do not alter the measured provider.
