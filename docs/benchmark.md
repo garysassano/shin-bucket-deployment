@@ -110,7 +110,7 @@ Independent cleanup confirmed all 60 planned stacks reached `DELETE_COMPLETE` an
 
 ## Latest CI benchmark
 
-The latest complete canonical five-repetition run was collected by GitHub Actions on 2026-09-25 from source commit `0409b76`. It contains five independently collected parallel repetitions of all canonical profiles across all four phases. The sanitized run UUID is `98c176b7-469f-48f0-84c6-5a4b8dc2a259`; raw AWS output remains outside git.
+The latest complete canonical five-repetition run was collected by GitHub Actions on 2026-09-25 from source commit `61df471`. It contains five independently collected parallel repetitions of all canonical profiles across all four phases. The sanitized run UUID is `082cd0d2-8b83-42a0-9a98-62e4a6d7f1e9`; raw AWS output remains outside git.
 
 | Field                 | Value                                                      |
 | --------------------- | ---------------------------------------------------------- |
@@ -121,30 +121,30 @@ The latest complete canonical five-repetition run was collected by GitHub Action
 
 | Profile     |  MiB | Max concurrency | Phase              |   n | Provider s, Shin / AWS | AWS/Shin | Local wall s, Shin / AWS | Max MiB, Shin / AWS |
 | ----------- | ---: | --------------: | ------------------ | --: | ---------------------: | -------: | -----------------------: | ------------------: |
-| `large-few` | 1024 |              32 | `cold-create`      |   5 |          2.008 / 8.378 |   4.172x |          72.408 / 80.146 |           119 / 450 |
-| `large-few` | 1024 |              32 | `unchanged-update` |   5 |          0.282 / 8.224 |  29.163x |          36.862 / 45.413 |            35 / 451 |
-| `large-few` | 1024 |              32 | `changed-update`   |   5 |          0.449 / 8.294 |  18.472x |          41.445 / 48.932 |            42 / 451 |
-| `large-few` | 1024 |              32 | `pruned-update`    |   5 |          0.527 / 7.989 |  15.159x |          38.211 / 47.937 |            42 / 421 |
-| `large-few` | 2048 |              64 | `cold-create`      |   5 |          1.217 / 4.656 |   3.826x |          69.929 / 72.984 |           187 / 451 |
-| `large-few` | 2048 |              64 | `unchanged-update` |   5 |          0.219 / 4.688 |  21.406x |          35.995 / 40.182 |            35 / 451 |
-| `large-few` | 2048 |              64 | `changed-update`   |   5 |          0.404 / 4.621 |  11.438x |          38.088 / 42.481 |            43 / 451 |
-| `large-few` | 2048 |              64 | `pruned-update`    |   5 |          0.484 / 4.503 |   9.304x |          40.079 / 42.923 |            41 / 421 |
-| `mixed`     | 1024 |              32 | `cold-create`      |   5 |          1.429 / 8.775 |   6.141x |           70.227 / 78.44 |           105 / 288 |
-| `mixed`     | 1024 |              32 | `unchanged-update` |   5 |          0.285 / 9.059 |  31.786x |           34.93 / 45.428 |            35 / 287 |
-| `mixed`     | 1024 |              32 | `changed-update`   |   5 |          0.465 / 8.859 |  19.052x |           37.473 / 47.66 |            39 / 287 |
-| `mixed`     | 1024 |              32 | `pruned-update`    |   5 |          1.058 / 8.919 |    8.43x |           37.35 / 47.993 |            41 / 280 |
-| `mixed`     | 2048 |              64 | `cold-create`      |   5 |          0.802 / 5.006 |   6.242x |          68.804 / 72.809 |           118 / 288 |
-| `mixed`     | 2048 |              64 | `unchanged-update` |   5 |          0.265 / 5.002 |  18.875x |          34.713 / 45.484 |            36 / 289 |
-| `mixed`     | 2048 |              64 | `changed-update`   |   5 |           0.354 / 5.11 |  14.435x |          37.852 / 42.701 |            39 / 288 |
-| `mixed`     | 2048 |              64 | `pruned-update`    |   5 |          1.064 / 5.463 |   5.134x |          37.235 / 42.834 |            39 / 280 |
-| `tiny-many` | 1024 |              32 | `cold-create`      |   5 |         2.617 / 23.202 |   8.866x |          73.438 / 91.533 |            59 / 228 |
-| `tiny-many` | 1024 |              32 | `unchanged-update` |   5 |         0.506 / 24.023 |  47.476x |          35.017 / 62.821 |            38 / 226 |
-| `tiny-many` | 1024 |              32 | `changed-update`   |   5 |         0.619 / 26.017 |  42.031x |          38.186 / 69.598 |            38 / 227 |
-| `tiny-many` | 1024 |              32 | `pruned-update`    |   5 |         1.402 / 23.063 |   16.45x |          41.099 / 66.351 |            38 / 222 |
-| `tiny-many` | 2048 |              64 | `cold-create`      |   5 |         1.499 / 12.919 |   8.618x |           71.04 / 83.559 |            73 / 232 |
-| `tiny-many` | 2048 |              64 | `unchanged-update` |   5 |          0.49 / 13.303 |  27.149x |          34.895 / 48.318 |            38 / 229 |
-| `tiny-many` | 2048 |              64 | `changed-update`   |   5 |         0.576 / 13.591 |  23.595x |           37.947 / 54.12 |            38 / 229 |
-| `tiny-many` | 2048 |              64 | `pruned-update`    |   5 |         1.357 / 12.785 |   9.422x |          40.764 / 51.531 |            38 / 227 |
+| `large-few` | 1024 |              32 | `cold-create`      |   5 |          1.904 / 8.427 |   4.426x |          70.299 / 75.935 |           109 / 451 |
+| `large-few` | 1024 |              32 | `unchanged-update` |   5 |          0.253 / 8.193 |  32.383x |           37.89 / 43.656 |            35 / 451 |
+| `large-few` | 1024 |              32 | `changed-update`   |   5 |          0.461 / 8.387 |  18.193x |          39.176 / 49.686 |            42 / 451 |
+| `large-few` | 1024 |              32 | `pruned-update`    |   5 |          0.543 / 7.985 |  14.705x |              40 / 45.409 |            42 / 421 |
+| `large-few` | 2048 |              64 | `cold-create`      |   5 |          1.207 / 4.639 |   3.843x |          70.221 / 70.281 |           167 / 451 |
+| `large-few` | 2048 |              64 | `unchanged-update` |   5 |          0.224 / 4.691 |  20.942x |          33.174 / 39.484 |            35 / 451 |
+| `large-few` | 2048 |              64 | `changed-update`   |   5 |           0.429 / 4.62 |  10.769x |          38.009 / 42.661 |            41 / 451 |
+| `large-few` | 2048 |              64 | `pruned-update`    |   5 |          0.499 / 4.434 |   8.886x |          37.908 / 43.856 |            42 / 421 |
+| `mixed`     | 1024 |              32 | `cold-create`      |   5 |          1.224 / 8.952 |   7.314x |           70.44 / 76.995 |            89 / 288 |
+| `mixed`     | 1024 |              32 | `unchanged-update` |   5 |          0.289 / 9.264 |  32.055x |           33.18 / 43.522 |            35 / 287 |
+| `mixed`     | 1024 |              32 | `changed-update`   |   5 |          0.429 / 9.389 |  21.886x |          37.962 / 44.901 |            39 / 288 |
+| `mixed`     | 1024 |              32 | `pruned-update`    |   5 |           1.098 / 9.05 |   8.242x |          37.936 / 48.664 |            39 / 279 |
+| `mixed`     | 2048 |              64 | `cold-create`      |   5 |          0.807 / 5.069 |   6.281x |          65.892 / 75.371 |            98 / 288 |
+| `mixed`     | 2048 |              64 | `unchanged-update` |   5 |          0.239 / 5.028 |  21.038x |          32.655 / 42.049 |            37 / 288 |
+| `mixed`     | 2048 |              64 | `changed-update`   |   5 |           0.387 / 5.22 |  13.488x |          38.603 / 42.434 |            39 / 288 |
+| `mixed`     | 2048 |              64 | `pruned-update`    |   5 |          1.055 / 5.116 |   4.849x |          37.838 / 43.043 |            39 / 280 |
+| `tiny-many` | 1024 |              32 | `cold-create`      |   5 |         2.498 / 23.442 |   9.384x |          70.843 / 91.895 |            55 / 226 |
+| `tiny-many` | 1024 |              32 | `unchanged-update` |   5 |          0.51 / 25.455 |  49.912x |          33.075 / 59.448 |            37 / 224 |
+| `tiny-many` | 1024 |              32 | `changed-update`   |   5 |         0.632 / 24.639 |  38.986x |          38.312 / 73.458 |            38 / 225 |
+| `tiny-many` | 1024 |              32 | `pruned-update`    |   5 |         1.425 / 25.126 |  17.632x |          38.444 / 61.938 |            38 / 221 |
+| `tiny-many` | 2048 |              64 | `cold-create`      |   5 |         1.471 / 13.355 |   9.079x |           70.458 / 80.59 |            69 / 229 |
+| `tiny-many` | 2048 |              64 | `unchanged-update` |   5 |          0.47 / 13.839 |  29.445x |          32.635 / 48.467 |            37 / 229 |
+| `tiny-many` | 2048 |              64 | `changed-update`   |   5 |          0.56 / 13.616 |  24.314x |          35.551 / 53.881 |            38 / 227 |
+| `tiny-many` | 2048 |              64 | `pruned-update`    |   5 |         1.292 / 13.132 |  10.164x |          37.904 / 50.739 |            38 / 225 |
 
 The [complete generated report](../benchmarks/ci-report.md) includes quartiles, end-to-end timings, and per-phase deltas. [Provider telemetry](../benchmarks/ci-telemetry.md) contains the sanitized Shin diagnostic tables.
 
