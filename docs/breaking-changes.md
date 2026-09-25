@@ -4,6 +4,10 @@ This file holds authored release notes for `ShinBucketDeployment` changes that b
 
 ## Unreleased
 
+### Provider runtime dependencies refreshed
+
+The provider lockfile now resolves `aws-sdk-s3` 1.149.0, `aws-sdk-cloudfront` 1.133.0, `async-compression` 0.4.48, `reqwest` 0.13.5 and `flate2` 1.1.10 with `miniz_oxide` 0.9.1, plus their compatible transitive updates. No `Cargo.toml` range changed. Provider archive bytes change, so stack-shared handlers and custom resources advance through the existing ownership-safe replacement path, while deployment-scoped handlers update code in place. The custom-resource wire contract is unchanged.
+
 ### Handler identities include the wire-schema digest
 
 The handler and custom resource for `ProviderSharing.DEPLOYMENT`, including `localBuild`, are replaced once on upgrade because their IDs now include the package's wire-schema digest. The new generation takes destination ownership before the old generation is deleted, preserving current objects even when `onDelete.deleteCurrentObjects` is enabled. Later releases keep these identities stable unless the wire contract changes; a schema change then uses separate old and new handlers instead of sending old properties to new code in an in-place Update. Local builds must implement the wire contract emitted by the installed package. Stack-shared prebuilt handler identities also include the digest, so every handler identity changes whenever the wire contract does, independently of the provider archive.
