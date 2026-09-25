@@ -464,7 +464,9 @@ jobs:
         env:
           RUN_ID: ${{ inputs.run_id }}
         run: |
-          evidence_root="${GITHUB_WORKSPACE%/*}/shin-benchmark-evidence/$RUN_ID"
+          # Must match the aggregate job's path: its manifest records the
+          # absolute evidence file, and publish-results rejects any other.
+          evidence_root="${GITHUB_WORKSPACE%/*}/shin-benchmark-evidence/$RUN_ID/complete"
           {
             echo "EVIDENCE_ROOT=$evidence_root"
             echo "RESULTS_FILE=$evidence_root/results.jsonl"
