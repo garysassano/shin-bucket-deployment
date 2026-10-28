@@ -244,10 +244,15 @@ jobs:
         uses: jdx/mise-action@v4
         with:
           cache: true
-          install_args: actionlint ripgrep taplo
+          install_args: actionlint ripgrep taplo github:github/gh-actions-lock
 
       - name: Lint GitHub Actions workflows
         run: actionlint
+
+      - name: Verify workflow lockfile
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh-actions-lock --verify
 
       - name: Verify major-version action references
         run: |
