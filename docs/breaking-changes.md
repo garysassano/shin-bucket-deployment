@@ -4,6 +4,10 @@ This file holds authored release notes for `ShinBucketDeployment` changes that b
 
 ## Unreleased
 
+### Provider TLS and signing dependencies patched
+
+The provider lockfile now resolves `rustls` 0.23.46, `rustls-webpki` 0.103.16, `webpki-root-certs` 1.0.11, `aws-sigv4` 1.6.4 with `crypto-bigint` 0.7.10, `ctutils` 0.4.6 and `tokio` 1.54.1, fixing RUSTSEC-2026-0346 through 0349, 0382, 0383, 0385, 0386 and 0387, and replaces the yanked `yoke-derive` 0.8.3. No runtime `Cargo.toml` range changed. Provider archive bytes change, so stack-shared handlers and custom resources advance through the existing ownership-safe replacement path, while deployment-scoped handlers update code in place. The custom-resource wire contract is unchanged.
+
 ### Provider runtime dependencies refreshed
 
 The provider lockfile now resolves `aws-sdk-s3` 1.149.0, `aws-sdk-cloudfront` 1.133.0, `async-compression` 0.4.48, `reqwest` 0.13.5 and `flate2` 1.1.10 with `miniz_oxide` 0.9.1, plus their compatible transitive updates. No `Cargo.toml` range changed. Provider archive bytes change, so stack-shared handlers and custom resources advance through the existing ownership-safe replacement path, while deployment-scoped handlers update code in place. The custom-resource wire contract is unchanged.

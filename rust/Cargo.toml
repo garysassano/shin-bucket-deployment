@@ -142,7 +142,7 @@ proptest = "1.11.0"
 tokio = { version = "1", features = ["test-util"] }
 # Avoid `deflate`: it selects zlib-rs and changes the provider decoder in tests.
 # Reuse the production flate2 backend and retain the existing deflate64 feature.
-zip = { version = "8", default-features = false, features = [
+zip = { version = "9", default-features = false, features = [
   "deflate-flate2",
   "deflate64",
 ] }
