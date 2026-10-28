@@ -4,7 +4,7 @@ This page records the latest combined AWS correctness baseline and subsequent ta
 
 ## Current Snapshot
 
-The `0.15.0` release candidate at `73d95cf` adds the wire-schema handler identity, the version-free shared handler identity, reproducible provider archives, the provider dependency refreshes and security patches, and the fixes listed in the 0.15.0 upgrade notes. Because handler identity changed after the 2026-09-05 destination-move evidence, the targeted `replacement-safety` chain was rerun on AWS; see [Destination Move for 0.15.0](#destination-move-for-0150). The TypeScript contract comparison of the release-prep change against `73d95cf` found unchanged declarations, 33 verification templates, and two benchmark templates: the version bump no longer changes synthesis.
+The `shin-bucket-deployment@0.15.0` release candidate at `73d95cf` adds the wire-schema handler identity, the version-free shared handler identity, reproducible provider archives, the provider dependency refreshes and security patches, and the fixes listed in the 0.15.0 upgrade notes. Because handler identity changed after the 2026-09-05 destination-move evidence, the targeted `replacement-safety` chain was rerun on AWS; see [Destination Move for 0.15.0](#destination-move-for-0150). The TypeScript contract comparison of the release-prep change against `73d95cf` found unchanged declarations, 33 verification templates, and two benchmark templates: the version bump no longer changes synthesis.
 
 The earlier paragraphs below record the `0.14.1` release and the fixes that followed it.
 
