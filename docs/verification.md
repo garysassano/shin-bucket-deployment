@@ -4,6 +4,10 @@ This page records the latest combined AWS correctness baseline and subsequent ta
 
 ## Current Snapshot
 
+The `shin-bucket-deployment@0.15.0` release candidate at `73d95cf` adds the wire-schema handler identity, the version-free shared handler identity, reproducible provider archives, the provider dependency refreshes and security patches, and the fixes listed in the 0.15.0 upgrade notes. Because handler identity changed after the 2026-09-05 destination-move evidence, the targeted `replacement-safety` chain was rerun on AWS; see [Destination Move for 0.15.0](#destination-move-for-0150). The TypeScript contract comparison of the release-prep change against `73d95cf` found unchanged declarations, 33 verification templates, and two benchmark templates: the version bump no longer changes synthesis.
+
+The earlier paragraphs below record the `0.14.1` release and the fixes that followed it.
+
 This snapshot tracks the published `shin-bucket-deployment@0.14.1` release and the unreleased ZIP root-directory, plain-text logging, and catalog staging fixes. Compared with the verified `0.14.0` candidate at `c352d7b`, the `0.14.1` production provider changes only its locked `rustls` dependency from `0.23.43` to `0.23.45`; additional archive regression tests do not change runtime behavior. The unreleased ZIP fix skips root directory entries in ZIP sources without changing the custom-resource wire contract. The latest combined AWS correctness baseline remains the 2026-09-05 `0.14.0` run below, with all 33 phase assertions and independent cleanup confirmed. The `0.14.1` release gates include both provider-archive builds, local checks, and a MinIO smoke that executes the real x86_64 provider binary. No arm64 AWS `deploy-smoke` run has been performed for this patch.
 
 For this candidate, both provider archives rebuilt locally, `pnpm check` passed 490 Vitest, 66 script, and 331 Rust tests plus the package, supply-chain, synthesis, and ledger gates, and the TypeScript contract comparison against `35bd33f` passed for 33 verification templates and two benchmark templates with the release identity changes acknowledged. The local run did not create AWS resources; the PR's hosted MinIO smoke is the binary execution gate.
@@ -13,6 +17,10 @@ For the unreleased ZIP fix, both provider archives rebuilt locally; `pnpm check`
 For the unreleased plain-text log change, both provider archives rebuilt locally and `pnpm check` passed 490 Vitest, 66 script, and 332 Rust tests, including a production-formatter regression. The strict TypeScript contract comparison against the `0.14.1` release commit found unchanged declarations, 33 verification templates, and two benchmark templates. The hosted MinIO smoke passed with the real x86_64 binary; no AWS resources were created for this formatting change.
 
 For the unreleased catalog staging cleanup, `pnpm check` passed 493 Vitest, 66 script, and 331 Rust tests plus the package, supply-chain, synthesis, and ledger gates. The strict TypeScript contract comparison against the `0.14.1` release commit found unchanged declarations, 33 verification templates, and two benchmark templates. Focused tests cover success, materialization rejection, CDK asset failure, source mutation during staging, and a combined operation/cleanup failure; no AWS resources were created for this synthesis-only change.
+
+## Destination Move for 0.15.0
+
+The 2026-10-28 targeted AWS run in `eu-central-1` deployed the ordered `replacement-safety-initial` and `replacement-safety-updated` phases from `73d95cf` with a freshly built provider archive and the configured test profile. Both phases passed their exact object-state assertions, and deploy and destroy exited 0. The runner's cleanup check and independent scoped probes confirmed the stack and all four captured buckets absent. The run's four `/aws/lambda/` log groups, which CloudFormation leaves behind for deleted functions, were deleted and confirmed absent. This verifies replacement and namespace ownership behavior under the 0.15.0 handler identities; it makes no performance claim.
 
 ## Wire-Schema Handler Identity
 
