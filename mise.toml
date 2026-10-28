@@ -5,6 +5,7 @@
 # See the supply chain section of SECURITY.md.
 [tools]
 actionlint = "1.7.12"
+"github:github/gh-actions-lock" = { version = "0.4.0", bin = "gh-actions-lock" }
 node = "24"
 pnpm = "12.6.0"
 ripgrep = "15.1.0"
