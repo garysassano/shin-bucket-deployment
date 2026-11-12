@@ -1031,6 +1031,15 @@ export class ShinBucketDeployment extends Construct {
         },
       },
     });
+    // `CustomResource` renders `ServiceTimeout` as a string, which the template
+    // reference documents, while the bundled CloudFormation validator schema
+    // types it as an integer and warns on every synthesis. Acknowledge only that
+    // type check, only on this custom resource.
+    Validations.of(this.cr).acknowledge({
+      id: "CloudFormation-Validate::W9003",
+      reason:
+        "aws-cdk-lib CustomResource renders ServiceTimeout as the documented string; CloudFormation accepts it.",
+    });
 
     // Under `@aws-cdk/aws-lambda:createNewPoliciesWithAddToRolePolicy` the provider
     // grants land in standalone policies that the handler's own DependsOn does not
