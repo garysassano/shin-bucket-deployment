@@ -45,6 +45,8 @@ Migration usually starts with this import change:
 +import { ShinBucketDeployment, Source } from "shin-bucket-deployment";
 ```
 
+Shin's `Source.jsonData` always escapes deploy-time values and takes no `{ escape }` option, so drop that argument; pass upstream's `Source.jsonData` instead only if you rely on unescaped output.
+
 See the [full property mapping](#bucketdeployment-property-mapping) for replaced and unsupported properties.
 
 ## Why Build This
