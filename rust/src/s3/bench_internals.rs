@@ -24,9 +24,9 @@ use aws_sdk_s3::Client as S3Client;
 use reqwest::Client as HttpClient;
 
 use crate::deployment::{
-    ArchiveExpansionLimits, DeploymentManifest, DeploymentRequest, MarkerConfig, PlannedAction,
-    PlannedObject, PutObjectRetryJitter, PutObjectRetryOptions, RuntimeOptions,
-    TrustedEntryIntegrity, TrustedSourceCatalog,
+    ArchiveExpansionLimits, DeploymentManifest, DeploymentRequest, PlannedAction, PlannedObject,
+    PutObjectRetryJitter, PutObjectRetryOptions, RuntimeOptions, TrustedEntryIntegrity,
+    TrustedSourceCatalog,
 };
 use crate::diagnostics::DeploymentStats;
 use crate::request::compile_filters;
@@ -276,7 +276,6 @@ impl PlanningBench {
                 source_object_keys: vec!["source.zip".to_string()],
                 source_catalogs: vec![catalog_sha256.map(|sha256| TrustedSourceCatalog { sha256 })],
                 source_markers: vec![std::collections::HashMap::new()],
-                source_markers_config: vec![MarkerConfig::default()],
                 dest_bucket_name: "destination".to_string(),
                 dest_bucket_prefix: "site".to_string(),
                 extract: true,

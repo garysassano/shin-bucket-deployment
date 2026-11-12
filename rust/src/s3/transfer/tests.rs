@@ -19,7 +19,7 @@ use super::super::destination::{
 };
 use crate::deadline::InvocationDeadlines;
 use crate::deployment::{
-    DeploymentRequest, MarkerConfig, PutObjectRetryJitter, PutObjectRetryOptions, SourceArchive,
+    DeploymentRequest, PutObjectRetryJitter, PutObjectRetryOptions, SourceArchive,
     TrustedEntryIntegrity,
 };
 use crate::diagnostics::DeploymentStats;
@@ -150,14 +150,14 @@ fn only_authenticated_catalog_integrity_enables_sparse_skips() {
 #[test]
 fn compiled_marker_replacements_are_shared_without_cloning_the_matcher() {
     let markers = HashMap::from([("marker".to_string(), "value".to_string())]);
-    let replacements = compile_marker_replacements(&markers, &Default::default())
+    let replacements = compile_marker_replacements(&markers)
         .expect("marker replacements should compile")
         .expect("non-empty markers should produce replacements");
     let shared = Arc::clone(&replacements);
 
     assert!(Arc::ptr_eq(&replacements, &shared));
     assert!(
-        compile_marker_replacements(&HashMap::new(), &Default::default())
+        compile_marker_replacements(&HashMap::new())
             .expect("empty markers should be accepted")
             .is_none()
     );
@@ -1115,10 +1115,10 @@ async fn marker_comparison_spools_small_entries_and_skips_the_second_pass() {
     let plan = zip_plan_from_archive(&zip, "marker.txt");
     let expected = b"before expanded-value after";
     let replacements = Arc::new(
-        MarkerReplacements::new(
-            &HashMap::from([("TOKEN".to_string(), "expanded-value".to_string())]),
-            &MarkerConfig::default(),
-        )
+        MarkerReplacements::new(&HashMap::from([(
+            "TOKEN".to_string(),
+            "expanded-value".to_string(),
+        )]))
         .expect("marker automaton"),
     );
     // One claim for the planning read and one for the reference second-pass body.
@@ -1188,10 +1188,10 @@ async fn marker_spooled_entry_skipped_by_matching_etag_is_not_counted_as_an_uplo
     let plan = zip_plan_from_archive(&zip, "marker.txt");
     let expected = b"before expanded-value after";
     let replacements = Arc::new(
-        MarkerReplacements::new(
-            &HashMap::from([("TOKEN".to_string(), "expanded-value".to_string())]),
-            &MarkerConfig::default(),
-        )
+        MarkerReplacements::new(&HashMap::from([(
+            "TOKEN".to_string(),
+            "expanded-value".to_string(),
+        )]))
         .expect("marker automaton"),
     );
     let mut etag_hasher = Md5::new();
@@ -1235,10 +1235,10 @@ async fn marker_comparison_falls_back_to_streaming_when_the_output_exceeds_the_c
     let plan = zip_plan_from_archive(&zip, "marker.txt");
     let expected = b"before expanded-value after";
     let replacements = Arc::new(
-        MarkerReplacements::new(
-            &HashMap::from([("TOKEN".to_string(), "expanded-value".to_string())]),
-            &MarkerConfig::default(),
-        )
+        MarkerReplacements::new(&HashMap::from([(
+            "TOKEN".to_string(),
+            "expanded-value".to_string(),
+        )]))
         .expect("marker automaton"),
     );
     // One claim for the planning read and one for the upload body poll below.
@@ -1336,7 +1336,6 @@ async fn transfer_sub_timings_cover_prepare_put_and_source_fetch_waits() {
     request.extract = true;
     request.source_markers[0] =
         HashMap::from([("TOKEN".to_string(), "expanded-value".to_string())]);
-    request.source_markers_config[0] = MarkerConfig::default();
     let source_budget = SourceByteBudget::new(256 * 1024 * 1024, Arc::clone(&stats), false)
         .expect("valid test source budget");
 
@@ -1489,10 +1488,10 @@ async fn transfer_put_source_wait_records_streaming_upload_body_fetches() {
     let zip = zip_from_entry("marker.txt", content.as_bytes());
     let plan = zip_plan_from_archive(&zip, "marker.txt");
     let replacements = Arc::new(
-        MarkerReplacements::new(
-            &HashMap::from([("TOKEN".to_string(), "expanded-value".to_string())]),
-            &MarkerConfig::default(),
-        )
+        MarkerReplacements::new(&HashMap::from([(
+            "TOKEN".to_string(),
+            "expanded-value".to_string(),
+        )]))
         .expect("marker automaton"),
     );
 

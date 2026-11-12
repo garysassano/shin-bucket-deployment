@@ -302,6 +302,20 @@ function singleObjectScenario(
   };
 }
 
+const YAML_PLAIN_STRING = /^[A-Za-z][A-Za-z0-9._-]*$/;
+const YAML_RESERVED_WORDS = new Set(["y", "n", "yes", "no", "true", "false", "on", "off", "null"]);
+
+/**
+ * The provider's `YAML_STRING` rendering of an ASCII value: a plain scalar
+ * for a simple identifier that YAML would not read as a boolean or null, and
+ * a JSON-quoted (valid YAML double-quoted) scalar otherwise.
+ */
+function yamlString(value: string): string {
+  return YAML_PLAIN_STRING.test(value) && !YAML_RESERVED_WORDS.has(value.toLowerCase())
+    ? value
+    : JSON.stringify(value);
+}
+
 async function verifyMarkerReplacement({
   stackName,
   outputs,
@@ -309,6 +323,9 @@ async function verifyMarkerReplacement({
 }: ScenarioContext): Promise<void> {
   const bucket = requiredOutput(outputs, "BucketName");
   const special = requiredOutput(outputs, "SpecialJsonTokenValue");
+  const quoted = requiredOutput(outputs, "QuotedValueTokenValue");
+  const jsonLooking = requiredOutput(outputs, "JsonLookingTokenValue");
+  const ports = requiredOutput(outputs, "PortsTokenValue").split(",");
   const rawJson = `{"stackName":"${stackName}","region":"${region()}","bucketName":"${bucket}","message":"jsonData without escape","repeatedRegion":"${region()}","specialValue":"${special}"}`;
   const escapedJson = JSON.stringify({
     stackName,
@@ -317,7 +334,21 @@ async function verifyMarkerReplacement({
     message: "jsonData with escape",
     repeatedRegion: region(),
     specialValue: special,
+    quotedValue: quoted,
+    jsonLookingValue: jsonLooking,
+    ports,
   });
+  const yaml = [
+    `stackName: ${yamlString(stackName)}`,
+    `region: ${yamlString(region())}`,
+    `bucketName: ${yamlString(bucket)}`,
+    "message: yaml replacement is active",
+    `repeatedRegion: ${yamlString(region())}`,
+    `specialValue: ${yamlString(special)}`,
+    `quotedValue: ${yamlString(quoted)}`,
+    `ports: ${JSON.stringify(ports)}`,
+    "",
+  ].join("\n");
   await assertExactKeys(api, bucket, "site/", [
     "site/app.js",
     "site/index.html",
@@ -350,12 +381,7 @@ async function verifyMarkerReplacement({
       "site/runtime/from-data-escaped.json",
       JSON.stringify({ specialValue: special }),
     ),
-    assertObjectBody(
-      api,
-      bucket,
-      "site/runtime/config.yaml",
-      `stackName: "${stackName}"\nregion: "${region()}"\nbucketName: "${bucket}"\nmessage: yaml replacement is active\nrepeatedRegion: "${region()}"\n`,
-    ),
+    assertObjectBody(api, bucket, "site/runtime/config.yaml", yaml),
   ]);
 }
 

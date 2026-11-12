@@ -2,16 +2,15 @@ import { type Hash, createHash } from "node:crypto";
 import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
-import { AssetHashType, IgnoreMode, IgnoreStrategy } from "aws-cdk-lib";
+import { AssetHashType, IgnoreMode, IgnoreStrategy, Token } from "aws-cdk-lib";
 import type { IBucket } from "aws-cdk-lib/aws-s3";
 import { Asset, type AssetOptions } from "aws-cdk-lib/aws-s3-assets";
 import {
   Source as CdkSource,
   type DeploymentSourceContext,
   type ISource,
-  type JsonProcessingOptions,
-  type MarkersConfig,
   type SourceConfig,
+  type SourceDataOptions,
 } from "aws-cdk-lib/aws-s3-deployment";
 import { DISABLE_ASSET_STAGING_CONTEXT } from "aws-cdk-lib/cx-api";
 import type { Construct } from "constructs";
@@ -250,40 +249,98 @@ export class Source {
   /**
    * Deploy one UTF-8 string object, including deploy-time CDK token values.
    *
+   * Deploy-time values are substituted as plain text. With
+   * `{ jsonEscape: true }` each value is JSON-escaped instead: a string token
+   * belongs inside quotes the content already provides, and a list token
+   * (`Token.asString(list)`) becomes a complete JSON array. Prefer
+   * `Source.jsonData()` or `Source.yamlData()` for structured content.
+   *
    * @param objectKey Destination key relative to `destination.keyPrefix`.
    * @param data Object contents.
-   * @param markersConfig Marker replacement options.
+   * @param options Deploy-time value encoding options.
    */
-  public static data(objectKey: string, data: string, markersConfig?: MarkersConfig): ISource {
-    return CdkSource.data(objectKey, data, markersConfig);
+  public static data(objectKey: string, data: string, options?: SourceDataOptions): ISource {
+    return CdkSource.data(objectKey, data, options);
   }
 
   /**
    * Serialize and deploy one JSON object, including deploy-time CDK token values.
    *
+   * Every deploy-time value is JSON-escaped for the position it takes: a
+   * string token as the contents of a JSON string, and a list or other token
+   * as a complete JSON value, so a value containing quotes or newlines cannot
+   * change the document's structure. CloudFormation delivers scalars inside
+   * lists and maps as strings, so a list of port numbers deploys as
+   * `["80", "443"]`.
+   *
+   * Unlike upstream `Source.jsonData()`, there is no option to turn escaping
+   * off; pass the upstream source directly for that legacy behavior.
+   *
    * @param objectKey Destination key relative to `destination.keyPrefix`.
    * @param obj JSON-serializable value.
-   * @param jsonProcessingOptions JSON token-processing options.
    */
-  public static jsonData(
-    objectKey: string,
-    obj: unknown,
-    jsonProcessingOptions?: JsonProcessingOptions,
-  ): ISource {
-    return CdkSource.jsonData(objectKey, obj, jsonProcessingOptions);
+  public static jsonData(objectKey: string, obj: unknown): ISource {
+    return CdkSource.jsonData(objectKey, obj);
   }
 
   /**
    * Serialize and deploy one YAML object, including deploy-time CDK token values.
    *
+   * A string token deploys as a plain scalar when its value is a simple
+   * identifier and as a double-quoted scalar otherwise; list and other tokens
+   * deploy as JSON flow values, which YAML accepts. A deploy-time value used
+   * as a mapping key is rejected at synthesis, because it would be
+   * substituted without escaping and could change the document's structure.
+   *
    * @param objectKey Destination key relative to `destination.keyPrefix`.
    * @param obj JSON-serializable value to format as YAML.
    */
   public static yamlData(objectKey: string, obj: unknown): ISource {
-    return CdkSource.yamlData(objectKey, obj);
+    return {
+      bind(scope: Construct, context?: DeploymentSourceContext): SourceConfig {
+        const tokenKey = findTokenKey(obj, "$");
+        if (tokenKey !== undefined) {
+          throw new ValidationError(
+            "ShinBucketDeploymentYamlTokenKey",
+            `Source.yamlData(${JSON.stringify(objectKey)}) uses a deploy-time value as a mapping key at ${tokenKey}; keys are substituted without escaping, so use a literal key.`,
+            scope,
+          );
+        }
+        return CdkSource.yamlData(objectKey, obj).bind(scope, context);
+      },
+    };
   }
 
   private constructor() {}
+}
+
+/**
+ * Path of the first mapping key that is an unresolved token, descending
+ * through arrays and plain objects but not into token values themselves.
+ */
+function findTokenKey(value: unknown, path: string): string | undefined {
+  if (value === null || typeof value !== "object" || Token.isUnresolved(value)) {
+    return undefined;
+  }
+  if (Array.isArray(value)) {
+    for (const [index, item] of value.entries()) {
+      const found = findTokenKey(item, `${path}[${index}]`);
+      if (found !== undefined) {
+        return found;
+      }
+    }
+    return undefined;
+  }
+  for (const [key, item] of Object.entries(value)) {
+    if (Token.isUnresolved(key)) {
+      return `${path}[${JSON.stringify(key)}]`;
+    }
+    const found = findTokenKey(item, `${path}.${key}`);
+    if (found !== undefined) {
+      return found;
+    }
+  }
+  return undefined;
 }
 
 interface CatalogEntry {

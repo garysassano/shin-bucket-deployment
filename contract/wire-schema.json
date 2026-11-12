@@ -49,33 +49,48 @@
     "SourceMarkers": {
       "type": "array",
       "items": {
-        "type": "object",
-        "propertyNames": {
-          "type": "string"
-        },
-        "additionalProperties": {
-          "type": "string"
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "Marker": {
+              "type": "string"
+            },
+            "Value": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "array",
+                  "items": {}
+                },
+                {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {}
+                }
+              ]
+            },
+            "Encoding": {
+              "type": "string",
+              "enum": [
+                "LITERAL",
+                "UNQUOTED_JSON_VALUE",
+                "JSON_VALUE",
+                "YAML_STRING"
+              ]
+            }
+          },
+          "required": [
+            "Marker",
+            "Value",
+            "Encoding"
+          ],
+          "additionalProperties": false
         }
-      }
-    },
-    "SourceMarkersConfig": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "jsonEscape": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "string",
-                "pattern": "^(?:[tT][rR][uU][eE]|[fF][aA][lL][sS][eE])$"
-              }
-            ]
-          }
-        },
-        "additionalProperties": false
       }
     },
     "Destination": {

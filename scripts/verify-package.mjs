@@ -540,7 +540,7 @@ function verifyConsumerInstall(tarball, workDir) {
       "--no-audit",
       "--no-fund",
       tarball,
-      "aws-cdk-lib@2.257.0",
+      "aws-cdk-lib@2.276.0",
       "constructs@10.6.0",
       "typescript@6.0.3",
     ],

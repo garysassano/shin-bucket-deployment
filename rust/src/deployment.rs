@@ -3,21 +3,15 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-#[serde(deny_unknown_fields)]
-pub(crate) struct MarkerConfig {
-    #[serde(default, deserialize_with = "crate::util::deserialize_boolish")]
-    pub(crate) json_escape: bool,
-}
-
 #[derive(Clone, Debug)]
 pub(crate) struct DeploymentRequest {
     pub(crate) source_bucket_names: Vec<String>,
     pub(crate) source_object_keys: Vec<String>,
     pub(crate) source_catalogs: Vec<Option<TrustedSourceCatalog>>,
+    /// Per source, each marker mapped to its already-encoded replacement text.
+    /// Encoding happens once while the request is parsed, so the transfer path
+    /// only substitutes bytes.
     pub(crate) source_markers: Vec<HashMap<String, String>>,
-    pub(crate) source_markers_config: Vec<MarkerConfig>,
     pub(crate) dest_bucket_name: String,
     pub(crate) dest_bucket_prefix: String,
     pub(crate) extract: bool,
@@ -49,7 +43,6 @@ impl DeploymentRequest {
             source_object_keys: vec!["source.zip".to_string()],
             source_catalogs: vec![None],
             source_markers: vec![HashMap::new()],
-            source_markers_config: vec![MarkerConfig::default()],
             dest_bucket_name: "destination".to_string(),
             dest_bucket_prefix: "site".to_string(),
             extract: false,

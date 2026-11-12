@@ -148,18 +148,17 @@ test("the synth guard rejects wrong-typed literal leaves", () => {
   expect(() => assertPayloadTree({ ...properties, DestinationOwnerId: false })).toThrow(
     /DestinationOwnerId/,
   );
+  const numericMarker = [[{ Marker: "runtime", Value: 42, Encoding: "LITERAL" }]];
+  expect(() => assertPayloadTree({ ...properties, SourceMarkers: numericMarker })).toThrow(
+    /SourceMarkers/,
+  );
+  expect(() => assertPayloadTree({ ...properties, SourceMarkers: numericMarker })).toThrow(/Value/);
   expect(() =>
     assertPayloadTree({
       ...properties,
-      SourceMarkers: [{ runtime: 42 }],
+      SourceMarkers: [[{ Marker: "runtime", Value: "v", Encoding: "TOML_STRING" }]],
     }),
-  ).toThrow(/SourceMarkers/);
-  expect(() =>
-    assertPayloadTree({
-      ...properties,
-      SourceMarkers: [{ runtime: 42 }],
-    }),
-  ).toThrow(/runtime/);
+  ).toThrow(/Encoding/);
   // null is not a valid value for an optional-only leaf...
   expect(() =>
     assertPayloadTree({
@@ -188,7 +187,7 @@ test("the synth guard accepts CloudFormation token leaves", () => {
     assertPayloadTree({
       ...properties,
       DestinationBucketArn: { "Fn::GetAtt": ["Dest", "Arn"] },
-      SourceMarkers: [{ runtime: { Ref: "Marker" } }],
+      SourceMarkers: [[{ Marker: "runtime", Value: { Ref: "Marker" }, Encoding: "LITERAL" }]],
       SourceProcessing: {
         ...sourceProcessing,
         MaxUncompressedEntryBytes: { Ref: "Bytes" },
@@ -257,8 +256,16 @@ test("the synth guard accepts every intrinsic form the construct can emit", () =
         MaxUncompressedEntryBytes: { "Fn::Join": ["", ["1", "0", "2", "4"]] },
         MaxCompressionRatio: { Ref: "Ratio" },
       },
-      // biome-ignore lint/suspicious/noTemplateCurlyInString: Fn::Sub placeholder syntax is intentional.
-      SourceMarkers: [{ runtime: { "Fn::Sub": ["prefix-${suffix}", { suffix: { Ref: "S" } }] } }],
+      SourceMarkers: [
+        [
+          {
+            Marker: "runtime",
+            // biome-ignore lint/suspicious/noTemplateCurlyInString: Fn::Sub placeholder syntax is intentional.
+            Value: { "Fn::Sub": ["prefix-${suffix}", { suffix: { Ref: "S" } }] },
+            Encoding: "LITERAL",
+          },
+        ],
+      ],
     }),
   ).not.toThrow();
 });

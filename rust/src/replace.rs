@@ -1,13 +1,15 @@
 use std::collections::HashMap;
 use std::io;
 
+use std::fmt::Write as _;
+
 use aho_corasick::{AhoCorasick, AhoCorasickBuilder, MatchKind};
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use md5::{Digest as Md5Digest, Md5};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-use crate::deployment::MarkerConfig;
 use crate::util::finalize_digest;
 
 const INPUT_CHUNK_BYTES: usize = 64 * 1024;
@@ -41,9 +43,15 @@ struct OutputAccounting {
 const OUTPUT_COALESCE_BYTES: usize = 8 * 1024;
 
 impl MarkerReplacements {
-    pub(crate) fn new(markers: &HashMap<String, String>, config: &MarkerConfig) -> Result<Self> {
-        let mut pairs = replacement_pairs(markers, config)?;
-        pairs.retain(|(pattern, _)| !pattern.is_empty());
+    /// Compiles `markers`, each mapped to its already-encoded replacement text.
+    pub(crate) fn new(markers: &HashMap<String, String>) -> Result<Self> {
+        let mut pairs = markers
+            .iter()
+            .filter(|(pattern, _)| !pattern.is_empty())
+            .map(|(pattern, replacement)| {
+                (pattern.as_bytes().to_vec(), replacement.as_bytes().to_vec())
+            })
+            .collect::<Vec<_>>();
         pairs.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
 
         let max_pattern_bytes = pairs
@@ -217,34 +225,125 @@ impl OutputAccounting {
     }
 }
 
-fn replacement_pairs(
-    markers: &HashMap<String, String>,
-    config: &MarkerConfig,
-) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
-    markers
-        .iter()
-        .map(|(key, value)| {
-            let replacement = if config.json_escape {
-                json_escape_marker_value(value)?
-            } else {
-                value.clone()
-            };
-            Ok((key.as_bytes().to_vec(), replacement.into_bytes()))
-        })
-        .collect()
+/// How a marker's deploy-time value is rendered before substitution. The
+/// variants and wire names match upstream AWS CDK `MarkerEncoding`; the
+/// construct resolves each marker's effective encoding at synthesis.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub(crate) enum MarkerEncoding {
+    /// The string value as-is.
+    Literal,
+    /// A string's JSON escaping without the surrounding quotes, for a slot
+    /// the content already quotes; any other value as complete JSON.
+    UnquotedJsonValue,
+    /// Any value as complete JSON, strings with their quotes.
+    JsonValue,
+    /// A plain YAML scalar for a simple identifier, otherwise a double-quoted
+    /// YAML scalar.
+    YamlString,
 }
 
-fn json_escape_marker_value(value: &str) -> Result<String> {
-    if let Some(inner) = value.strip_prefix('"').and_then(|v| v.strip_suffix('"')) {
-        return serde_json::to_string(inner).map_err(Into::into);
+impl MarkerEncoding {
+    fn wire_name(self) -> &'static str {
+        match self {
+            Self::Literal => "LITERAL",
+            Self::UnquotedJsonValue => "UNQUOTED_JSON_VALUE",
+            Self::JsonValue => "JSON_VALUE",
+            Self::YamlString => "YAML_STRING",
+        }
     }
+}
 
-    if serde_json::from_str::<Value>(value).is_ok() {
-        return Ok(value.to_string());
+/// Renders a marker's deploy-time value in `encoding`.
+///
+/// Error messages name only the encoding and the value's JSON kind: marker
+/// values are deployment inputs that can carry secrets.
+///
+/// Unlike upstream's handler, which uses Python's ASCII-only `json.dumps`,
+/// JSON output keeps non-ASCII text as UTF-8, which is equally valid JSON and
+/// does not split astral characters into surrogate escapes that some YAML
+/// parsers cannot read back.
+pub(crate) fn encode_marker_value(encoding: MarkerEncoding, value: &Value) -> Result<String> {
+    match (encoding, value) {
+        (MarkerEncoding::Literal, Value::String(text)) => Ok(text.clone()),
+        (MarkerEncoding::UnquotedJsonValue, Value::String(text)) => {
+            let quoted = serde_json::to_string(text)?;
+            Ok(quoted[1..quoted.len() - 1].to_string())
+        }
+        (MarkerEncoding::UnquotedJsonValue | MarkerEncoding::JsonValue, value) => {
+            Ok(serde_json::to_string(value)?)
+        }
+        (MarkerEncoding::YamlString, Value::String(text)) => Ok(yaml_string(text)),
+        (MarkerEncoding::Literal | MarkerEncoding::YamlString, value) => Err(anyhow!(
+            "{} encoding requires a string value, but the deploy-time value is a JSON {}",
+            encoding.wire_name(),
+            json_kind(value)
+        )),
     }
+}
 
-    let escaped = serde_json::to_string(value)?;
-    Ok(escaped[1..escaped.len() - 1].to_string())
+fn json_kind(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "list",
+        Value::Object(_) => "map",
+    }
+}
+
+/// Words YAML 1.1 parsers read as booleans or null when unquoted.
+const YAML_RESERVED_WORDS: [&str; 9] =
+    ["y", "n", "yes", "no", "true", "false", "on", "off", "null"];
+
+/// Upstream's `YAML_STRING` rule: a plain scalar only for an identifier that
+/// starts with a letter and continues with letters, digits, `.`, `_` or `-`,
+/// and is not a reserved word; a double-quoted scalar otherwise.
+fn yaml_string(text: &str) -> String {
+    let mut chars = text.chars();
+    let plain = chars
+        .next()
+        .is_some_and(|first| first.is_ascii_alphabetic())
+        && chars.all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'))
+        && !YAML_RESERVED_WORDS
+            .iter()
+            .any(|word| text.eq_ignore_ascii_case(word));
+    if plain {
+        text.to_string()
+    } else {
+        yaml_double_quoted(text)
+    }
+}
+
+/// A YAML double-quoted scalar. JSON string escaping is a subset of YAML's,
+/// so this starts from the JSON form and additionally escapes what YAML treats
+/// differently: characters outside YAML's printable set, and the Unicode line
+/// separators (U+0085, U+2028, U+2029) and byte-order mark, which YAML 1.1
+/// parsers would fold or strip inside a quoted scalar.
+fn yaml_double_quoted(text: &str) -> String {
+    let quoted = serde_json::to_string(text).expect("a string always serializes to JSON");
+    let mut out = String::with_capacity(quoted.len());
+    for ch in quoted.chars() {
+        if yaml_escape_required(ch) {
+            let _ = write!(out, "\\u{:04X}", u32::from(ch));
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+fn yaml_escape_required(ch: char) -> bool {
+    let printable = matches!(
+        ch,
+        '\t' | '\n' | '\r'
+            | '\u{20}'..='\u{7E}'
+            | '\u{A0}'..='\u{D7FF}'
+            | '\u{E000}'..='\u{FFFD}'
+            | '\u{10000}'..='\u{10FFFF}'
+    );
+    !printable || matches!(ch, '\u{2028}' | '\u{2029}' | '\u{FEFF}')
 }
 
 #[cfg(test)]
@@ -254,6 +353,7 @@ mod tests {
     use std::task::{Context, Poll};
 
     use proptest::prelude::*;
+    use serde_json::json;
     use tokio::io::{AsyncRead, ReadBuf};
 
     use super::*;
@@ -285,12 +385,11 @@ mod tests {
     async fn render(
         input: &[u8],
         markers: &HashMap<String, String>,
-        config: &MarkerConfig,
         chunk_bytes: usize,
         max_output_bytes: u64,
     ) -> io::Result<(Vec<u8>, ReplacementResult)> {
         let replacements =
-            MarkerReplacements::new(markers, config).expect("marker replacements should compile");
+            MarkerReplacements::new(markers).expect("marker replacements should compile");
         let mut input = ChunkedReader {
             inner: std::io::Cursor::new(input.to_vec()),
             chunk_bytes,
@@ -340,7 +439,7 @@ mod tests {
             ("x".to_string(), "cascaded".to_string()),
         ]);
 
-        let (output, _) = render(b"abax", &markers, &MarkerConfig::default(), 1, u64::MAX)
+        let (output, _) = render(b"abax", &markers, 1, u64::MAX)
             .await
             .expect("streaming replacement should succeed");
 
@@ -355,15 +454,9 @@ mod tests {
             ("世界".to_string(), large.clone()),
         ]);
 
-        let (output, result) = render(
-            "before-TOKEN-世界-after".as_bytes(),
-            &markers,
-            &MarkerConfig::default(),
-            2,
-            u64::MAX,
-        )
-        .await
-        .expect("streaming replacement should succeed");
+        let (output, result) = render("before-TOKEN-世界-after".as_bytes(), &markers, 2, u64::MAX)
+            .await
+            .expect("streaming replacement should succeed");
 
         assert_eq!(
             output,
@@ -373,38 +466,137 @@ mod tests {
         assert!(!result.md5.is_empty());
     }
 
-    #[tokio::test]
-    async fn json_escape_values_keep_existing_semantics() {
-        let markers = HashMap::from([(
-            "TOKEN".to_string(),
-            r#"value with "quotes" and \backslash"#.to_string(),
-        )]);
+    fn encode(encoding: MarkerEncoding, value: Value) -> String {
+        encode_marker_value(encoding, &value).expect("value should encode")
+    }
 
-        let (output, _) = render(
-            br#"{"value":"TOKEN"}"#,
-            &markers,
-            &MarkerConfig { json_escape: true },
-            3,
-            u64::MAX,
-        )
-        .await
-        .expect("JSON-escaped replacement should succeed");
-
+    #[test]
+    fn literal_substitutes_strings_verbatim() {
         assert_eq!(
-            output,
-            br#"{"value":"value with \"quotes\" and \\backslash"}"#
+            encode(MarkerEncoding::Literal, json!(r#"a "b" \c"#)),
+            r#"a "b" \c"#
+        );
+    }
+
+    #[test]
+    fn unquoted_json_escapes_every_string_as_contents() {
+        // The pre-quoted skeleton supplies the quotes, so strings that look
+        // like JSON or arrive already quoted are still escaped as contents.
+        let cases = [
+            (
+                r#"value with "quotes" and \backslash"#,
+                r#"value with \"quotes\" and \\backslash"#,
+            ),
+            (r#"{"a":1}"#, r#"{\"a\":1}"#),
+            (r#""quoted""#, r#"\"quoted\""#),
+            ("8080", "8080"),
+            ("line\nbreak", r"line\nbreak"),
+            ("caf\u{e9} \u{1F600}", "caf\u{e9} \u{1F600}"),
+        ];
+        for (value, expected) in cases {
+            let encoded = encode(MarkerEncoding::UnquotedJsonValue, json!(value));
+            assert_eq!(encoded, expected);
+            let document = format!(r#"{{"v":"{encoded}"}}"#);
+            let parsed: Value = serde_json::from_str(&document).expect("substituted JSON parses");
+            assert_eq!(parsed["v"], json!(value));
+        }
+    }
+
+    #[test]
+    fn json_encodings_render_lists_and_maps_as_complete_values() {
+        let list = json!(["80", "443"]);
+        let map = json!({ "port": "443" });
+        for encoding in [MarkerEncoding::UnquotedJsonValue, MarkerEncoding::JsonValue] {
+            assert_eq!(encode(encoding, list.clone()), r#"["80","443"]"#);
+            assert_eq!(encode(encoding, map.clone()), r#"{"port":"443"}"#);
+        }
+        assert_eq!(
+            encode(MarkerEncoding::JsonValue, json!(r#"say "hi""#)),
+            r#""say \"hi\"""#
+        );
+    }
+
+    #[test]
+    fn yaml_string_keeps_simple_identifiers_plain() {
+        for plain in ["us-east-1", "my-bucket.v2", "Stack_Name", "a"] {
+            assert_eq!(encode(MarkerEncoding::YamlString, json!(plain)), plain);
+        }
+    }
+
+    #[test]
+    fn yaml_string_quotes_reserved_words_and_complex_values() {
+        let cases = [
+            ("yes", r#""yes""#),
+            ("NULL", r#""NULL""#),
+            ("Off", r#""Off""#),
+            ("8080", r#""8080""#),
+            ("", r#""""#),
+            ("a: b", r#""a: b""#),
+            (r#"say "hi""#, r#""say \"hi\"""#),
+            ("caf\u{e9}", "\"caf\u{e9}\""),
+        ];
+        for (value, expected) in cases {
+            assert_eq!(encode(MarkerEncoding::YamlString, json!(value)), expected);
+        }
+    }
+
+    #[test]
+    fn yaml_string_escapes_characters_yaml_folds_or_forbids() {
+        assert_eq!(
+            encode(
+                MarkerEncoding::YamlString,
+                json!("a\u{2028}b\u{85}c\u{FEFF}d\u{9F}e")
+            ),
+            r#""a\u2028b\u0085c\uFEFFd\u009Fe""#
+        );
+        // Astral characters stay literal instead of becoming surrogate escapes.
+        assert_eq!(
+            encode(MarkerEncoding::YamlString, json!("emoji \u{1F600}")),
+            "\"emoji \u{1F600}\""
+        );
+    }
+
+    #[test]
+    fn string_only_encodings_reject_structured_values_without_echoing_them() {
+        for encoding in [MarkerEncoding::Literal, MarkerEncoding::YamlString] {
+            let error = encode_marker_value(encoding, &json!(["secret-value"]))
+                .expect_err("lists are not strings");
+            let message = error.to_string();
+            assert!(message.contains("requires a string value"), "{message}");
+            assert!(message.contains("list"), "{message}");
+            assert!(!message.contains("secret-value"), "{message}");
+        }
+    }
+
+    #[test]
+    fn encodings_use_the_upstream_wire_names() {
+        let names = serde_json::to_value([
+            MarkerEncoding::Literal,
+            MarkerEncoding::UnquotedJsonValue,
+            MarkerEncoding::JsonValue,
+            MarkerEncoding::YamlString,
+        ])
+        .expect("encodings serialize");
+        assert_eq!(
+            names,
+            json!([
+                "LITERAL",
+                "UNQUOTED_JSON_VALUE",
+                "JSON_VALUE",
+                "YAML_STRING"
+            ])
         );
     }
 
     #[tokio::test]
     async fn output_limit_is_enforced_before_the_excess_is_written() {
         let markers = HashMap::from([("x".to_string(), "expanded".to_string())]);
-        let (output, _) = render(b"xx", &markers, &MarkerConfig::default(), 1, 16)
+        let (output, _) = render(b"xx", &markers, 1, 16)
             .await
             .expect("an output exactly at the limit should succeed");
         assert_eq!(output.len(), 16);
 
-        let error = render(b"xx", &markers, &MarkerConfig::default(), 1, 15)
+        let error = render(b"xx", &markers, 1, 15)
             .await
             .expect_err("16-byte expansion must be rejected");
 
@@ -427,7 +619,6 @@ mod tests {
             let (actual, _) = runtime.block_on(render(
                 input.as_bytes(),
                 &marker_map,
-                &MarkerConfig::default(),
                 chunk_bytes,
                 u64::MAX,
             )).expect("streaming replacement should succeed");

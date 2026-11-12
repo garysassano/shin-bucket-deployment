@@ -42,18 +42,14 @@ class CloudFrontSyncShinBucketDeploymentStack extends Stack {
     new ShinBucketDeployment(this, "DeployWebsite", {
       sources: [
         Source.asset("test/fixtures/my-website"),
-        Source.jsonData(
-          "runtime/cache-probe.json",
-          {
-            stackName: Aws.STACK_NAME,
-            region: Aws.REGION,
-            bucketName: websiteBucket.bucketName,
-            distributionId: distribution.distributionId,
-            cacheProbeToken,
-            message: "redeploy with a different CacheProbeToken to validate invalidation",
-          },
-          { escape: true },
-        ),
+        Source.jsonData("runtime/cache-probe.json", {
+          stackName: Aws.STACK_NAME,
+          region: Aws.REGION,
+          bucketName: websiteBucket.bucketName,
+          distributionId: distribution.distributionId,
+          cacheProbeToken,
+          message: "redeploy with a different CacheProbeToken to validate invalidation",
+        }),
       ],
       destination: {
         bucket: websiteBucket,

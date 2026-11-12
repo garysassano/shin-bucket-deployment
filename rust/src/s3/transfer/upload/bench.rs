@@ -92,7 +92,7 @@ impl TransferBench {
         Ok(Self {
             store: resident_store(client, fixture.archive.clone(), &plan)?,
             plan,
-            replacements: compile_marker_replacements(&markers, &Default::default())?,
+            replacements: compile_marker_replacements(&markers)?,
             destination,
             operation,
         })

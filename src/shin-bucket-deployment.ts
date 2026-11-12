@@ -23,10 +23,11 @@ import { grantDestinationPermissions } from "./iam";
 import type { ShinBucketDeploymentLocalBuildOptions } from "./local-build";
 import { PROVIDER_TIMEOUT, getOrCreateHandler } from "./provider";
 import {
+  hasMarkers,
   sourceCatalogs,
   sourceConfigEqual,
   sourceMarkers,
-  sourceMarkersConfig,
+  unsupportedMarkerEncodings,
 } from "./source-config";
 import { destinationOwnerPrefix, validateDeploymentProps } from "./validation";
 
@@ -917,12 +918,12 @@ export class ShinBucketDeployment extends Construct {
             "ShinBucketDeployment requires at least one source; pass a source in sources or call addSource() before synthesis.",
           ];
         }
-        if (this.sources.some((source) => source.markers) && sourceProcessing.extract === false) {
+        if (this.sources.some(hasMarkers) && sourceProcessing.extract === false) {
           return [
             "Set sourceProcessing.extract:true or remove deploy-time Source.data/jsonData/yamlData values; marker replacement requires extraction.",
           ];
         }
-        return [];
+        return unsupportedMarkerEncodings(this.sources);
       },
     });
 
@@ -966,12 +967,6 @@ export class ShinBucketDeployment extends Construct {
         SourceMarkers: Lazy.uncachedAny(
           {
             produce: () => sourceMarkers(this.sources),
-          },
-          { omitEmptyArray: true },
-        ),
-        SourceMarkersConfig: Lazy.uncachedAny(
-          {
-            produce: () => sourceMarkersConfig(this.sources),
           },
           { omitEmptyArray: true },
         ),
@@ -1035,6 +1030,15 @@ export class ShinBucketDeployment extends Construct {
           },
         },
       },
+    });
+    // `CustomResource` renders `ServiceTimeout` as a string, which the template
+    // reference documents, while the bundled CloudFormation validator schema
+    // types it as an integer and warns on every synthesis. Acknowledge only that
+    // type check, only on this custom resource.
+    Validations.of(this.cr).acknowledge({
+      id: "CloudFormation-Validate::W9003",
+      reason:
+        "aws-cdk-lib CustomResource renders ServiceTimeout as the documented string; CloudFormation accepts it.",
     });
 
     // Under `@aws-cdk/aws-lambda:createNewPoliciesWithAddToRolePolicy` the provider

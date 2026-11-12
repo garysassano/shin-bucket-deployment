@@ -3,11 +3,13 @@ import {
   Aws,
   CfnOutput,
   CfnParameter,
+  Fn,
   RemovalPolicy,
   Stack,
   type StackProps,
 } from "aws-cdk-lib";
 import { Bucket } from "aws-cdk-lib/aws-s3";
+import { Source as CdkSource } from "aws-cdk-lib/aws-s3-deployment";
 import { ShinBucketDeployment, Source } from "../../../src";
 import { grantVerifierRead } from "../verification-access";
 
@@ -28,6 +30,26 @@ class MarkerReplacementShinBucketDeploymentStack extends Stack {
         "Deploy-time string used to verify JSON escaping when token values contain quotes and backslashes.",
     });
 
+    const quotedValueToken = new CfnParameter(this, "QuotedValueToken", {
+      type: "String",
+      default: '"quoted"',
+      description:
+        "Deploy-time string wrapped in double quotes, which must still be escaped as string contents.",
+    });
+
+    const jsonLookingToken = new CfnParameter(this, "JsonLookingToken", {
+      type: "String",
+      default: '{"looks":"like json"}',
+      description:
+        "Deploy-time string that parses as JSON, which must still be escaped as string contents.",
+    });
+
+    const portsToken = new CfnParameter(this, "PortsToken", {
+      type: "CommaDelimitedList",
+      default: "80,443",
+      description: "Deploy-time list substituted as a complete JSON value.",
+    });
+
     new ShinBucketDeployment(this, "DeployWebsite", {
       sources: [
         Source.asset("test/fixtures/my-website"),
@@ -40,7 +62,9 @@ class MarkerReplacementShinBucketDeploymentStack extends Stack {
             `bucket=${websiteBucket.bucketName}`,
           ].join("\n"),
         ),
-        Source.jsonData(
+        // Upstream's escape:false opt-out, which Shin's own Source.jsonData()
+        // does not offer, still deploys through the plain-text path.
+        CdkSource.jsonData(
           "runtime/raw.json",
           {
             stackName: Aws.STACK_NAME,
@@ -52,18 +76,17 @@ class MarkerReplacementShinBucketDeploymentStack extends Stack {
           },
           { escape: false },
         ),
-        Source.jsonData(
-          "runtime/escaped.json",
-          {
-            stackName: Aws.STACK_NAME,
-            region: Aws.REGION,
-            bucketName: websiteBucket.bucketName,
-            message: "jsonData with escape",
-            repeatedRegion: Aws.REGION,
-            specialValue: specialJsonToken.valueAsString,
-          },
-          { escape: true },
-        ),
+        Source.jsonData("runtime/escaped.json", {
+          stackName: Aws.STACK_NAME,
+          region: Aws.REGION,
+          bucketName: websiteBucket.bucketName,
+          message: "jsonData with escape",
+          repeatedRegion: Aws.REGION,
+          specialValue: specialJsonToken.valueAsString,
+          quotedValue: quotedValueToken.valueAsString,
+          jsonLookingValue: jsonLookingToken.valueAsString,
+          ports: portsToken.valueAsList,
+        }),
         Source.data(
           "runtime/from-data-raw.json",
           `{"specialValue":"${specialJsonToken.valueAsString}"}`,
@@ -79,6 +102,9 @@ class MarkerReplacementShinBucketDeploymentStack extends Stack {
           bucketName: websiteBucket.bucketName,
           message: "yaml replacement is active",
           repeatedRegion: Aws.REGION,
+          specialValue: specialJsonToken.valueAsString,
+          quotedValue: quotedValueToken.valueAsString,
+          ports: portsToken.valueAsList,
         }),
       ],
       destination: {
@@ -97,6 +123,18 @@ class MarkerReplacementShinBucketDeploymentStack extends Stack {
 
     new CfnOutput(this, "SpecialJsonTokenValue", {
       value: specialJsonToken.valueAsString,
+    });
+
+    new CfnOutput(this, "QuotedValueTokenValue", {
+      value: quotedValueToken.valueAsString,
+    });
+
+    new CfnOutput(this, "JsonLookingTokenValue", {
+      value: jsonLookingToken.valueAsString,
+    });
+
+    new CfnOutput(this, "PortsTokenValue", {
+      value: Fn.join(",", portsToken.valueAsList),
     });
 
     new CfnOutput(this, "ListRuntimeFilesCommand", {
