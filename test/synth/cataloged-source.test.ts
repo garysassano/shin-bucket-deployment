@@ -797,15 +797,17 @@ describe("cataloged directory assets", () => {
       {},
     ]);
     expect(properties.SourceMarkers).toEqual([
-      {},
-      { "<<marker:0xbaba:0>>": { Ref: "SecondValue" } },
-      { "<<marker:0xbaba:0>>": { Ref: "FirstValue" } },
+      [],
+      [{ Marker: "<<marker:0xbaba:0>>", Value: { Ref: "SecondValue" }, Encoding: "LITERAL" }],
+      [
+        {
+          Marker: "<<marker:0xbaba:0>>",
+          Value: { Ref: "FirstValue" },
+          Encoding: "UNQUOTED_JSON_VALUE",
+        },
+      ],
     ]);
-    expect(properties.SourceMarkersConfig).toEqual([
-      {},
-      { jsonEscape: false },
-      { jsonEscape: true },
-    ]);
+    expect(properties).not.toHaveProperty("SourceMarkersConfig");
     expect(firstBind).toHaveBeenCalledTimes(1);
   });
 

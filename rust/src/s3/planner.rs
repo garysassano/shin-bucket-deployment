@@ -163,11 +163,6 @@ pub(super) fn validate_request_lengths(request: &DeploymentRequest) -> Result<()
             "SourceMarkers and SourceBucketNames must be the same length"
         ));
     }
-    if request.source_markers_config.len() != request.source_bucket_names.len() {
-        return Err(anyhow!(
-            "SourceMarkersConfig and SourceBucketNames must be the same length"
-        ));
-    }
 
     Ok(())
 }

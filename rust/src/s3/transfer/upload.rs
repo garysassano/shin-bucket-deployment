@@ -224,10 +224,8 @@ pub(in crate::s3) async fn upload_zip_entries(
             if plans.is_empty() {
                 continue;
             }
-            let marker_replacements = compile_marker_replacements(
-                &request.source_markers[source_index],
-                &request.source_markers_config[source_index],
-            )?;
+            let marker_replacements =
+                compile_marker_replacements(&request.source_markers[source_index])?;
             let source_window_bytes =
                 source_window_bytes_for_archive(&request.runtime, source.len(), plans.len());
             let store = SourceBlockStore::new(
@@ -552,14 +550,11 @@ async fn prepare_zip_entry_for_comparison(
 
 pub(super) fn compile_marker_replacements(
     markers: &HashMap<String, String>,
-    config: &crate::deployment::MarkerConfig,
 ) -> Result<Option<Arc<MarkerReplacements>>> {
     if markers.is_empty() {
         Ok(None)
     } else {
-        MarkerReplacements::new(markers, config)
-            .map(Arc::new)
-            .map(Some)
+        MarkerReplacements::new(markers).map(Arc::new).map(Some)
     }
 }
 

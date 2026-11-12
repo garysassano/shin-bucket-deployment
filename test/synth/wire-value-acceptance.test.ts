@@ -32,8 +32,7 @@ function baselinePayload(): Record<string, unknown> {
     SourceBucketNames: ["assets"],
     SourceObjectKeys: ["site.zip"],
     SourceCatalogs: [{}],
-    SourceMarkers: [{ marker: "value" }],
-    SourceMarkersConfig: [{}],
+    SourceMarkers: [[{ Marker: "marker", Value: "value", Encoding: "LITERAL" }]],
     Destination: { BucketName: "destination" },
     DestinationOwnerId: "owner",
     SourceProcessing: {
@@ -219,6 +218,10 @@ function leafKinds(schema: z.ZodTypeAny): Set<string> {
   if (node instanceof z.ZodNumber) return new Set(["number"]);
   if (node instanceof z.ZodBoolean) return new Set(["boolean"]);
   if (node instanceof z.ZodUnknown) return new Set(["unknown"]);
+  // Union branches that carry unconstrained JSON (a marker's list or map
+  // value) are covered by a case of the matching JSON type.
+  if (node instanceof z.ZodArray) return new Set(["array"]);
+  if (node instanceof z.ZodRecord) return new Set(["object"]);
   if (node instanceof z.ZodEnum) {
     return new Set(node.options.map((value) => `enum:${value}`));
   }

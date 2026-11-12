@@ -5,5 +5,7 @@ minimumReleaseAgeExclude:
   - '@vitest/mocker@5.0.0'
   - '@vitest/spy@5.0.0'
   - vitest@5.0.0
+  # aws-cdk-lib 2.276.0 introduced per-marker encodings; drop once it is 3 days old (2026-11-13T20:04Z).
+  - aws-cdk-lib@2.276.0
 
 pmOnFail: ignore

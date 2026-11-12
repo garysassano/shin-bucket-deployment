@@ -422,19 +422,7 @@ mod tests {
             );
         }
         let schema = load_schema();
-        let mut baseline = build_payload(&schema);
-        // `SourceMarkers` items are unconstrained records, so the schema-derived
-        // payload cannot know a key to navigate to; seed the representative key
-        // the matrix uses. This mirrors the TypeScript baseline payload.
-        if let Some(markers) = baseline
-            .get_mut("SourceMarkers")
-            .and_then(Value::as_array_mut)
-            && let Some(first) = markers.get_mut(0).and_then(Value::as_object_mut)
-        {
-            first
-                .entry("runtime".to_string())
-                .or_insert_with(|| Value::String("value".into()));
-        }
+        let baseline = build_payload(&schema);
 
         for (index, entry) in cases.iter().enumerate() {
             let path = entry["path"]
@@ -476,16 +464,7 @@ mod tests {
         // boundaries are pinned here and on the TypeScript side without
         // reading the matrix at all.
         let schema = load_schema();
-        let mut baseline = build_payload(&schema);
-        if let Some(markers) = baseline
-            .get_mut("SourceMarkers")
-            .and_then(Value::as_array_mut)
-            && let Some(first) = markers.get_mut(0).and_then(Value::as_object_mut)
-        {
-            first
-                .entry("runtime".to_string())
-                .or_insert_with(|| Value::String("value".into()));
-        }
+        let baseline = build_payload(&schema);
 
         // u64 overflow boundary: max accepted, max+1 rejected.
         let mut max = baseline.clone();

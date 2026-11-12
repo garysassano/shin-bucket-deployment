@@ -220,6 +220,8 @@ describe("scenario state verifier", () => {
     const api = new FakeVerificationApi();
     putFixture(api, "destination", "site");
     const special = 'value with "quotes" and \\backslash';
+    const quoted = '"quoted"';
+    const jsonLooking = '{"looks":"like json"}';
     api.putObject(
       "destination",
       "site/runtime/plain.txt",
@@ -240,6 +242,9 @@ describe("scenario state verifier", () => {
         message: "jsonData with escape",
         repeatedRegion: region(),
         specialValue: special,
+        quotedValue: quoted,
+        jsonLookingValue: jsonLooking,
+        ports: ["80", "443"],
       }),
     );
     api.putObject(
@@ -255,11 +260,24 @@ describe("scenario state verifier", () => {
     api.putObject(
       "destination",
       "site/runtime/config.yaml",
-      `stackName: "${STACK_NAME}"\nregion: "${region()}"\nbucketName: "destination"\nmessage: yaml replacement is active\nrepeatedRegion: "${region()}"\n`,
+      [
+        "stackName: VerificationStack",
+        "region: eu-central-1",
+        "bucketName: destination",
+        "message: yaml replacement is active",
+        "repeatedRegion: eu-central-1",
+        'specialValue: "value with \\"quotes\\" and \\\\backslash"',
+        'quotedValue: "\\"quoted\\""',
+        'ports: ["80","443"]',
+        "",
+      ].join("\n"),
     );
     const outputs = outputsFile({
       BucketName: "destination",
       SpecialJsonTokenValue: special,
+      QuotedValueTokenValue: quoted,
+      JsonLookingTokenValue: jsonLooking,
+      PortsTokenValue: "80,443",
     });
 
     await expect(

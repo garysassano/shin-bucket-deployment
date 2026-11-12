@@ -9,9 +9,10 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::deployment::{
     ArchiveExpansionLimits, DeletePreviousObjectsOnChange, DeploymentRequest, Filters,
-    MarkerConfig, PreviousDestination, PutObjectRetryJitter, PutObjectRetryOptions, RuntimeOptions,
+    PreviousDestination, PutObjectRetryJitter, PutObjectRetryOptions, RuntimeOptions,
     TrustedSourceCatalog,
 };
+use crate::replace::{MarkerEncoding, encode_marker_value};
 use crate::s3::{
     DEFAULT_SOURCE_BLOCK_BYTES, DEFAULT_SOURCE_BLOCK_MERGE_GAP_BYTES,
     DEFAULT_TRANSFER_MAX_CONCURRENCY, PUT_OBJECT_MAX_ATTEMPTS, PUT_OBJECT_RETRY_BASE_DELAY_MS,
@@ -48,6 +49,20 @@ pub(crate) struct RawSourceCatalog {
     pub(crate) sha256: Option<String>,
 }
 
+/// One deploy-time substitution: the marker text, the value CloudFormation
+/// resolved for it, and the encoding to render that value in.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+#[serde(rename_all = "PascalCase")]
+pub(crate) struct RawSourceMarker {
+    pub(crate) marker: String,
+    /// CloudFormation stringifies scalars, so a value is a string, or a list
+    /// or map for list tokens and other structured values.
+    #[serde(deserialize_with = "deserialize_marker_value")]
+    pub(crate) value: serde_json::Value,
+    pub(crate) encoding: MarkerEncoding,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 #[serde(rename_all = "PascalCase")]
@@ -57,9 +72,7 @@ pub(crate) struct RawDeploymentRequest {
     #[serde(default)]
     pub(crate) source_catalogs: Option<Vec<RawSourceCatalog>>,
     #[serde(default)]
-    pub(crate) source_markers: Vec<HashMap<String, String>>,
-    #[serde(default)]
-    pub(crate) source_markers_config: Vec<MarkerConfig>,
+    pub(crate) source_markers: Vec<Vec<RawSourceMarker>>,
     /// The current destination. Wire names mirror the public API paths the
     /// construct synthesizes them from; non-public values (the ownership
     /// identity, envelope fields) stay flat.
@@ -264,16 +277,7 @@ pub(crate) fn parse_request_with_memory(
     let archive_expansion = archive_expansion_limits(&raw.source_processing)?;
     let runtime = runtime_options_with_memory(&raw.transfer, lambda_memory)?;
 
-    let source_count = raw.source_bucket_names.len();
-    let mut source_markers = raw.source_markers;
-    let mut source_markers_config = raw.source_markers_config;
-
-    if source_markers.is_empty() {
-        source_markers = vec![HashMap::new(); source_count];
-    }
-    if source_markers_config.is_empty() {
-        source_markers_config = vec![MarkerConfig::default(); source_count];
-    }
+    let source_markers = encode_source_markers(raw.source_markers, raw.source_bucket_names.len())?;
 
     let delete_previous_objects_on_change = raw
         .destination_lifecycle
@@ -299,7 +303,6 @@ pub(crate) fn parse_request_with_memory(
         source_object_keys: raw.source_object_keys,
         source_catalogs,
         source_markers,
-        source_markers_config,
         dest_bucket_name: raw.destination.bucket_name,
         dest_bucket_prefix,
         extract: raw.source_processing.extract,
@@ -792,6 +795,51 @@ fn default_distribution_path(dest_bucket_prefix: &str) -> String {
 
 fn default_true() -> bool {
     true
+}
+
+/// Encodes every marker value once, while the request is decoded, so an
+/// encoding that cannot apply to its value fails before any destination work.
+/// An absent `SourceMarkers` means no source has markers.
+fn encode_source_markers(
+    raw: Vec<Vec<RawSourceMarker>>,
+    source_count: usize,
+) -> Result<Vec<HashMap<String, String>>> {
+    if raw.is_empty() {
+        return Ok(vec![HashMap::new(); source_count]);
+    }
+    raw.into_iter()
+        .enumerate()
+        .map(|(source_index, markers)| {
+            let mut encoded = HashMap::with_capacity(markers.len());
+            for marker in markers {
+                let label = sanitize_diagnostic(&marker.marker, MAX_DIAGNOSTIC_VALUE_BYTES);
+                let replacement = encode_marker_value(marker.encoding, &marker.value)
+                    .with_context(|| format!("SourceMarkers[{source_index}] marker {label}"))?;
+                ensure!(
+                    encoded.insert(marker.marker, replacement).is_none(),
+                    "SourceMarkers[{source_index}] lists marker {label} more than once"
+                );
+            }
+            Ok(encoded)
+        })
+        .collect()
+}
+
+fn deserialize_marker_value<'de, D>(
+    deserializer: D,
+) -> std::result::Result<serde_json::Value, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    match value {
+        serde_json::Value::String(_)
+        | serde_json::Value::Array(_)
+        | serde_json::Value::Object(_) => Ok(value),
+        _ => Err(serde::de::Error::custom(
+            "marker Value must be a string, list, or map",
+        )),
+    }
 }
 
 fn deserialize_present<'de, D, T>(deserializer: D) -> std::result::Result<Option<T>, D::Error>
@@ -1738,24 +1786,96 @@ mod tests {
     }
 
     #[test]
-    fn serde_rejects_non_object_marker_config_entries() {
+    fn serde_rejects_the_removed_marker_config_property() {
         let mut props = minimal_request();
-        props["SourceMarkersConfig"] = json!(["bad"]);
+        props["SourceMarkersConfig"] = json!([{ "jsonEscape": true }]);
 
         assert!(serde_json::from_value::<RawDeploymentRequest>(props).is_err());
     }
 
     #[test]
-    fn deserializes_cloudformation_string_booleans_in_marker_config() {
-        let mut props = minimal_request();
-        props["SourceMarkers"] = json!([{}]);
-        props["SourceMarkersConfig"] = json!([{ "jsonEscape": "true" }]);
+    fn serde_rejects_scalar_marker_values_and_unknown_encodings() {
+        for marker in [
+            json!({ "Marker": "m", "Value": 42, "Encoding": "LITERAL" }),
+            json!({ "Marker": "m", "Value": null, "Encoding": "LITERAL" }),
+            json!({ "Marker": "m", "Value": "v", "Encoding": "TOML_STRING" }),
+            json!({ "Marker": "m", "Value": "v" }),
+        ] {
+            let mut props = minimal_request();
+            props["SourceMarkers"] = json!([[marker]]);
+            assert!(
+                serde_json::from_value::<RawDeploymentRequest>(props).is_err(),
+                "{marker} must be rejected"
+            );
+        }
+    }
 
-        let raw: RawDeploymentRequest = serde_json::from_value(props)
-            .expect("marker config string booleans should deserialize");
+    #[test]
+    fn markers_are_encoded_once_while_the_request_is_parsed() {
+        let mut props = minimal_request();
+        props["SourceMarkers"] = json!([[
+            { "Marker": "<<a>>", "Value": "say \"hi\"", "Encoding": "UNQUOTED_JSON_VALUE" },
+            { "Marker": "<<b>>", "Value": ["80", "443"], "Encoding": "JSON_VALUE" },
+            { "Marker": "<<c>>", "Value": "yes", "Encoding": "YAML_STRING" },
+            { "Marker": "<<d>>", "Value": "raw \"text\"", "Encoding": "LITERAL" },
+        ]]);
+        let raw: RawDeploymentRequest = serde_json::from_value(props).expect("markers decode");
         let request = parse_test_request(raw).expect("valid request");
 
-        assert!(request.source_markers_config[0].json_escape);
+        assert_eq!(
+            request.source_markers,
+            vec![HashMap::from([
+                ("<<a>>".to_string(), r#"say \"hi\""#.to_string()),
+                ("<<b>>".to_string(), r#"["80","443"]"#.to_string()),
+                ("<<c>>".to_string(), r#""yes""#.to_string()),
+                ("<<d>>".to_string(), r#"raw "text""#.to_string()),
+            ])]
+        );
+    }
+
+    #[test]
+    fn absent_markers_expand_to_one_empty_map_per_source() {
+        let mut props = minimal_request();
+        props["SourceBucketNames"] = json!(["one", "two"]);
+        props["SourceObjectKeys"] = json!(["one.zip", "two.zip"]);
+        let raw: RawDeploymentRequest = serde_json::from_value(props).expect("request decodes");
+        let request = parse_test_request(raw).expect("valid request");
+
+        assert_eq!(request.source_markers, vec![HashMap::new(), HashMap::new()]);
+    }
+
+    #[test]
+    fn marker_encoding_failures_name_the_marker_but_not_the_value() {
+        let mut props = minimal_request();
+        props["SourceMarkers"] = json!([[
+            { "Marker": "<<list>>", "Value": ["secret-value"], "Encoding": "LITERAL" },
+        ]]);
+        let raw: RawDeploymentRequest = serde_json::from_value(props).expect("markers decode");
+        let error = parse_test_request(raw).expect_err("a list cannot be LITERAL");
+        let message = format!("{error:#}");
+
+        assert!(
+            message.contains("SourceMarkers[0] marker <<list>>"),
+            "{message}"
+        );
+        assert!(
+            message.contains("LITERAL encoding requires a string value"),
+            "{message}"
+        );
+        assert!(!message.contains("secret-value"), "{message}");
+    }
+
+    #[test]
+    fn duplicate_markers_in_one_source_are_rejected() {
+        let mut props = minimal_request();
+        props["SourceMarkers"] = json!([[
+            { "Marker": "<<m>>", "Value": "a", "Encoding": "LITERAL" },
+            { "Marker": "<<m>>", "Value": "b", "Encoding": "LITERAL" },
+        ]]);
+        let raw: RawDeploymentRequest = serde_json::from_value(props).expect("markers decode");
+        let error = parse_test_request(raw).expect_err("duplicates are ambiguous");
+
+        assert!(error.to_string().contains("more than once"), "{error:#}");
     }
 
     #[test]

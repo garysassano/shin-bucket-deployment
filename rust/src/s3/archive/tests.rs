@@ -40,7 +40,7 @@ use super::{
     SourceClient, head_source, range_get_request_error, source_get_retry_cap_millis,
     source_get_retry_delay,
 };
-use crate::deployment::{MarkerConfig, TrustedEntryIntegrity};
+use crate::deployment::TrustedEntryIntegrity;
 use crate::diagnostics::DeploymentStats;
 use crate::replace::MarkerReplacements;
 use crate::s3::planner::ZipEntryPlan;
@@ -902,10 +902,10 @@ async fn marker_forward_reports_broken_pipe_from_the_trailing_partial_frame() {
 async fn marker_spooled_planning_retains_bytes_within_the_cap() {
     let zip = zip_from_entry("marker.txt", b"before TOKEN after");
     let plan = zip_plan_from_archive(&zip, "marker.txt");
-    let replacements = MarkerReplacements::new(
-        &HashMap::from([("TOKEN".to_string(), "expanded-value".to_string())]),
-        &MarkerConfig::default(),
-    )
+    let replacements = MarkerReplacements::new(&HashMap::from([(
+        "TOKEN".to_string(),
+        "expanded-value".to_string(),
+    )]))
     .expect("marker automaton");
     let store = ready_store_for_plan(&zip, &plan);
     let expected = b"before expanded-value after";
@@ -954,10 +954,10 @@ async fn marker_spooled_planning_retains_bytes_within_the_cap() {
 async fn marker_spooled_planning_over_cap_drops_the_spool_but_still_hashes() {
     let zip = zip_from_entry("marker.txt", b"before TOKEN after");
     let plan = zip_plan_from_archive(&zip, "marker.txt");
-    let replacements = MarkerReplacements::new(
-        &HashMap::from([("TOKEN".to_string(), "expanded-value".to_string())]),
-        &MarkerConfig::default(),
-    )
+    let replacements = MarkerReplacements::new(&HashMap::from([(
+        "TOKEN".to_string(),
+        "expanded-value".to_string(),
+    )]))
     .expect("marker automaton");
     let store = ready_store_for_plan(&zip, &plan);
     let expected = b"before expanded-value after";
@@ -991,10 +991,10 @@ async fn marker_spooled_planning_enforces_the_cap_on_output_not_input() {
     let plan = zip_plan_from_archive(&zip, "marker.txt");
     assert_eq!(plan.size, 5);
     let cap = plan.size;
-    let replacements = MarkerReplacements::new(
-        &HashMap::from([("TOKEN".to_string(), "0123456789".to_string())]),
-        &MarkerConfig::default(),
-    )
+    let replacements = MarkerReplacements::new(&HashMap::from([(
+        "TOKEN".to_string(),
+        "0123456789".to_string(),
+    )]))
     .expect("marker automaton");
     let store = ready_store_for_plan(&zip, &plan);
 
@@ -1015,10 +1015,10 @@ async fn marker_upload_stream_is_retryable_and_withholds_the_final_chunk_until_v
     let zip = zip_from_entry("marker.txt", b"TOKEN and TOKEN");
     let plan = zip_plan_from_archive(&zip, "marker.txt");
     let replacements = Arc::new(
-        MarkerReplacements::new(
-            &HashMap::from([("TOKEN".to_string(), "replacement".to_string())]),
-            &MarkerConfig::default(),
-        )
+        MarkerReplacements::new(&HashMap::from([(
+            "TOKEN".to_string(),
+            "replacement".to_string(),
+        )]))
         .expect("marker automaton"),
     );
     let output = b"replacement and replacement";
@@ -1066,10 +1066,10 @@ async fn marker_upload_crc_failure_releases_no_final_body_frame() {
     plan.crc32 ^= 1;
     let store = ready_store_for_plan(&zip, &plan);
     let replacements = Arc::new(
-        MarkerReplacements::new(
-            &HashMap::from([("TOKEN".to_string(), "replacement".to_string())]),
-            &MarkerConfig::default(),
-        )
+        MarkerReplacements::new(&HashMap::from([(
+            "TOKEN".to_string(),
+            "replacement".to_string(),
+        )]))
         .expect("marker automaton"),
     );
     let (sender, mut receiver) = tokio::sync::mpsc::channel(2);
@@ -1097,11 +1097,8 @@ async fn marker_upload_stops_when_body_receiver_is_dropped() {
     let output = "x".repeat(crate::s3::ZIP_ENTRY_BODY_CHUNK_BYTES * 8);
     let store = ready_store_for_plan(&zip, &plan);
     let replacements = Arc::new(
-        MarkerReplacements::new(
-            &HashMap::from([("TOKEN".to_string(), output.clone())]),
-            &MarkerConfig::default(),
-        )
-        .expect("marker automaton"),
+        MarkerReplacements::new(&HashMap::from([("TOKEN".to_string(), output.clone())]))
+            .expect("marker automaton"),
     );
     let (sender, receiver) = tokio::sync::mpsc::channel(1);
     drop(receiver);

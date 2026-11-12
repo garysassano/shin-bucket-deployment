@@ -90,6 +90,7 @@ const EXPECTED_ERROR_CODES = [
   "ShinBucketDeploymentSourceWindowExceedsMemoryBudget",
   "ShinBucketDeploymentSourcesRequired",
   "ShinBucketDeploymentUnknownProperty",
+  "ShinBucketDeploymentYamlTokenKey",
 ];
 
 const EXPECTED_WARNING_CODES = [

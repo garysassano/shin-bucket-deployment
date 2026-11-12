@@ -185,6 +185,19 @@ const cloudfrontInvalidationSchema = z.strictObject({
   WaitForCompletion: boolish.optional(),
 });
 
+/**
+ * One deploy-time substitution (`RawSourceMarker` in `rust/src/request.rs`).
+ * `Value` is what CloudFormation resolved the marker's expression to: always a
+ * string for scalars, because CloudFormation stringifies them, or a list or map
+ * for list tokens and other structured values. `Encoding` names the upstream
+ * `MarkerEncoding` the provider applies before substituting the value.
+ */
+const sourceMarkerSchema = z.strictObject({
+  Marker: z.string(),
+  Value: z.union([z.string(), z.array(z.unknown()), z.record(z.string(), z.unknown())]),
+  Encoding: z.enum(["LITERAL", "UNQUOTED_JSON_VALUE", "JSON_VALUE", "YAML_STRING"]),
+});
+
 const destinationWriteRetrySchema = z.strictObject({
   MaxAttempts: unsignedOptional.nullish(),
   BaseDelayMs: unsignedOptional.nullish(),
@@ -226,16 +239,7 @@ export const wireContractSchema = z.strictObject({
   SourceBucketNames: z.array(z.string()),
   SourceObjectKeys: z.array(z.string()),
   SourceCatalogs: z.array(sourceCatalogSchema).nullish(),
-  SourceMarkers: z.array(z.record(z.string())).optional(),
-  SourceMarkersConfig: z
-    .array(
-      z.strictObject({
-        // Deliberate camelCase outlier: the public API property is upstream
-        // `markersConfig.jsonEscape` and the provider mirrors that name.
-        jsonEscape: boolish.optional(),
-      }),
-    )
-    .optional(),
+  SourceMarkers: z.array(z.array(sourceMarkerSchema)).optional(),
   Destination: destinationSchema,
   SourceProcessing: sourceProcessingSchema,
   DestinationLifecycle: destinationLifecycleSchema,

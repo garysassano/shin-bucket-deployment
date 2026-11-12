@@ -1,10 +1,18 @@
 import { join } from "node:path";
-import { Aws, Stack } from "aws-cdk-lib";
+import { App, Aws, CfnParameter, Stack } from "aws-cdk-lib";
 import { Template } from "aws-cdk-lib/assertions";
 import { Bucket } from "aws-cdk-lib/aws-s3";
+import {
+  Source as CdkSource,
+  type ISource,
+  MarkerEncoding,
+  type SourceConfig,
+} from "aws-cdk-lib/aws-s3-deployment";
 import { expect, test } from "vitest";
 import { ShinBucketDeployment, Source } from "../../src";
 import { testLocalProviderBuild } from "../support/bundling";
+
+type WireMarker = { Marker: string; Value: unknown; Encoding: string };
 
 function customResourceProperties(stack: Stack) {
   const template = Template.fromStack(stack).toJSON() as {
@@ -22,193 +30,161 @@ function customResourceProperties(stack: Stack) {
   return resource.Properties;
 }
 
-function markerAt(markers: Array<Record<string, unknown>>, index: number): Record<string, unknown> {
-  const marker = markers[index];
-  if (marker === undefined) {
-    throw new Error(`Source marker ${index} not found`);
-  }
-  return marker;
+function deploy(sources: ISource[], extract?: boolean): Stack {
+  const stack = new Stack();
+  new ShinBucketDeployment(stack, "Deploy", {
+    sources,
+    destination: { bucket: new Bucket(stack, "Dest") },
+    sourceProcessing: extract === undefined ? undefined : { extract },
+    providerLambda: { localBuild: testLocalProviderBuild() },
+  });
+  return stack;
 }
 
-test("renders plain markers for Source.data", () => {
-  const stack = new Stack();
-  const destinationBucket = new Bucket(stack, "Dest");
+function sourceMarkers(stack: Stack): WireMarker[][] {
+  return customResourceProperties(stack).SourceMarkers as WireMarker[][];
+}
 
-  new ShinBucketDeployment(stack, "Deploy", {
-    sources: [
-      Source.data(
-        "runtime/plain.txt",
-        `region=${Aws.REGION}\nstack=${Aws.STACK_NAME}\nregion-again=${Aws.REGION}`,
-      ),
-    ],
-    destination: {
-      bucket: destinationBucket,
-    },
-    providerLambda: {
-      localBuild: testLocalProviderBuild(),
-    },
-  });
+function encodings(markers: WireMarker[] | undefined): string[] {
+  if (markers === undefined) {
+    throw new Error("source marker list not found");
+  }
+  return markers.map((marker) => marker.Encoding);
+}
 
-  const properties = customResourceProperties(stack);
-  const sourceMarkers = properties.SourceMarkers as Array<Record<string, unknown>>;
+test("renders Source.data markers as LITERAL with their CloudFormation values", () => {
+  const stack = deploy([
+    Source.data(
+      "runtime/plain.txt",
+      `region=${Aws.REGION}\nstack=${Aws.STACK_NAME}\nregion-again=${Aws.REGION}`,
+    ),
+  ]);
 
-  expect(sourceMarkers).toHaveLength(1);
-  expect(Object.keys(markerAt(sourceMarkers, 0))).toHaveLength(3);
-  expect(properties.SourceMarkersConfig).toBeUndefined();
+  const [markers] = sourceMarkers(stack);
+  expect(encodings(markers)).toEqual(["LITERAL", "LITERAL", "LITERAL"]);
+  expect(markers?.map((marker) => marker.Value)).toEqual([
+    { Ref: "AWS::Region" },
+    { Ref: "AWS::StackName" },
+    { Ref: "AWS::Region" },
+  ]);
+  expect(customResourceProperties(stack).SourceMarkersConfig).toBeUndefined();
 });
 
-test("renders plain markers for Source.yamlData", () => {
-  const stack = new Stack();
-  const destinationBucket = new Bucket(stack, "Dest");
+test("resolves jsonEscape to UNQUOTED_JSON_VALUE for Source.data markers", () => {
+  const stack = deploy([
+    Source.data("runtime/from-data-escaped.json", `{"specialValue":"${Aws.STACK_NAME}"}`, {
+      jsonEscape: true,
+    }),
+  ]);
 
+  expect(encodings(sourceMarkers(stack)[0])).toEqual(["UNQUOTED_JSON_VALUE"]);
+});
+
+test("escapes Source.jsonData strings as contents and lists as complete JSON values", () => {
+  const stack = new Stack();
+  const ports = new CfnParameter(stack, "Ports", { type: "CommaDelimitedList" });
+  new ShinBucketDeployment(stack, "Deploy", {
+    sources: [
+      Source.jsonData("runtime/config.json", {
+        stackName: Aws.STACK_NAME,
+        ports: ports.valueAsList,
+      }),
+    ],
+    destination: { bucket: new Bucket(stack, "Dest") },
+    providerLambda: { localBuild: testLocalProviderBuild() },
+  });
+
+  const [markers] = sourceMarkers(stack);
+  expect(markers).toEqual([
+    expect.objectContaining({ Value: { Ref: "AWS::StackName" }, Encoding: "UNQUOTED_JSON_VALUE" }),
+    expect.objectContaining({ Value: { Ref: "Ports" }, Encoding: "JSON_VALUE" }),
+  ]);
+});
+
+test("renders Source.yamlData strings as YAML_STRING and lists as JSON_VALUE", () => {
+  const stack = new Stack();
+  const ports = new CfnParameter(stack, "Ports", { type: "CommaDelimitedList" });
   new ShinBucketDeployment(stack, "Deploy", {
     sources: [
       Source.yamlData("runtime/config.yaml", {
         stackName: Aws.STACK_NAME,
-        region: Aws.REGION,
+        ports: ports.valueAsList,
       }),
     ],
-    destination: {
-      bucket: destinationBucket,
-    },
-    providerLambda: {
-      localBuild: testLocalProviderBuild(),
-    },
+    destination: { bucket: new Bucket(stack, "Dest") },
+    providerLambda: { localBuild: testLocalProviderBuild() },
   });
 
-  const properties = customResourceProperties(stack);
-  const sourceMarkers = properties.SourceMarkers as Array<Record<string, unknown>>;
-
-  expect(sourceMarkers).toHaveLength(1);
-  expect(Object.keys(markerAt(sourceMarkers, 0))).toHaveLength(2);
-  expect(properties.SourceMarkersConfig).toBeUndefined();
+  expect(encodings(sourceMarkers(stack)[0])).toEqual(["YAML_STRING", "JSON_VALUE"]);
 });
 
-test("renders jsonEscape config for Source.data markers", () => {
-  const stack = new Stack();
-  const destinationBucket = new Bucket(stack, "Dest");
-
-  new ShinBucketDeployment(stack, "Deploy", {
-    sources: [
-      Source.data("runtime/from-data-escaped.json", `{"specialValue":"${Aws.STACK_NAME}"}`, {
-        jsonEscape: true,
-      }),
-    ],
-    destination: {
-      bucket: destinationBucket,
-    },
-    providerLambda: {
-      localBuild: testLocalProviderBuild(),
-    },
-  });
-
-  const properties = customResourceProperties(stack);
-
-  expect(properties.SourceMarkersConfig).toEqual([{ jsonEscape: true }]);
+test("rejects a deploy-time value used as a Source.yamlData mapping key", () => {
+  expect(() =>
+    deploy([Source.yamlData("runtime/config.yaml", { nested: { [Aws.STACK_NAME]: "value" } })]),
+  ).toThrow(/mapping key at \$\.nested\[/);
 });
 
-test("renders source markers for jsonData sources with escape enabled", () => {
-  const stack = new Stack();
-  const destinationBucket = new Bucket(stack, "Dest");
+test("keeps upstream jsonData without escaping on the LITERAL path", () => {
+  const stack = deploy([
+    CdkSource.jsonData("runtime/raw.json", { stackName: Aws.STACK_NAME }, { escape: false }),
+  ]);
 
-  new ShinBucketDeployment(stack, "Deploy", {
-    sources: [
-      Source.asset(join(__dirname, "..", "fixtures", "my-website")),
-      Source.jsonData(
-        "runtime/config.json",
-        {
-          stackName: Aws.STACK_NAME,
-          region: Aws.REGION,
-        },
-        { escape: true },
-      ),
-    ],
-    destination: {
-      bucket: destinationBucket,
-    },
-    providerLambda: {
-      localBuild: testLocalProviderBuild(),
-    },
-  });
-
-  const properties = customResourceProperties(stack);
-  const sourceMarkersConfig = properties.SourceMarkersConfig as Array<Record<string, unknown>>;
-
-  expect(sourceMarkersConfig).toEqual([{}, { jsonEscape: true }]);
+  expect(encodings(sourceMarkers(stack)[0])).toEqual(["LITERAL"]);
 });
 
-test("keeps jsonData without escape on the plain replacement path", () => {
-  const stack = new Stack();
-  const destinationBucket = new Bucket(stack, "Dest");
+test("aligns marker lists with sources and leaves marker-free sources empty", () => {
+  const stack = deploy([
+    Source.asset(join(__dirname, "..", "fixtures", "my-website")),
+    Source.data("runtime/plain.txt", `region=${Aws.REGION}`),
+    Source.data("runtime/static.txt", "no deploy-time values"),
+    Source.jsonData("runtime/escaped.json", { stackName: Aws.STACK_NAME }),
+    Source.yamlData("runtime/config.yaml", { stackName: Aws.STACK_NAME }),
+  ]);
 
-  new ShinBucketDeployment(stack, "Deploy", {
-    sources: [
-      Source.jsonData(
-        "runtime/config.json",
-        {
-          stackName: Aws.STACK_NAME,
-        },
-        { escape: false },
-      ),
-    ],
-    destination: {
-      bucket: destinationBucket,
-    },
-    providerLambda: {
-      localBuild: testLocalProviderBuild(),
-    },
-  });
-
-  const properties = customResourceProperties(stack);
-  const sourceMarkers = properties.SourceMarkers as Array<Record<string, unknown>>;
-
-  expect(sourceMarkers).toHaveLength(1);
-  expect(Object.keys(markerAt(sourceMarkers, 0))).toHaveLength(1);
-  expect(properties.SourceMarkersConfig).toEqual([{}]);
+  const markers = sourceMarkers(stack);
+  expect(markers.map(encodings)).toEqual([
+    [],
+    ["LITERAL"],
+    [],
+    ["UNQUOTED_JSON_VALUE"],
+    ["YAML_STRING"],
+  ]);
 });
 
-test("keeps source marker config aligned across mixed source types", () => {
-  const stack = new Stack();
-  const destinationBucket = new Bucket(stack, "Dest");
+test("sends no marker array when no source has a deploy-time value", () => {
+  const stack = deploy([
+    Source.asset(join(__dirname, "..", "fixtures", "my-website")),
+    Source.data("runtime/static.txt", "no deploy-time values"),
+  ]);
 
-  new ShinBucketDeployment(stack, "Deploy", {
-    sources: [
-      Source.asset(join(__dirname, "..", "fixtures", "my-website")),
-      Source.data("runtime/plain.txt", `region=${Aws.REGION}`),
-      Source.jsonData(
-        "runtime/raw.json",
-        {
-          stackName: Aws.STACK_NAME,
+  expect(customResourceProperties(stack)).not.toHaveProperty("SourceMarkers");
+});
+
+test("allows token-free Source.data without extraction", () => {
+  const synth = (source: ISource) => () => customResourceProperties(deploy([source], false));
+
+  expect(synth(Source.data("runtime/static.txt", "no deploy-time values"))).not.toThrow();
+  expect(synth(Source.data("runtime/plain.txt", `region=${Aws.REGION}`))).toThrow(
+    /marker replacement requires extraction/,
+  );
+});
+
+test("rejects a marker encoding the provider does not implement at synthesis", () => {
+  const inner = Source.data("runtime/plain.txt", `region=${Aws.REGION}`);
+  const futureEncoding: ISource = {
+    bind(scope, context): SourceConfig {
+      const config = inner.bind(scope, context);
+      const [marker] = Object.keys(config.markers ?? {});
+      return {
+        ...config,
+        markersConfig: {
+          markerEncodings: { [marker as string]: "TOML_STRING" as MarkerEncoding },
         },
-        { escape: false },
-      ),
-      Source.jsonData(
-        "runtime/escaped.json",
-        {
-          stackName: Aws.STACK_NAME,
-        },
-        { escape: true },
-      ),
-      Source.yamlData("runtime/config.yaml", {
-        stackName: Aws.STACK_NAME,
-      }),
-    ],
-    destination: {
-      bucket: destinationBucket,
+      };
     },
-    providerLambda: {
-      localBuild: testLocalProviderBuild(),
-    },
-  });
+  };
+  const stack = deploy([futureEncoding]);
 
-  const properties = customResourceProperties(stack);
-  const sourceMarkers = properties.SourceMarkers as Array<Record<string, unknown>>;
-
-  expect(sourceMarkers).toHaveLength(5);
-  expect(markerAt(sourceMarkers, 0)).toEqual({});
-  expect(Object.keys(markerAt(sourceMarkers, 1))).toHaveLength(1);
-  expect(Object.keys(markerAt(sourceMarkers, 2))).toHaveLength(1);
-  expect(Object.keys(markerAt(sourceMarkers, 3))).toHaveLength(1);
-  expect(Object.keys(markerAt(sourceMarkers, 4))).toHaveLength(1);
-  expect(properties.SourceMarkersConfig).toEqual([{}, {}, {}, { jsonEscape: true }, {}]);
+  expect(() => App.of(stack)?.synth()).toThrow(/requests encoding "TOML_STRING"/);
+  expect(Object.values(MarkerEncoding)).not.toContain("TOML_STRING");
 });

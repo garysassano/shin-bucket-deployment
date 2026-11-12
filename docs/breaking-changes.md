@@ -4,6 +4,36 @@ This file holds authored release notes for `ShinBucketDeployment` changes that b
 
 ## Unreleased
 
+### Deploy-time values are encoded per marker and require `aws-cdk-lib` 2.276.0
+
+`aws-cdk-lib` 2.276.0 ([aws/aws-cdk#39542](https://github.com/aws/aws-cdk/pull/39542)) changed what `Source.data`, `Source.jsonData` and `Source.yamlData` bind. Values now arrive unquoted, with a per-marker `markerEncodings` map, and `jsonData` escapes by default. Shin's previous provider rejected that shape, and its JSON escaping assumed the old pre-quoted values, so the peer dependency is now `aws-cdk-lib` `^2.276.0`. That release writes cloud-assembly schema 55, so apps also need AWS CDK CLI 2.1148.0 or later.
+
+The custom-resource wire contract changes:
+
+- `SourceMarkers` is now one list per source of `{ Marker, Value, Encoding }` entries. `Encoding` is the effective upstream `MarkerEncoding` (`LITERAL`, `UNQUOTED_JSON_VALUE`, `JSON_VALUE` or `YAML_STRING`), resolved at synthesis, so the template states how each value is escaped.
+- `SourceMarkersConfig` is removed.
+- `Value` may be a list or map, for list tokens.
+- A deployment whose sources carry no marker sends no `SourceMarkers`.
+
+The wire-schema digest changes with it, so every handler identity changes. Stack-shared and deployment-scoped handlers and their custom resources are replaced through the ownership-safe handoff described under [Handler identities include the wire-schema digest](#handler-identities-include-the-wire-schema-digest). Each generation decodes only its own properties, and destination objects are preserved.
+
+Deployed content changes for some sources:
+
+- **JSON escaping.** Every `Source.jsonData` string value is now escaped as the contents of a JSON string. Previously, `jsonData` without `{ escape: true }` inserted values unescaped. With it, the provider still left a value unescaped when it parsed as JSON (such as `{"a":1}`) or was wrapped in double quotes. Both could produce invalid JSON. Values that need no escaping deploy byte-for-byte as before.
+- **YAML quoting.** `Source.yamlData` string values that are simple identifiers (a letter followed by letters, digits, `.`, `_` or `-`, and not a word YAML reads as a boolean or null) now deploy unquoted, and other strings deploy double-quoted. Previously every value was double-quoted. The parsed YAML is unchanged, but the object bytes differ, so those objects upload once on the next deployment.
+- **List tokens.** A list token in `jsonData` or `yamlData` deploys as a JSON array, such as `["80", "443"]`. Upstream no longer adds its `CdkJsonStringify` helper resource for these lists.
+- **Non-ASCII text.** JSON and YAML output keeps it as UTF-8 rather than ASCII escapes, unlike upstream's handler.
+
+Construct API changes:
+
+- `Source.jsonData` no longer takes `jsonProcessingOptions`. Values are always escaped. Code that passed `{ escape: true }` drops the argument, and code that needs the unescaped legacy output can pass upstream `Source.jsonData(..., { escape: false })` from `aws-cdk-lib/aws-s3-deployment`.
+- `Source.data` takes upstream `SourceDataOptions` (`jsonEscape`) instead of `MarkersConfig`. Upstream `Source.data` never applied `markerEncodings` passed there.
+- `Source.yamlData` rejects a deploy-time value used as a mapping key with `ShinBucketDeploymentYamlTokenKey`. Upstream substitutes such keys without escaping, so a value could change the document's structure.
+- A marker whose encoding Shin does not implement, such as one a later `aws-cdk-lib` adds, fails synthesis instead of deployment.
+- A `Source.data` source without deploy-time values no longer counts as a marker source, so it is allowed with `sourceProcessing.extract: false`.
+
+Affected: every deployment, through the handler replacement. Deployed objects change only for sources with deploy-time values in `Source.jsonData`, `Source.yamlData` or `Source.data` with `jsonEscape`, as listed above.
+
 ## 0.15.0
 
 ### Provider TLS and signing dependencies patched

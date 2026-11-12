@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "comment": "Value-language agreement between contract/wire-contract.mjs (Zod, the runtime ResourceProperties schema) and the Rust decoder (rust/src/request.rs). Each case sets `value` at `path` (object keys, `[0]` for the first array element) in an otherwise-valid payload; both sides must accept or reject identically. The intent is authored here, and both the Zod schema and the Rust decoder are implementations that must satisfy it: test/synth/wire-value-acceptance.test.ts runs it against the schema, rust/src/wire_contract.rs against the decoder. The corpus is guarded: every case has a stable unique `id`, `caseCount` must equal the number of cases, `schemaVersion` is pinned by both sides, and both test suites derive the schema's leaf and union-branch coverage and fail when any leaf or branch is left without a case, so the matrix cannot shrink or drift quietly.",
-  "caseCount": 145,
+  "caseCount": 159,
   "cases": [
     {
       "id": "SourceProcessing-Extract--true",
@@ -569,48 +569,290 @@
       "note": "sha256: present null rejected"
     },
     {
-      "id": "SourceMarkers-0-runtime--value",
+      "id": "SourceMarkers--lists",
       "path": [
-        "SourceMarkers",
-        "[0]",
-        "runtime"
+        "SourceMarkers"
       ],
-      "value": "value",
+      "value": [
+        [
+          {
+            "Marker": "m",
+            "Value": "v",
+            "Encoding": "LITERAL"
+          }
+        ]
+      ],
       "accept": true,
-      "note": "marker record value: string"
+      "note": "marker lists: one list per source"
     },
     {
-      "id": "SourceMarkers-0-runtime--123",
+      "id": "SourceMarkers--empty",
       "path": [
-        "SourceMarkers",
-        "[0]",
-        "runtime"
+        "SourceMarkers"
       ],
-      "value": 123,
-      "accept": false,
-      "note": "marker record value: number rejected"
+      "value": [],
+      "accept": true,
+      "note": "marker lists: empty array means no source has markers"
     },
     {
-      "id": "SourceMarkers-0-runtime--true",
+      "id": "SourceMarkers--null",
       "path": [
-        "SourceMarkers",
-        "[0]",
-        "runtime"
-      ],
-      "value": true,
-      "accept": false,
-      "note": "marker record value: boolean rejected"
-    },
-    {
-      "id": "SourceMarkers-0-runtime--null",
-      "path": [
-        "SourceMarkers",
-        "[0]",
-        "runtime"
+        "SourceMarkers"
       ],
       "value": null,
       "accept": false,
-      "note": "marker record value: null rejected"
+      "note": "marker lists: present null rejected"
+    },
+    {
+      "id": "SourceMarkers-0--empty",
+      "path": [
+        "SourceMarkers",
+        "[0]"
+      ],
+      "value": [],
+      "accept": true,
+      "note": "marker list: a marker-free source"
+    },
+    {
+      "id": "SourceMarkers-0--record",
+      "path": [
+        "SourceMarkers",
+        "[0]"
+      ],
+      "value": {
+        "m": "v"
+      },
+      "accept": false,
+      "note": "marker list: the previous record form is rejected"
+    },
+    {
+      "id": "SourceMarkers-0--missing-encoding",
+      "path": [
+        "SourceMarkers",
+        "[0]"
+      ],
+      "value": [
+        {
+          "Marker": "m",
+          "Value": "v"
+        }
+      ],
+      "accept": false,
+      "note": "marker list: Encoding is required"
+    },
+    {
+      "id": "SourceMarkers-0--unknown-key",
+      "path": [
+        "SourceMarkers",
+        "[0]"
+      ],
+      "value": [
+        {
+          "Marker": "m",
+          "Value": "v",
+          "Encoding": "LITERAL",
+          "jsonEscape": true
+        }
+      ],
+      "accept": false,
+      "note": "marker list: undeclared keys rejected"
+    },
+    {
+      "id": "SourceMarkers-0-0-Marker--string",
+      "path": [
+        "SourceMarkers",
+        "[0]",
+        "[0]",
+        "Marker"
+      ],
+      "value": "<<marker:0xbaba:0>>",
+      "accept": true,
+      "note": "marker text: string"
+    },
+    {
+      "id": "SourceMarkers-0-0-Marker--number",
+      "path": [
+        "SourceMarkers",
+        "[0]",
+        "[0]",
+        "Marker"
+      ],
+      "value": 1,
+      "accept": false,
+      "note": "marker text: number rejected"
+    },
+    {
+      "id": "SourceMarkers-0-0-Marker--null",
+      "path": [
+        "SourceMarkers",
+        "[0]",
+        "[0]",
+        "Marker"
+      ],
+      "value": null,
+      "accept": false,
+      "note": "marker text: null rejected"
+    },
+    {
+      "id": "SourceMarkers-0-0-Value--string",
+      "path": [
+        "SourceMarkers",
+        "[0]",
+        "[0]",
+        "Value"
+      ],
+      "value": "value",
+      "accept": true,
+      "note": "marker value: string"
+    },
+    {
+      "id": "SourceMarkers-0-0-Value--list",
+      "path": [
+        "SourceMarkers",
+        "[0]",
+        "[0]",
+        "Value"
+      ],
+      "value": [
+        "80",
+        "443"
+      ],
+      "accept": true,
+      "note": "marker value: list from a list token"
+    },
+    {
+      "id": "SourceMarkers-0-0-Value--map",
+      "path": [
+        "SourceMarkers",
+        "[0]",
+        "[0]",
+        "Value"
+      ],
+      "value": {
+        "port": "443"
+      },
+      "accept": true,
+      "note": "marker value: map"
+    },
+    {
+      "id": "SourceMarkers-0-0-Value--number",
+      "path": [
+        "SourceMarkers",
+        "[0]",
+        "[0]",
+        "Value"
+      ],
+      "value": 123,
+      "accept": false,
+      "note": "marker value: number rejected; CloudFormation stringifies scalars"
+    },
+    {
+      "id": "SourceMarkers-0-0-Value--true",
+      "path": [
+        "SourceMarkers",
+        "[0]",
+        "[0]",
+        "Value"
+      ],
+      "value": true,
+      "accept": false,
+      "note": "marker value: boolean rejected"
+    },
+    {
+      "id": "SourceMarkers-0-0-Value--null",
+      "path": [
+        "SourceMarkers",
+        "[0]",
+        "[0]",
+        "Value"
+      ],
+      "value": null,
+      "accept": false,
+      "note": "marker value: null rejected"
+    },
+    {
+      "id": "SourceMarkers-0-0-Encoding--LITERAL",
+      "path": [
+        "SourceMarkers",
+        "[0]",
+        "[0]",
+        "Encoding"
+      ],
+      "value": "LITERAL",
+      "accept": true,
+      "note": "marker encoding: LITERAL"
+    },
+    {
+      "id": "SourceMarkers-0-0-Encoding--UNQUOTED_JSON_VALUE",
+      "path": [
+        "SourceMarkers",
+        "[0]",
+        "[0]",
+        "Encoding"
+      ],
+      "value": "UNQUOTED_JSON_VALUE",
+      "accept": true,
+      "note": "marker encoding: UNQUOTED_JSON_VALUE"
+    },
+    {
+      "id": "SourceMarkers-0-0-Encoding--JSON_VALUE",
+      "path": [
+        "SourceMarkers",
+        "[0]",
+        "[0]",
+        "Encoding"
+      ],
+      "value": "JSON_VALUE",
+      "accept": true,
+      "note": "marker encoding: JSON_VALUE"
+    },
+    {
+      "id": "SourceMarkers-0-0-Encoding--YAML_STRING",
+      "path": [
+        "SourceMarkers",
+        "[0]",
+        "[0]",
+        "Encoding"
+      ],
+      "value": "YAML_STRING",
+      "accept": true,
+      "note": "marker encoding: YAML_STRING"
+    },
+    {
+      "id": "SourceMarkers-0-0-Encoding--unknown",
+      "path": [
+        "SourceMarkers",
+        "[0]",
+        "[0]",
+        "Encoding"
+      ],
+      "value": "TOML_STRING",
+      "accept": false,
+      "note": "marker encoding: unknown variant rejected"
+    },
+    {
+      "id": "SourceMarkers-0-0-Encoding--lowercase",
+      "path": [
+        "SourceMarkers",
+        "[0]",
+        "[0]",
+        "Encoding"
+      ],
+      "value": "literal",
+      "accept": false,
+      "note": "marker encoding: variants are case-sensitive"
+    },
+    {
+      "id": "SourceMarkers-0-0-Encoding--null",
+      "path": [
+        "SourceMarkers",
+        "[0]",
+        "[0]",
+        "Encoding"
+      ],
+      "value": null,
+      "accept": false,
+      "note": "marker encoding: null rejected"
     },
     {
       "id": "Destination-KeyPrefix--site",
@@ -858,65 +1100,6 @@
       "value": null,
       "accept": true,
       "note": "catalog array: nullish"
-    },
-    {
-      "id": "SourceMarkers--runtime-value",
-      "path": [
-        "SourceMarkers"
-      ],
-      "value": [
-        {
-          "runtime": "value"
-        }
-      ],
-      "accept": true,
-      "note": "marker array: values"
-    },
-    {
-      "id": "SourceMarkersConfig--jsonEscape-true",
-      "path": [
-        "SourceMarkersConfig"
-      ],
-      "value": [
-        {
-          "jsonEscape": true
-        }
-      ],
-      "accept": true,
-      "note": "markers-config array: values"
-    },
-    {
-      "id": "SourceMarkersConfig-0-jsonEscape--true",
-      "path": [
-        "SourceMarkersConfig",
-        "[0]",
-        "jsonEscape"
-      ],
-      "value": true,
-      "accept": true,
-      "note": "markers config: boolean"
-    },
-    {
-      "id": "SourceMarkersConfig-0-jsonEscape--true-1",
-      "path": [
-        "SourceMarkersConfig",
-        "[0]",
-        "jsonEscape"
-      ],
-      "value": "true",
-      "accept": true,
-      "note": "markers config: boolish string"
-    },
-    {
-      "id": "SourceMarkersConfig-0-jsonEscape--null",
-      "path": [
-        "SourceMarkersConfig",
-        "[0]",
-        "jsonEscape"
-      ],
-      "value": null,
-      "accept": false,
-      "note": "markers config: present null rejected"
     },
     {
       "id": "Destination-BucketName--bucket-2",
