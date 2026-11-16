@@ -1311,26 +1311,21 @@ async fn transfer_sub_timings_cover_prepare_put_and_source_fetch_waits() {
     let plan = zip_plan_from_archive(&zip, "marker.txt");
 
     // The store `upload_zip_entries` builds fetches the entry's source span
-    // through the source client, so the replay serves the ranged GET, the
-    // metadata HEAD (via `prepare_source_zip`), and the destination PUT.
+    // through the source client, so the replay serves the metadata suffix GET
+    // (via `prepare_source_zip`), the ranged GET, and the destination PUT.
     let source_span =
         zip[plan.source_offset as usize..plan.source_span_end_exclusive as usize].to_vec();
     let replay = StaticReplayClient::new(vec![
-        head_event(vec![
-            (
-                "content-length",
-                Box::leak(zip.len().to_string().into_boxed_str()),
-            ),
-            ("etag", "\"test-source-etag\""),
-        ]),
+        source_tail_event(&zip),
         range_success_event(source_span, plan.source_offset, zip.len() as u64),
         put_success_event(),
     ]);
     let state = test_app_state_with_replay(replay.clone());
     let stats = Arc::new(DeploymentStats::default());
-    let source = prepare_source_zip(&state, "source", "source.zip", &stats)
+    let source = prepare_source_zip(&state, "source", "source.zip", SOURCE_TAIL_BYTES)
         .await
-        .expect("source metadata HEAD succeeds");
+        .expect("source metadata read succeeds")
+        .source;
     let archives = vec![SourceArchive { source }];
     let mut request = DeploymentRequest::for_test();
     request.extract = true;
@@ -1404,20 +1399,15 @@ async fn transfer_prepare_records_the_skipped_entry_comparison_pass() {
     let source_span =
         zip[plan.source_offset as usize..plan.source_span_end_exclusive as usize].to_vec();
     let replay = StaticReplayClient::new(vec![
-        head_event(vec![
-            (
-                "content-length",
-                Box::leak(zip.len().to_string().into_boxed_str()),
-            ),
-            ("etag", "\"test-source-etag\""),
-        ]),
+        source_tail_event(&zip),
         range_success_event(source_span, plan.source_offset, zip.len() as u64),
     ]);
     let state = test_app_state_with_replay(replay.clone());
     let stats = Arc::new(DeploymentStats::default());
-    let source = prepare_source_zip(&state, "source", "source.zip", &stats)
+    let source = prepare_source_zip(&state, "source", "source.zip", SOURCE_TAIL_BYTES)
         .await
-        .expect("source metadata HEAD succeeds");
+        .expect("source metadata read succeeds")
+        .source;
     let archives = vec![SourceArchive { source }];
     let mut request = DeploymentRequest::for_test();
     request.extract = true;
@@ -1500,13 +1490,7 @@ async fn transfer_put_source_wait_records_streaming_upload_body_fetches() {
     // streaming body pass. The real store computes one claim per block, and
     // `retain_zip_entry_for_replay` re-arms a released block, so the body
     // pass genuinely re-fetches.
-    let mut events = vec![head_event(vec![
-        (
-            "content-length",
-            Box::leak(zip.len().to_string().into_boxed_str()),
-        ),
-        ("etag", "\"test-source-etag\""),
-    ])];
+    let mut events = vec![source_tail_event(&zip)];
     for _ in 0..2 {
         let mut start = plan.source_offset;
         while start < plan.source_span_end_exclusive {
@@ -1521,9 +1505,10 @@ async fn transfer_put_source_wait_records_streaming_upload_body_fetches() {
     }
     let state = test_app_state_with_replay(StaticReplayClient::new(events));
     let stats = Arc::new(DeploymentStats::default());
-    let source = prepare_source_zip(&state, "source", "source.zip", &stats)
+    let source = prepare_source_zip(&state, "source", "source.zip", SOURCE_TAIL_BYTES)
         .await
-        .expect("source metadata HEAD succeeds");
+        .expect("source metadata read succeeds")
+        .source;
     let request = DeploymentRequest::for_test();
     let source_budget = SourceByteBudget::new(256 * 1024 * 1024, Arc::clone(&stats), false)
         .expect("valid test source budget");
@@ -2245,4 +2230,28 @@ async fn copy_diagnostics_reach_the_deployment_summary() {
     );
     // Copies must not leak into the PutObject section.
     assert_eq!(after.put_object.wire_attempts, 0);
+}
+
+const SOURCE_TAIL_BYTES: usize = 64;
+
+/// The suffix-range response `prepare_source_zip` reads the source's length and `ETag`
+/// from.
+fn source_tail_event(zip: &[u8]) -> ReplayEvent {
+    let start = zip.len().saturating_sub(SOURCE_TAIL_BYTES);
+    ReplayEvent::new(
+        Request::builder()
+            .uri("https://s3.test/expected")
+            .body(SdkBody::empty())
+            .unwrap(),
+        Response::builder()
+            .status(206)
+            .header("content-length", zip.len() - start)
+            .header(
+                "content-range",
+                format!("bytes {start}-{}/{}", zip.len() - 1, zip.len()),
+            )
+            .header("etag", "\"test-source-etag\"")
+            .body(SdkBody::from(zip[start..].to_vec()))
+            .unwrap(),
+    )
 }

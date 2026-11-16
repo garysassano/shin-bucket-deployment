@@ -3,9 +3,9 @@ use std::collections::BTreeMap;
 use anyhow::{Context, Result, anyhow, ensure};
 use bytes::Bytes;
 
-use super::SourceClient;
 use super::budget::{SourceByteBudget, SourcePlanningPermit};
-use super::range_reader::{S3RangeReader, align_down};
+use super::range_reader::{S3RangeReader, align_down, covering_block};
+use super::{SourceClient, SourceTail};
 
 const EOCD_SIGNATURE: [u8; 4] = 0x0605_4b50_u32.to_le_bytes();
 const ZIP64_LOCATOR_SIGNATURE: [u8; 4] = 0x0706_4b50_u32.to_le_bytes();
@@ -42,16 +42,24 @@ pub(crate) async fn prepare_zip_directory_reader(
     chunk_size: usize,
     budget: std::sync::Arc<SourceByteBudget>,
     streaming_headroom_bytes: u64,
+    tail: SourceTail,
 ) -> Result<PreparedZipDirectoryReader> {
     ensure!(
         source.len() >= EOCD_LEN,
         "source ZIP is too short to contain an end-of-central-directory record"
     );
 
-    let chunk_size = chunk_size.max(1);
-    let scan_chunk_size = chunk_size.min(METADATA_SCAN_CHUNK_BYTES);
+    let scan_chunk_size = metadata_scan_chunk_bytes(chunk_size);
     let mut preloaded = BTreeMap::new();
     let mut preloaded_bytes = 0_u64;
+    if !tail.bytes.is_empty() {
+        preloaded_bytes = tail.bytes.len() as u64;
+        ensure!(
+            preloaded_bytes <= budget.limit_bytes(),
+            "ZIP end-record search exceeds the invocation-global source budget"
+        );
+        preloaded.insert(tail.start, tail.bytes);
+    }
     let eocd_offset = locate_eocd(
         &source,
         scan_chunk_size,
@@ -69,17 +77,24 @@ pub(crate) async fn prepare_zip_directory_reader(
         &mut preloaded_bytes,
     )
     .await?;
-    // Preloaded blocks are keyed by `scan_chunk_size` alignment, so the parser can only
-    // reuse them while it reads at the same alignment. A central directory that outgrows
-    // one scan chunk is read at the streaming chunk size instead, where a single large
-    // aligned GET beats many small sequential ones; those blocks are then dropped.
-    let directory_fits_scan_chunk = info.central_directory_size <= scan_chunk_size as u64;
-    let (reader_chunk_size, reader_preloaded) = if directory_fits_scan_chunk {
-        (scan_chunk_size, preloaded)
-    } else {
-        (chunk_size, BTreeMap::new())
-    };
-    let planning_bytes = directory_memory_estimate(info, preloaded_bytes)?;
+
+    // The parser reads the central directory sequentially, and its exact range is known
+    // now. Fetch whatever the end-record search has not already loaded as exact ranges,
+    // so a directory larger than one scan chunk costs one GET of its own bytes rather than
+    // streaming-block-aligned reads that also fetch the file data preceding it.
+    let directory_end = info
+        .central_directory_start
+        .checked_add(info.central_directory_size)
+        .ok_or_else(|| anyhow!("ZIP central-directory range overflowed"))?;
+    let directory_gaps = uncovered_ranges(&preloaded, info.central_directory_start, directory_end);
+    let gap_bytes = directory_gaps
+        .iter()
+        .try_fold(0_u64, |total, (start, end)| total.checked_add(end - start))
+        .ok_or_else(|| anyhow!("ZIP central-directory range overflowed"))?;
+    let resident_bytes = preloaded_bytes
+        .checked_add(gap_bytes)
+        .ok_or_else(|| anyhow!("ZIP planning memory estimate overflowed"))?;
+    let planning_bytes = directory_memory_estimate(info, resident_bytes)?;
     let combined_bytes = planning_bytes
         .checked_add(streaming_headroom_bytes)
         .ok_or_else(|| anyhow!("ZIP planning and streaming memory estimate overflowed"))?;
@@ -92,12 +107,45 @@ pub(crate) async fn prepare_zip_directory_reader(
         .reserve_planning(planning_bytes)
         .await
         .context("failed to reserve source budget for ZIP central-directory planning")?;
+    for (start, end) in directory_gaps {
+        let bytes = source
+            .get_range(start, end - 1)
+            .await
+            .context("failed to read the ZIP central directory")?;
+        preloaded.insert(start, bytes);
+    }
 
     Ok(PreparedZipDirectoryReader {
-        reader: S3RangeReader::with_preloaded(source, reader_chunk_size, reader_preloaded),
+        reader: S3RangeReader::with_preloaded(source, scan_chunk_size, preloaded),
         central_directory_start: info.central_directory_start,
         _planning_permit: planning_permit,
     })
+}
+
+/// Size of the suffix the source metadata read fetches, and of every end-record probe.
+pub(crate) fn metadata_scan_chunk_bytes(source_block_bytes: usize) -> usize {
+    source_block_bytes.clamp(1, METADATA_SCAN_CHUNK_BYTES)
+}
+
+/// The sub-ranges of `start..end` that no preloaded block covers, in order.
+fn uncovered_ranges(preloaded: &BTreeMap<u64, Bytes>, start: u64, end: u64) -> Vec<(u64, u64)> {
+    let mut gaps = Vec::new();
+    let mut position = start;
+    while position < end {
+        if let Some(block_end) = covering_block(preloaded, position)
+            .map(|(block_start, block)| block_start + block.len() as u64)
+        {
+            position = block_end;
+            continue;
+        }
+        let gap_end = preloaded
+            .range(position..)
+            .next()
+            .map_or(end, |(next_start, _)| (*next_start).min(end));
+        gaps.push((position, gap_end));
+        position = gap_end;
+    }
+    gaps
 }
 
 async fn locate_eocd(
@@ -429,16 +477,21 @@ async fn load_block_for_offset(
         offset < source.len(),
         "ZIP metadata offset is outside the source object"
     );
-    let chunk_size = chunk_size.max(1) as u64;
-    let start = align_down(offset, chunk_size);
-    if preloaded.contains_key(&start) {
+    if let Some((start, _)) = covering_block(preloaded, offset) {
         return Ok(start);
     }
-    let end = source
-        .len()
-        .saturating_sub(1)
-        .min(start.saturating_add(chunk_size - 1));
-    let len = end - start + 1;
+    let chunk_size = chunk_size.max(1) as u64;
+    let start = align_down(offset, chunk_size);
+    // Stop before the next cached block (the source tail, for instance) rather than
+    // fetching its bytes a second time.
+    let end_exclusive = source.len().min(start.saturating_add(chunk_size)).min(
+        preloaded
+            .range(offset..)
+            .next()
+            .map_or(u64::MAX, |(next_start, _)| *next_start),
+    );
+    let end = end_exclusive - 1;
+    let len = end_exclusive - start;
     let projected = preloaded_bytes
         .checked_add(len)
         .ok_or_else(|| anyhow!("preloaded ZIP metadata size overflowed"))?;

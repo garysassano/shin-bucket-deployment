@@ -7,6 +7,7 @@ use aws_sdk_s3::config::retry::RetryConfig;
 use aws_sdk_s3::error::ProvideErrorMetadata;
 use aws_sdk_s3::error::SdkError;
 use aws_sdk_s3::types::{Delete, EncodingType, ObjectIdentifier};
+use futures_util::StreamExt;
 use tokio::time::Instant;
 use tracing::warn;
 
@@ -19,6 +20,9 @@ use crate::state::AppState;
 use super::retry::{RetryCoordinator, RetryDiagnostics, is_retryable_http_status};
 
 const MAX_RETAINED_DELETION_KEY_BYTES: usize = 4 * 1024 * 1024;
+/// `DeleteObjects` accepts at most 1,000 keys per request.
+const DELETE_OBJECTS_MAX_KEYS: usize = 1_000;
+const DELETE_OBJECTS_CONCURRENCY: usize = 4;
 
 pub(super) struct DestinationPlan {
     pub(super) objects: HashMap<String, DestinationObject>,
@@ -217,10 +221,24 @@ pub(super) async fn plan_destination(
     let mut listed_objects = 0_u64;
     let mut current_stale = DeletionCandidates::default();
     let mut previous_stale = DeletionCandidates::default();
-    let mut pager =
-        DestinationListPager::new(state, &request.dest_bucket_name, list_prefix.as_deref());
+    // Each listed key is judged on its own, so the key space can be listed as several
+    // concurrent ranges and their pages processed in whatever order they arrive.
+    let mut pages = futures_util::stream::select_all(
+        listing_segments(list_prefix.as_deref(), manifest)
+            .into_iter()
+            .map(|(start_after, upper_bound)| {
+                DestinationListPager::segment(
+                    state,
+                    &request.dest_bucket_name,
+                    list_prefix.as_deref(),
+                    start_after,
+                    upper_bound,
+                )
+                .into_pages()
+            }),
+    );
 
-    while let Some(response) = pager.next_page().await? {
+    while let Some(response) = pages.next().await.transpose()? {
         stats.record_destination_page_objects(response.contents().len() as u64);
         listed_objects = listed_objects.saturating_add(response.contents().len() as u64);
 
@@ -235,7 +253,7 @@ pub(super) async fn plan_destination(
             let relative_key = strip_destination_prefix(strip_prefix, key);
             let current_key_is_stale = record_destination_object(
                 key,
-                &relative_key,
+                relative_key,
                 object.e_tag(),
                 object.size().and_then(|size| u64::try_from(size).ok()),
                 DestinationRecordContext {
@@ -253,7 +271,7 @@ pub(super) async fn plan_destination(
                 && previous_cleanup_namespace
                     .as_deref()
                     .is_some_and(|prefix| key.starts_with(prefix))
-                && !manifest.contains_key(&relative_key)
+                && !manifest.contains_key(relative_key)
             {
                 previous_stale.retain(key);
             }
@@ -268,6 +286,43 @@ pub(super) async fn plan_destination(
         current_stale,
         previous_stale,
     })
+}
+
+/// Manifest keys per concurrent listing range; each range then spans at least two
+/// `ListObjectsV2` pages, so splitting is only worth it from twice this size.
+const LISTING_SEGMENT_MANIFEST_KEYS: usize = 2_000;
+const MAX_LISTING_SEGMENTS: usize = 8;
+
+/// Splits the planning listing into `(start_after, inclusive_upper_bound)` key ranges at
+/// evenly spaced manifest keys.
+///
+/// S3 lists keys in UTF-8 byte order, which is also `String` order, so consecutive
+/// boundaries partition the namespace: every key falls in exactly one range. The
+/// manifest only predicts where *current* objects sit; a namespace dominated by stale
+/// objects still lists correctly, just with less even ranges.
+fn listing_segments(
+    list_prefix: Option<&str>,
+    manifest: &DeploymentManifest,
+) -> Vec<(Option<String>, Option<String>)> {
+    let segments = (manifest.len() / LISTING_SEGMENT_MANIFEST_KEYS).clamp(1, MAX_LISTING_SEGMENTS);
+    let prefix = list_prefix.unwrap_or("");
+    let mut boundaries = manifest
+        .keys()
+        .enumerate()
+        .filter(|(index, _)| *index > 0 && (index * segments) % manifest.len() < segments)
+        .map(|(_, relative_key)| format!("{prefix}{relative_key}"))
+        .take(segments - 1)
+        .collect::<Vec<_>>();
+    boundaries.dedup();
+
+    let mut ranges = Vec::with_capacity(boundaries.len() + 1);
+    let mut start_after = None;
+    for boundary in boundaries {
+        ranges.push((start_after, Some(boundary.clone())));
+        start_after = Some(boundary);
+    }
+    ranges.push((start_after, None));
+    ranges
 }
 
 pub(super) async fn delete_stale_objects(
@@ -613,20 +668,46 @@ struct DestinationListPager<'a> {
     bucket: &'a str,
     prefix: Option<&'a str>,
     start_after: Option<String>,
+    /// Inclusive last key of a bounded listing range; keys after it belong to the next
+    /// range and are dropped from the page that crosses it.
+    upper_bound: Option<String>,
     finished: bool,
     missing_bucket_is_empty: bool,
 }
 
+type ListPage = aws_sdk_s3::operation::list_objects_v2::ListObjectsV2Output;
+
 impl<'a> DestinationListPager<'a> {
     fn new(state: &'a AppState, bucket: &'a str, prefix: Option<&'a str>) -> Self {
+        Self::segment(state, bucket, prefix, None, None)
+    }
+
+    /// Lists only the keys after `start_after` up to and including `upper_bound`.
+    fn segment(
+        state: &'a AppState,
+        bucket: &'a str,
+        prefix: Option<&'a str>,
+        start_after: Option<String>,
+        upper_bound: Option<String>,
+    ) -> Self {
         Self {
             state,
             bucket,
             prefix,
-            start_after: None,
+            start_after,
+            upper_bound,
             finished: false,
             missing_bucket_is_empty: false,
         }
+    }
+
+    fn into_pages(
+        self,
+    ) -> std::pin::Pin<Box<dyn futures_util::Stream<Item = Result<ListPage>> + Send + 'a>> {
+        Box::pin(futures_util::stream::try_unfold(
+            self,
+            |mut pager| async move { Ok(pager.next_page().await?.map(|page| (page, pager))) },
+        ))
     }
 
     /// Cleanup-listing variant: a missing bucket makes the namespace empty by
@@ -643,9 +724,7 @@ impl<'a> DestinationListPager<'a> {
         !self.finished
     }
 
-    async fn next_page(
-        &mut self,
-    ) -> Result<Option<aws_sdk_s3::operation::list_objects_v2::ListObjectsV2Output>> {
+    async fn next_page(&mut self) -> Result<Option<ListPage>> {
         if self.finished {
             return Ok(None);
         }
@@ -696,7 +775,17 @@ impl<'a> DestinationListPager<'a> {
             }
         }
         let last_key = last_key.map(ToOwned::to_owned);
-        if !response.is_truncated().unwrap_or(false) || last_key.is_none() {
+        let mut reached_upper_bound = false;
+        if let (Some(upper_bound), Some(contents)) =
+            (self.upper_bound.as_deref(), response.contents.as_mut())
+            && let Some(cut) = contents
+                .iter()
+                .position(|object| object.key().is_some_and(|key| key > upper_bound))
+        {
+            contents.truncate(cut);
+            reached_upper_bound = true;
+        }
+        if reached_upper_bound || !response.is_truncated().unwrap_or(false) || last_key.is_none() {
             self.finished = true;
         } else {
             self.start_after = last_key;
@@ -755,18 +844,25 @@ async fn delete_keys_optional_stats(
     retry_coordinator: &RetryCoordinator,
     work_deadline: Instant,
 ) -> Result<u64> {
+    // Retained stale-key lists can span many 1,000-key requests. They are independent,
+    // so a few run at once; the shared retry coordinator still slows every one of them
+    // down together when S3 throttles.
+    let mut chunks = futures_util::stream::iter(keys.chunks(DELETE_OBJECTS_MAX_KEYS))
+        .map(|chunk| {
+            delete_key_chunk(
+                state,
+                bucket,
+                chunk,
+                stats,
+                retry,
+                retry_coordinator,
+                work_deadline,
+            )
+        })
+        .buffer_unordered(DELETE_OBJECTS_CONCURRENCY);
     let mut deleted = 0_u64;
-    for chunk in keys.chunks(1000) {
-        let (chunk_deleted, bucket_missing) = delete_key_chunk(
-            state,
-            bucket,
-            chunk,
-            stats,
-            retry,
-            retry_coordinator,
-            work_deadline,
-        )
-        .await?;
+    while let Some(result) = chunks.next().await {
+        let (chunk_deleted, bucket_missing) = result?;
         deleted = deleted.saturating_add(chunk_deleted);
         if bucket_missing {
             return Ok(deleted);
@@ -1140,14 +1236,14 @@ fn record_destination_object_original(
     if relative_key.is_empty() {
         return false;
     }
-    if !context.manifest.contains_key(&relative_key) {
+    if !context.manifest.contains_key(relative_key) {
         return context.detect_stale_candidates
             && !key_is_excluded(key, context.protected_namespace)
-            && context.filters.should_include(&relative_key);
+            && context.filters.should_include(relative_key);
     }
 
     objects.insert(
-        relative_key,
+        relative_key.to_owned(),
         DestinationObject {
             etag: etag.and_then(normalize_etag),
             size,
@@ -1166,8 +1262,8 @@ fn unplanned_destination_key(
     let relative_key = strip_destination_prefix(strip_prefix, key);
     !relative_key.is_empty()
         && !key_is_excluded(key, protected_namespace)
-        && !manifest.contains_key(&relative_key)
-        && filters.is_none_or(|filters| filters.should_include(&relative_key))
+        && !manifest.contains_key(relative_key)
+        && filters.is_none_or(|filters| filters.should_include(relative_key))
 }
 
 #[cfg(test)]
@@ -1569,7 +1665,7 @@ mod tests {
                 let relative_key = strip_destination_prefix("site/", key);
                 if record_destination_object(
                     key,
-                    &relative_key,
+                    relative_key,
                     Some("\"etag\""),
                     Some(1),
                     context(detect),
@@ -1579,7 +1675,7 @@ mod tests {
                 }
                 if !relative_key.is_empty()
                     && previous_namespace.is_some_and(|prefix| key.starts_with(prefix))
-                    && !manifest.contains_key(&relative_key)
+                    && !manifest.contains_key(relative_key)
                 {
                     fused_previous.retain(key);
                 }
@@ -1670,7 +1766,7 @@ mod tests {
                     let relative_key = strip_destination_prefix("site/", key);
                     if record_destination_object(
                         key,
-                        &relative_key,
+                        relative_key,
                         Some("\"abc\""),
                         Some(1),
                         DestinationRecordContext {
@@ -2223,7 +2319,7 @@ mod tests {
 
         let has_stale_candidate = record_destination_object(
             "site/old.txt",
-            &strip_destination_prefix("site/", "site/old.txt"),
+            strip_destination_prefix("site/", "site/old.txt"),
             Some("\"ABC123\""),
             Some(10),
             DestinationRecordContext {
@@ -2264,7 +2360,7 @@ mod tests {
 
         let has_stale_candidate = record_destination_object(
             "site//index.html",
-            &strip_destination_prefix("site/", "site//index.html"),
+            strip_destination_prefix("site/", "site//index.html"),
             Some("\"alias-etag\""),
             Some(10),
             DestinationRecordContext {
@@ -2344,7 +2440,7 @@ mod tests {
 
         let manifest_key_is_stale = record_destination_object(
             "site/keep.txt",
-            &strip_destination_prefix("site/", "site/keep.txt"),
+            strip_destination_prefix("site/", "site/keep.txt"),
             None,
             Some(1),
             DestinationRecordContext {
@@ -2357,7 +2453,7 @@ mod tests {
         );
         let excluded_key_is_stale = record_destination_object(
             "site/debug.map",
-            &strip_destination_prefix("site/", "site/debug.map"),
+            strip_destination_prefix("site/", "site/debug.map"),
             None,
             Some(1),
             DestinationRecordContext {
@@ -2395,7 +2491,7 @@ mod tests {
 
         let has_stale_candidate = record_destination_object(
             "site/",
-            &strip_destination_prefix("site/", "site/"),
+            strip_destination_prefix("site/", "site/"),
             None,
             None,
             DestinationRecordContext {
@@ -2419,7 +2515,7 @@ mod tests {
 
         let has_stale_candidate = record_destination_object(
             "site/old.txt",
-            &strip_destination_prefix("site/", "site/old.txt"),
+            strip_destination_prefix("site/", "site/old.txt"),
             None,
             Some(1),
             DestinationRecordContext {
@@ -2552,6 +2648,199 @@ mod tests {
                 "<ListBucketResult><EncodingType>url</EncodingType><IsTruncated>{truncated}</IsTruncated>{contents}</ListBucketResult>"
             ),
         )
+    }
+
+    /// A bucket listing that honours `prefix` and `start-after` and pages by 1,000
+    /// keys, recording each request's `start-after`.
+    fn listing_state(
+        keys: Arc<Vec<String>>,
+        start_afters: Arc<Mutex<Vec<Option<String>>>>,
+    ) -> AppState {
+        let http = aws_smithy_http_client::test_util::infallible_client_fn(move |request| {
+            let query = request.uri().query().unwrap_or_default().to_string();
+            let parameter = |name: &str| {
+                query.split('&').find_map(|pair| {
+                    let (key, value) = pair.split_once('=')?;
+                    (key == name).then(|| urlencoding::decode(value).unwrap().into_owned())
+                })
+            };
+            let prefix = parameter("prefix").unwrap_or_default();
+            let start_after = parameter("start-after");
+            start_afters.lock().unwrap().push(start_after.clone());
+            let mut matching = keys
+                .iter()
+                .filter(|key| key.starts_with(&prefix))
+                .filter(|key| {
+                    start_after
+                        .as_deref()
+                        .is_none_or(|after| key.as_str() > after)
+                });
+            let page = matching.by_ref().take(1000).collect::<Vec<_>>();
+            let truncated = matching.next().is_some();
+            let contents = page
+                .iter()
+                .map(|key| {
+                    format!("<Contents><Key>{key}</Key><ETag>&quot;e&quot;</ETag><Size>1</Size></Contents>")
+                })
+                .collect::<String>();
+            Response::builder()
+                .status(200)
+                .body(SdkBody::from(format!(
+                    "<ListBucketResult><EncodingType>url</EncodingType><IsTruncated>{truncated}</IsTruncated>{contents}</ListBucketResult>"
+                )))
+                .unwrap()
+        });
+        let mut state =
+            crate::state::test_app_state_with_replay(StaticReplayClient::new(Vec::new()));
+        state.destination_s3 = aws_sdk_s3::Client::from_conf(
+            aws_sdk_s3::Config::builder()
+                .behavior_version_latest()
+                .region(aws_sdk_s3::config::Region::new("us-east-1"))
+                .credentials_provider(aws_sdk_s3::config::Credentials::new(
+                    "test-access-key",
+                    "test-secret-key",
+                    None,
+                    None,
+                    "shin-bucket-deployment-test",
+                ))
+                .endpoint_url("https://s3.test")
+                .force_path_style(true)
+                .http_client(http)
+                .build(),
+        );
+        state
+    }
+
+    #[tokio::test]
+    async fn a_large_namespace_is_listed_as_concurrent_ranges_with_the_same_result() {
+        const MANIFEST_KEYS: usize = 5_000;
+        let mut manifest = DeploymentManifest::new();
+        for index in 0..MANIFEST_KEYS {
+            let relative_key = format!("k{index:05}");
+            manifest.insert(
+                relative_key.clone(),
+                PlannedObject {
+                    relative_key,
+                    expected_etag: None,
+                    action: PlannedAction::CopyObject {
+                        source_index: 0,
+                        size: Some(1),
+                    },
+                },
+            );
+        }
+        // Every third manifest key is already deployed, every seventh index also has a
+        // stale neighbour, and keys outside the namespace must never be listed.
+        let mut bucket = vec!["other/k00001".to_string(), "sitf".to_string()];
+        let mut expected_stale = Vec::new();
+        for index in 0..MANIFEST_KEYS {
+            if index % 3 == 0 {
+                bucket.push(format!("site/k{index:05}"));
+            }
+            if index % 7 == 0 {
+                let stale = format!("site/k{index:05}-stale");
+                bucket.push(stale.clone());
+                expected_stale.push(stale);
+            }
+        }
+        bucket.push("site/zzz-stale".to_string());
+        expected_stale.push("site/zzz-stale".to_string());
+        bucket.sort();
+        let start_afters = Arc::new(Mutex::new(Vec::new()));
+        let state = listing_state(Arc::new(bucket), Arc::clone(&start_afters));
+        let request = DeploymentRequest::for_test();
+        let stats = DeploymentStats::default();
+        let filters = compile_filters(&[], &[]).unwrap();
+
+        let plan =
+            super::plan_destination(&state, &request, None, None, &filters, &manifest, &stats)
+                .await
+                .expect("segmented listing succeeds");
+
+        assert_eq!(plan.objects.len(), MANIFEST_KEYS.div_ceil(3));
+        assert!(
+            plan.objects
+                .keys()
+                .all(|key| key[1..].parse::<usize>().unwrap() % 3 == 0)
+        );
+        let mut stale = plan.current_stale.keys().unwrap().to_vec();
+        stale.sort();
+        assert_eq!(stale, expected_stale);
+        assert!(plan.previous_stale.keys().unwrap().is_empty());
+        let start_afters = start_afters.lock().unwrap();
+        assert!(
+            start_afters.contains(&Some("site/k02500".to_string())),
+            "the second range starts after the middle manifest key: {start_afters:?}"
+        );
+        assert!(
+            start_afters.len() > (MANIFEST_KEYS.div_ceil(3) + expected_stale.len()).div_ceil(1000),
+            "ranges are listed separately"
+        );
+    }
+
+    #[tokio::test]
+    async fn retained_keys_beyond_one_request_are_deleted_in_concurrent_chunks() {
+        let keys = (0..2_500)
+            .map(|index| format!("site/stale-{index:04}"))
+            .collect::<Vec<_>>();
+        let replay = StaticReplayClient::new(vec![
+            delete_success_event(),
+            delete_success_event(),
+            delete_success_event(),
+        ]);
+        let state = replay_app_state(replay.clone());
+        let stats = DeploymentStats::default();
+
+        let deleted = super::delete_keys_optional_stats(
+            &state,
+            "destination",
+            &keys,
+            Some(&stats),
+            &retry_options(1, 0),
+            &RetryCoordinator::new(),
+            tokio::time::Instant::now() + Duration::from_secs(60),
+        )
+        .await
+        .expect("chunked delete succeeds");
+
+        assert_eq!(deleted, 2_500);
+        let mut requested = replay
+            .actual_requests()
+            .map(|request| request_body(request).matches("<Key>").count())
+            .collect::<Vec<_>>();
+        requested.sort_unstable();
+        assert_eq!(requested, [500, 1_000, 1_000]);
+    }
+
+    #[test]
+    fn listing_segments_partition_at_manifest_boundaries() {
+        let mut manifest = DeploymentManifest::new();
+        for index in 0..4_000 {
+            let relative_key = format!("k{index:04}");
+            manifest.insert(
+                relative_key.clone(),
+                PlannedObject {
+                    relative_key,
+                    expected_etag: None,
+                    action: PlannedAction::CopyObject {
+                        source_index: 0,
+                        size: Some(1),
+                    },
+                },
+            );
+        }
+        assert_eq!(
+            super::listing_segments(Some("site/"), &manifest),
+            vec![
+                (None, Some("site/k2000".to_string())),
+                (Some("site/k2000".to_string()), None),
+            ]
+        );
+        manifest.retain(|key, _| key.as_str() < "k1999");
+        assert_eq!(
+            super::listing_segments(Some("site/"), &manifest),
+            vec![(None, None)]
+        );
     }
 
     fn request_body(request: &aws_sdk_s3::config::http::HttpRequest) -> String {
