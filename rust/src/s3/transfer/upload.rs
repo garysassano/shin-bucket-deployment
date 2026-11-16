@@ -34,7 +34,7 @@ use super::super::archive::entry::{
 use super::super::content_type::apply_put_content_type;
 use super::super::destination::{
     DestinationObject, DestinationWritePrecondition, destination_md5_and_size_match,
-    destination_write_precondition,
+    destination_write_precondition, normalize_etag,
 };
 use super::super::planner::ZipEntryPlan;
 use super::super::retry::RetryCoordinator;
@@ -610,7 +610,8 @@ pub(super) async fn upload_payload(
         let attempt_elapsed = attempt_started.map_or(Duration::ZERO, |started| started.elapsed());
 
         match result {
-            Ok(_) => {
+            Ok(output) => {
+                verify_put_etag(destination_key, &payload, &output)?;
                 context.stats.add_uploaded_object(payload.content_length());
                 return Ok(());
             }
@@ -699,6 +700,41 @@ pub(super) async fn upload_payload(
             sanitize_diagnostic(destination_key, MAX_DIAGNOSTIC_VALUE_BYTES)
         )
     }))
+}
+
+/// Compares the `ETag` S3 reports for a completed PutObject with the MD5 the provider
+/// computed over the bytes it sent.
+///
+/// Under SSE-S3 a single-part object's `ETag` is the plaintext MD5, and later deployments
+/// skip unchanged objects by that equality. A mismatch therefore means either the stored
+/// bytes differ from what was hashed, or the destination applied a different encryption
+/// mode than the SSE-S3 contract requires; either way the deployment must not report
+/// success. A payload whose MD5 was never computed, or a response without an `ETag`,
+/// carries nothing to compare.
+fn verify_put_etag(
+    destination_key: &str,
+    payload: &UploadPayload,
+    output: &aws_sdk_s3::operation::put_object::PutObjectOutput,
+) -> Result<()> {
+    let (Some(expected), Some(actual)) = (
+        payload.body_state().etag_md5(),
+        output.e_tag().and_then(normalize_etag),
+    ) else {
+        return Ok(());
+    };
+    if actual == expected {
+        return Ok(());
+    }
+    let encryption = output
+        .server_side_encryption()
+        .map_or("not reported", |encryption| encryption.as_str());
+    Err(anyhow!(
+        "destination PutObject for {} returned ETag {} but the uploaded bytes have MD5 {expected}; \
+         destination objects must use SSE-S3 (server-side encryption: {})",
+        sanitize_diagnostic(destination_key, MAX_DIAGNOSTIC_VALUE_BYTES),
+        sanitize_diagnostic(&actual, MAX_DIAGNOSTIC_VALUE_BYTES),
+        sanitize_diagnostic(encryption, MAX_DIAGNOSTIC_VALUE_BYTES),
+    ))
 }
 
 fn apply_put_precondition(

@@ -24,6 +24,7 @@ const MAX_INVALIDATION_PATHS: usize = 3_000;
 /// distribution's active-wildcard quota. A wildcard path is one whose final
 /// character is `*`.
 const MAX_WILDCARD_INVALIDATION_PATHS: usize = 15;
+const TOO_MANY_INVALIDATIONS_IN_PROGRESS: &str = "TooManyInvalidationsInProgress";
 
 /// An invalidation created by [`create_invalidation`], ready to be awaited by
 /// [`wait_for_invalidation`]. Splitting creation from the completion wait lets a
@@ -58,29 +59,52 @@ pub(crate) async fn create_invalidation(
         )
         .build()?;
 
-    let response = match timeout_at(
-        deadline,
-        state
-            .cloudfront
-            .create_invalidation()
-            .distribution_id(distribution_id)
-            .invalidation_batch(batch)
-            .send(),
-    )
-    .await
-    .context("CloudFront invalidation creation exceeded the deployment work deadline")?
-    {
-        Ok(response) => response,
-        Err(error)
-            if missing_distribution_is_success
-                && error
+    // CloudFront caps in-progress invalidations per distribution and rejects a new one
+    // with `TooManyInvalidationsInProgress`, which the SDK does not retry. By this point
+    // every object has been written, so waiting for capacity within the work deadline
+    // beats failing the deployment. Every attempt reuses the same caller reference, so a
+    // retry can never create a second invalidation for this request.
+    let response = loop {
+        match timeout_at(
+            deadline,
+            state
+                .cloudfront
+                .create_invalidation()
+                .distribution_id(distribution_id)
+                .invalidation_batch(batch.clone())
+                .send(),
+        )
+        .await
+        .context("CloudFront invalidation creation exceeded the deployment work deadline")?
+        {
+            Ok(response) => break response,
+            Err(error)
+                if missing_distribution_is_success
+                    && error
+                        .as_service_error()
+                        .and_then(ProvideErrorMetadata::code)
+                        == Some("NoSuchDistribution") =>
+            {
+                return Ok(None);
+            }
+            Err(error)
+                if error
                     .as_service_error()
                     .and_then(ProvideErrorMetadata::code)
-                    == Some("NoSuchDistribution") =>
-        {
-            return Ok(None);
+                    == Some(TOO_MANY_INVALIDATIONS_IN_PROGRESS) =>
+            {
+                let Some(retry_at) = next_wait_before_deadline(Instant::now(), deadline) else {
+                    return Err(error).context(
+                        "CloudFront invalidation capacity did not free up before the deployment work deadline",
+                    );
+                };
+                tracing::warn!(
+                    "CloudFront has too many invalidations in progress for the distribution; retrying"
+                );
+                sleep_until(retry_at).await;
+            }
+            Err(error) => return Err(error.into()),
         }
-        Err(error) => return Err(error.into()),
     };
 
     if !wait_for_completion {
@@ -152,12 +176,16 @@ fn next_poll_at(now: Instant, deadline: Instant) -> Result<Instant> {
         now < deadline,
         "CloudFront invalidation polling exceeded the deployment work deadline"
     );
-    let next_poll = now.checked_add(poll_interval()).unwrap_or(deadline);
-    ensure!(
-        next_poll < deadline,
-        "CloudFront invalidation did not complete before the deployment work deadline"
-    );
-    Ok(next_poll)
+    next_wait_before_deadline(now, deadline).ok_or_else(|| {
+        anyhow!("CloudFront invalidation did not complete before the deployment work deadline")
+    })
+}
+
+/// One jittered poll interval from `now`, or `None` when waking then would leave no time
+/// before `deadline` for the request that follows.
+fn next_wait_before_deadline(now: Instant, deadline: Instant) -> Option<Instant> {
+    now.checked_add(poll_interval())
+        .filter(|wake| *wake < deadline)
 }
 
 fn poll_interval() -> Duration {
@@ -232,12 +260,16 @@ fn invalidation_quantity(path_count: usize) -> Result<i32> {
 mod tests {
     use std::time::Duration;
 
+    use aws_sdk_s3::primitives::SdkBody;
+    use aws_smithy_http_client::test_util::{ReplayEvent, StaticReplayClient};
     use tokio::time::Instant;
+
+    use crate::state::AppState;
 
     use super::{
         INVALIDATION_POLL_INTERVAL, INVALIDATION_POLL_JITTER, MAX_INVALIDATION_PATH_CHARACTERS,
-        MAX_INVALIDATION_PATHS, MAX_WILDCARD_INVALIDATION_PATHS, invalidation_quantity,
-        next_poll_at, poll_interval, validate_invalidation_paths,
+        MAX_INVALIDATION_PATHS, MAX_WILDCARD_INVALIDATION_PATHS, create_invalidation,
+        invalidation_quantity, next_poll_at, poll_interval, validate_invalidation_paths,
     };
 
     #[test]
@@ -351,6 +383,106 @@ mod tests {
         // earliest possible wake-up and remains a valid deadline boundary.
         assert!(next_poll_at(now, now + INVALIDATION_POLL_INTERVAL).is_err());
         assert!(next_poll_at(now, now).is_err());
+    }
+
+    fn cloudfront_replay_state(replay: StaticReplayClient) -> AppState {
+        let mut state =
+            crate::state::test_app_state_with_replay(StaticReplayClient::new(Vec::new()));
+        state.cloudfront = aws_sdk_cloudfront::Client::from_conf(
+            aws_sdk_cloudfront::Config::builder()
+                .behavior_version_latest()
+                .region(aws_sdk_cloudfront::config::Region::new("us-east-1"))
+                .credentials_provider(aws_sdk_cloudfront::config::Credentials::new(
+                    "test-access-key",
+                    "test-secret-key",
+                    None,
+                    None,
+                    "shin-bucket-deployment-test",
+                ))
+                .endpoint_url("https://cloudfront.test")
+                .http_client(replay)
+                .build(),
+        );
+        state
+    }
+
+    fn cloudfront_event(status: u16, body: &str) -> ReplayEvent {
+        ReplayEvent::new(
+            http::Request::builder()
+                .uri("https://cloudfront.test/expected")
+                .body(SdkBody::empty())
+                .unwrap(),
+            http::Response::builder()
+                .status(status)
+                .header("content-type", "text/xml")
+                .body(SdkBody::from(body.to_string()))
+                .unwrap(),
+        )
+    }
+
+    fn too_many_invalidations_event() -> ReplayEvent {
+        cloudfront_event(
+            400,
+            r#"<?xml version="1.0"?><ErrorResponse xmlns="http://cloudfront.amazonaws.com/doc/2020-05-31/"><Error><Type>Sender</Type><Code>TooManyInvalidationsInProgress</Code><Message>busy</Message></Error><RequestId>request</RequestId></ErrorResponse>"#,
+        )
+    }
+
+    fn created_invalidation_event() -> ReplayEvent {
+        cloudfront_event(
+            201,
+            r#"<?xml version="1.0"?><Invalidation xmlns="http://cloudfront.amazonaws.com/doc/2020-05-31/"><Id>INVALIDATION</Id><Status>InProgress</Status><CreateTime>2026-01-01T00:00:00Z</CreateTime><InvalidationBatch><Paths><Quantity>1</Quantity><Items><Path>/*</Path></Items></Paths><CallerReference>reference</CallerReference></InvalidationBatch></Invalidation>"#,
+        )
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn invalidation_creation_waits_out_too_many_invalidations_in_progress() {
+        let replay = StaticReplayClient::new(vec![
+            too_many_invalidations_event(),
+            created_invalidation_event(),
+        ]);
+        let state = cloudfront_replay_state(replay.clone());
+        let started = Instant::now();
+
+        let created = create_invalidation(
+            &state,
+            "DISTRIBUTION",
+            &["/*".to_string()],
+            true,
+            "reference",
+            false,
+            started + Duration::from_secs(120),
+        )
+        .await
+        .expect("the retry should create the invalidation")
+        .expect("waiting for completion returns the invalidation");
+
+        assert_eq!(created.invalidation_id, "INVALIDATION");
+        assert_eq!(replay.actual_requests().count(), 2);
+        assert!(started.elapsed() >= INVALIDATION_POLL_INTERVAL);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn invalidation_creation_stops_retrying_before_the_work_deadline() {
+        let replay = StaticReplayClient::new(vec![too_many_invalidations_event()]);
+        let state = cloudfront_replay_state(replay.clone());
+
+        let error = match create_invalidation(
+            &state,
+            "DISTRIBUTION",
+            &["/*".to_string()],
+            true,
+            "reference",
+            false,
+            Instant::now() + INVALIDATION_POLL_INTERVAL,
+        )
+        .await
+        {
+            Ok(_) => panic!("a retry that cannot finish before the deadline must not be attempted"),
+            Err(error) => error,
+        };
+
+        assert!(format!("{error:#}").contains("capacity did not free up"));
+        assert_eq!(replay.actual_requests().count(), 1);
     }
 
     #[test]

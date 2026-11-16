@@ -4,6 +4,12 @@ This file holds authored release notes for `ShinBucketDeployment` changes that b
 
 ## Unreleased
 
+### Uploads fail when S3 reports an `ETag` that is not the uploaded MD5
+
+After each successful `PutObject`, the provider now compares the response `ETag` with the MD5 of the bytes it sent and fails the deployment when they differ. Under the supported SSE-S3 destination encryption they always match, so a mismatch means the stored bytes differ from what was sent, or the bucket applied another encryption mode. The error names the encryption S3 reported.
+
+Affected: only destinations whose default encryption was changed outside the construct to SSE-KMS or DSSE-KMS, which synthesis already rejects. Those deployments previously succeeded while re-uploading every object on every run, because no skip decision could ever match; they now fail on the first upload. Restore SSE-S3 on the bucket.
+
 ### Deploy-time values are encoded per marker and require `aws-cdk-lib` 2.276.0
 
 `aws-cdk-lib` 2.276.0 ([aws/aws-cdk#39542](https://github.com/aws/aws-cdk/pull/39542)) changed what `Source.data`, `Source.jsonData` and `Source.yamlData` bind. Values now arrive unquoted, with a per-marker `markerEncodings` map, and `jsonData` escapes by default. Shin's previous provider rejected that shape, and its JSON escaping assumed the old pre-quoted values, so the peer dependency is now `aws-cdk-lib` `^2.276.0`. That release writes cloud-assembly schema 55, so apps also need AWS CDK CLI 2.1148.0 or later.
