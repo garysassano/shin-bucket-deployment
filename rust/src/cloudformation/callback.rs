@@ -247,7 +247,12 @@ async fn send_response_with_policy(
                     ));
                 }
             }
-            Err(error) if error.is_connect() || error.is_timeout() => {
+            // The callback is a PUT of a fixed body to a presigned URL, so replaying it
+            // is idempotent. Connection resets and incomplete responses (typical of a
+            // pooled connection that went stale between warm invocations) are neither
+            // `is_connect` nor `is_timeout`, so retry every transport failure except a
+            // request that could not even be built.
+            Err(error) if !error.is_builder() => {
                 if let Some(stats) = stats {
                     stats.record_callback_failure();
                 }
@@ -421,6 +426,7 @@ mod tests {
     enum MockCallback {
         Status(u16),
         Timeout(Duration),
+        CloseWithoutResponse,
     }
 
     struct MockCallbackServer {
@@ -495,6 +501,11 @@ mod tests {
                 stream.flush().expect("flush callback response");
             }
             MockCallback::Timeout(duration) => thread::sleep(duration),
+            MockCallback::CloseWithoutResponse => {
+                stream
+                    .shutdown(std::net::Shutdown::Both)
+                    .expect("close callback connection");
+            }
         }
     }
 
@@ -567,6 +578,26 @@ mod tests {
             destination_owner_id: "callback-owner".to_string(),
             ..crate::deployment::DeploymentRequest::for_test()
         }
+    }
+
+    #[tokio::test]
+    async fn callback_retries_a_connection_closed_before_the_response() {
+        let server = MockCallbackServer::start(vec![
+            MockCallback::CloseWithoutResponse,
+            MockCallback::Status(200),
+        ]);
+        let result = send_response_with_policy(
+            &callback_client(Duration::from_secs(1)),
+            &server.url,
+            b"{}",
+            TokioInstant::now() + Duration::from_secs(5),
+            test_retry_policy(3),
+            None,
+        )
+        .await;
+
+        assert!(result.is_ok(), "unexpected callback failure: {result:?}");
+        assert_eq!(server.finish(), 2);
     }
 
     #[tokio::test]
