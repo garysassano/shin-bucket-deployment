@@ -211,6 +211,56 @@ async fn sse_s3_conflict_reconciliation_uses_md5_etag_without_acl_reads() {
     }
 }
 
+async fn run_single_put(response: ReplayEvent) -> (Result<()>, DeploymentStats) {
+    let replay = StaticReplayClient::new(vec![response]);
+    let client = replay_s3_client(replay);
+    let diagnostics = WriteDiagnostics::default();
+    let stats = DeploymentStats::default();
+    let retry_coordinator = RetryCoordinator::new();
+    let retry = test_retry_options();
+    let result = upload_payload(
+        PutContext {
+            destination_s3: &client,
+            destination_bucket: "destination",
+            retry: &retry,
+            retry_coordinator: &retry_coordinator,
+            diagnostics: &diagnostics,
+            stats: &stats,
+            work_deadline: test_work_deadline(),
+        },
+        "file.txt",
+        test_payload(),
+        Some(DestinationWritePrecondition::IfNoneMatch),
+    )
+    .await;
+    (result, stats)
+}
+
+#[tokio::test]
+async fn completed_put_must_report_the_md5_of_the_uploaded_bytes() {
+    let (matching, _) = run_single_put(head_event(vec![(
+        "etag",
+        "\"5D41402ABC4B2A76B9719D911017C592\"",
+    )]))
+    .await;
+    matching.expect("an ETag equal to the uploaded MD5 is accepted");
+
+    let (missing, _) = run_single_put(head_event(Vec::new())).await;
+    missing.expect("a response without an ETag carries nothing to compare");
+
+    let (mismatched, stats) = run_single_put(head_event(vec![
+        ("etag", "\"00000000000000000000000000000000\""),
+        ("x-amz-server-side-encryption", "aws:kms"),
+    ]))
+    .await;
+    let error = mismatched.expect_err("an ETag that is not the uploaded MD5 must fail");
+    let message = format!("{error:#}");
+    assert!(message.contains("must use SSE-S3"), "{message}");
+    assert!(message.contains("aws:kms"), "{message}");
+    let summary = stats.snapshot("Update", "failure", &DeploymentRequest::for_test());
+    assert_eq!(summary.counts.uploaded_objects, 0);
+}
+
 #[tokio::test]
 async fn conditional_put_retries_an_unmatched_409() {
     let (result, replay, diagnostics, stats) = run_conditional_put(
