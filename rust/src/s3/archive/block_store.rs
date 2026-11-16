@@ -252,9 +252,22 @@ impl SourceBlockStore {
             while tasks.len() < self.source_get_concurrency && next_index < self.blocks.len() {
                 let index = next_index;
                 next_index += 1;
-                let Some(reservation) =
-                    self.reserve_fetch(index, SourceFetchMode::Prefetch).await?
-                else {
+                // A prefetch reservation can wait for window or budget capacity, and
+                // only completed fetches (followed by readers consuming them) free that
+                // capacity. Keep polling the in-flight fetches during the wait: a
+                // `FuturesUnordered` makes progress only while it is polled, so awaiting
+                // the reservation alone froze every in-flight GET and could deadlock on
+                // the block the readers needed next.
+                let reserve = self.reserve_fetch(index, SourceFetchMode::Prefetch);
+                tokio::pin!(reserve);
+                let reservation = loop {
+                    tokio::select! {
+                        biased;
+                        reservation = &mut reserve => break reservation?,
+                        Some(()) = tasks.next(), if !tasks.is_empty() => {}
+                    }
+                };
+                let Some(reservation) = reservation else {
                     continue;
                 };
                 tasks.push(async move {

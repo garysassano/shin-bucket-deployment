@@ -1927,6 +1927,141 @@ async fn open_entry_data_reader_rejects_header_bytes_outside_every_planned_block
     );
 }
 
+/// Serves ranged GETs from `source`, holding back the body of the block that starts
+/// at offset 0 until `release` is set.
+fn gated_first_block_source_client(
+    source: Arc<Vec<u8>>,
+    started: Arc<AtomicBool>,
+    released: Arc<AtomicBool>,
+    waker: Arc<AtomicWaker>,
+) -> Arc<SourceClient> {
+    let len = source.len() as u64;
+    let http = aws_smithy_http_client::test_util::infallible_client_fn(move |request| {
+        let (start, end) = request
+            .headers()
+            .get("range")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.strip_prefix("bytes="))
+            .and_then(|value| value.split_once('-'))
+            .and_then(|(start, end)| Some((start.parse::<u64>().ok()?, end.parse::<u64>().ok()?)))
+            .expect("ranged GET");
+        let bytes = Bytes::copy_from_slice(&source[start as usize..=end as usize]);
+        let response = Response::builder()
+            .status(206)
+            .header("content-length", bytes.len())
+            .header(
+                "content-range",
+                format!("bytes {start}-{end}/{}", source.len()),
+            );
+        if start == 0 {
+            response
+                .body(SdkBody::from_body_1_x(GatedResponseBody {
+                    started: Arc::clone(&started),
+                    released: Arc::clone(&released),
+                    waker: Arc::clone(&waker),
+                    bytes: Some(bytes),
+                }))
+                .unwrap()
+        } else {
+            response.body(SdkBody::from(bytes.to_vec())).unwrap()
+        }
+    });
+    let config = aws_sdk_s3::Config::builder()
+        .behavior_version_latest()
+        .region(aws_sdk_s3::config::Region::new("us-east-1"))
+        .credentials_provider(aws_sdk_s3::config::Credentials::new(
+            "test-access-key",
+            "test-secret-key",
+            None,
+            None,
+            "shin-bucket-deployment-test",
+        ))
+        .endpoint_url("https://s3.test")
+        .force_path_style(true)
+        .http_client(http)
+        .build();
+    Arc::new(SourceClient {
+        client: aws_sdk_s3::Client::from_conf(config),
+        bucket: "bucket".to_string(),
+        key: "archive.zip".to_string(),
+        len,
+        etag: "\"test-source-etag\"".to_string(),
+        diagnostics: Arc::new(SourceDiagnostics::new(len)),
+    })
+}
+
+#[tokio::test]
+async fn scheduler_keeps_in_flight_fetches_moving_while_waiting_for_window_capacity() {
+    // Three one-block entries, two concurrent GETs, and a window of exactly two
+    // blocks (the adaptive floor of `source_block_bytes * source_get_concurrency`).
+    // Block 1 arrives first, so the scheduler reserves block 2 and waits for window
+    // capacity while block 0 is still in flight. That wait must not stop block 0's
+    // GET, or the reader that needs block 0 next waits until the work deadline.
+    const BLOCK: u64 = 64;
+    let source: Arc<Vec<u8>> = Arc::new((0..3 * BLOCK).map(|byte| byte as u8).collect());
+    let started = Arc::new(AtomicBool::new(false));
+    let released = Arc::new(AtomicBool::new(false));
+    let waker = Arc::new(AtomicWaker::new());
+    let plans = [
+        plan_with_span("a", 0, BLOCK),
+        plan_with_span("b", BLOCK, 2 * BLOCK),
+        plan_with_span("c", 2 * BLOCK, 3 * BLOCK),
+    ];
+    let budget = SourceByteBudget::new(1024 * 1024, Arc::new(DeploymentStats::default()), false)
+        .expect("valid test source budget");
+    let store = SourceBlockStore::new(
+        gated_first_block_source_client(
+            Arc::clone(&source),
+            Arc::clone(&started),
+            Arc::clone(&released),
+            Arc::clone(&waker),
+        ),
+        &plans,
+        SourceBlockOptions {
+            block_bytes: BLOCK as usize,
+            merge_gap_bytes: 0,
+            get_concurrency: 2,
+            window_bytes: 2 * BLOCK as usize,
+        },
+        budget,
+    )
+    .expect("store constructs");
+    assert_eq!(store.blocks.len(), 3);
+    store.start_scheduler();
+
+    let block1 = tokio::time::timeout(Duration::from_secs(1), store.slice_from(BLOCK, 2 * BLOCK))
+        .await
+        .expect("block 1 should arrive")
+        .expect("block 1 read");
+    assert_eq!(
+        &block1.bytes[..],
+        &source[BLOCK as usize..2 * BLOCK as usize]
+    );
+    wait_for_test_condition(|| {
+        matches!(
+            store.state.lock().expect("source block state").slots[2].status,
+            SourceBlockStatus::Pending
+        ) && store
+            .state
+            .lock()
+            .expect("source block state")
+            .window_committed_bytes
+            == 2 * BLOCK
+    })
+    .await;
+
+    released.store(true, Ordering::Release);
+    waker.wake();
+
+    let block0 = tokio::time::timeout(Duration::from_secs(1), store.slice_from(0, BLOCK))
+        .await
+        .expect("block 0 must arrive while the scheduler waits for window capacity")
+        .expect("block 0 read");
+    assert_eq!(&block0.bytes[..], &source[..BLOCK as usize]);
+    assert!(started.load(Ordering::Acquire));
+    store.cancel("test finished");
+}
+
 #[test]
 fn source_diagnostics_splits_waits_and_replay_refetch_reasons() {
     let diagnostics = SourceDiagnostics::new(1024);
