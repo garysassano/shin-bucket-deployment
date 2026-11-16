@@ -6,6 +6,7 @@ use anyhow::{Context, Result, anyhow};
 use async_zip::base::read::seek::ZipFileReader;
 use async_zip::{Compression, StoredZipEntry};
 use crc32fast::Hasher as Crc32Hasher;
+use futures_util::{StreamExt, TryStreamExt};
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncReadExt;
 
@@ -20,11 +21,12 @@ use crate::util::{MAX_DIAGNOSTIC_VALUE_BYTES, sanitize_diagnostic};
 
 use super::archive::block_store::{SourceBlockOptions, SourceBlockStore};
 use super::archive::budget::SourceByteBudget;
+use super::archive::directory::metadata_scan_chunk_bytes;
 use super::archive::directory::prepare_zip_directory_reader;
 use super::archive::entry::{
     validate_zip_entry_output, validate_zip_entry_size_not_exceeded, zip_entry_reader,
 };
-use super::archive::prepare_source_zip;
+use super::archive::{PreparedSource, SourceTail, prepare_source_zip};
 use super::destination::{
     DestinationObject, DestinationWritePrecondition, destination_etag_matches,
     destination_write_precondition, normalize_etag,
@@ -174,28 +176,72 @@ pub(super) async fn plan_deployment(
     stats: &DeploymentStats,
     source_budget: std::sync::Arc<SourceByteBudget>,
 ) -> Result<(Vec<SourceArchive>, DeploymentManifest)> {
+    if request.extract {
+        plan_archive_sources(state, request, filters, stats, source_budget).await
+    } else {
+        Ok((
+            Vec::new(),
+            plan_copy_sources(state, request, filters, stats).await?,
+        ))
+    }
+}
+
+/// Plans each source archive in order, fetching the next archive's metadata tail while
+/// the current archive's directory is planned.
+///
+/// Directory planning itself stays sequential: the embedded-catalog admission check relies
+/// on the current archive's planning reservation being the only one outstanding. The
+/// prefetched tail is at most one metadata scan chunk and is charged to the budget when
+/// its own archive's planning reservation is taken.
+///
+/// `planSourceHeads` keeps partitioning the plan phase: the first metadata read is charged
+/// in full, and each overlapped prefetch only for the time it kept planning waiting.
+async fn plan_archive_sources(
+    state: &AppState,
+    request: &DeploymentRequest,
+    filters: &Filters,
+    stats: &DeploymentStats,
+    source_budget: std::sync::Arc<SourceByteBudget>,
+) -> Result<(Vec<SourceArchive>, DeploymentManifest)> {
+    let source_count = request.source_bucket_names.len();
+    let tail_bytes = metadata_scan_chunk_bytes(request.runtime.source_block_bytes);
+    let prepare = |source_index: usize| {
+        prepare_source_zip(
+            state,
+            &request.source_bucket_names[source_index],
+            &request.source_object_keys[source_index],
+            tail_bytes,
+        )
+    };
     let mut archives = Vec::new();
     let mut manifest = DeploymentManifest::new();
+    if source_count == 0 {
+        return Ok((archives, manifest));
+    }
 
-    for source_index in 0..request.source_bucket_names.len() {
-        if request.extract {
-            let source = prepare_source_zip(
-                state,
-                &request.source_bucket_names[source_index],
-                &request.source_object_keys[source_index],
-                stats,
-            )
-            .await?;
-            let archive_index = archives.len();
-            stats.add_source_archive(source.len());
-            archives.push(SourceArchive {
-                source: source.clone(),
-            });
+    let started = std::time::Instant::now();
+    let first = prepare(0).await;
+    stats.add_plan_source_heads_micros(crate::util::duration_micros(started.elapsed()));
+    let mut next = Some(first?);
 
-            add_archive_entries_to_manifest(
+    for source_index in 0..source_count {
+        let PreparedSource { source, tail } = next
+            .take()
+            .ok_or_else(|| anyhow!("source archive {source_index} was not prepared"))?;
+        let archive_index = archives.len();
+        stats.add_source_archive(source.len());
+        archives.push(SourceArchive {
+            source: source.clone(),
+        });
+
+        let started = std::time::Instant::now();
+        let planning = async {
+            let started = std::time::Instant::now();
+            let result = add_archive_entries_to_manifest(
                 archive_index,
                 source_index,
                 source,
+                tail,
                 ArchivePlanningContext {
                     request,
                     filters,
@@ -204,36 +250,78 @@ pub(super) async fn plan_deployment(
                 },
                 &mut manifest,
             )
-            .await?;
-        } else {
-            let relative_key = source_basename(&request.source_object_keys[source_index])?;
-            if !filters.should_include(&relative_key) {
-                stats.add_filtered_entry();
-                continue;
+            .await;
+            (result, started.elapsed())
+        };
+        let prefetch = async {
+            if source_index + 1 < source_count {
+                Some(prepare(source_index + 1).await)
+            } else {
+                None
             }
-            let (expected_etag, size) = source_object_metadata(
-                state,
-                &request.source_bucket_names[source_index],
-                &request.source_object_keys[source_index],
-                stats,
-            )
-            .await?;
-
-            insert_manifest_object(
-                &mut manifest,
-                PlannedObject {
-                    relative_key,
-                    expected_etag: Some(expected_etag),
-                    action: PlannedAction::CopyObject {
-                        source_index,
-                        size: Some(size),
-                    },
-                },
-            );
-        }
+        };
+        let ((planned, planning_elapsed), prefetched) = tokio::join!(planning, prefetch);
+        stats.add_plan_source_heads_micros(crate::util::duration_micros(
+            started.elapsed().saturating_sub(planning_elapsed),
+        ));
+        planned?;
+        next = prefetched.transpose()?;
     }
 
     Ok((archives, manifest))
+}
+
+/// Bound on concurrent copy-mode source `HeadObject` requests.
+const SOURCE_METADATA_CONCURRENCY: usize = 16;
+
+/// Plans copy-mode sources. Their metadata reads are independent, so they run
+/// concurrently; results are applied in source order so a later source still replaces an
+/// earlier one at the same destination key. `planSourceHeads` records the wall time.
+async fn plan_copy_sources(
+    state: &AppState,
+    request: &DeploymentRequest,
+    filters: &Filters,
+    stats: &DeploymentStats,
+) -> Result<DeploymentManifest> {
+    let mut included = Vec::new();
+    for source_index in 0..request.source_bucket_names.len() {
+        let relative_key = source_basename(&request.source_object_keys[source_index])?;
+        if filters.should_include(&relative_key) {
+            included.push((source_index, relative_key));
+        } else {
+            stats.add_filtered_entry();
+        }
+    }
+
+    let started = std::time::Instant::now();
+    let metadata = futures_util::stream::iter(included.iter().map(|(source_index, _)| {
+        source_object_metadata(
+            state,
+            &request.source_bucket_names[*source_index],
+            &request.source_object_keys[*source_index],
+        )
+    }))
+    .buffered(SOURCE_METADATA_CONCURRENCY)
+    .try_collect::<Vec<_>>()
+    .await;
+    stats.add_plan_source_heads_micros(crate::util::duration_micros(started.elapsed()));
+
+    let mut manifest = DeploymentManifest::new();
+    for ((source_index, relative_key), (expected_etag, size)) in included.into_iter().zip(metadata?)
+    {
+        insert_manifest_object(
+            &mut manifest,
+            PlannedObject {
+                relative_key,
+                expected_etag: Some(expected_etag),
+                action: PlannedAction::CopyObject {
+                    source_index,
+                    size: Some(size),
+                },
+            },
+        );
+    }
+    Ok(manifest)
 }
 
 pub(super) fn collect_copy_plans(
@@ -361,23 +449,15 @@ async fn source_object_metadata(
     state: &AppState,
     bucket: &str,
     key: &str,
-    stats: &DeploymentStats,
 ) -> Result<(String, u64)> {
-    // planSourceHeads: the per-source metadata await in copy mode. Like the
-    // extract-mode `HeadObject`, it runs in the `plan_deployment` loop outside
-    // every ZIP planning bucket, so the span is exclusive and feeds the plan
-    // parts total. The span is recorded on the error path too: a failed or
-    // timed-out HEAD still waited, and failure summaries retain these stats.
-    let started = std::time::Instant::now();
-    let head = state
+    let response = state
         .source_s3
         .head_object()
         .bucket(bucket)
         .key(key)
         .send()
-        .await;
-    stats.add_plan_source_heads_micros(crate::util::duration_micros(started.elapsed()));
-    let response = head.with_context(|| {
+        .await
+        .with_context(|| {
         format!(
             "failed to read source object metadata s3://{bucket}/{key}; source buckets must be in the provider's AWS Region"
         )
@@ -398,6 +478,7 @@ async fn add_archive_entries_to_manifest(
     archive_index: usize,
     source_index: usize,
     source: std::sync::Arc<super::archive::SourceClient>,
+    tail: SourceTail,
     context: ArchivePlanningContext<'_>,
     manifest: &mut DeploymentManifest,
 ) -> Result<()> {
@@ -420,6 +501,7 @@ async fn add_archive_entries_to_manifest(
             .as_ref()
             .map(|_| source.len().min(request.runtime.source_block_bytes as u64))
             .unwrap_or(0),
+        tail,
     )
     .await?;
     let central_directory_start = prepared.central_directory_start;
@@ -2144,10 +2226,8 @@ mod tests {
         let mut request = copy_request();
         request.extract = true;
         request.source_catalogs = vec![None];
-        let events = vec![
-            replay_head_event(zip.len() as u64),
-            replay_whole_zip_event(&zip),
-        ];
+        // The archive fits the metadata suffix read, so that one GET is all planning needs.
+        let events = vec![replay_whole_zip_event(&zip)];
         let state = crate::state::test_app_state_with_replay(StaticReplayClient::new(events));
         let stats = Arc::new(DeploymentStats::default());
         let budget = SourceByteBudget::new(256 * 1024 * 1024, Arc::clone(&stats), false)
@@ -2392,8 +2472,9 @@ mod tests {
             request.source_catalogs =
                 vec![sha256.map(|digest| TrustedSourceCatalog { sha256: digest })];
 
-            let mut events = vec![replay_head_event(zip.len() as u64)];
-            events.push(replay_whole_zip_event(&zip));
+            // The archive fits the metadata suffix read, so planning issues no other
+            // directory GET.
+            let mut events = vec![replay_whole_zip_event(&zip)];
             if trusted {
                 // The catalog object is fetched through its own source block,
                 // so an authenticated run issues one extra ranged GET. The
@@ -2629,6 +2710,88 @@ mod tests {
         );
     }
 
+    /// Several archives are planned in source order with the next archive's metadata
+    /// read overlapping the current archive's planning, and `planSourceHeads` still
+    /// partitions the plan phase.
+    #[tokio::test]
+    async fn multiple_archives_plan_in_order_with_one_metadata_read_each() {
+        let first = zip_bytes_from_entries(&[("index.html", b"first"), ("a.js", b"a")], false);
+        let second = zip_bytes_from_entries(&[("index.html", b"second"), ("b.js", b"b")], false);
+        let mut request = copy_request();
+        request.extract = true;
+        request.source_bucket_names = vec!["source".to_string(), "source".to_string()];
+        request.source_object_keys = vec!["first.zip".to_string(), "second.zip".to_string()];
+        request.source_catalogs = vec![None, None];
+        request.source_markers = vec![HashMap::new(), HashMap::new()];
+        let replay = StaticReplayClient::new(vec![
+            replay_whole_zip_event(&first),
+            replay_whole_zip_event(&second),
+        ]);
+        let state = crate::state::test_app_state_with_replay(replay.clone());
+        let stats = Arc::new(DeploymentStats::default());
+        let budget = SourceByteBudget::new(256 * 1024 * 1024, Arc::clone(&stats), false)
+            .expect("valid test source budget");
+        let filters = compile_filters(&[], &[]).expect("empty filters compile");
+
+        let (archives, manifest) =
+            super::plan_deployment(&state, &request, &filters, &stats, budget)
+                .await
+                .expect("multi-archive planning succeeds");
+
+        assert_eq!(archives.len(), 2);
+        assert_eq!(
+            manifest.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["a.js", "b.js", "index.html"]
+        );
+        let PlannedAction::ZipEntry { source_index, .. } = manifest["index.html"].action else {
+            panic!("expected a ZIP entry");
+        };
+        assert_eq!(source_index, 1, "the later source wins a shared key");
+        let requested = replay
+            .actual_requests()
+            .map(|request| request.uri().to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(requested.len(), 2);
+        assert!(requested[0].contains("first.zip"));
+        assert!(requested[1].contains("second.zip"));
+        let (source_heads, catalog, directory, entries, validation, parts) =
+            stats.plan_parts_micros_for_test();
+        assert!(source_heads > 0);
+        assert_eq!(
+            parts,
+            source_heads + catalog + directory + entries + validation
+        );
+    }
+
+    /// Copy-mode metadata reads run concurrently but are applied in source order, so
+    /// the later source still owns a shared destination key.
+    #[tokio::test]
+    async fn concurrent_copy_mode_heads_keep_source_order() {
+        let mut request = copy_request();
+        request.extract = false;
+        request.source_bucket_names = vec!["source".to_string(), "source".to_string()];
+        request.source_object_keys = vec!["one/site.txt".to_string(), "two/site.txt".to_string()];
+        request.source_catalogs = vec![None, None];
+        request.source_markers = vec![HashMap::new(), HashMap::new()];
+        let replay = StaticReplayClient::new(vec![replay_head_event(128), replay_head_event(128)]);
+        let state = crate::state::test_app_state_with_replay(replay.clone());
+        let stats = Arc::new(DeploymentStats::default());
+        let budget = SourceByteBudget::new(256 * 1024 * 1024, Arc::clone(&stats), false)
+            .expect("valid test source budget");
+        let filters = compile_filters(&[], &[]).expect("empty filters compile");
+
+        let (_, manifest) = super::plan_deployment(&state, &request, &filters, &stats, budget)
+            .await
+            .expect("copy-mode planning succeeds");
+
+        assert_eq!(replay.actual_requests().count(), 2);
+        assert_eq!(manifest.len(), 1);
+        let PlannedAction::CopyObject { source_index, .. } = manifest["site.txt"].action else {
+            panic!("expected a copy plan");
+        };
+        assert_eq!(source_index, 1);
+    }
+
     fn synthetic_planning_zip(entry_count: usize, catalog_json: Option<&[u8]>) -> Vec<u8> {
         let cursor = Cursor::new(Vec::new());
         let mut writer = ZipWriter::new(cursor);
@@ -2688,6 +2851,7 @@ mod tests {
                 .status(206)
                 .header("content-length", zip.len())
                 .header("content-range", format!("bytes 0-{}/{}", len - 1, len))
+                .header("etag", "\"test-etag\"")
                 .body(SdkBody::from(zip.to_vec()))
                 .unwrap(),
         )

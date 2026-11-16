@@ -50,19 +50,24 @@ impl S3RangeReader {
     }
 
     fn start_fetch(&mut self) -> bool {
-        let chunk_size = self.chunk_size.max(1) as u64;
-        let start = align_down(self.position, chunk_size);
-        let end_inclusive = self
-            .source
-            .len
-            .saturating_sub(1)
-            .min(start.saturating_add(chunk_size - 1));
-        if let Some(bytes) = self.preloaded.remove(&start) {
+        // Cached blocks stay in the map: the parser revisits the end records' block when
+        // a central directory runs into it, and the planning reservation already charges
+        // every preloaded byte for the reader's lifetime.
+        if let Some((start, bytes)) = covering_block(&self.preloaded, self.position) {
             self.buffer_start = start;
-            self.buffer = bytes;
+            self.buffer = bytes.clone();
             self.in_flight = None;
             return true;
         }
+        let chunk_size = self.chunk_size.max(1) as u64;
+        let start = align_down(self.position, chunk_size);
+        // Stop before the next preloaded block instead of fetching its bytes again.
+        let end_inclusive = self.source.len.min(start.saturating_add(chunk_size)).min(
+            self.preloaded
+                .range(self.position..)
+                .next()
+                .map_or(u64::MAX, |(next_start, _)| *next_start),
+        ) - 1;
         let source = Arc::clone(&self.source);
         self.in_flight_start = start;
         self.in_flight = Some(Box::pin(async move {
@@ -179,6 +184,20 @@ impl AsyncSeek for S3RangeReader {
     fn poll_complete(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<u64>> {
         Poll::Ready(Ok(self.position))
     }
+}
+
+/// The cached block that contains `offset`, as `(start, bytes)`. Blocks are keyed by
+/// their first byte and may have any length, so an exact suffix read and aligned probe
+/// reads can share one map.
+pub(super) fn covering_block(
+    preloaded: &BTreeMap<u64, Bytes>,
+    offset: u64,
+) -> Option<(u64, &Bytes)> {
+    preloaded
+        .range(..=offset)
+        .rev()
+        .find(|(start, bytes)| offset - **start < bytes.len() as u64)
+        .map(|(start, bytes)| (*start, bytes))
 }
 
 pub(super) fn align_down(value: u64, block_size: u64) -> u64 {

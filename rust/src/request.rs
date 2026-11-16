@@ -752,13 +752,15 @@ pub(crate) fn join_s3_key(prefix: &str, relative_key: &str) -> String {
     }
 }
 
-pub(crate) fn strip_destination_prefix(prefix: &str, key: &str) -> String {
+/// Borrows the relative part of `key`: it runs once per listed destination key, and the
+/// caller only needs an owned copy for the keys it retains.
+pub(crate) fn strip_destination_prefix<'a>(prefix: &str, key: &'a str) -> &'a str {
     if prefix.is_empty() {
-        return key.to_string();
+        return key;
     }
 
     match key.strip_prefix(prefix) {
-        Some(stripped) => stripped.to_string(),
+        Some(stripped) => stripped,
         None => {
             // Every production caller derives `prefix` from the same namespace the
             // listing was requested under, so a mismatch is a programming error
@@ -769,7 +771,7 @@ pub(crate) fn strip_destination_prefix(prefix: &str, key: &str) -> String {
                 false,
                 "destination key `{key}` does not start with the strip prefix `{prefix}`"
             );
-            key.to_string()
+            key
         }
     }
 }

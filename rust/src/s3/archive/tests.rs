@@ -37,8 +37,8 @@ use super::entry::{
 };
 use super::range_reader::S3RangeReader;
 use super::{
-    SourceClient, head_source, range_get_request_error, source_get_retry_cap_millis,
-    source_get_retry_delay,
+    SourceClient, SourceTail, prepare_source_zip, range_get_request_error,
+    source_get_retry_cap_millis, source_get_retry_delay,
 };
 use crate::deployment::TrustedEntryIntegrity;
 use crate::diagnostics::DeploymentStats;
@@ -175,25 +175,34 @@ async fn external_zip_local_extra_fields_stream_with_directory_bounds() {
 }
 
 #[tokio::test]
-async fn directory_preflight_reuses_its_single_source_request_and_accounts_memory() {
+async fn directory_preflight_reads_nothing_beyond_a_covering_source_tail() {
     for encoded in [INFO_ZIP_FIXTURE, PYTHON_FORCE_ZIP64_FIXTURE] {
         let bytes = BASE64_STANDARD.decode(encoded.trim()).unwrap();
-        let replay = StaticReplayClient::new(vec![get_success_bytes(bytes.clone())]);
+        let replay = StaticReplayClient::new(Vec::new());
         let source = replay_source_client(replay.clone(), bytes.len() as u64);
         let stats = Arc::new(DeploymentStats::default());
         let budget = SourceByteBudget::new(64 * 1024 * 1024, Arc::clone(&stats), false)
             .expect("valid test source budget");
 
-        let prepared = prepare_zip_directory_reader(source, 8 * 1024 * 1024, budget, 0)
-            .await
-            .expect("directory preflight");
+        let prepared = prepare_zip_directory_reader(
+            source,
+            8 * 1024 * 1024,
+            budget,
+            0,
+            SourceTail {
+                start: 0,
+                bytes: Bytes::from(bytes.clone()),
+            },
+        )
+        .await
+        .expect("directory preflight");
         let planning_permit = prepared._planning_permit;
         let reader = async_zip::base::read::seek::ZipFileReader::with_tokio(prepared.reader)
             .await
             .expect("preloaded parser");
 
         assert_eq!(reader.file().entries().len(), 1);
-        assert_eq!(replay.actual_requests().count(), 1);
+        assert_eq!(replay.actual_requests().count(), 0);
         let (_, current, high_water) = stats.source_global_memory_for_test();
         assert!(current > bytes.len() as u64);
         assert_eq!(current, high_water);
@@ -2290,20 +2299,27 @@ fn source_get_retry_delay_applies_full_jitter_under_the_cap() {
     }
 }
 
-fn head_replay_event(etag: Option<&str>, len: u64) -> ReplayEvent {
+fn source_tail_replay_event(
+    status: u16,
+    etag: Option<&str>,
+    content_range: Option<&str>,
+    body: &'static [u8],
+) -> ReplayEvent {
     let mut response = Response::builder()
-        .status(200)
-        .header("content-length", len.to_string());
+        .status(status)
+        .header("content-length", body.len().to_string());
     if let Some(etag) = etag {
         response = response.header("etag", etag);
     }
+    if let Some(content_range) = content_range {
+        response = response.header("content-range", content_range);
+    }
     ReplayEvent::new(
         Request::builder()
-            .method("HEAD")
             .uri("https://s3.test/bucket/archive.zip")
             .body(SdkBody::empty())
             .unwrap(),
-        response.body(SdkBody::empty()).unwrap(),
+        response.body(SdkBody::from(body)).unwrap(),
     )
 }
 
@@ -2312,65 +2328,136 @@ fn replay_app_state(replay: StaticReplayClient) -> AppState {
 }
 
 #[tokio::test]
-async fn head_source_rejects_a_source_without_an_etag() {
-    let state = replay_app_state(StaticReplayClient::new(vec![head_replay_event(None, 128)]));
+async fn source_metadata_comes_from_one_suffix_range_get() {
+    let replay = StaticReplayClient::new(vec![source_tail_replay_event(
+        206,
+        Some("\"source-etag\""),
+        Some("bytes 124-127/128"),
+        b"tail",
+    )]);
+    let state = replay_app_state(replay.clone());
 
-    let error = head_source(&state, "bucket", "archive.zip", &DeploymentStats::default())
+    let prepared = prepare_source_zip(&state, "bucket", "archive.zip", 4)
         .await
-        .expect_err("a source HEAD without an ETag must fail closed");
+        .expect("a suffix GET with an ETag must succeed");
+
+    assert_eq!(prepared.source.len, 128);
+    assert_eq!(prepared.source.etag, "\"source-etag\"");
+    assert_eq!(prepared.tail.start, 124);
+    assert_eq!(&prepared.tail.bytes[..], b"tail");
+    let requests = replay.actual_requests().collect::<Vec<_>>();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method(), "GET");
+    assert_eq!(requests[0].headers().get("range"), Some("bytes=-4"));
+    assert_eq!(requests[0].headers().get("if-match"), None);
+    assert_eq!(prepared.source.diagnostics().source_get_attempts, 1);
+}
+
+#[tokio::test]
+async fn source_metadata_accepts_a_whole_object_answered_without_content_range() {
+    let state = replay_app_state(StaticReplayClient::new(vec![source_tail_replay_event(
+        200,
+        Some("\"source-etag\""),
+        None,
+        b"small",
+    )]));
+
+    let prepared = prepare_source_zip(&state, "bucket", "archive.zip", 64)
+        .await
+        .expect("a whole-object answer carries the complete tail");
+
+    assert_eq!(prepared.source.len, 5);
+    assert_eq!(prepared.tail.start, 0);
+    assert_eq!(&prepared.tail.bytes[..], b"small");
+}
+
+#[tokio::test]
+async fn source_metadata_rejects_a_source_without_an_etag() {
+    let state = replay_app_state(StaticReplayClient::new(vec![source_tail_replay_event(
+        206,
+        None,
+        Some("bytes 124-127/128"),
+        b"tail",
+    )]));
+
+    let error = match prepare_source_zip(&state, "bucket", "archive.zip", 4).await {
+        Ok(_) => panic!("a source without an ETag must fail closed"),
+        Err(error) => error,
+    };
     assert!(
-        error.to_string().contains("missing an ETag"),
-        "unexpected error: {error}"
+        format!("{error:#}").contains("missing an ETag"),
+        "unexpected error: {error:#}"
     );
 }
 
 #[tokio::test]
-async fn head_source_records_the_wait_span_on_a_failed_head() {
-    // The HEAD request itself fails (500), so `.send().await` errors; the
-    // request still waited, and that span must land in `planSourceHeads` on the
-    // error path too, because failure summaries retain and log these stats.
+async fn source_metadata_rejects_a_range_that_does_not_end_the_object() {
+    let state = replay_app_state(StaticReplayClient::new(vec![source_tail_replay_event(
+        206,
+        Some("\"source-etag\""),
+        Some("bytes 0-3/128"),
+        b"head",
+    )]));
+
+    let error = match prepare_source_zip(&state, "bucket", "archive.zip", 4).await {
+        Ok(_) => panic!("a range that is not the object's suffix must fail closed"),
+        Err(error) => error,
+    };
+    assert!(
+        format!("{error:#}").contains("mismatched Content-Range"),
+        "unexpected error: {error:#}"
+    );
+}
+
+#[tokio::test]
+async fn source_metadata_reports_an_empty_object_as_too_short() {
     let state = replay_app_state(StaticReplayClient::new(vec![ReplayEvent::new(
         Request::builder()
-            .method("HEAD")
             .uri("https://s3.test/bucket/archive.zip")
             .body(SdkBody::empty())
             .unwrap(),
         Response::builder()
-            .status(500)
-            .body(SdkBody::empty())
+            .status(416)
+            .body(SdkBody::from(
+                "<Error><Code>InvalidRange</Code><Message>The requested range is not satisfiable</Message></Error>",
+            ))
             .unwrap(),
     )]));
-    let stats = DeploymentStats::default();
 
-    let error = head_source(&state, "bucket", "archive.zip", &stats)
-        .await
-        .expect_err("a failed source HEAD must fail closed");
+    let error = match prepare_source_zip(&state, "bucket", "archive.zip", 4).await {
+        Ok(_) => panic!("an empty source must fail"),
+        Err(error) => error,
+    };
     assert!(
-        error
-            .to_string()
-            .contains("failed to read source archive metadata"),
-        "unexpected error: {error}"
-    );
-
-    let (source_heads_micros, ..) = stats.plan_parts_micros_for_test();
-    assert!(
-        source_heads_micros > 0,
-        "a failed HEAD still waited for its span, got {source_heads_micros} us"
+        format!("{error:#}").contains("too short to contain an end-of-central-directory record"),
+        "unexpected error: {error:#}"
     );
 }
 
 #[tokio::test]
-async fn head_source_keeps_the_returned_etag_verbatim() {
-    let state = replay_app_state(StaticReplayClient::new(vec![head_replay_event(
-        Some("\"source-etag\""),
-        128,
+async fn source_metadata_failure_names_the_source_and_region_requirement() {
+    let state = replay_app_state(StaticReplayClient::new(vec![ReplayEvent::new(
+        Request::builder()
+            .uri("https://s3.test/bucket/archive.zip")
+            .body(SdkBody::empty())
+            .unwrap(),
+        Response::builder()
+            .status(403)
+            .body(SdkBody::from(
+                "<Error><Code>AccessDenied</Code><Message>denied</Message></Error>",
+            ))
+            .unwrap(),
     )]));
 
-    let head = head_source(&state, "bucket", "archive.zip", &DeploymentStats::default())
-        .await
-        .expect("a source HEAD with an ETag must succeed");
-    assert_eq!(head.len, 128);
-    assert_eq!(head.etag, "\"source-etag\"");
+    let error = match prepare_source_zip(&state, "bucket", "archive.zip", 4).await {
+        Ok(_) => panic!("a denied source read must fail"),
+        Err(error) => error,
+    };
+    let message = format!("{error:#}");
+    assert!(
+        message.contains("failed to read source archive metadata s3://bucket/archive.zip"),
+        "unexpected error: {message}"
+    );
 }
 
 #[tokio::test]
@@ -2519,4 +2606,112 @@ fn get_gated_range_event(
             }))
             .unwrap(),
     )
+}
+
+/// Serves any ranged GET from `source` and records each requested range.
+fn recording_source_client(
+    source: Arc<Vec<u8>>,
+    requests: Arc<std::sync::Mutex<Vec<(u64, u64)>>>,
+) -> Arc<SourceClient> {
+    let len = source.len() as u64;
+    let http = aws_smithy_http_client::test_util::infallible_client_fn(move |request| {
+        let (start, end) = request
+            .headers()
+            .get("range")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.strip_prefix("bytes="))
+            .and_then(|value| value.split_once('-'))
+            .and_then(|(start, end)| Some((start.parse::<u64>().ok()?, end.parse::<u64>().ok()?)))
+            .expect("ranged GET");
+        requests.lock().unwrap().push((start, end));
+        let bytes = source[start as usize..=end as usize].to_vec();
+        Response::builder()
+            .status(206)
+            .header("content-length", bytes.len())
+            .header(
+                "content-range",
+                format!("bytes {start}-{end}/{}", source.len()),
+            )
+            .body(SdkBody::from(bytes))
+            .unwrap()
+    });
+    let config = aws_sdk_s3::Config::builder()
+        .behavior_version_latest()
+        .region(aws_sdk_s3::config::Region::new("us-east-1"))
+        .credentials_provider(aws_sdk_s3::config::Credentials::new(
+            "test-access-key",
+            "test-secret-key",
+            None,
+            None,
+            "shin-bucket-deployment-test",
+        ))
+        .endpoint_url("https://s3.test")
+        .force_path_style(true)
+        .http_client(http)
+        .build();
+    Arc::new(SourceClient {
+        client: aws_sdk_s3::Client::from_conf(config),
+        bucket: "bucket".to_string(),
+        key: "archive.zip".to_string(),
+        len,
+        etag: "\"test-source-etag\"".to_string(),
+        diagnostics: Arc::new(SourceDiagnostics::new(len)),
+    })
+}
+
+#[tokio::test]
+async fn a_directory_larger_than_the_tail_is_fetched_as_its_exact_range() {
+    const SCAN_BYTES: usize = 1024;
+    const ENTRIES: usize = 40;
+    let mut writer = ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for index in 0..ENTRIES {
+        writer
+            .start_file(
+                format!("{index:02}-{}.txt", "long-entry-name".repeat(4)),
+                SimpleFileOptions::default(),
+            )
+            .unwrap();
+        writer.write_all(&vec![b'x'; 512]).unwrap();
+    }
+    let zip = writer.finish().unwrap().into_inner();
+    let central_directory_start = zip
+        .windows(4)
+        .position(|window| window == b"PK\x01\x02")
+        .expect("central directory signature") as u64;
+    let tail_start = zip.len() - SCAN_BYTES;
+    assert!(
+        central_directory_start < tail_start as u64,
+        "the fixture directory must extend before the tail"
+    );
+
+    let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let source = recording_source_client(Arc::new(zip.clone()), Arc::clone(&requests));
+    let budget = SourceByteBudget::new(
+        64 * 1024 * 1024,
+        Arc::new(DeploymentStats::default()),
+        false,
+    )
+    .expect("valid test source budget");
+    let prepared = prepare_zip_directory_reader(
+        source,
+        SCAN_BYTES,
+        budget,
+        0,
+        SourceTail {
+            start: tail_start as u64,
+            bytes: Bytes::copy_from_slice(&zip[tail_start..]),
+        },
+    )
+    .await
+    .expect("directory preflight");
+    let reader = async_zip::base::read::seek::ZipFileReader::with_tokio(prepared.reader)
+        .await
+        .expect("preloaded parser");
+
+    assert_eq!(reader.file().entries().len(), ENTRIES);
+    assert_eq!(
+        *requests.lock().unwrap(),
+        vec![(central_directory_start, tail_start as u64 - 1)],
+        "only the directory bytes the tail lacks are fetched, in one GET"
+    );
 }
