@@ -1,8 +1,8 @@
+import { execFileSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import Ajv2020 from "ajv/dist/2020.js";
 import addFormats from "ajv-formats";
-import { format } from "prettier";
 import { describe, expect, test } from "vitest";
 import { z } from "zod";
 import { MAX_BENCHMARK_CONCURRENCY, benchmarkConfigSchema } from "../../benchmarks/src/config";
@@ -21,7 +21,11 @@ describe("asset benchmark configuration schema", () => {
       target: "draft-2020-12",
       io: "input",
     });
-    const rendered = await format(JSON.stringify(jsonSchema), { parser: "json" });
+    const rendered = execFileSync(
+      join(process.cwd(), "node_modules", ".bin", "biome"),
+      ["format", `--stdin-file-path=${artifactPath}`],
+      { encoding: "utf8", input: JSON.stringify(jsonSchema) },
+    );
     expect(readFileSync(artifactPath, "utf8")).toBe(rendered);
   });
 

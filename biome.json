@@ -24,7 +24,10 @@
       "benchmarks/configs/**/*.json",
       "benchmarks/schemas/**/*.json",
       "package.json",
-      "vitest.config.ts"
+      "vitest.config.ts",
+      "**/*.md",
+      "**/*.yaml",
+      "**/*.yml"
     ]
   },
   "formatter": {
@@ -42,5 +45,20 @@
     "clientKind": "git",
     "useIgnoreFile": true
   },
-  "$schema": "./node_modules/@biomejs/biome/configuration_schema.json"
+  "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+  "markdown": {
+    "parser": {
+      "frontmatter": true
+    }
+  },
+  "overrides": [
+    {
+      "includes": ["**/pnpm-workspace.yaml"],
+      "yaml": {
+        "formatter": {
+          "quoteStyle": "single"
+        }
+      }
+    }
+  ]
 }
