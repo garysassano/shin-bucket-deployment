@@ -50,15 +50,5 @@
     "parser": {
       "frontmatter": true
     }
-  },
-  "overrides": [
-    {
-      "includes": ["**/pnpm-workspace.yaml"],
-      "yaml": {
-        "formatter": {
-          "quoteStyle": "single"
-        }
-      }
-    }
-  ]
+  }
 }
