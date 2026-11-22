@@ -2,12 +2,12 @@
 // Generates the committed asset benchmark configuration schema from the
 // authoritative Zod model and validates every committed configuration.
 
+import { execFileSync } from "node:child_process";
 import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import Ajv2020 from "ajv/dist/2020.js";
 import addFormats from "ajv-formats";
-import { format } from "prettier";
 import { z } from "zod";
 import { benchmarkConfigSchema } from "../dist/benchmarks/src/config.js";
 
@@ -21,7 +21,12 @@ export function renderBenchmarkConfigSchema() {
     target: "draft-2020-12",
     io: "input",
   });
-  return format(JSON.stringify(jsonSchema), { parser: "json" });
+  // Format with the repository's pinned Biome so the artifact matches `pnpm lint`.
+  return execFileSync(
+    join(repoRoot, "node_modules", ".bin", "biome"),
+    ["format", `--stdin-file-path=${artifactPath}`],
+    { cwd: repoRoot, encoding: "utf8", input: JSON.stringify(jsonSchema) },
+  );
 }
 
 function validateCommittedConfigs(jsonSchema) {
